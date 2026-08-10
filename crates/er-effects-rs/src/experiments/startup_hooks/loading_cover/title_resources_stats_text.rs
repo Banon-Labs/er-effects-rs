@@ -636,7 +636,10 @@ pub(crate) fn profile_slot_name(slot: i32) -> Option<String> {
     guard.as_ref()?.get(slot as usize)?.clone()
 }
 
-fn build_loaded_char_name() -> Option<String> {
+static PLAYER_GAME_DATA_NAME_OVERRIDE_BUFFER: std::sync::Mutex<Vec<u16>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn loaded_player_game_data_ptr() -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gdm = game_data_man_ptr_or_null();
     if gdm == 0 || gdm == null {
@@ -646,17 +649,150 @@ fn build_loaded_char_name() -> Option<String> {
     if pgd == 0 || pgd == null {
         return None;
     }
-    let (units, len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
-    if len == 0 {
+    Some(pgd)
+}
+
+fn loaded_char_name_units_from_pgd(pgd: usize) -> Option<([u16; PGD_NAME_LEN_U16], usize)> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if pgd == 0 || pgd == null {
         return None;
     }
+    let (units, len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    if len == 0 || utf16_name_empty_like(&units, len) {
+        return None;
+    }
+    Some((units, len))
+}
+
+pub(crate) fn build_loaded_char_name() -> Option<String> {
+    let pgd = loaded_player_game_data_ptr()?;
+    let (units, len) = loaded_char_name_units_from_pgd(pgd)?;
     String::from_utf16(units.get(..len)?)
         .ok()
         .filter(|s| !s.trim().is_empty())
 }
 
+pub(crate) unsafe extern "system" fn player_game_data_name_getter_hook(pgd: usize) -> *const u16 {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PLAYER_GAME_DATA_NAME_GETTER_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return std::ptr::null();
+    }
+    let f: unsafe extern "system" fn(usize) -> *const u16 = unsafe { std::mem::transmute(orig) };
+    let native = unsafe { f(pgd) };
+    if !stats_panel_enabled() || Some(pgd) != loaded_player_game_data_ptr() {
+        return native;
+    }
+    let Some((units, len)) = loaded_char_name_units_from_pgd(pgd) else {
+        return native;
+    };
+    let native_addr = native as usize;
+    if native_addr != 0 && native_addr != null {
+        let (native_units, native_len) = unsafe { read_utf16_name_units(native_addr) };
+        if native_len == len && utf16_names_equal(&native_units, &units, len) {
+            return native;
+        }
+    }
+    let Ok(mut buffer) = PLAYER_GAME_DATA_NAME_OVERRIDE_BUFFER.lock() else {
+        return native;
+    };
+    buffer.clear();
+    buffer.extend_from_slice(units.get(..len).unwrap_or(&[]));
+    buffer.push(0);
+    let override_ptr = buffer.as_ptr();
+    if PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        let raw = String::from_utf16(units.get(..len).unwrap_or(&[])).unwrap_or_default();
+        let native_preview = if native_addr != 0 && native_addr != null {
+            let (native_units, native_len) = unsafe { read_utf16_name_units(native_addr) };
+            String::from_utf16(native_units.get(..native_len).unwrap_or(&[])).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let caller_rva = trace_first_game_caller_rva();
+        append_autoload_debug(format_args!(
+            "stats-text: main-player name getter override native='{native_preview}' raw='{raw}' pgd=0x{pgd:x} caller_rva=0x{caller_rva:x}"
+        ));
+    }
+    override_ptr
+}
+
 fn nul_terminated_utf16(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+fn profile_editor_live_layout() -> Option<er_gfx::profile_05_010_layout::Profile05_010Layout> {
+    let dir = std::env::var_os("ER_PROFILE_05_010_EDITOR_DIR")?;
+    if dir.is_empty() {
+        return None;
+    }
+    let text = std::fs::read_to_string(
+        std::path::PathBuf::from(dir).join(er_gfx::profile_05_010_protocol::CONTROL_FILE_NAME),
+    )
+    .ok()?;
+    let command = er_gfx::profile_05_010_protocol::ProfileEditorCommand::parse(&text).ok()?;
+    if command.render_mode != er_gfx::profile_05_010_protocol::RenderMode::LiveRuntime {
+        return None;
+    }
+    Some(command.layout)
+}
+
+pub(crate) fn profile_editor_live_text_for_field<'a>(
+    field_name_nul: &str,
+    text: &'a [u16],
+) -> std::borrow::Cow<'a, [u16]> {
+    if text.len() == 1 && text[0] == 0 {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let field_name = field_name_nul.strip_suffix('\0').unwrap_or(field_name_nul);
+    let Some(layout) = profile_editor_live_layout() else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let Some(field) = layout.fields.get(field_name) else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let Some(decoded) = decode_scaleform_html_line(text) else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let size = field.font_height.max(1);
+    let (body, already_html) = scaleform_html_body(&decoded);
+    let body = if already_html {
+        scaleform_html_size_existing_font_tags(body, size)
+    } else {
+        format!(
+            "<font size=\"{size}\">{}</font>",
+            scaleform_html_escape_text(body)
+        )
+    };
+    let wrapped = format!("<p align=\"{}\">{body}</p>", field.align.as_str());
+    std::borrow::Cow::Owned(wrapped.encode_utf16().chain(core::iter::once(0)).collect())
+}
+
+fn scaleform_html_size_existing_font_tags(body: &str, size: i32) -> String {
+    let mut out = String::with_capacity(body.len() + 32);
+    let mut rest = body;
+    while let Some(idx) = rest.find("<font") {
+        out.push_str(&rest[..idx]);
+        rest = &rest[idx..];
+        let Some(end) = rest.find('>') else {
+            out.push_str(rest);
+            return out;
+        };
+        let tag = &rest[..=end];
+        if tag.contains(" size=") {
+            out.push_str(tag);
+        } else {
+            out.push_str("<font size=\"");
+            out.push_str(&size.to_string());
+            out.push('"');
+            out.push_str(&tag[5..]);
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The STORED effective max vitals `[hp, fp, stamina]` of the character in save `slot`, or
@@ -712,10 +848,30 @@ fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
     String::from_utf16(body).ok().filter(|s| !s.is_empty())
 }
 
-fn scaleform_html_body(line: &str) -> &str {
-    line.strip_prefix("<p align=\"left\">")
-        .and_then(|s| s.strip_suffix("</p>"))
-        .unwrap_or(line)
+fn scaleform_html_body(line: &str) -> (&str, bool) {
+    if let Some(rest) = line.strip_prefix("<p align=\"") {
+        if let Some((_align, body)) = rest.split_once("\">") {
+            if let Some(body) = body.strip_suffix("</p>") {
+                return (body, true);
+            }
+        }
+    }
+    (line, false)
+}
+
+fn scaleform_html_escape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn merge_scaleform_html_utf16_lines(first: &[u16], second: &[u16]) -> Vec<u16> {
@@ -725,8 +881,8 @@ fn merge_scaleform_html_utf16_lines(first: &[u16], second: &[u16]) -> Vec<u16> {
     let Some(second) = decode_scaleform_html_line(second) else {
         return first.encode_utf16().chain(core::iter::once(0)).collect();
     };
-    let first = scaleform_html_body(&first);
-    let second = scaleform_html_body(&second);
+    let (first, _) = scaleform_html_body(&first);
+    let (second, _) = scaleform_html_body(&second);
     let merged = format!(
         "<p align=\"left\">{first} <font size=\"16\" color=\"#8f887a\">/</font> {second}</p>"
     );
@@ -740,8 +896,8 @@ fn merge_scaleform_html_utf16_block(first: &[u16], second: &[u16]) -> Vec<u16> {
     let Some(second) = decode_scaleform_html_line(second) else {
         return first.encode_utf16().chain(core::iter::once(0)).collect();
     };
-    let first = scaleform_html_body(&first);
-    let second = scaleform_html_body(&second);
+    let (first, _) = scaleform_html_body(&first);
+    let (second, _) = scaleform_html_body(&second);
     let merged = format!("<p align=\"left\">{first}<br>{second}</p>");
     merged.encode_utf16().chain(core::iter::once(0)).collect()
 }
@@ -781,9 +937,9 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
         return false;
     };
     let all = er_save_loader::stats::all_slot_stats(&sl2);
-    let mut names: [Option<String>; 10] = core::array::from_fn(|_| None);
+    let mut names = er_save_loader::stats::all_slot_names(&sl2);
     for slot in er_save_loader::bnd4::active_character_slots(&sl2).unwrap_or_default() {
-        if slot.slot < names.len() {
+        if slot.slot < names.len() && names[slot.slot].is_none() {
             names[slot.slot] = Some(slot.name);
         }
     }
@@ -832,7 +988,7 @@ pub(crate) unsafe fn push_stats_text_on_row(
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign) };
-    let settext: unsafe extern "system" fn(usize, usize) -> usize =
+    let settext: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
     let dtor: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
@@ -866,8 +1022,18 @@ pub(crate) unsafe fn push_stats_text_on_row(
     let component_live =
         comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base);
     let accepted = if component_live {
-        // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
-        (unsafe { settext(component_slot, utf16.as_ptr() as usize) }) != 0
+        // The wrapper copies the UTF-16 into a DLString synchronously. In live editor mode,
+        // font/align hot-reload rides this same safe SetText path by wrapping the text in
+        // Scaleform HTML; field width remains a movie-definition/bounds edit.
+        let live_text = profile_editor_live_text_for_field(name, utf16);
+        unsafe { settext(component_slot, live_text.as_ref().as_ptr() as usize) };
+        crate::experiments::startup_hooks::remember_profile_editor_field_target(
+            name,
+            comp,
+            utf16,
+            "last-row-settext",
+        );
+        true
     } else {
         let skips = PROFILE_STATS_PUSH_STALE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
         PROFILE_STATS_PUSH_STALE_LAST_COMP.store(comp, Ordering::SeqCst);
@@ -894,7 +1060,7 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     label: &str,
     utf16: &[u16],
 ) -> bool {
-    let settext: unsafe extern "system" fn(usize, usize) -> usize =
+    let settext: unsafe extern "system" fn(usize, usize) =
         unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
     let component_slot = field_proxy + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
     let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
@@ -909,7 +1075,15 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
         0
     };
     if comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base) {
-        (unsafe { settext(component_slot, utf16.as_ptr() as usize) }) != 0
+        let live_text = profile_editor_live_text_for_field(label, utf16);
+        unsafe { settext(component_slot, live_text.as_ref().as_ptr() as usize) };
+        crate::experiments::startup_hooks::remember_profile_editor_field_target(
+            label,
+            comp,
+            utf16,
+            "resolved-field-settext",
+        );
+        true
     } else {
         let skips = PROFILE_STATS_PUSH_STALE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
         PROFILE_STATS_PUSH_STALE_LAST_COMP.store(comp, Ordering::SeqCst);
@@ -1081,6 +1255,36 @@ unsafe fn restore_row_model_menu_string(row_model: usize, offset: usize, displac
     unsafe { (field as *mut usize).write_volatile(displaced) };
 }
 
+/// Point the row model's `PlayerName` `CS::MenuString` at `text` and return the pointer it displaced,
+/// so the caller can put it back the moment the native populate returns.
+///
+/// This is the product path for replacing the title/current-row character name: native row populate
+/// reads this field and writes the visible `PlayerName` object itself. Post-populate SetText is still
+/// useful for editor diagnostics, but it is not a reliable ownership path for the renderer.
+pub(crate) unsafe fn stage_row_model_player_name(
+    row_model: usize,
+    text: *const u16,
+) -> Option<usize> {
+    unsafe {
+        stage_row_model_menu_string(
+            row_model,
+            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
+            text,
+        )
+    }
+}
+
+/// Put back whatever [`stage_row_model_player_name`] displaced.
+pub(crate) unsafe fn restore_row_model_player_name(row_model: usize, displaced: usize) {
+    unsafe {
+        restore_row_model_menu_string(
+            row_model,
+            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
+            displaced,
+        )
+    };
+}
+
 /// Point the row model's `Location` `CS::MenuString` at `text` and return the pointer it displaced,
 /// so the caller can put it back the moment the native populate returns.
 ///
@@ -1147,7 +1351,14 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     let Some(stats) = (unsafe { title_load_row_stats_text() }) else {
         return;
     };
-    if let Some(name) = profile_slot_name(0).or_else(build_loaded_char_name) {
+    let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
+    if let Some(name) = build_loaded_char_name().or_else(|| {
+        if cache_loaded {
+            profile_slot_name(0)
+        } else {
+            None
+        }
+    }) {
         let name = nul_terminated_utf16(&name);
         PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
         let pushed = unsafe { push_stats_text_on_row(base, row_proxy, "PlayerName\0", &name) };
@@ -1204,10 +1415,12 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     }
     let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    // The last-saved text and the row-model pointer it displaced, held across the native call: the
-    // populate reads the pointer, so the buffer has to outlive it and the field has to go back
-    // afterwards. For browse file rows it is staged into Location, not PlayTime, so filename and
-    // timestamp share one visual line.
+    // Staged row-model strings and the pointers they displaced, held across the native call: the
+    // populate reads the pointer, so each buffer has to outlive it and each field has to go back
+    // afterwards. PlayerName uses the same native ownership path as the game's own row builder;
+    // browse file timestamps are staged into Location, not PlayTime, so filename and timestamp share
+    // one visual line.
+    let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
     if row_model != 0
         && row_model != null
@@ -1337,21 +1550,27 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     // Normal character rows share the compact row stack with the save-file picker,
                     // so all eight colored attributes fit on one compact line.
                     let stats = build_stats_compact_html_utf16(&attrs);
-                    if let Some(name) = profile_slot_name(slot) {
-                        let name = nul_terminated_utf16(&name);
+                    if let Some(name) = if slot == 0 {
+                        build_loaded_char_name().or_else(|| profile_slot_name(slot))
+                    } else {
+                        profile_slot_name(slot)
+                    } {
+                        let name_utf16 = nul_terminated_utf16(&name);
                         PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-                        let pushed_name = unsafe {
-                            push_stats_text_on_row(base, row_proxy, "PlayerName\0", &name)
-                        };
-                        if pushed_name {
-                            PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
-                            if seen <= 4 {
-                                append_autoload_debug(format_args!(
-                                    "stats-text: pushed PlayerName slot={slot} on row=0x{row_proxy:x}"
-                                ));
+                        match unsafe { stage_row_model_player_name(row_model, name_utf16.as_ptr()) }
+                        {
+                            Some(displaced) => {
+                                PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
+                                if seen <= 4 {
+                                    append_autoload_debug(format_args!(
+                                        "stats-text: staged native PlayerName slot={slot} name='{name}' on row_model=0x{row_model:x} row=0x{row_proxy:x}"
+                                    ));
+                                }
+                                staged_player_name = Some((displaced, name_utf16));
                             }
-                        } else {
-                            PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                            None => {
+                                PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                            }
                         }
                     }
                     let blank = [0u16];
@@ -1390,10 +1609,39 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
     }
     let ret = unsafe { f(row_model, row_proxy, arg3, arg4) };
-    // The populate has read the string; give the row model its own pointer back so our borrow does
-    // not outlive the call that needed it. `utf16` drops here, after the read, never before.
+    // The populate has read the strings; give the row model its own pointers back so our borrows do
+    // not outlive the call that needed them. UTF-16 buffers drop here, after the read, never before.
+    if let Some((displaced, _utf16)) = staged_player_name {
+        unsafe { restore_row_model_player_name(row_model, displaced) };
+    }
     if let Some((displaced, _utf16)) = staged_location {
         unsafe { restore_row_model_location(row_model, displaced) };
     }
     ret
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_font_size_injects_into_existing_colored_stats_fonts_without_outer_font_wrap() {
+        let body = "<font color=\"#8f887a\">VIG</font> <font color=\"#e0736b\"><b>50</b></font>";
+        let sized = scaleform_html_size_existing_font_tags(body, 20);
+        assert_eq!(
+            sized,
+            "<font size=\"20\" color=\"#8f887a\">VIG</font> <font size=\"20\" color=\"#e0736b\"><b>50</b></font>"
+        );
+        assert!(
+            !sized.contains("<font size=\"20\"><font"),
+            "nested outer font tags made Scaleform render the stats line blank"
+        );
+    }
+
+    #[test]
+    fn live_font_size_keeps_existing_font_size_attributes() {
+        let body = "<font size=\"19\" color=\"#8f887a\">VIG</font>";
+        let sized = scaleform_html_size_existing_font_tags(body, 20);
+        assert_eq!(sized, body);
+    }
 }
