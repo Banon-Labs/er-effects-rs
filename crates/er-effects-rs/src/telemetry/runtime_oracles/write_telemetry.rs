@@ -655,6 +655,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
         er_telemetry::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
     ));
+    // DO THE ROWS DESCRIBE THE SAVE ON SCREEN? The per-slot name/attribute caches were a
+    // process-lifetime latch, so a session's first save described every row forever. `_reloads`
+    // counts refills from the picker's own bytes when a save is previewed; `_invalidations` counts
+    // drops when that preview is withdrawn. Both at zero after a save swap means the rows are
+    // describing a save the user is no longer looking at.
+    body.push_str(&format!(
+        "  \"oracle_profile_slot_cache_preview_reloads\": {},\n  \"oracle_profile_slot_cache_invalidations\": {},\n",
+        er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
+        er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst)
+    ));
     // Save-file rows showing when the file was last written in place of the native playtime.
     // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`
     // > 0 means the model field was unreadable and the row kept the game's own playtime string.

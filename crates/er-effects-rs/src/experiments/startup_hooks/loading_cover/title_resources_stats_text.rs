@@ -1014,18 +1014,196 @@ pub(crate) static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
 pub(crate) static PROFILE_SLOT_NAMES_CACHE: std::sync::Mutex<Option<[Option<String>; 10]>> =
     std::sync::Mutex::new(None);
 
+/// Per-slot saved map (`USER_DATA00N + 0x04`), from the same `.sl2` parse as the names and stats.
+///
+/// This is the only field a character body and its `ProfileSummary` record share, which makes it the
+/// one way to ask whether the record on screen belongs to the character it is drawn beside. See
+/// [`profile_slot_location_is_this_characters`].
+pub(crate) static PROFILE_SLOT_SAVED_MAP_CACHE: std::sync::Mutex<Option<[Option<i32>; 10]>> =
+    std::sync::Mutex::new(None);
+
+/// The saved map of the character in save `slot`, or `None` when the slot is empty or unread.
+pub(crate) fn profile_slot_saved_map(slot: i32) -> Option<i32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_SAVED_MAP_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize).copied().flatten()
+}
+
+/// Per-slot `PlaceName` id resolved from the save itself -- the slot's own record when it describes
+/// that slot's body, else the id the save pairs with that body's map in a record that IS consistent
+/// (`er_save_loader::profile_summary::slot_place_name_ids`).
+pub(crate) static PROFILE_SLOT_PLACE_NAME_CACHE: std::sync::Mutex<Option<[Option<u32>; 10]>> =
+    std::sync::Mutex::new(None);
+
+/// The resolved `PlaceName` id for save `slot`, or `None` when the save cannot evidence one.
+pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_PLACE_NAME_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize).copied().flatten()
+}
+
+/// Point slot `slot`'s LIVE `ProfileSummary` record at `place_name_id` for the duration of one native
+/// row populate, returning the id it displaced.
+///
+/// The row's `Location` string is built by the game from this one `u32` (`FUN_1408752c0` loads
+/// `record[0x34]` into the row-model builder, which formats it through
+/// `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`), so lending the field our resolved id makes
+/// the game's own writer render the right place -- the same borrow-then-restore the merged
+/// `PlayerName` uses, and nothing is left behind.
+///
+/// # Safety
+/// Game thread, around a single populate call. Fault-guarded read; the write only happens once the
+/// record has been read back successfully.
+pub(crate) unsafe fn stage_profile_record_place_name(slot: i32, place_name_id: u32) -> Option<u32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return None;
+    }
+    let field = summary
+        + PROFILE_SUMMARY_RECORD_BASE
+        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE
+        + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    let displaced = unsafe { safe_read_i32(field) }? as u32;
+    if displaced == place_name_id {
+        return None;
+    }
+    unsafe { core::ptr::write_volatile(field as *mut u32, place_name_id) };
+    Some(displaced)
+}
+
+/// Hook of the ProfileSelect row-model BUILDER `FUN_1408752c0(rowModel, slot)`.
+///
+/// This is where a slot's `ProfileSummary` record becomes a row: the builder reads `record[0x34]`
+/// and the field filler turns it into the row model's `Location` string. So a slot whose record was
+/// copied in from another save is lent the id this save evidences for that body's map, for the
+/// duration of this one call, and the game's own formatter renders it. The record is put back before
+/// returning -- it is the game's, and the save-swap snapshot and portrait identity checks read it.
+///
+/// The correction cannot happen at the populate hook: by then `Location` is a formatted string and
+/// the record is never read again.
+pub(crate) unsafe extern "system" fn profile_row_model_build_hook(
+    row_model: usize,
+    slot: i32,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PROFILE_ROW_MODEL_BUILD_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return row_model;
+    }
+    let f: unsafe extern "system" fn(usize, i32) -> usize = unsafe { std::mem::transmute(orig) };
+    let staged = if stats_panel_enabled()
+        && !unsafe { profile_slot_location_is_this_characters(slot) }
+        && let Some(id) = profile_slot_place_name_id(slot)
+    {
+        unsafe { stage_profile_record_place_name(slot, id) }.map(|displaced| {
+            let n = PROFILE_ROW_PLACE_NAME_REPAIRS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 10 || n.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "stats-text: slot {slot} Location REPAIRED -- its record is another character's (record place {displaced}); lent it PlaceName {id}, which this save pairs with body map 0x{:08x} in a record the game DID write (repairs={n})",
+                    profile_slot_saved_map(slot).unwrap_or(0)
+                ));
+            }
+            displaced
+        })
+    } else {
+        None
+    };
+    let ret = unsafe { f(row_model, slot) };
+    if let Some(displaced) = staged {
+        unsafe { restore_profile_record_place_name(slot, displaced) };
+    }
+    ret
+}
+
+/// Give slot `slot`'s record back the `PlaceName` id [`stage_profile_record_place_name`] displaced.
+///
+/// # Safety
+/// Game thread, immediately after the call that borrowed the field.
+pub(crate) unsafe fn restore_profile_record_place_name(slot: i32, displaced: u32) {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return;
+    }
+    let field = summary
+        + PROFILE_SUMMARY_RECORD_BASE
+        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE
+        + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    unsafe { core::ptr::write_volatile(field as *mut u32, displaced) };
+}
+
+/// Does the LIVE `ProfileSummary` record for `slot` describe the character whose body sits in that
+/// slot of the save we parsed?
+///
+/// The row's `Location` is formatted from that record's `PlaceName` id and from nothing else. In a
+/// save the game wrote, the record and the body were written together and always agree; in a save
+/// ASSEMBLED by a manager that copies `USER_DATA00N` bodies between files, `USER_DATA010` is left
+/// behind and the record describes whoever used to hold the slot. `save-files/100-Lilbro` is that
+/// case, and it is why six Load Game rows read "Midra's Manse" for characters saved in the Academy
+/// (user-reported 2026-08-07).
+///
+/// The comparison is against the LIVE record rather than the file's, and that is load-bearing: the
+/// game rewrites a slot's record whenever it saves that character, so after a switch-and-quit the
+/// loaded slot's record is correct while the file's copy is still the stale one. Reading the file
+/// would blank the one row that had just become right.
+///
+/// `true` whenever the question cannot be answered (no cached map, no readable summary). Hiding a
+/// field needs positive evidence; absence of evidence is not it.
+///
+/// # Safety
+/// Game thread; every read is fault-guarded.
+pub(crate) unsafe fn profile_slot_location_is_this_characters(slot: i32) -> bool {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return true;
+    }
+    // A previewed record whose place name could not be sourced still holds the TEMPLATE character's,
+    // and its map was written from the body -- so it passes the comparison below while being exactly
+    // the case that comparison is for. The preview says so directly instead.
+    if PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.load(Ordering::SeqCst) & (1usize << slot as usize) != 0
+    {
+        return false;
+    }
+    let Some(body_map) = profile_slot_saved_map(slot) else {
+        return true;
+    };
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return true;
+    }
+    let record =
+        summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let Some(record_map) = (unsafe { safe_read_i32(record + PROFILE_SUMMARY_MAP_OFFSET) }) else {
+        return true;
+    };
+    record_map == body_map
+}
+
+/// Rows whose `Location` was withheld because the record behind it names another character.
+static PROFILE_ROW_FOREIGN_LOCATION_ROWS: AtomicUsize = AtomicUsize::new(0);
+
 /// Populate the per-slot stats cache from the live save file if not already loaded. Reads the on-disk
 /// `.sl2` (the exact file the game loads) via the native save-dir builder path (`own_load_read_sl2_bytes`),
 /// then parses each `USER_DATA` slot's `PlayerGameData` attributes with `er_save_loader::stats`. Heavy
 /// work (a ~26 MB read + parse) happens at most once per session; subsequent rows hit the cache.
 /// Returns whether the cache is loaded (true even if some/all slots are empty).
 pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
-    let mut guard = match PROFILE_SLOT_STATS_CACHE.lock() {
-        Ok(g) => g,
-        Err(poison) => poison.into_inner(),
-    };
-    if guard.is_some() {
-        return true;
+    {
+        let guard = match PROFILE_SLOT_STATS_CACHE.lock() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
+        if guard.is_some() {
+            return true;
+        }
     }
     let Some(sl2) = (unsafe { crate::experiments::own_load_read_sl2_bytes(base) }) else {
         PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
@@ -1034,27 +1212,89 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
         ));
         return false;
     };
-    let all = er_save_loader::stats::all_slot_stats(&sl2);
-    let mut names = er_save_loader::stats::all_slot_names(&sl2);
-    for slot in er_save_loader::bnd4::active_character_slots(&sl2).unwrap_or_default() {
+    load_profile_slot_caches_from_bytes(&sl2, "live .sl2");
+    true
+}
+
+/// Fill both per-slot caches from `sl2`, replacing whatever they held.
+///
+/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker ALREADY HAS the
+/// bytes of the save it is previewing: reloading from them costs a parse instead of another ~26 MB
+/// read, and it makes the caches describe the save whose slots are on screen.
+pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> usize {
+    let all = er_save_loader::stats::all_slot_stats(sl2);
+    let mut names = er_save_loader::stats::all_slot_names(sl2);
+    for slot in er_save_loader::bnd4::active_character_slots(sl2).unwrap_or_default() {
         if slot.slot < names.len() && names[slot.slot].is_none() {
             names[slot.slot] = Some(slot.name);
         }
     }
+    // Read straight off each body: the map is the only field the body and its ProfileSummary record
+    // both carry, so it is what lets a row ask whether its record is really its own.
+    let maps: [Option<i32>; 10] = core::array::from_fn(|slot| {
+        er_save_loader::bnd4::slot_body(sl2, slot)
+            .ok()
+            .and_then(er_save_loader::bnd4::slot_saved_map)
+    });
+    // What each slot's Location should say, resolved from the save's own consistent records.
+    let place_names = er_save_loader::profile_summary::slot_place_name_ids(sl2);
     let decoded = all.iter().flatten().count();
     let named = names.iter().flatten().count();
-    *guard = Some(all);
+    match PROFILE_SLOT_STATS_CACHE.lock() {
+        Ok(mut guard) => *guard = Some(all),
+        Err(poison) => *poison.into_inner() = Some(all),
+    }
     if let Ok(mut name_guard) = PROFILE_SLOT_NAMES_CACHE.lock() {
         *name_guard = Some(names);
+    }
+    if let Ok(mut map_guard) = PROFILE_SLOT_SAVED_MAP_CACHE.lock() {
+        *map_guard = Some(maps);
+    }
+    if let Ok(mut place_guard) = PROFILE_SLOT_PLACE_NAME_CACHE.lock() {
+        *place_guard = Some(place_names);
     }
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(named, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "stats-text: per-slot cache loaded from .sl2 ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
+        "stats-text: per-slot cache loaded from {source} ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
         sl2.len()
     ));
-    true
+    decoded
+}
+
+/// Drop both per-slot caches so the next row populate re-reads the save that is actually active.
+///
+/// THE CACHES USED TO BE A PROCESS-LIFETIME LATCH. `ensure_profile_slot_stats_cached` returned early
+/// whenever they held anything, and nothing in the workspace ever put `None` back -- so the FIRST
+/// save read in a session described every ProfileSelect row for the rest of that session. Pick a
+/// different save file and the rows mixed two characters: `Location` and the level come off the
+/// game's own row model and followed the new save, while the name and the whole attribute line came
+/// from here and stayed on the old one. (`WL` merely vanished, because it is dropped when the cached
+/// slot's level disagrees with the row's -- the one field whose guard accidentally covered this.)
+pub(crate) fn invalidate_profile_slot_caches(reason: &str) {
+    let had = match PROFILE_SLOT_STATS_CACHE.lock() {
+        Ok(mut guard) => guard.take().is_some(),
+        Err(poison) => poison.into_inner().take().is_some(),
+    };
+    if let Ok(mut name_guard) = PROFILE_SLOT_NAMES_CACHE.lock() {
+        *name_guard = None;
+    }
+    if let Ok(mut map_guard) = PROFILE_SLOT_SAVED_MAP_CACHE.lock() {
+        *map_guard = None;
+    }
+    if let Ok(mut place_guard) = PROFILE_SLOT_PLACE_NAME_CACHE.lock() {
+        *place_guard = None;
+    }
+    PROFILE_SLOT_STATS_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_NAMES_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_CACHE_STATE.store(0, Ordering::SeqCst);
+    if had {
+        let n = PROFILE_SLOT_CACHE_INVALIDATIONS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "stats-text: per-slot cache dropped ({reason}); the next row populate re-reads the active save (invalidations={n})"
+        ));
+    }
 }
 
 /// Push `utf16` onto the row's `ErStats` field with the game's own machinery, exactly as the native
@@ -1570,6 +1810,29 @@ unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
     Some(build_stats_compact_html_utf16(&attrs))
 }
 
+thread_local! {
+    /// Non-zero while this thread is inside the CURRENT-PLAYER summary builder
+    /// (`PROFILE_CURRENT_ROW_POPULATE_RVA`), which calls the per-slot row populate we also hook.
+    ///
+    /// This exists because the slot index cannot answer "whose character is this row". The builder
+    /// composes its transient summary as `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
+    /// index 0 with the LIVE player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
+    /// both that row and save slot 0's real row. Guessing "0 means the live character" put the
+    /// loaded character's NAME on save slot 0's row, level, attributes and location: with slot 3 of
+    /// `100-Lilbro` loaded, the Load Game list read "Vagabond, RL 100 WL 20" -- Vagabond is the RL 9
+    /// character that was loaded, everything else on the row is angrE's (user-reported 2026-08-07).
+    /// Being inside the builder is the fact itself rather than a proxy for it, and it is per-thread
+    /// because the row populate is called from other threads' menu work too.
+    static IN_CURRENT_PLAYER_ROW_BUILD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Is the row being populated right now the transient CURRENT-PLAYER summary rather than a save slot?
+fn building_current_player_row() -> bool {
+    IN_CURRENT_PLAYER_ROW_BUILD
+        .try_with(|depth| depth.get() != 0)
+        .unwrap_or(false)
+}
+
 pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     param_1: usize,
     row_proxy: usize,
@@ -1580,7 +1843,12 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         return;
     }
     let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+    // Marked across the original because the per-slot row populate runs INSIDE it (the builder ends
+    // `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and that nested call
+    // is the one that has to know this row is the live character's.
+    let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get() + 1));
     unsafe { f(param_1, row_proxy) };
+    let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get().saturating_sub(1)));
     if !stats_panel_enabled() || row_proxy == 0 || row_proxy == null {
         return;
     }
@@ -1600,15 +1868,21 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     // Name AND level from ONE character. This row is the CURRENT player, so live PGD is the truth;
     // slot 0 is only a fallback for when there is no live PGD yet, and then BOTH values come from
     // slot 0. Mixing the two sources renders one character's name beside another's level.
+    // WHOSE CHARACTER IS THIS ROW? Normally the live one -- this hook builds the current-player
+    // summary. But while a foreign save is previewed, the rows describe THAT save, and stamping the
+    // loaded character's identity here puts their name (and level, and weapon level) on somebody
+    // else's row. Slot 0 of the previewed save is the honest answer then, which is what the cache
+    // now holds.
+    let foreign_preview = crate::experiments::startup_hooks::system_quit_foreign_preview_active();
     let identity = match build_loaded_char_name() {
-        Some(name) => Some((
+        Some(name) if !foreign_preview => Some((
             name,
             build_loaded_char_level(),
             build_loaded_char_weapon_level(),
         )),
-        None if cache_loaded => profile_slot_name(0)
+        _ if cache_loaded => profile_slot_name(0)
             .map(|name| (name, profile_slot_level(0), profile_slot_weapon_level(0))),
-        None => None,
+        _ => None,
     };
     if let Some((name, level, weapon_level)) = identity {
         // MERGED ROW HEADER -- the SECOND populate path. This hook, not the row-model one, is what
@@ -1732,6 +2006,9 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         if base != null && unsafe { row_is_stats_panel_template(base, row_proxy) } {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
+            // Read once, before anything keys on the slot index: it is the difference between save
+            // slot 0's row and the transient current-player row, which share that index.
+            let current_player_row = building_current_player_row();
             let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)
                 .contains(&slot)
                 .then_some(slot as usize);
@@ -1764,32 +2041,50 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let merged_header = if slot_info.is_none() && stats_panel_enabled() {
                 // Latched; the first caller pays the .sl2 read and the rest hit the cache.
                 unsafe { ensure_profile_slot_stats_cached(base) };
-                let name = if slot == 0 {
+                // WHOSE NAME BELONGS ON THIS ROW. The live character's only on the transient
+                // current-player row, which `building_current_player_row` identifies by the call
+                // stack it is on. It used to be identified by `slot == 0`, which is also every save
+                // slot 0 row: with another slot's character loaded, that put the loaded name on save
+                // slot 0's row beside save slot 0's level, attributes and location.
+                let name = if current_player_row {
                     build_loaded_char_name().or_else(|| profile_slot_name(slot))
                 } else {
                     profile_slot_name(slot)
                 };
                 name.map(|name| {
                     let mut values = ProfileRowHeaderValues::from_name(name);
-                    // Straight from the row model -- the same word the native `Level` field
-                    // formats -- so the merged string always agrees with the row it is on, with no
-                    // slot lookup to get wrong.
+                    // The row model's level word is the one the native `Level` field formats
+                    // (`rowModel + 0x88`), taken from that slot's ProfileSummary record. On the
+                    // transient current-player row it is the LIVE character's level and is the only
+                    // source; on a save slot it is the RECORD's, which describes the record's
+                    // character -- not necessarily the body that will load. So a save slot takes its
+                    // level from the same decode of the same body the name and the attribute line
+                    // came from, and falls back to the record only when the body did not decode.
+                    //
+                    // This is not hypothetical tidiness: on `100-Lilbro`, whose summary table is
+                    // another save's, slot 1 rendered "Dark Moon Bean, RL 7" -- the body's name
+                    // beside the stale record's level, for a character who is RL 90 (observed
+                    // 2026-08-07, +54146ms).
                     let row_level =
                         unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_LEVEL_88_OFFSET) };
-                    if let Some(level) = row_level {
+                    let level = if current_player_row {
+                        row_level
+                    } else {
+                        profile_slot_level(slot).or(row_level)
+                    };
+                    if let Some(level) = level {
                         values = values.with_rune_level(level);
                     }
-                    // WL comes from the per-slot `.sl2` cache, but ONLY when that slot's cached
-                    // level agrees with the level this row is actually drawing. The transient
-                    // current-player row is built with slot index 0 carrying the LIVE character's
-                    // level (`FUN_1408753f0` -> `FUN_1408759e0(summary, 0, &name, pgd->level)`), so
-                    // on a save whose slot 0 holds somebody else, keying the cache on that index
-                    // would print a different character's weapon level beside the right name. When
-                    // the two levels disagree this row is not the slot the cache describes, so WL
-                    // is dropped rather than guessed.
-                    if let Some(wl) = profile_slot_weapon_level(slot)
-                        && profile_slot_level(slot) == row_level
-                    {
+                    // WL has no native field at all, so it comes from the same body decode as the
+                    // level above -- keeping every number on the row a statement about one
+                    // character. The current-player row reads it off live `PlayerGameData` for the
+                    // same reason.
+                    let weapon_level = if current_player_row {
+                        build_loaded_char_weapon_level()
+                    } else {
+                        profile_slot_weapon_level(slot)
+                    };
+                    if let Some(wl) = weapon_level {
                         values = values.with_weapon_level(i32::from(wl));
                     }
                     er_loading_portrait::profile_row_label::row_header_label(&values)
@@ -1797,14 +2092,45 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             } else {
                 None
             };
+            // A character row's `Location` is formatted from that slot's ProfileSummary record, so
+            // it is only this character's location when the record is this character's. When it is
+            // not, LEND the record the id the save itself evidences for this body's map and let the
+            // game's own writer render it -- restored right after the populate. The field is only
+            // hidden when even that has no answer, because the remaining alternative is printing the
+            // place of whoever used to occupy the slot.
+            //
+            // The transient current-player row is exempt: it is not save slot 0, so the slot-0
+            // record it would be compared against is somebody else's by construction, and its
+            // location comes from the live player either way.
+            let record_is_this_characters = current_player_row
+                || slot_info.is_some()
+                || unsafe { profile_slot_location_is_this_characters(slot) };
+            let repair_place_name = if record_is_this_characters {
+                None
+            } else {
+                profile_slot_place_name_id(slot)
+            };
+            let location_available = record_is_this_characters || repair_place_name.is_some();
             let (want_visibility, last_saved) = match slot_info {
                 Some(info) => (
                     RowSlotFieldVisibility::browse_row(info.location.is_some()),
                     info.location,
                 ),
-                None if merged_header.is_some() => (RowSlotFieldVisibility::NATIVE_MERGED, None),
+                None if merged_header.is_some() => (
+                    RowSlotFieldVisibility::native_merged(location_available),
+                    None,
+                ),
                 None => (RowSlotFieldVisibility::NATIVE, None),
             };
+            if !location_available && merged_header.is_some() {
+                let rows = PROFILE_ROW_FOREIGN_LOCATION_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+                if rows <= 10 || rows.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}) and no consistent record in this save covers that map, so there is no place name to show (rows={rows})",
+                        profile_slot_saved_map(slot).unwrap_or(0)
+                    ));
+                }
+            }
             if want_visibility != RowSlotFieldVisibility::NATIVE
                 || PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.load(Ordering::SeqCst) != 0
             {
