@@ -20,7 +20,16 @@ EOF
     return 2
   fi
   local token_text
-  IFS= read -r token_text < "$token" || token_text=""
+  # `read` returns NON-ZERO when it hits EOF without a trailing newline, having already stored the
+  # line it read. The old `|| token_text=""` threw that value away, so a perfectly valid token file
+  # written with `printf '%s'` was refused and the diagnostic below printed an empty `token:` --
+  # which reads as "the file is empty" and sends the next person hunting the wrong fault (observed
+  # 2026-08-07). Keep what was read; an actually-empty file still fails the exact-match test below.
+  local token_text_status=0
+  IFS= read -r token_text < "$token" || token_text_status=$?
+  if [[ $token_text_status -ne 0 && -z "$token_text" ]]; then
+    token_text=""
+  fi
   if [[ "$token_text" != "$run_id" ]]; then
     cat >&2 <<EOF
 user-runtime-gate: refusing real Elden Ring runtime launch.

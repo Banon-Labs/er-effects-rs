@@ -737,6 +737,17 @@ pub(crate) const PROFILE_SUMMARY_TOTAL_BYTES: usize =
 pub(crate) const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
 pub(crate) const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
 pub(crate) const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
+/// `PlaceName` message id -- the field the row's **Location** is rendered from, and the one a
+/// field-by-field rebuild from `PlayerGameData` cannot supply.
+///
+/// `FUN_1408752c0` loads `record[0x34]` into `param_5` of the row-model builder (disassembly at
+/// `0x140875355`: `mov 0x34(%rsi),%eax ; mov %eax,0x20(%rsp)`), and `FUN_1408759e0` turns that into
+/// the row model's `+0x90` MenuString via `FUN_1407611c0` =
+/// `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`. So this is NOT the map id at `+0x30`:
+/// the game writes it from `CSFeMan` (where the player currently is) when saving its own summary.
+/// For a foreign save it comes out of that save's own stored summary --
+/// `er_save_loader::profile_summary`.
+pub(crate) const PROFILE_SUMMARY_PLACE_NAME_OFFSET: usize = 0x34;
 pub(crate) const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
 pub(crate) const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
 pub(crate) const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
@@ -759,6 +770,16 @@ pub(crate) const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 /// itself instead of relying on human review of RT dumps).
 pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_COUNT] =
     [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
+
+/// Bit per slot: the preview rebuilt this slot's record but could NOT source a place name for it.
+///
+/// The rebuild copies a STRUCTURAL template from the original save's record before overwriting the
+/// fields it can supply (see `write_profile_summary_record`), so a slot whose place name the previewed
+/// save cannot supply keeps the TEMPLATE character's -- and the map field, which is written from the
+/// body, then agrees with the body and makes the record look self-consistent. The map comparison that
+/// catches a stale record on a normally-loaded save therefore cannot catch this one; this mask is the
+/// record of the fact, set where the failure to source actually happens.
+pub(crate) static PROFILE_PREVIEW_PLACE_NAME_UNSOURCED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
 pub(crate) const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
@@ -1316,6 +1337,7 @@ impl<'a> SerializedPlayerGameData<'a> {
         profile_summary: usize,
         slot: usize,
         saved_map: i32,
+        place_name_id: Option<u32>,
         playtime_ticks: u32,
         fallback_record: Option<&[u8]>,
         face_bytes: Option<&[u8]>,
@@ -1348,6 +1370,21 @@ impl<'a> SerializedPlayerGameData<'a> {
             *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
                 self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
             *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
+            // Location. Without this the row keeps whichever place name the PREVIOUS save left in
+            // the record, so a swap updated the name, level, play time and stats while the location
+            // stayed put -- user-reported 2026-08-07. `None` leaves the field alone rather than
+            // writing a zero that would render as an empty Location, and records that the row must
+            // not SHOW it: the value still sitting there is the template character's, and the field
+            // is unrecoverable otherwise (it is in no character body and the game cannot recompute
+            // it from a map), so the row hides it rather than printing somebody else's place.
+            let slot_bit = 1usize << slot;
+            if let Some(place_name_id) = place_name_id {
+                *(slot_data.wrapping_add(PROFILE_SUMMARY_PLACE_NAME_OFFSET) as *mut u32) =
+                    place_name_id;
+                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_and(!slot_bit, Ordering::SeqCst);
+            } else {
+                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_or(slot_bit, Ordering::SeqCst);
+            }
             // VISUAL IDENTITY (second-load wrong-head ROOT fix, user-identified 2026-07-06: "Banon in
             // all three windows"). The fallback record above is a STRUCTURAL template cloned from the
             // ORIGINAL save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe

@@ -4,11 +4,11 @@
 # Icon_0 stays placed and hidden, never unplaced.
 
 [field.PlayerName]
-x = -520
+x = -538
 y = -17
 width = 1200
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
 sample_load_character = "Maddened Bean, RL 125 WL 25"
 sample_save_picker = "[..] save-files"
@@ -19,7 +19,7 @@ x = -346
 y = -18.25
 width = 149
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
 sample_load_character = "RL"
 sample_save_picker = ""
@@ -30,18 +30,18 @@ x = -300
 y = -19
 width = 52
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "125"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Location]
-x = 250
+x = 260
 y = -16
 width = 281
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "Midra's Manse"
 sample_save_picker = ""
@@ -52,62 +52,62 @@ x = 326
 y = -16
 width = 200
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "107:49:34"
 sample_save_picker = "2026-07-07"
 sample_drive_row = "2026-07-07"
 
 [field.ErStats]
-x = -324
+x = -175
 y = -16
 width = 587
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
 sample_load_character = ""
 sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -208
-y = -13
+x = -175
+y = -13.5
 width = 484
 clip_height = 42
-font_height = 19
+font_height = 20
 align = "center"
 sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.DriveCell_0]
-x = -325
+x = -375
 y = -16
 width = 64
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "center"
 sample_load_character = ""
 sample_save_picker = "[C:]"
 sample_drive_row = "[C:]"
 
 [field.DriveCell_1]
-x = -247
+x = -325
 y = -16
 width = 64
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "center"
 sample_load_character = ""
 sample_save_picker = "[S:]"
 sample_drive_row = "[S:]"
 
 [field.DriveCell_2]
-x = -166
+x = -275
 y = -16
 width = 64
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "center"
 sample_load_character = ""
 sample_save_picker = ">Z:<"

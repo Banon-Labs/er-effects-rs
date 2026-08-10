@@ -100,6 +100,49 @@ pub(crate) fn install_profile_row_populate_hook() {
             )),
         }
     }
+    // The row-model BUILDER, hooked separately from the populate above because it is the only place
+    // a slot's ProfileSummary record is still a record: it reads `record[0x34]` and the filler turns
+    // that into the row's `Location` string. A save whose summary table was copied in from another
+    // file needs its place name corrected HERE or not at all.
+    if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve row-model-build rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_row_model_build_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_ROW_MODEL_BUILD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable row-model-build failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PROFILE_ROW_MODEL_BUILD_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked ProfileSelect row-model builder FUN_1408752c0 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: row-model-build MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new row-model-build failed: {status:?}"
+            )),
+        }
+    }
     if !current_row_installed {
         let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
             append_autoload_debug(format_args!(
@@ -1671,6 +1714,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
             }
             "05_010_ProfileSelect" => {
+                // ONE TICK PER RENDERED FRAME OF OUR VIEW. The live editor's safety gate reads this
+                // to answer "is the ProfileSelect view on screen right now", which decides whether a
+                // web-UI edit may be applied from the async FrameBegin path or has to wait for the
+                // in-band row populate. Stamped here because this hook IS the per-frame run of that
+                // window's MenuWindowJob; nothing else in the process is that direct about it.
+                er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                    .fetch_add(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
             }
             _ => 0,

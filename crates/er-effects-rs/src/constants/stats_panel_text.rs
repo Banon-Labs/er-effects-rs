@@ -99,6 +99,23 @@ pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
 pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// Row-model BUILDER `FUN_1408752c0(rowModel, int slot)` -- the only reader of a slot's
+/// `ProfileSummary` record on the way to a row.
+///
+/// It resolves the record (`FUN_140261b80(summary, slot)`), pulls the level from `record[0x24]`, the
+/// play time from `record[0x28]` and the **PlaceName id from `record[0x34]`**, then hands all three
+/// to the field filler `FUN_1408759e0`, which turns the place id into the row model's `+0x90`
+/// `Location` MenuString via `FUN_1407611c0` = `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`.
+///
+/// That ordering is why the record must be lent its corrected place name HERE and not at
+/// [`PROFILE_ROW_POPULATE_RVA`]: by the time the populate runs, `Location` is already a formatted
+/// string and the record is no longer consulted. Patching there changed nothing on screen while the
+/// telemetry happily reported a repair (observed 2026-08-07 -- seven rows still read the stale
+/// "Midra's Manse").
+///
+/// Byte-verified against `eldenring-deobf.bin` before hooking: `40 55 56 57 48 81 ec 90 00 00 00`,
+/// identical to the 1.16.2 dump's disassembly at the same VA (shift 0).
+pub(crate) const PROFILE_ROW_MODEL_BUILD_RVA: usize = 0x8752c0;
 /// Title/load-current-character row builder `FUN_140951220`: builds a transient current-player
 /// `MenuSaveDataSummary` on its own STACK, then calls [`PROFILE_ROW_POPULATE_RVA`] to fill
 /// PlayerName/Level/Location/PlayTime/Icon_0. Hooked after the original to push `ErCharStats` on
@@ -194,9 +211,48 @@ pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_STAGE_FAILURES;
 /// per call as an oracle so "the fields are still visible in game" is diagnosable from telemetry
 /// instead of guesswork -- a non-10 type means the hide silently no-ops.
 pub(crate) const GFX_VALUE_TYPE_DISPLAY_OBJECT: usize = 10;
+/// `GFx::Value::VT_Undefined` / `VT_Null` -- what a named-child resolve leaves in the out proxy when
+/// the movie has NO child by that name.
+///
+/// This is the only observable difference between a hit and a miss, and missing it is what let one
+/// movie's presentation be applied to another's. `SceneObjProxy::assignComponentWithName`
+/// (`0x14074a2f0`) always returns a fully constructed out proxy: the named-child ctor
+/// (`0x14074a7c0`) runs `ComponentProxy::ComponentProxy` -- which initialises the component slot at
+/// +0x8 to the proxy ITSELF -- and then asks `FUN_140d7f9d0` for the member. On a miss the member
+/// lookup writes an undefined `GFx::Value` and the self-link stands, so `*(out + 0x8)` is non-null
+/// and its vtable IS in the game image. Any "did the field resolve?" test written on the component
+/// pointer therefore answers YES for every name on every movie. Measured on the live game: 5
+/// non-display resolves per populate on the System>Quit summary, exactly the five field names this
+/// mod injects into `05_010_ProfileSelect` and that `02_040_OptionSetting` does not have.
+pub(crate) const GFX_VALUE_TYPE_UNDEFINED: usize = 0;
+pub(crate) const GFX_VALUE_TYPE_NULL: usize = 1;
+/// True when a named-child resolve actually found a child (as opposed to leaving the out proxy's
+/// value undefined).
+pub(crate) fn gfx_value_type_is_resolved(datatype: usize) -> bool {
+    datatype != GFX_VALUE_TYPE_UNDEFINED && datatype != GFX_VALUE_TYPE_NULL
+}
 /// Offset of the GFx value's type word inside a `CSScaleformValue` (the `lVar+0x20` every setter
 /// guards on: `CSScaleformValue` = vfptr + `GFx::Value`, whose `dataType` lands at +0x20).
 pub(crate) const CSSCALEFORMVALUE_DATATYPE_20_OFFSET: usize = 0x20;
+/// MSVC's `_purecall` (`0x14251c480`) and the handler it jumps to, `purecall_crash_handler`
+/// (`0x140c90080` = `xor eax,eax; mov dword [rax], 0xdead; ret`) -- a deliberate write to NULL.
+///
+/// THIS IS HOW A DESTROYED C++ OBJECT ANSWERS A VIRTUAL CALL. When an object is destructed its
+/// vtable pointer is left describing an abstract base, whose slots are filled with `_purecall`; the
+/// dispatch then "succeeds" and lands in the trap. Every liveness check in this module used to ask
+/// only whether the resolved function pointer lies inside the game image -- and `_purecall` does,
+/// so a destroyed component passed the check and the very next indirect call killed the process
+/// (2026-08-07 17:03:32, `access-violation rva=0xc90082 access=1 fault_addr=0x0`, backtrace
+/// `eldenring.exe+0x251c4b4` -> `+0x251c480` -> our DLL). Ruling these two targets out is what turns
+/// "the object is gone" from a crash into an error string.
+pub(crate) const PURECALL_RVA: usize = 0x251c480;
+pub(crate) const PURECALL_CRASH_HANDLER_RVA: usize = 0xc90080;
+
+/// True when an about-to-be-called vtable slot is the pure-virtual trap, i.e. the object behind it
+/// has been destructed. Check this before EVERY indirect call through a resolved component.
+pub(crate) fn dispatch_target_is_purecall(target: usize, base: usize) -> bool {
+    target == base + PURECALL_RVA || target == base + PURECALL_CRASH_HANDLER_RVA
+}
 /// Count of rows the hide was DRIVEN on because the row has no character -- i.e. the native setter
 /// was called for at least one of the three fields; pair it with `_NON_DISPLAY` below to know the
 /// call took effect (oracle). Also the latch that arms the symmetric re-show: until it is non-zero
@@ -213,7 +269,19 @@ pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_VIS_SKIPS;
 pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_NON_DISPLAY;
 /// Last GFx value type observed by the visibility path (diagnostic companion to the counter above).
 pub(crate) use er_telemetry::counters::PROFILE_ROW_SLOT_INFO_LAST_DATATYPE;
+/// Count of summary populates handed back to the game untouched because the row is not ours (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_FOREIGN_SUMMARY_ROWS;
+/// Count of summary populates on our own edited ProfileSelect row template (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_OWN_SUMMARY_ROWS;
+/// Count of text pushes refused because the movie has no child by that name (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_MISSING_FIELD;
 pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Trampoline for [`PROFILE_ROW_MODEL_BUILD_RVA`], and its one-shot install latch.
+pub(crate) static PROFILE_ROW_MODEL_BUILD_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_ROW_MODEL_BUILD_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Rows whose record was lent a corrected `PlaceName` id by the builder hook (oracle).
+pub(crate) static PROFILE_ROW_PLACE_NAME_REPAIRS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_CURRENT_ROW_POPULATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::PROFILE_ROW_POPULATE_INSTALLED;
@@ -230,6 +298,10 @@ pub(crate) static PLAYER_GAME_DATA_NAME_GETTER_OVERRIDE_LOGGED: AtomicUsize = At
 /// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
 /// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
 pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_CACHE_STATE;
+/// Count of per-slot cache drops on a save swap (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS;
+/// Count of per-slot cache refills from picker-held bytes (oracle).
+pub(crate) use er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS;
 /// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
 pub(crate) use er_telemetry::counters::PROFILE_SLOT_STATS_DECODED;
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HITS;
