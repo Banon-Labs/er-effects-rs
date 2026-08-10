@@ -55,3 +55,11 @@ pub const PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET: usize =
 /// The offset is bound through `offset_of!`, so this only guards against an upstream layout change
 /// silently moving it: the Ghidra 1.16.2 dump has `matchmakingWeaponLevel` at `PlayerGameData+0xe2`.
 const _: () = assert!(PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET == 0xe2);
+
+/// Highest value the field can legitimately hold: standard armaments reinforce `+0..=+25` (somber
+/// `+0..=+10`), and `CS::ChrIns::CheckWeaponLevelMismatch` itself guards the byte with `< 0x1a`
+/// before using it. A byte above this means we are not looking at a live `PlayerGameData`, so the
+/// value is reported as unknown rather than rendered -- a confident wrong number on the loading
+/// screen is worse than a placeholder. `er_save_loader::stats` applies the identical bound to the
+/// serialized copy of the same field, so both sources reject the same values.
+pub const PGD_MATCHING_WEAPON_LEVEL_MAX: u8 = 25;
