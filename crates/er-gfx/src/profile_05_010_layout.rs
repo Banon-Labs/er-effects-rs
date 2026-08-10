@@ -252,6 +252,35 @@ impl Default for Profile05_010Layout {
     }
 }
 
+/// Menu font vertical metrics, read out of the game's own `data0:/font/eu_std/font.gfx`
+/// `DefineFont3` id=1 ("Agmena W1G For Bandai", 910 glyphs) layout block.
+///
+/// These are why a text field has a floor on its box height. Scaleform lays one line out as
+/// `(ascent + descent) / em_square * font_height` pixels; `GFx::TextField` reflow
+/// (`FUN_14114bf10`) then insets the usable area by [`TEXT_DOC_INSET_PX_PER_EDGE`] on every
+/// edge (`+0x80 = [+0xb0] + 40.0f` … `+0x8c = [+0xbc] - 40.0f`, twips). A box below that sum
+/// cannot hold its own text, which is exactly how `PlayerName` shipped at `clip_height = 30`
+/// against a 38.383 px requirement and rendered short. Vanilla's own `PlayerName` rect is
+/// 40 px -- the tightest round number that clears it.
+pub const MENU_FONT_ASCENT: i32 = 20800;
+pub const MENU_FONT_DESCENT: i32 = 8540;
+/// Fixed by the SWF spec for `DefineFont3`: glyph coordinates are 1/20 twip, i.e. 1024 * 20.
+pub const MENU_FONT_EM_SQUARE: i32 = 20480;
+/// 40 twips per edge in the reflow routine = 2 px, top and bottom both.
+pub const TEXT_DOC_INSET_PX_PER_EDGE: i32 = 2;
+
+/// Height in px of one laid-out line of the menu font at `font_height`.
+pub fn line_box_px(font_height: i32) -> f32 {
+    (MENU_FONT_ASCENT + MENU_FONT_DESCENT) as f32 / MENU_FONT_EM_SQUARE as f32 * font_height as f32
+}
+
+/// Smallest `clip_height` that can render one line at `font_height`, inset included.
+///
+/// Rounds up: a fractional shortfall still clips, so `38.383` demands `39`.
+pub fn min_clip_height_px(font_height: i32) -> i32 {
+    (line_box_px(font_height) + (2 * TEXT_DOC_INSET_PX_PER_EDGE) as f32).ceil() as i32
+}
+
 fn field(
     x: i32,
     y: i32,
@@ -365,6 +394,18 @@ impl Profile05_010Layout {
             if field.font_height <= 0 {
                 return Err(LayoutError::InvalidValue(format!(
                     "field.{name}.font_height must be > 0"
+                )));
+            }
+            let minimum = min_clip_height_px(field.font_height);
+            if field.clip_height < minimum {
+                return Err(LayoutError::InvalidValue(format!(
+                    "field.{name}.clip_height {} cannot render one line of its own font: \
+                     font_height {} needs a {:.3} px line box ({MENU_FONT_ASCENT} ascent + \
+                     {MENU_FONT_DESCENT} descent over {MENU_FONT_EM_SQUARE} em) plus the \
+                     {TEXT_DOC_INSET_PX_PER_EDGE} px/edge reflow inset, so clip_height must be >= {minimum}",
+                    field.clip_height,
+                    field.font_height,
+                    line_box_px(field.font_height),
                 )));
             }
         }
@@ -569,5 +610,53 @@ mod tests {
             err.to_string().contains("visible_rows must stay 10"),
             "{err}"
         );
+    }
+
+    /// The regression this exists to prevent: `PlayerName` shipped at `clip_height = 30` with
+    /// `font_height = 24`, which is 8.383 px short of one line box plus the reflow inset, and the
+    /// character name rendered short in game. The old rule was `font_height <= clip_height`, which
+    /// 24-in-30 satisfies, so nothing caught it.
+    #[test]
+    fn clip_height_below_the_font_line_box_fails_closed() {
+        let err =
+            Profile05_010Layout::parse("[field.PlayerName]\nclip_height = 30\nfont_height = 24\n")
+                .expect_err("a box too short for one line of its own font must fail");
+        let message = err.to_string();
+        assert!(message.contains("cannot render one line"), "{err}");
+        assert!(message.contains(">= 39"), "{err}");
+
+        // The exact boundary, so nobody "fixes" this by loosening the rounding: 24 px of Agmena
+        // is a 34.383 px line box, +4 px inset = 38.383, so 38 must fail and 39 must pass.
+        assert_eq!(min_clip_height_px(24), 39);
+        assert!(
+            Profile05_010Layout::parse("[field.PlayerName]\nclip_height = 38\nfont_height = 24\n")
+                .is_err(),
+            "38 px still clips a 38.383 px requirement"
+        );
+        assert!(
+            Profile05_010Layout::parse("[field.PlayerName]\nclip_height = 39\nfont_height = 24\n")
+                .is_ok(),
+            "39 px clears the requirement"
+        );
+    }
+
+    /// Every field in the checked-in schema must clear its own font, not just `PlayerName`.
+    #[test]
+    fn checked_in_schema_fields_all_clear_their_font_line_box() {
+        let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+            .expect("checked-in schema parses");
+        for name in FIELD_NAMES {
+            let field = layout.field(name);
+            let minimum = min_clip_height_px(field.font_height);
+            assert!(
+                field.clip_height >= minimum,
+                "field.{name}: clip_height {} < {minimum} required for font_height {} \
+                 (line box {:.3} px + {} px/edge inset)",
+                field.clip_height,
+                field.font_height,
+                line_box_px(field.font_height),
+                TEXT_DOC_INSET_PX_PER_EDGE,
+            );
+        }
     }
 }
