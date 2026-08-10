@@ -4,10 +4,10 @@ use super::*;
 //
 // Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
 // out of the game) with the same native 10-row window the character switcher already drives. The
-// rows are a browsable directory listing -- a pinned `[ new ]` FIRST in destination intent, then
-// up, drive cycler, dirs + mode-locked save files -- staged as synthetic ProfileSummary records;
-// the shared model lives in `experiments::save_picker` and owns the row layout (see its module docs
-// for the order and why nothing sits at a fixed index). It is also the surface the Save Game row
+// rows are a browsable directory listing -- the drive switcher ALWAYS FIRST when present, then
+// destination-only `[ new ]`, up, dirs + mode-locked save files -- staged as synthetic
+// ProfileSummary records; the shared model lives in `experiments::save_picker` and owns the row
+// layout (see its module docs for the order and derived indices). It is also the surface the Save Game row
 // press opens directly, with no confirm in front of it. Directory/drive navigation and edge-hover
 // scroll-window restaging rebuild the row list in place via the game's own records-changed rebuild
 // (close + menu-pump resubmit as fallback). Picking a file feeds the validation/preview pipeline
@@ -25,7 +25,8 @@ use super::*;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_ACTION_OBJ;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_CANCEL_COUNT;
 /// 1 while the live picker is the save-DESTINATION chooser (save-game-flow WP3) instead of the
-/// load-source browser: row 0 is a pinned `[ new ]`, and activation feeds the save flow.
+/// load-source browser: `[ new ]` is the initial selection (row 1 when drives occupy row 0), and
+/// activation feeds the save flow.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
 /// 1 while the live `05_010_ProfileSelect` window is OUR file-picker (rows = directory listing).
 /// 0 when it is the normal character-slot view.
@@ -1399,7 +1400,8 @@ pub(crate) struct RowSlotInfo {
     /// Whether this row has real `ErStats` copy. False on the drive row unless a visible status
     /// message temporarily owns it, so stale parent-folder copy cannot survive row-clip reuse.
     pub(crate) er_stats: bool,
-    /// Whether this is the one drive-cycle row. Drive cells are hidden on every other picker row.
+    /// Whether this is the one drive-cycle row and its cells own the row. A visible status message
+    /// temporarily takes that field band instead, so the drive cells hide rather than overlap it.
     pub(crate) drive_cells: bool,
 }
 
@@ -1416,10 +1418,11 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     let (last_saved, er_stats, drive_cells) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let model = guard.as_ref()?;
+        let has_auxiliary_lines = model.row_auxiliary_lines(row).is_some();
         (
             model.row_last_saved(row),
-            model.row_auxiliary_lines(row).is_some() || model.row_file_characters(row).is_some(),
-            model.drive_row() == Some(row),
+            has_auxiliary_lines || model.row_file_characters(row).is_some(),
+            model.drive_row() == Some(row) && !has_auxiliary_lines,
         )
     };
     Some(RowSlotInfo {
