@@ -100,9 +100,22 @@ pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_STALE_LAST_VT;
 /// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
 pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
 /// Title/load-current-character row builder `FUN_140951220`: builds a transient current-player
-/// `MenuSaveDataSummary`, calls [`PROFILE_ROW_POPULATE_RVA`] to fill PlayerName/Level/Location/
-/// PlayTime/Icon_0, then returns without going through the per-slot row-populate hook entry we own.
-/// Hook after the original and push `ErCharStats` on the same row proxy for the title Load Game view.
+/// `MenuSaveDataSummary` on its own STACK, then calls [`PROFILE_ROW_POPULATE_RVA`] to fill
+/// PlayerName/Level/Location/PlayTime/Icon_0. Hooked after the original to push `ErCharStats` on
+/// the same row proxy for the title Load Game view.
+///
+/// CORRECTED 2026-08-07 (decompile of `FUN_140951220`). This previously claimed the builder
+/// "returns without going through the per-slot row-populate hook entry we own". It does NOT: the
+/// body ends `pSVar3 = SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);
+/// FUN_140875030(local_128);` -- an ordinary call, so our entry hook on 0x8757e0 DOES see this row.
+/// Believing the old comment cost a debugging session: a change was added to a second hook to work
+/// around a bypass that never existed, while the real defect sat in the first hook's own guard.
+///
+/// What IS distinctive here: `FUN_1408753f0` builds that transient summary as
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- SLOT INDEX 0 with the LIVE player's level. So a
+/// row reaching the per-slot hook with `rowModel + 0x8 == 0` may be this current-player row rather
+/// than save slot 0, and anything keyed on that slot index (a stats-cache lookup, a "is this the
+/// picker?" test) will be wrong for it. Read per-row values off the row model instead.
 pub(crate) const PROFILE_CURRENT_ROW_POPULATE_RVA: usize = 0x951220;
 /// Row-model field holding the profile/save slot index (0-9). The native populate reads
 /// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
@@ -138,6 +151,16 @@ pub(crate) const PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET: usize = 0x5
 // LEVER, LOCATION/PLAYTIME: both strings come from the row model. A browse save-FILE row stages its
 // timestamp into `Location` (top-right, same line as PlayerName) and hides the bottom `PlayTime`, so
 // `ER0000.sl2` and `YYYY-MM-DD HH:MM` occupy one row instead of two vertical bands.
+/// Offset of the row model's level word -- the exact `u32` the native `Level` field formats
+/// (`FUN_140749ed0(&proxy->comp, *(u32*)(rowModel + 0x88))`, see the note above).
+///
+/// Reading the MERGED header's level from here rather than from a slot-indexed cache removes the
+/// slot-mapping question entirely: whatever number the native field would have printed on THIS row
+/// is the number the merged string prints, per-slot rows and the transient current-player row alike.
+/// Static RE of `FUN_1408753f0` shows the current-player summary is built as
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot 0 with the LIVE level -- so a cache lookup
+/// keyed on that slot would describe save slot 0's character, not the loaded one.
+pub(crate) const PROFILE_ROW_MODEL_LEVEL_88_OFFSET: usize = 0x88;
 pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502\0";
 pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
 pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";

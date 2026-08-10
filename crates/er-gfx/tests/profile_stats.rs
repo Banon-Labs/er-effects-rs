@@ -726,17 +726,19 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let movie = Movie::parse(&out).expect("edited movie parses");
+    // WHAT A LOAD-CHARACTER ROW ACTUALLY DRAWS. The name, Rune Level and weapon level are ONE
+    // merged string in `PlayerName`; the `Level` FMG caption, the `Level` value and `PlayTime` are
+    // hidden per row (`RowSlotFieldVisibility::NATIVE_MERGED`). Listing hidden fields here would
+    // assert a layout nothing renders -- and would fail on exactly the overlap the merge creates on
+    // purpose, since `Location` is widened into the freed play-time band.
     let samples = [
-        ("PlayerName", "Maddened Bean", None),
-        ("StaticText_110502", "Level", None),
-        ("Level", "999", None),
+        ("PlayerName", "Maddened Bean, RL 999 WL 25", None),
         (
             CHAR_STATS_FIELD_NAME,
             "VIG 99 MND 99 END 99 STR 99 DEX 99 INT 99 FAI 99 ARC 99",
             Some(16.0),
         ),
-        ("Location", "Leyndell Ashen", None),
-        ("PlayTime", "999:59:59", None),
+        ("Location", "Elphael, Brace of the Haligtree", None),
     ];
     let rects: Vec<_> = samples
         .iter()
@@ -755,19 +757,11 @@ fn stats_panel_output_keeps_load_character_row_text_from_overlapping() {
         }
     }
 
-    let level = rects
-        .iter()
-        .find(|r| r.name == "Level")
-        .expect("Level text rect exists");
-    let char_stats = rects
-        .iter()
-        .find(|r| r.name == CHAR_STATS_FIELD_NAME)
-        .expect("ErCharStats text rect exists");
-    const LEVEL_TO_STATS_GUTTER_PX: i32 = 44;
-    assert!(
-        char_stats.left - level.right >= LEVEL_TO_STATS_GUTTER_PX * 20,
-        "level number and stat line need a readable gutter: level={level:?} stats={char_stats:?}; all={rects:?}"
-    );
+    // The old level-number -> stat-line gutter check lived here. It measured two fields that a
+    // merged row no longer draws. The equivalent boundary is now header-ink -> attribute-box, which
+    // `er-loading-portrait/tests/merged_row_header_fits.rs` measures against the real font for the
+    // worst-case name and suffix -- a stronger check than a fixed gutter constant, because the
+    // merged header's width varies with the name.
 }
 
 #[test]
@@ -782,17 +776,15 @@ fn stats_panel_output_keeps_load_character_rendered_text_inside_the_visible_row_
     let movie = Movie::parse(&out).expect("edited movie parses");
     let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
         .expect("checked-in visual editor schema parses");
+    // Merged row: hidden fields are deliberately absent (see the note in the overlap test above).
     let samples = [
-        ("PlayerName", "Maddened Bean", None),
-        ("StaticText_110502", "Level", None),
-        ("Level", "125", None),
+        ("PlayerName", "Maddened Bean, RL 125 WL 25", None),
         (
             CHAR_STATS_FIELD_NAME,
             "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7",
             Some(layout.field(CHAR_STATS_FIELD_NAME).font_height as f32),
         ),
-        ("Location", "Midra's Manse", None),
-        ("PlayTime", "107:49:34", None),
+        ("Location", "Elphael, Brace of the Haligtree", None),
     ];
     let slot_top = -(COMPACT_ROW_PITCH_PX * 20) / 2;
     let slot_bottom = (COMPACT_ROW_PITCH_PX * 20) / 2;

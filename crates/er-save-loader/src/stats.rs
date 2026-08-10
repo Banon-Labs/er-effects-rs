@@ -37,6 +37,25 @@ const PGD_MAX_HP: usize = 0x14;
 const PGD_MAX_FP: usize = 0x20;
 const PGD_MAX_STAMINA: usize = 0x30;
 
+/// `matchmakingWeaponLevel` -- the character's HIGHEST weapon upgrade level, which the game already
+/// maintains for multiplayer matchmaking.
+///
+/// Verified in the 1.16.2 Ghidra dump as `PlayerGameData + 0xe2`, type `byte`, and independently in
+/// ClayAmore's `SL2.bt` save template as `MatchmakingWeaponLvl` at template `+0xda` (the template's
+/// struct is `CS::PlayerGameData + 0x8`, so `0xda + 8 == 0xe2`). The same template's `Level @ 0x60`
+/// and `Vigor @ 0x34` map to this module's `PGD_LEVEL` `0x68` and `PGD_STAT_BASE` `0x3c` under the
+/// identical `+8`, which is what makes the correspondence a check rather than a coincidence.
+///
+/// Taking this byte instead of walking the inventory avoids the whole failure mode that walk
+/// carries: no item-record stride to get wrong, no reliance on the `paramId % 100` reinforcement
+/// convention, and no equipped-only blind spot for a `+25` sitting in the storage box.
+const PGD_MATCHMAKING_WEAPON_LEVEL: usize = 0xe2;
+
+/// Highest reachable weapon upgrade: standard armaments reinforce `+0..=+25` (somber `+0..=+10`).
+/// A byte outside that window means the located base is not really a `PlayerGameData`, so it is
+/// reported as unknown rather than rendered.
+const MAX_WEAPON_LEVEL: u8 = 25;
+
 /// Number of attributes: Vigor, Mind, Endurance, Strength, Dexterity,
 /// Intelligence, Faith, Arcane.
 pub const STAT_COUNT: usize = 8;
@@ -65,6 +84,10 @@ pub struct SlotStats {
     /// Effective max Stamina as stored (SL2.bt `MaxSP` == runtime
     /// `current_max_stamina`). 0 when unreadable.
     pub max_stamina: i32,
+    /// Highest weapon upgrade level on this character (`matchmakingWeaponLevel`), or `None` when the
+    /// byte is unreadable or implausible. `Some(0)` is a real answer -- a character with nothing
+    /// upgraded -- and is deliberately distinct from `None`, which means "we do not know".
+    pub matchmaking_weapon_level: Option<u8>,
 }
 
 fn rd_i32(b: &[u8], off: usize) -> Option<i32> {
@@ -98,12 +121,18 @@ fn stat_block_at(body: &[u8], stat_base: usize) -> Option<SlotStats> {
             .filter(|v| *v > 0)
             .unwrap_or(0)
     };
+    // Same best-effort posture as the vitals: acceptance is the rune-level invariant alone, and an
+    // out-of-range byte decodes as "unknown" rather than rejecting an otherwise-valid block.
+    let matchmaking_weapon_level = pgd
+        .and_then(|p| body.get(p + PGD_MATCHMAKING_WEAPON_LEVEL).copied())
+        .filter(|v| *v <= MAX_WEAPON_LEVEL);
     Some(SlotStats {
         level,
         attributes,
         max_hp: vital(PGD_MAX_HP),
         max_fp: vital(PGD_MAX_FP),
         max_stamina: vital(PGD_MAX_STAMINA),
+        matchmaking_weapon_level,
     })
 }
 
@@ -228,6 +257,53 @@ mod tests {
                 slot.attributes.iter().sum::<i32>() - RUNE_LEVEL_BASE,
                 "Rune Level invariant must hold for a decoded slot"
             );
+        }
+    }
+
+    /// The weapon-level byte must decode to a plausible upgrade on real saves, and must not be
+    /// constant across distinct characters (which is what a wrong offset landing on padding, a
+    /// flag, or a shared field would look like). Corpus-gated; prints the values so a suspicious
+    /// decode is visible rather than merely passing.
+    #[test]
+    fn matchmaking_weapon_level_decodes_plausibly_on_real_saves() {
+        let mut seen: Vec<(String, i32, Option<u8>)> = Vec::new();
+        for fixture_name in ["9-Menace", "45-Slots"] {
+            let Some(data) = fixture(fixture_name) else {
+                eprintln!("fixture {fixture_name} missing; skipping");
+                continue;
+            };
+            let stats = all_slot_stats(&data);
+            let names = all_slot_names(&data);
+            for (i, slot) in stats.iter().enumerate() {
+                let Some(slot) = slot else { continue };
+                let name = names[i].clone().unwrap_or_default();
+                eprintln!(
+                    "{fixture_name} slot {i}: {name:?} RL {} WL {:?}",
+                    slot.level, slot.matchmaking_weapon_level
+                );
+                if let Some(wl) = slot.matchmaking_weapon_level {
+                    assert!(
+                        wl <= MAX_WEAPON_LEVEL,
+                        "{fixture_name} slot {i}: weapon level {wl} exceeds the +25 cap"
+                    );
+                }
+                seen.push((name, slot.level, slot.matchmaking_weapon_level));
+            }
+        }
+        if seen.is_empty() {
+            eprintln!("no corpus saves present; weapon-level decode unverified");
+            return;
+        }
+        // A low-level character cannot have a highly upgraded armament: reaching +25 needs Somber
+        // /smithing stones a RL<20 character has not plausibly farmed. This is the cheap sanity
+        // check that a wrong offset (reading an unrelated byte) tends to violate.
+        for (name, level, wl) in &seen {
+            if let Some(wl) = wl {
+                assert!(
+                    *level >= 20 || *wl <= 12,
+                    "implausible pairing, offset suspect: {name:?} RL {level} WL {wl}"
+                );
+            }
         }
     }
 

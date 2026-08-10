@@ -182,6 +182,31 @@ impl RowSlotFieldVisibility {
         drive_cells: false,
     };
 
+    /// A character row whose header was MERGED: the name, Rune Level and weapon level are one
+    /// string in `PlayerName` (see `profile_row_label`), so the separate `Level` FMG caption and
+    /// level value must go.
+    ///
+    /// This is a DISTINCT constant rather than a change to [`Self::NATIVE`] on purpose. The row
+    /// pass only applies visibility when the wanted state differs from `NATIVE` (or when a row was
+    /// previously hidden), so flipping `NATIVE.level` to false would make the wanted state equal
+    /// `NATIVE` again and skip the very pass that has to hide the fields -- the caption would
+    /// render under the merged label until some other row happened to trigger the pass. Keeping
+    /// them separate means the guard fires on the first merged row, with no change to the guard and
+    /// no visibility work on rows we do not merge.
+    ///
+    /// Every other field matches `NATIVE`: this is a character row, so it still denies the browse
+    /// and drive text that would otherwise survive onto a recycled clip.
+    /// `play_time` is false here for a LAYOUT reason, not a data one (user 2026-08-07): the row's
+    /// bottom-right play-time box overlaps the top-right `Location` box, so as long as it is drawn,
+    /// `Location` cannot be widened past it and long place names clip. Dropping the play-time frees
+    /// that whole band for the location, which is the field the user actually reads. A row that
+    /// fails to merge falls back to `NATIVE` and keeps its play-time, so the vanilla view is intact.
+    pub const NATIVE_MERGED: Self = Self {
+        level: false,
+        play_time: false,
+        ..Self::NATIVE
+    };
+
     /// Browse/file rows are not profile slots; level is hidden, the top-right
     /// location field is shown only when it carries a staged timestamp, and the
     /// bottom play-time row is always hidden so file rows collapse to one line.
