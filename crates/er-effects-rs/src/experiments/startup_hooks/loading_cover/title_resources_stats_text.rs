@@ -1695,8 +1695,13 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
         let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
         if rows <= 4 || rows.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} rows={rows})",
-                want.level, want.location, want.play_time
+                "save-picker: hid {hidden} row field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} er_stats={} char_stats={} drive_cells={} rows={rows})",
+                want.level,
+                want.location,
+                want.play_time,
+                want.er_stats,
+                want.char_stats,
+                want.drive_cells
             ));
         }
     }
@@ -2113,7 +2118,11 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let location_available = record_is_this_characters || repair_place_name.is_some();
             let (want_visibility, last_saved) = match slot_info {
                 Some(info) => (
-                    RowSlotFieldVisibility::browse_row(info.location.is_some()),
+                    RowSlotFieldVisibility::browse_row(
+                        info.location.is_some(),
+                        info.er_stats,
+                        info.drive_cells,
+                    ),
                     info.location,
                 ),
                 None if merged_header.is_some() => (
@@ -2172,9 +2181,10 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             }
             // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
             // title, `ErStats` carries file details/navigation copy, `Location` carries timestamps,
-            // and drive rows draw their actual cells through separate `DriveCell_*` row children.
-            // Blank every synthetic drive child on every picker-owned row first so recycled row clips
-            // cannot leak a previous drive strip into file/directory rows.
+            // and only the drive row exposes its actual cells through separate `DriveCell_*` row
+            // children. Blank every synthetic drive child on every picker-owned row as content
+            // hygiene in addition to the row-kind visibility decision above; either layer then stops
+            // a recycled drive strip leaking into file/directory rows.
             if let Some(row) = picker_row {
                 let blank = [0u16];
                 let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &blank) };
