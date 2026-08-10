@@ -1072,6 +1072,78 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
 /// menu-arena object with a garbage heap vtable, and that dispatch jumped into `.rdata` (hard
 /// crash). Validate component -> vtable -> slot target are all game-image-plausible before letting
 /// the wrapper dispatch; otherwise skip fail-closed with full diagnostics.
+/// GFx value type of the child `name` on `row_proxy`, or `None` when the resolve itself could not be
+/// run. `Some(0)` means the resolve RAN and found nothing -- see [`gfx_value_type_is_resolved`].
+///
+/// Callers get the type rather than a bool because the type is the only honest answer: the resolve
+/// always hands back a constructed out proxy whose component slot points at itself, so a movie
+/// without the child is indistinguishable from one with it on every other observable.
+unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) -> Option<usize> {
+    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if row_proxy == 0 || row_proxy == null {
+        return None;
+    }
+    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+    };
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == null {
+        return None;
+    }
+    let datatype = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize);
+    // Release exactly what the resolve constructed, exactly as the native populate does per field.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    datatype
+}
+
+/// Is this summary row one of OUR edited `05_010_ProfileSelect` rows?
+///
+/// `CS::MenuSaveDataSummary`'s populate (vtable slot 1, `0x8757e0`) is a SHARED template: every
+/// surface that renders a character summary reaches it, including the game's own System>Quit
+/// `GameEnd` panel in `02_040_OptionSetting`, which owns its own `PlayerName` / `Level` /
+/// `StaticText_110502` / `Location` / `PlayTime` fields with its own geometry. Applying this mod's
+/// row presentation to whatever proxy arrives therefore edits the game's menu as well as ours --
+/// observed as the Quit Game panel losing its level caption, level and play time, since those hides
+/// DO land while the merged-header SetText silently does not.
+///
+/// The probe is `ErCharStats`, a field this mod adds to the ProfileSelect row template and that
+/// exists in no vanilla movie, so the test is self-identifying: no address, no dialog identity, and
+/// nothing to re-derive when the game updates. A row that fails it is handed back untouched.
+pub(crate) unsafe fn row_is_stats_panel_template(base: usize, row_proxy: usize) -> bool {
+    let ours =
+        unsafe { row_child_gfx_value_type(base, row_proxy, PROFILE_ROW_CHAR_STATS_FIELD_NAME) }
+            .is_some_and(gfx_value_type_is_resolved);
+    if ours {
+        PROFILE_OWN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst);
+    } else {
+        let n = PROFILE_FOREIGN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: summary row=0x{row_proxy:x} has no ErCharStats child -- not our ProfileSelect movie; left native (foreign_rows={n})"
+            ));
+        }
+    }
+    ours
+}
+
 pub(crate) unsafe fn push_stats_text_on_row(
     base: usize,
     row_proxy: usize,
@@ -1117,8 +1189,38 @@ pub(crate) unsafe fn push_stats_text_on_row(
     } else {
         0
     };
-    let component_live =
-        comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base);
+    // DID THE NAME ACTUALLY RESOLVE? The component-pointer checks below cannot answer that: on a
+    // miss the named-child ctor leaves the out proxy's component slot pointing at ITSELF, so `comp`
+    // is non-null and `comp_vt` is the game's own `CS::SceneObjProxy` vtable -- game-image-live by
+    // every test here. Only the GFx value TYPE separates a hit from a miss, and without this check
+    // every push reported success on every movie: 109,035 "successful" `ErCharStats` writes were
+    // logged against the System>Quit panel, which has no such field, while the visibility hides that
+    // travelled with them landed for real. Telemetry that cannot be wrong about this is the point.
+    let resolved = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize)
+    .is_some_and(gfx_value_type_is_resolved);
+    if !resolved {
+        let n = PROFILE_STATS_PUSH_MISSING_FIELD.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: push REFUSED -- movie has no child '{}' on row=0x{row_proxy:x} (missing_field={n})",
+                name.trim_end_matches('\0')
+            ));
+        }
+        unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+        return false;
+    }
+    // `dispatch_target_is_purecall`: a destructed component keeps a vtable full of `_purecall`,
+    // which lives in the game image and so passes `vtable_in_game_image`. Calling it is a
+    // write-to-NULL abort, not a soft failure.
+    let component_live = comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base);
     let accepted = if component_live {
         // The wrapper copies the UTF-16 into a DLString synchronously. In live editor mode,
         // font/align hot-reload rides this same safe SetText path by wrapping the text in
@@ -1172,7 +1274,26 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     } else {
         0
     };
-    if comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base) {
+    // Same hit-vs-miss test as `push_stats_text_on_row`: a proxy whose named-child resolve missed
+    // still carries a game-image vtable, so the type word is what says a field is really there.
+    let resolved = unsafe {
+        safe_read_i32(
+            field_proxy
+                + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET
+                + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize)
+    .is_some_and(gfx_value_type_is_resolved);
+    if !resolved {
+        PROFILE_STATS_PUSH_MISSING_FIELD.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    if comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base)
+    {
         let live_text = profile_editor_live_text_for_field(label, utf16);
         unsafe { settext(component_slot, live_text.as_ref().as_ptr() as usize) };
         crate::experiments::startup_hooks::remember_profile_editor_field_target(
@@ -1466,6 +1587,12 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     let Ok(base) = game_module_base() else {
         return;
     };
+    // THE GAME'S OWN SUMMARY PANELS ARE NOT OURS TO DRAW. This hook is on the CURRENT-PLAYER summary
+    // builder, which the System>Quit `GameEnd` panel uses as much as the ProfileSelect current row --
+    // and that panel is where the user watched the level caption, level and play time disappear.
+    if !unsafe { row_is_stats_panel_template(base, row_proxy) } {
+        return;
+    }
     let Some(stats) = (unsafe { title_load_row_stats_text() }) else {
         return;
     };
@@ -1598,7 +1725,11 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         && PROFILE_STATS_PUSH_IN_PROGRESS.swap(1, Ordering::SeqCst) == 0
     {
         let base = game_module_base().unwrap_or(null);
-        if base != null {
+        // Same gate as the current-row hook: this template populates every character-summary surface
+        // in the game, so a row that is not one of our edited ProfileSelect rows gets nothing from us
+        // -- no merged header, no visibility statement, no pushes -- and reaches the original exactly
+        // as the game built it.
+        if base != null && unsafe { row_is_stats_panel_template(base, row_proxy) } {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
             let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)

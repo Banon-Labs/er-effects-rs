@@ -181,6 +181,95 @@ fn stats_panel_output_has_unique_character_definitions() {
     );
 }
 
+/// Every instance name placed anywhere in `movie`.
+fn placed_instance_names(movie: &Movie) -> std::collections::BTreeSet<String> {
+    fn walk(tags: &[Tag], out: &mut std::collections::BTreeSet<String>) {
+        for tag in tags {
+            match tag {
+                Tag::PlaceObject2 { name: Some(n), .. } => {
+                    out.insert(n.clone());
+                }
+                Tag::PlaceObject3 { name: Some(n), .. } => {
+                    out.insert(n.clone());
+                }
+                Tag::DefineSprite { tags, .. } => walk(tags, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    walk(&movie.tags, &mut out);
+    out
+}
+
+/// THE FIELDS THIS MOD INJECTS MUST NAME NOTHING THE GAME ALREADY HAS.
+///
+/// The DLL decides whether a character-summary row belongs to this mod by asking the row proxy for
+/// its `ErCharStats` child: `CS::MenuSaveDataSummary`'s populate is a shared template, so the
+/// System>Quit `GameEnd` panel in `02_040_OptionSetting` -- which owns its own `PlayerName`,
+/// `Level`, `StaticText_110502`, `Location` and `PlayTime` -- arrives at the very same hook as a
+/// ProfileSelect row. The probe is only decisive while the injected names exist in the edited movie
+/// and in NO vanilla one; the moment a vanilla movie gains a child by one of these names, this mod
+/// starts rewriting the game's own menu again, which is the defect the gate exists to prevent.
+///
+/// Vanilla `02_040_OptionSetting` is checked by name here because it is the specific panel the user
+/// watched lose its level caption, level and play time.
+#[test]
+fn injected_row_field_names_exist_in_our_movie_and_in_no_vanilla_summary_panel() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let edited = Movie::parse(&out).expect("edited movie parses");
+    let injected: Vec<&str> = [STATS_FIELD_NAME, CHAR_STATS_FIELD_NAME]
+        .into_iter()
+        .chain(DRIVE_CELL_FIELD_NAMES)
+        .collect();
+
+    let ours = placed_instance_names(&edited);
+    for name in &injected {
+        assert!(
+            ours.contains(*name),
+            "edited ProfileSelect must place {name}; without it the runtime probe cannot tell our \
+             rows from the game's own summary panels"
+        );
+    }
+
+    let vanilla_profile_select = Movie::parse(&vanilla).expect("vanilla ProfileSelect parses");
+    for (label, movie) in [("05_010_ProfileSelect", &vanilla_profile_select)] {
+        let names = placed_instance_names(movie);
+        for name in &injected {
+            assert!(
+                !names.contains(*name),
+                "vanilla {label} already places {name}; the probe would answer \"ours\" for a movie \
+                 this mod never edited"
+            );
+        }
+    }
+
+    // The quit-menu panel, read from the corpus and skipped when it is absent.
+    for file in ["win/02_040_optionsetting.gfx", "02_040_optionsetting.gfx"] {
+        let path = common::corpus_root().join(file);
+        let Ok(bytes) = std::fs::read(&path) else {
+            eprintln!("SKIP: {} not present", path.display());
+            continue;
+        };
+        let movie = Movie::parse(&bytes).expect("vanilla OptionSetting parses");
+        let names = placed_instance_names(&movie);
+        // The premise of the whole coupling: it really does own the same native field names.
+        assert!(
+            names.contains("PlayerName"),
+            "{file} is expected to carry the shared summary field names"
+        );
+        for name in &injected {
+            assert!(
+                !names.contains(*name),
+                "{file} places {name}: the System>Quit summary would be treated as one of our rows"
+            );
+        }
+    }
+}
+
 #[test]
 fn stats_panel_output_places_stats_field_and_hides_face_box() {
     let Some(vanilla) = read_vanilla_or_skip() else {
