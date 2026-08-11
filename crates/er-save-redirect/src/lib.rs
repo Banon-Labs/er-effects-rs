@@ -1355,8 +1355,8 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
 
     let stage_root = path
         .parent()
-        .map(|parent| parent.join("er-effects-save-redirect-stage"))
-        .unwrap_or_else(|| PathBuf::from("er-effects-save-redirect-stage"));
+        .map(|parent| parent.join(DIRECT_STAGE_ROOT_DIR_NAME))
+        .unwrap_or_else(|| PathBuf::from(DIRECT_STAGE_ROOT_DIR_NAME));
     SaveSourcePlan::DirectFile {
         file: path.clone(),
         root_wide: path_root_to_wine_wide(&stage_root),
@@ -1364,8 +1364,189 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
     }
 }
 
+/// Directory name of the private staged save tree a DIRECT-FILE source is copied into.
+///
+/// The staleness sweep only ever deletes inside a directory carrying this component, so the
+/// constant is the containment proof as much as it is the path builder.
+pub const DIRECT_STAGE_ROOT_DIR_NAME: &str = "er-effects-save-redirect-stage";
+
 pub fn direct_stage_case_dirs(root: &Path) -> [PathBuf; 2] {
     [root.join("eldenring"), root.join("EldenRing")]
+}
+
+/// True when `dir` lies inside a private staged save tree (a `DIRECT_STAGE_ROOT_DIR_NAME`
+/// component appears somewhere in it).
+///
+/// Staging deletes stale containers, and a delete is only ever safe inside our own tree: the
+/// configured source itself lives one level ABOVE the stage root and is read-only by contract.
+pub fn is_inside_direct_stage_root(dir: &Path) -> bool {
+    dir.components().any(|comp| {
+        // UTF-8 Lossy: path component classification only; invalid host bytes cannot spell the
+        // stage-root directory name and must fail this containment check deterministically.
+        comp.as_os_str().to_string_lossy() == DIRECT_STAGE_ROOT_DIR_NAME
+    })
+}
+
+/// The vanilla save container. Elden Ring itself writes only this one.
+pub const VANILLA_SAVE_CONTAINER_NAME: &str = "ER0000.sl2";
+/// The extension ERSC ships with in `ersc_settings.ini`. It is a DEFAULT, never an invariant --
+/// see [`parse_ersc_save_file_extension`].
+pub const DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION: &str = "co2";
+/// ERSC's own documented ceiling for `save_file_extension` ("limit = 120").
+pub const MAX_SAVE_FILE_EXTENSION_LEN: usize = 120;
+
+/// The Seamless save-container extension ERSC is CONFIGURED with, from its `ersc_settings.ini`.
+///
+/// `.co2` is only the shipped default. `ersc_settings.ini` says, in its own words: "Your save file
+/// extension (in the vanilla game this is .sl2). Use any alphanumeric characters (limit = 120)" --
+/// so the value REPLACES `sl2` and a user may set it to anything. Every hard-coded `.co2` in a save
+/// path is therefore a latent version of the same bug this module exists to fix: the staged copy
+/// carrying a name the runtime never asks for.
+///
+/// Returns None when the key is absent, outside `[SAVE]`, empty, over-long, or not plain ASCII
+/// alphanumeric -- the last of which also keeps a config value from steering the staged filename
+/// out of its directory.
+pub fn parse_ersc_save_file_extension(ini: &str) -> Option<&str> {
+    let mut in_save_section = false;
+    for line in ini.lines() {
+        let line = line.split(';').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            in_save_section = line.eq_ignore_ascii_case("[SAVE]");
+            continue;
+        }
+        if !in_save_section {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("save_file_extension") {
+            continue;
+        }
+        let value = value.trim();
+        let usable = (1..=MAX_SAVE_FILE_EXTENSION_LEN).contains(&value.len())
+            && value.bytes().all(|b| b.is_ascii_alphanumeric());
+        return usable.then_some(value);
+    }
+    None
+}
+
+/// The save container for one extension: `ER0000.<ext>`.
+pub fn save_container_name_for_extension(extension: &str) -> String {
+    format!("ER0000.{extension}")
+}
+
+/// Container names the active runtime will LOAD, in priority order.
+///
+/// The mode lock is ASYMMETRIC: Seamless takes both containers preferring the co-op one, vanilla
+/// takes only `.sl2` so an offline launch can never advance co-op progress. `seamless_name` is the
+/// co-op container ERSC is configured with, NOT a fixed `ER0000.co2`.
+pub fn active_save_container_names_for(seamless: bool, seamless_name: &str) -> Vec<String> {
+    if seamless && !seamless_name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME) {
+        vec![
+            seamless_name.to_owned(),
+            VANILLA_SAVE_CONTAINER_NAME.to_owned(),
+        ]
+    } else {
+        vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
+    }
+}
+
+/// The container name the active runtime WRITES to -- the preferred load candidate.
+pub fn active_save_container_name_for(seamless: bool, seamless_name: &str) -> String {
+    if seamless {
+        seamless_name.to_owned()
+    } else {
+        VANILLA_SAVE_CONTAINER_NAME.to_owned()
+    }
+}
+
+/// Every container name a staging pass writes from the configured source.
+///
+/// BOTH the vanilla container and ERSC's configured one, always -- the staged name is derived
+/// neither from the SOURCE file's extension nor from the Seamless mode. Measured 2026-08-11:
+/// staging runs inside the `CreateFileW` detour at DllMain+191ms, and me3 loads `ersc.dll` after
+/// that, so the ERSC module latch still reads `seamless=false` there (`save-picker mode from ERSC
+/// module latch seamless=false reason=active-default-save-file-name`) while the same run's
+/// telemetry later reports `seamless_coop_loaded=true`. Naming the staged copy from that unsettled
+/// latch put a Seamless run's save at `ER0000.sl2` while `own_load::drive` and the native writer
+/// asked for the co-op container, and the two never met -- a silent soft lock at the boot cover.
+///
+/// Writing both names removes the time-of-check race outright: whichever container the runtime
+/// resolves to once the mode HAS settled, it holds the configured source. Restamping the name is
+/// byte-safe -- every flavor is the same 28 MB BND4 container.
+pub fn staged_save_container_names_for(seamless_name: &str) -> Vec<String> {
+    let mut names = vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()];
+    if !seamless_name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME) {
+        names.push(seamless_name.to_owned());
+    }
+    names
+}
+
+/// True when `file_name` is one of the containers this staging pass rewrites.
+pub fn is_staged_save_container_name(file_name: &str, staged_names: &[&str]) -> bool {
+    staged_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(file_name))
+}
+
+/// What happens to a file already sitting in a staged `<root>/<case>/<steamid>/` directory when a
+/// new staging pass runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagedEntryFate {
+    /// A container this pass rewrites from the configured source, so its old bytes cannot survive.
+    Rewritten,
+    /// A save artifact left over from an EARLIER run that this pass does not rewrite: a `.bak`
+    /// companion, a half-finished restore temp, a container under some other spelling. It does not
+    /// correspond to the configured source and the game must never find it.
+    StaleRemove,
+    /// Not a save artifact (`GraphicsConfig.xml`, stray logs). Left alone.
+    Keep,
+}
+
+/// Classify one existing staged directory entry against the containers this pass rewrites.
+///
+/// Nothing here consults mtimes. A staged file is current because THIS run wrote it from the
+/// configured source, and stale otherwise -- the 2026-08-11 soft lock served a `.co2` written
+/// 33 minutes earlier from a different source, and every timestamp involved looked plausible.
+pub fn staged_entry_fate(file_name: &str, staged_names: &[&str]) -> StagedEntryFate {
+    if is_staged_save_container_name(file_name, staged_names) {
+        return StagedEntryFate::Rewritten;
+    }
+    let lower = file_name.to_ascii_lowercase();
+    let save_artifact = lower.contains("er0000")
+        || lower.ends_with(".sl2")
+        || lower.ends_with(".co2")
+        || lower.ends_with(".bak");
+    if save_artifact {
+        StagedEntryFate::StaleRemove
+    } else {
+        StagedEntryFate::Keep
+    }
+}
+
+/// Drop paths that resolve to the same directory, keeping first-seen order.
+///
+/// The staged tree is created under both `eldenring` and `EldenRing` because a case-SENSITIVE host
+/// filesystem needs both spellings. Under Wine those two resolve to one directory, so writing a
+/// 28 MB container once per spelling doubles the DllMain staging cost for nothing. `identity` is
+/// the caller's resolver (`fs::canonicalize` in product); a path it cannot resolve keeps its own
+/// literal path as identity, so an unresolvable dir is never silently merged with another.
+pub fn dedupe_dirs_by_identity(
+    dirs: impl IntoIterator<Item = PathBuf>,
+    identity: impl Fn(&Path) -> Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
+        let key = identity(&dir).unwrap_or_else(|| dir.clone());
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(dir);
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1374,9 +1555,16 @@ pub struct DirectStageFileStatus {
     pub bytes: Option<u64>,
 }
 
+/// Does the staged tree hold a container the runtime will actually LOAD?
+///
+/// `load_names` is the ACTIVE MODE's candidate list (`active_save_container_names`), never
+/// anything derived from the source file's extension. Probing by source extension is what made
+/// this oracle lie on 2026-08-11: it reported `direct_stage_file_exists=true` for a `.co2` source
+/// while the run's staged copy had been written as `ER0000.sl2`, so the one telemetry field that
+/// could have named the mismatch confirmed the staging instead.
 pub fn probe_direct_stage_file_status(
     root: Option<&Path>,
-    source_file: Option<&Path>,
+    load_names: &[&str],
     steam_id: u64,
 ) -> DirectStageFileStatus {
     if steam_id == 0 {
@@ -1391,27 +1579,17 @@ pub fn probe_direct_stage_file_status(
             bytes: None,
         };
     };
-    let staged_is_co2 = source_file
-        .and_then(Path::extension)
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
-    let candidates = if staged_is_co2 {
-        [("eldenring", "er0000.co2"), ("EldenRing", "ER0000.co2")]
-    } else {
-        [("eldenring", "er0000.sl2"), ("EldenRing", "ER0000.sl2")]
-    };
-    for (dir_name, file_name) in candidates {
-        let path = root
-            .join(dir_name)
-            .join(steam_id.to_string())
-            .join(file_name);
-        if let Ok(meta) = std::fs::metadata(path)
-            && meta.is_file()
-        {
-            return DirectStageFileStatus {
-                exists: true,
-                bytes: Some(meta.len()),
-            };
+    for file_name in load_names {
+        for dir in direct_stage_case_dirs(root) {
+            let path = dir.join(steam_id.to_string()).join(file_name);
+            if let Ok(meta) = std::fs::metadata(path)
+                && meta.is_file()
+            {
+                return DirectStageFileStatus {
+                    exists: true,
+                    bytes: Some(meta.len()),
+                };
+            }
         }
     }
     DirectStageFileStatus {
@@ -2026,7 +2204,7 @@ mod tests {
     }
 
     #[test]
-    fn probes_direct_stage_file_status_for_sl2_and_co2_names() {
+    fn probes_direct_stage_file_status_for_the_active_modes_load_names() {
         let unique = format!(
             "er-save-redirect-status-{}-{}",
             std::process::id(),
@@ -2044,37 +2222,50 @@ mod tests {
         std::fs::create_dir_all(sl2.parent().unwrap()).unwrap();
         std::fs::write(&sl2, b"sl2").unwrap();
 
+        let vanilla_names = active_save_container_names_for(false, "ER0000.co2");
+        let vanilla: Vec<&str> = vanilla_names.iter().map(String::as_str).collect();
+        let seamless_names = active_save_container_names_for(true, "ER0000.co2");
+        let seamless: Vec<&str> = seamless_names.iter().map(String::as_str).collect();
+        // Vanilla loads only `.sl2`, and that is what is staged.
         assert_eq!(
-            probe_direct_stage_file_status(Some(&root), None, steam_id),
+            probe_direct_stage_file_status(Some(&root), &vanilla, steam_id),
             DirectStageFileStatus {
                 exists: true,
                 bytes: Some(3)
             }
         );
-
-        let co2_source = Path::new("picked.co2");
+        // Seamless prefers `.co2` but accepts the `.sl2` that is present.
         assert_eq!(
-            probe_direct_stage_file_status(Some(&root), Some(co2_source), steam_id),
+            probe_direct_stage_file_status(Some(&root), &seamless, steam_id),
             DirectStageFileStatus {
-                exists: false,
-                bytes: None
+                exists: true,
+                bytes: Some(3)
             }
         );
+        // A `.co2` present makes Seamless report the co-op container it will actually open, while
+        // vanilla keeps reporting the `.sl2` it is locked to.
         let co2 = root
             .join("eldenring")
             .join(steam_id.to_string())
-            .join("er0000.co2");
+            .join("ER0000.co2");
         std::fs::create_dir_all(co2.parent().unwrap()).unwrap();
         std::fs::write(&co2, b"co2!!").unwrap();
         assert_eq!(
-            probe_direct_stage_file_status(Some(&root), Some(co2_source), steam_id),
+            probe_direct_stage_file_status(Some(&root), &seamless, steam_id),
             DirectStageFileStatus {
                 exists: true,
                 bytes: Some(5)
             }
         );
         assert_eq!(
-            probe_direct_stage_file_status(Some(&root), None, 0),
+            probe_direct_stage_file_status(Some(&root), &vanilla, steam_id),
+            DirectStageFileStatus {
+                exists: true,
+                bytes: Some(3)
+            }
+        );
+        assert_eq!(
+            probe_direct_stage_file_status(Some(&root), &seamless, 0),
             DirectStageFileStatus {
                 exists: false,
                 bytes: None
@@ -2082,6 +2273,208 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The Seamless container comes from ERSC's OWN config, not from a hard-coded `.co2`.
+    #[test]
+    fn reads_the_seamless_container_extension_out_of_ersc_settings() {
+        // Verbatim shape of the shipped `ersc_settings.ini`, comment and all.
+        let shipped = "[PASSWORD]\n\ncooppassword =seamless\n\n[SAVE]\n\n;Your save file extension (in the vanilla game this is .sl2). Use any alphanumeric characters (limit = 120)\nsave_file_extension = co2\n\n[LANGUAGE]\n\nmod_language_override =\n";
+        assert_eq!(parse_ersc_save_file_extension(shipped), Some("co2"));
+        assert_eq!(
+            save_container_name_for_extension(parse_ersc_save_file_extension(shipped).unwrap()),
+            "ER0000.co2"
+        );
+
+        // A user-chosen extension must flow through -- the case a hard-coded `.co2` breaks.
+        assert_eq!(
+            parse_ersc_save_file_extension("[SAVE]\nsave_file_extension = coop2\n"),
+            Some("coop2")
+        );
+        // The key only counts inside `[SAVE]`.
+        assert_eq!(
+            parse_ersc_save_file_extension("[GAMEPLAY]\nsave_file_extension = nope\n"),
+            None
+        );
+        // Absent, blank, commented out, or over-long -> no usable value.
+        assert_eq!(parse_ersc_save_file_extension("[SAVE]\n"), None);
+        assert_eq!(
+            parse_ersc_save_file_extension("[SAVE]\nsave_file_extension =\n"),
+            None
+        );
+        assert_eq!(
+            parse_ersc_save_file_extension("[SAVE]\n;save_file_extension = co2\n"),
+            None
+        );
+        assert_eq!(
+            parse_ersc_save_file_extension(&format!(
+                "[SAVE]\nsave_file_extension = {}\n",
+                "a".repeat(MAX_SAVE_FILE_EXTENSION_LEN + 1)
+            )),
+            None
+        );
+        // A filename is built from this, so anything that could leave the directory is refused.
+        for hostile in ["../../evil", "co2/x", r"co2\x", "co 2", "co.2"] {
+            assert_eq!(
+                parse_ersc_save_file_extension(&format!(
+                    "[SAVE]\nsave_file_extension = {hostile}\n"
+                )),
+                None,
+                "a non-alphanumeric extension must not reach a staged filename: {hostile}"
+            );
+        }
+    }
+
+    /// THE naming rule. Whatever container the runtime resolves to once the Seamless mode has
+    /// settled, staging must already have written the configured source under that name -- for the
+    /// DEFAULT co-op extension and for a custom one, and never varying with the SOURCE file's
+    /// extension (the shape the 2026-08-11 soft lock was misdiagnosed as).
+    #[test]
+    fn staged_container_names_cover_every_mode_for_any_configured_extension() {
+        for extension in [DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION, "coop2", "sl2"] {
+            let seamless_name = save_container_name_for_extension(extension);
+            let staged = staged_save_container_names_for(&seamless_name);
+            let staged_refs: Vec<&str> = staged.iter().map(String::as_str).collect();
+            for seamless in [false, true] {
+                assert!(
+                    is_staged_save_container_name(
+                        &active_save_container_name_for(seamless, &seamless_name),
+                        &staged_refs
+                    ),
+                    "staging must write the container the runtime writes (ext={extension} seamless={seamless})"
+                );
+                for name in active_save_container_names_for(seamless, &seamless_name) {
+                    assert!(
+                        is_staged_save_container_name(&name, &staged_refs),
+                        "staging must write every container the runtime may load: {name} (ext={extension})"
+                    );
+                }
+            }
+            // Vanilla is locked to `.sl2` whatever ERSC is configured with.
+            assert_eq!(
+                active_save_container_names_for(false, &seamless_name),
+                vec!["ER0000.sl2"]
+            );
+        }
+
+        // `.co2` is a default, not an invariant: a custom extension names a different container.
+        assert_eq!(
+            active_save_container_names_for(true, "ER0000.coop2"),
+            vec!["ER0000.coop2", "ER0000.sl2"]
+        );
+        assert_eq!(
+            staged_save_container_names_for("ER0000.coop2"),
+            vec!["ER0000.sl2", "ER0000.coop2"]
+        );
+        // An ERSC configured with `sl2` IS the vanilla container -- one name, never duplicated.
+        assert_eq!(
+            staged_save_container_names_for("ER0000.sl2"),
+            vec!["ER0000.sl2"]
+        );
+        assert_eq!(
+            active_save_container_names_for(true, "ER0000.sl2"),
+            vec!["ER0000.sl2"]
+        );
+
+        let default_staged = staged_save_container_names_for("ER0000.co2");
+        let default_refs: Vec<&str> = default_staged.iter().map(String::as_str).collect();
+        assert!(is_staged_save_container_name("er0000.CO2", &default_refs));
+        assert!(!is_staged_save_container_name(
+            "ER0000.sl2.bak",
+            &default_refs
+        ));
+        assert!(!is_staged_save_container_name("ER0001.sl2", &default_refs));
+        // The staged set never depends on the SOURCE file's extension: it is the same set whether
+        // the configured save was picked as a `.sl2`, a `.co2`, or anything else.
+        assert_eq!(default_staged, vec!["ER0000.sl2", "ER0000.co2"]);
+    }
+
+    /// THE staleness check. A container from an earlier run that this pass does not rewrite is
+    /// removed, so it can never be served in place of the configured source.
+    #[test]
+    fn staged_entry_fate_removes_leftovers_and_keeps_non_save_files() {
+        let staged = ["ER0000.sl2", "ER0000.co2"];
+        assert_eq!(
+            staged_entry_fate("ER0000.sl2", &staged),
+            StagedEntryFate::Rewritten
+        );
+        assert_eq!(
+            staged_entry_fate("er0000.co2", &staged),
+            StagedEntryFate::Rewritten
+        );
+
+        // The 2026-08-11 leftovers: a `.bak` companion and a restore temp from earlier sessions.
+        assert_eq!(
+            staged_entry_fate("ER0000.co2.bak", &staged),
+            StagedEntryFate::StaleRemove
+        );
+        assert_eq!(
+            staged_entry_fate("ER0000.sl2.bak", &staged),
+            StagedEntryFate::StaleRemove
+        );
+        assert_eq!(
+            staged_entry_fate("er0000.sl2.er-save-dest-restore.tmp", &staged),
+            StagedEntryFate::StaleRemove
+        );
+        assert_eq!(
+            staged_entry_fate("ER0001.sl2", &staged),
+            StagedEntryFate::StaleRemove
+        );
+
+        // A container left by a PREVIOUS ERSC extension is exactly what must not survive...
+        assert_eq!(
+            staged_entry_fate("ER0000.coop2", &staged),
+            StagedEntryFate::StaleRemove
+        );
+        // ...and it is kept once ERSC is configured that way.
+        assert_eq!(
+            staged_entry_fate("ER0000.coop2", &["ER0000.sl2", "ER0000.coop2"]),
+            StagedEntryFate::Rewritten
+        );
+
+        assert_eq!(
+            staged_entry_fate("GraphicsConfig.xml", &staged),
+            StagedEntryFate::Keep
+        );
+        assert_eq!(
+            staged_entry_fate("er-effects-autoload-debug.log", &staged),
+            StagedEntryFate::Keep
+        );
+    }
+
+    #[test]
+    fn stage_deletes_are_confined_to_the_private_stage_tree() {
+        assert!(is_inside_direct_stage_root(Path::new(
+            "/home/u/save-files/125-Frenzy/er-effects-save-redirect-stage/eldenring/765/"
+        )));
+        assert!(!is_inside_direct_stage_root(Path::new(
+            "/home/u/save-files/125-Frenzy"
+        )));
+        assert!(!is_inside_direct_stage_root(Path::new(
+            r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729"
+        )));
+    }
+
+    #[test]
+    fn dedupes_case_dirs_that_resolve_to_one_directory() {
+        let root = Path::new("/stage");
+        let [lower, native] = direct_stage_case_dirs(root);
+        // Wine/case-insensitive host: both spellings resolve to the same directory, so the 28 MB
+        // container is written once.
+        let merged = dedupe_dirs_by_identity([lower.clone(), native.clone()], |dir| {
+            Some(PathBuf::from(dir.to_string_lossy().to_lowercase()))
+        });
+        assert_eq!(merged, vec![lower.clone()]);
+
+        // Case-sensitive host: two real directories, both written.
+        let split = dedupe_dirs_by_identity([lower.clone(), native.clone()], |dir| {
+            Some(dir.to_path_buf())
+        });
+        assert_eq!(split, vec![lower.clone(), native.clone()]);
+
+        // Unresolvable paths fall back to their own literal path and are never merged.
+        let unresolved = dedupe_dirs_by_identity([lower.clone(), native.clone()], |_| None);
+        assert_eq!(unresolved, vec![lower, native]);
     }
 
     #[test]

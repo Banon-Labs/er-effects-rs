@@ -58,10 +58,39 @@ fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
         if candidate.join("buffer.c").is_file() {
             return candidate;
         }
+        // `vendor/` is git-excluded and exists only in the MAIN checkout, so a build from a linked
+        // git worktree finds nothing above itself. Follow the worktree's `.git` file back to the
+        // main working tree and look there before giving up.
+        if let Some(main_worktree) = main_worktree_root(ancestor) {
+            let candidate = main_worktree.join("vendor/minhook/src");
+            if candidate.join("buffer.c").is_file() {
+                return candidate;
+            }
+        }
     }
 
     panic!(
         "unable to find vendor/minhook/src (checked {} and ancestor vendor dirs; set ER_MINHOOK_SRC_DIR or ER_EFFECTS_MINHOOK_SRC_DIR to the MinHook src directory)",
         repo_local.display()
     );
+}
+
+/// Main working tree of a linked git worktree, from its `.git` FILE.
+///
+/// A linked worktree's `.git` is a file reading `gitdir: <main>/.git/worktrees/<name>`, so the main
+/// working tree is the grandparent of that `worktrees/<name>` directory, minus the `.git` component.
+/// Returns None for a normal checkout (`.git` is a directory) or any shape that does not match.
+fn main_worktree_root(dir: &Path) -> Option<PathBuf> {
+    let dot_git = dir.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(&dot_git).ok()?;
+    let gitdir = Path::new(contents.strip_prefix("gitdir:")?.trim());
+    // <main>/.git/worktrees/<name> -> <main>/.git -> <main>
+    let worktrees = gitdir.parent()?;
+    if worktrees.file_name()? != "worktrees" {
+        return None;
+    }
+    worktrees.parent()?.parent().map(Path::to_path_buf)
 }
