@@ -586,8 +586,12 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
             )),
             Err(reason) => {
                 model.set_status_message(reason.status_message());
+                // Keep what was typed on the control, marked invalid, so it can be corrected in
+                // place. Ordering matters: `set_status_message` does not clear the rejected text,
+                // while a later valid entry refreshes the listing and drops it automatically.
+                model.set_rejected_path_text(&path);
                 append_autoload_debug(format_args!(
-                    "save-picker-path: rejected accepted text reason={reason:?}; directory remains '{}'",
+                    "save-picker-path: rejected accepted text reason={reason:?}; keeping '{path}' on the control as invalid; directory remains '{}'",
                     model.current_dir().display()
                 ));
             }

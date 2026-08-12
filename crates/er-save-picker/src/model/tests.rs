@@ -32,6 +32,7 @@ fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel 
         cursor: 0,
         drive_strip_offset: 0,
         status_message: None,
+        rejected_path_text: None,
         edge_scroll_ticks: 0,
         edge_scroll_repeats: 0,
         edge_scroll_direction: 0,
@@ -1501,6 +1502,56 @@ fn entering_path_edit_mode_clears_the_previous_rejection() {
     assert!(model.begin_path_edit());
     assert!(model.status_message().is_none());
     assert!(!model.begin_path_edit());
+}
+
+/// A refused entry stays on the CurrentPath control so it can be corrected in place, and a
+/// later good entry must take the marking off again -- including the case where the corrected
+/// path is the folder already open, which commits `Ok(false)` and never refreshes the listing.
+#[test]
+fn a_rejected_path_entry_is_kept_for_correction_and_cleared_by_the_next_good_one() {
+    let (root_dir, _) = real_dir_and_root("rejected-path-text");
+    let target = root_dir.join("Real Folder");
+    std::fs::create_dir_all(&target).expect("target dir must be creatable");
+    let mut model = model_with(
+        PickerIntent::LoadSource,
+        root_dir.to_string_lossy().as_ref(),
+        0,
+    );
+    assert_eq!(model.rejected_path_text(), None);
+
+    assert_eq!(
+        model.set_current_dir_from_text("relative folder"),
+        Err(DirectoryChangeError::NotAbsolute)
+    );
+    model.set_rejected_path_text("relative folder");
+    assert_eq!(
+        model.rejected_path_text(),
+        Some("relative folder"),
+        "a refused entry must survive so the user can fix it rather than retype it"
+    );
+
+    let exact = target
+        .to_str()
+        .expect("test temp path must be Unicode")
+        .to_owned();
+    assert_eq!(model.set_current_dir_from_text(&exact), Ok(true));
+    assert_eq!(
+        model.rejected_path_text(),
+        None,
+        "a directory change must drop the marking"
+    );
+
+    model.set_rejected_path_text("nonsense again");
+    assert_eq!(
+        model.set_current_dir_from_text(&exact),
+        Ok(false),
+        "re-entering the open folder is valid but changes nothing"
+    );
+    assert_eq!(
+        model.rejected_path_text(),
+        None,
+        "a valid entry must clear the marking even when the directory does not change"
+    );
 }
 
 #[test]

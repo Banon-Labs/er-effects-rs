@@ -1590,6 +1590,11 @@ pub(crate) fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
     save_picker_html_utf16_color_size(display, color, font_height)
 }
 
+/// CurrentPath control colours: the parchment tone the rest of the picker chrome uses, and the
+/// warning gold reserved for an entry the picker refused.
+const SAVE_PICKER_PATH_NORMAL_COLOR: &str = "#b8b1a2";
+const SAVE_PICKER_PATH_INVALID_COLOR: &str = "#e8c34a";
+
 pub(crate) fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
     if save_picker_path_editor_active() {
         return Some(vec![0]);
@@ -1602,11 +1607,17 @@ pub(crate) fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
     if model.drive_row() != Some(row) {
         return Some(vec![0]);
     }
-    let text = model.current_dir().to_str()?;
+    // A rejected entry outranks the real folder: the user sees exactly what they typed, marked
+    // invalid, until they correct it (any successful commit or navigation refreshes the listing,
+    // which drops the rejected text and returns this control to the normal colour).
+    let (text, color) = match model.rejected_path_text() {
+        Some(rejected) => (rejected, SAVE_PICKER_PATH_INVALID_COLOR),
+        None => (model.current_dir().to_str()?, SAVE_PICKER_PATH_NORMAL_COLOR),
+    };
     let escaped = save_picker_html_escape(text);
     let font_height = profile_editor_field_font_height("CurrentPath");
     let html = format!(
-        "<p align=\"left\"><font size=\"{font_height}\" color=\"#b8b1a2\">{escaped}</font></p>"
+        "<p align=\"left\"><font size=\"{font_height}\" color=\"{color}\">{escaped}</font></p>"
     );
     Some(html.encode_utf16().chain(core::iter::once(0)).collect())
 }
