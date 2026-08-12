@@ -84,20 +84,269 @@
 
 pub mod boot;
 pub mod config;
+pub mod drive_strip_router;
 pub mod host;
 pub mod model;
 #[cfg(feature = "os-dialog")]
 pub mod os_dialog;
 #[cfg(feature = "boot-flow")]
 pub mod overlay;
+pub mod path_editor_lifecycle;
 pub mod slots;
 pub mod surface;
 
 pub use boot::*;
 pub use config::*;
+pub use drive_strip_router::*;
 pub use host::*;
 pub use model::*;
 #[cfg(feature = "os-dialog")]
 pub use os_dialog::*;
+pub use path_editor_lifecycle::*;
 pub use slots::*;
 pub use surface::*;
+
+#[cfg(test)]
+mod picker_activation_source_contract_tests {
+    const DIALOG_HANDLERS: &str = include_str!(concat!(
+        "../../er-effects-rs/src/experiments/startup_hooks/quit_menu/",
+        "system_quit_dialog_handlers.rs"
+    ));
+    const SAVE_PICKER_MENU: &str = include_str!(concat!(
+        "../../er-effects-rs/src/experiments/startup_hooks/quit_menu/",
+        "save_picker_menu.rs"
+    ));
+    const OWNERSHIP_REPRO: &str = include_str!(concat!(
+        "../../er-effects-rs/src/experiments/startup_hooks/quit_menu/",
+        "system_quit_ownership_repro.rs"
+    ));
+    const PROFILE_CONSTANTS: &str = include_str!(concat!(
+        "../../er-effects-rs/src/constants/",
+        "profile_render.rs"
+    ));
+    const HOOK_INSTALLS: &str = include_str!(concat!(
+        "../../er-effects-rs/src/experiments/startup_hooks/quit_menu/",
+        "system_quit_hooks.rs"
+    ));
+
+    fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        source
+            .split_once(start)
+            .unwrap_or_else(|| panic!("missing start boundary {start}"))
+            .1
+            .split_once(end)
+            .unwrap_or_else(|| panic!("missing end boundary {end}"))
+            .0
+    }
+
+    #[test]
+    fn foreign_property_button_hook_has_no_picker_provenance_symbols() {
+        let hook = between(
+            DIALOG_HANDLERS,
+            "pub(crate) unsafe extern \"system\" fn property_new_button_controller_activate_hook(",
+            "\nconst _: PropertyNewButtonControllerActivateFn",
+        );
+        for forbidden in [
+            "save_picker_compose_activation_provenance_with",
+            "save_picker_arm_drive_strip_activation_provenance",
+            "save_picker_clear_pending_drive_strip_target",
+            "forward_drive_strip_native_activation_once",
+            "activation_provenance",
+        ] {
+            assert!(
+                !hook.contains(forbidden),
+                "foreign hook still owns {forbidden}"
+            );
+        }
+        assert!(hook.contains("system_quit_forward_button_controller_activation"));
+    }
+
+    #[test]
+    fn scoped_update_hook_owns_context_and_profile_callback_has_exact_abi() {
+        let update = between(
+            SAVE_PICKER_MENU,
+            "pub(crate) unsafe extern \"system\" fn profile_load_menu_window_update_hook(",
+            "\nconst _: ProfileLoadMenuWindowUpdateFn",
+        );
+        for required in [
+            "save_picker_dialog_identity(dialog)",
+            "PickerNativeLifecycleAdapter",
+            "run_update_with",
+            "save_picker_compose_activation_provenance_with",
+        ] {
+            assert!(
+                update.contains(required),
+                "scoped update omitted {required}"
+            );
+        }
+        assert!(SAVE_PICKER_MENU.contains("SAVE_PICKER_ACTIVATION_RING_CAPACITY: usize = 64"));
+        assert!(SAVE_PICKER_MENU.contains("native-matcher-no-callback"));
+        assert!(SAVE_PICKER_MENU.contains("source: \"profile-load-late\""));
+        let lifecycle_update = between(
+            SAVE_PICKER_MENU,
+            "unsafe fn run_update_with(",
+            "\n    pub(crate) unsafe fn dispatch_profile_load(",
+        );
+        let enter = lifecycle_update
+            .find("PickerActivationScope::enter")
+            .expect("lifecycle enters context");
+        let original = enter
+            + lifecycle_update[enter..]
+                .find("original(identity.dialog, update_scalar, row_input_gate)")
+                .expect("owned lifecycle calls typed update original");
+        let finish = lifecycle_update
+            .find("scope.finish()")
+            .expect("lifecycle finalizes context");
+        assert!(
+            enter < original && original < finish,
+            "context must span the typed native update original"
+        );
+        assert_eq!(
+            SAVE_PICKER_MENU
+                .matches("type ProfileLoadMenuWindowUpdateFn =")
+                .count(),
+            1,
+            "the verified update ABI must have one shared alias",
+        );
+        assert!(!SAVE_PICKER_MENU.contains("static SAVE_PICKER_DRIVE_STRIP_PENDING_CELL"));
+
+        let profile = between(
+            OWNERSHIP_REPRO,
+            "pub(crate) unsafe extern \"system\" fn system_quit_profile_load_activate_hook(dialog: usize) {",
+            "\nconst _: unsafe extern \"system\" fn(usize)",
+        );
+        for required in [
+            "save_picker_dialog_identity(dialog)",
+            "identity.picker_mode_active",
+            "identity.is_exact_active_picker()",
+            "PickerNativeLifecycleAdapter",
+            "dispatch_profile_load(identity, cursor)",
+        ] {
+            assert!(
+                profile.contains(required),
+                "profile callback omitted {required}"
+            );
+        }
+        assert!(!profile.contains("unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)"));
+        assert!(!profile.contains("original(dialog, b, c, d)"));
+    }
+
+    #[test]
+    fn physical_classifier_converts_event_client_pixels_before_stage_hit_testing() {
+        let physical = between(
+            SAVE_PICKER_MENU,
+            "unsafe fn save_picker_physical_activation_provenance(",
+            "\nfn save_picker_decision_labels(",
+        );
+        for required in [
+            "save_picker_event_client_point(row_input_gate)",
+            "save_picker_validated_game_window_geometry()",
+            ".client_point_to_movie_stage(event_client_x, event_client_y)",
+            "save_picker_validated_game_pointer_from(geometry)",
+            "event_stage_x",
+            "event_stage_y",
+            "event_target",
+            "live_target",
+        ] {
+            assert!(
+                physical.contains(required),
+                "physical classifier omitted {required}"
+            );
+        }
+        let event_route = between(
+            physical,
+            "let event_target = er_save_picker::route_drive_strip_native_click(",
+            "\n    let live_target =",
+        );
+        assert!(event_route.contains("event_stage_x"));
+        assert!(event_route.contains("event_stage_y"));
+        assert!(!event_route.contains("event_client_x"));
+        assert!(!event_route.contains("event_client_y"));
+        assert!(
+            physical
+                .find("classify_picker_physical_row")
+                .expect("ordinary-row gate")
+                < physical
+                    .find("save_picker_event_client_point")
+                    .expect("drive-row event point"),
+            "ordinary rows must return before drive-strip coordinate validation"
+        );
+        for diagnostic in [
+            "raw_event_client=",
+            "event_stage=",
+            "live_stage=",
+            "event_target=",
+            "live_target=",
+        ] {
+            assert!(
+                physical.contains(diagnostic),
+                "physical diagnostic line omitted {diagnostic}"
+            );
+        }
+        let ring = between(
+            SAVE_PICKER_MENU,
+            "pub(crate) fn save_picker_activation_ring_json()",
+            "\nunsafe fn save_picker_event_client_point(",
+        );
+        for diagnostic in [
+            "\\\"raw_event_client\\\":{}",
+            "\\\"event_stage\\\":{}",
+            "\\\"live_stage\\\":{}",
+            "\\\"event_target\\\":{}",
+            "\\\"live_target\\\":{}",
+        ] {
+            assert!(
+                ring.contains(diagnostic),
+                "activation ring omitted {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn installed_targets_are_the_byte_verified_1162_functions() {
+        assert!(
+            PROFILE_CONSTANTS
+                .contains("pub(crate) const PROFILE_LOAD_MENU_WINDOW_UPDATE_RVA: u32 = 0x745570;")
+        );
+        assert!(
+            PROFILE_CONSTANTS.contains(
+                "pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;"
+            )
+        );
+        assert!(
+            !PROFILE_CONSTANTS.contains("SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4170")
+        );
+        let typed_installer = between(
+            HOOK_INSTALLS,
+            "fn mh_install_profile_update_hook_once_with(",
+            "\npub(crate) fn install_profile_load_menu_window_update_hook()",
+        );
+        for required in [
+            "handler: ProfileLoadMenuWindowUpdateFn",
+            "create(addr, handler)",
+            "enable(addr)",
+            "PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLING",
+        ] {
+            assert!(
+                typed_installer.contains(required),
+                "typed installer omitted {required}"
+            );
+        }
+        for forbidden in ["UnionFn", "register_union_hook", "mh_install_hook_once"] {
+            assert!(
+                !typed_installer.contains(forbidden),
+                "float-ABI installer regressed through {forbidden}"
+            );
+        }
+        let installed = between(
+            HOOK_INSTALLS,
+            "pub(crate) fn install_profile_load_menu_window_update_hook()",
+            "\npub(crate) fn install_system_quit_profile_load_activate_hook()",
+        );
+        assert!(installed.contains("profile_load_menu_window_update_hook,"));
+        assert!(installed.contains("MH_CreateHook("));
+        assert!(installed.contains("MH_EnableHook("));
+        assert!(!installed.contains("UnionFn"));
+        assert!(!installed.contains("register_union_hook"));
+    }
+}

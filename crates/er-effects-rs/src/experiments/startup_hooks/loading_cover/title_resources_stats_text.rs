@@ -1037,6 +1037,72 @@ pub(crate) fn profile_slot_saved_map(slot: i32) -> Option<i32> {
 pub(crate) static PROFILE_SLOT_PLACE_NAME_CACHE: std::sync::Mutex<Option<[Option<u32>; 10]>> =
     std::sync::Mutex::new(None);
 
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProfileSlotCachesTestSnapshot {
+    stats: Option<[Option<er_save_loader::stats::SlotStats>; 10]>,
+    names: Option<[Option<String>; 10]>,
+    maps: Option<[Option<i32>; 10]>,
+    place_names: Option<[Option<u32>; 10]>,
+    cache_state: usize,
+    stats_decoded: usize,
+    names_decoded: usize,
+    invalidations: usize,
+    preview_reloads: usize,
+}
+
+#[cfg(test)]
+pub(crate) fn snapshot_profile_slot_caches_for_test() -> ProfileSlotCachesTestSnapshot {
+    let stats = PROFILE_SLOT_STATS_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let names = PROFILE_SLOT_NAMES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let maps = PROFILE_SLOT_SAVED_MAP_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let place_names = PROFILE_SLOT_PLACE_NAME_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ProfileSlotCachesTestSnapshot {
+        stats: *stats,
+        names: names.clone(),
+        maps: *maps,
+        place_names: *place_names,
+        cache_state: PROFILE_SLOT_STATS_CACHE_STATE.load(Ordering::SeqCst),
+        stats_decoded: PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        names_decoded: PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
+        invalidations: PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst),
+        preview_reloads: PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn restore_profile_slot_caches_for_test(snapshot: &ProfileSlotCachesTestSnapshot) {
+    let mut stats = PROFILE_SLOT_STATS_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut names = PROFILE_SLOT_NAMES_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut maps = PROFILE_SLOT_SAVED_MAP_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut place_names = PROFILE_SLOT_PLACE_NAME_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *stats = snapshot.stats;
+    *names = snapshot.names.clone();
+    *maps = snapshot.maps;
+    *place_names = snapshot.place_names;
+    PROFILE_SLOT_STATS_CACHE_STATE.store(snapshot.cache_state, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_DECODED.store(snapshot.stats_decoded, Ordering::SeqCst);
+    PROFILE_SLOT_NAMES_DECODED.store(snapshot.names_decoded, Ordering::SeqCst);
+    PROFILE_SLOT_CACHE_INVALIDATIONS.store(snapshot.invalidations, Ordering::SeqCst);
+    PROFILE_SLOT_CACHE_PREVIEW_RELOADS.store(snapshot.preview_reloads, Ordering::SeqCst);
+}
+
 /// The resolved `PlaceName` id for save `slot`, or `None` when the save cannot evidence one.
 pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
@@ -1216,12 +1282,17 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
     true
 }
 
-/// Fill both per-slot caches from `sl2`, replacing whatever they held.
-///
-/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker ALREADY HAS the
-/// bytes of the save it is previewing: reloading from them costs a parse instead of another ~26 MB
-/// read, and it makes the caches describe the save whose slots are on screen.
-pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> usize {
+pub(crate) struct PreparedProfileSlotCaches {
+    all: [Option<er_save_loader::stats::SlotStats>; 10],
+    names: [Option<String>; 10],
+    maps: [Option<i32>; 10],
+    place_names: [Option<u32>; 10],
+    decoded: usize,
+    named: usize,
+    source_len: usize,
+}
+
+pub(crate) fn prepare_profile_slot_caches_from_bytes(sl2: &[u8]) -> PreparedProfileSlotCaches {
     let all = er_save_loader::stats::all_slot_stats(sl2);
     let mut names = er_save_loader::stats::all_slot_names(sl2);
     for slot in er_save_loader::bnd4::active_character_slots(sl2).unwrap_or_default() {
@@ -1240,6 +1311,30 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     let place_names = er_save_loader::profile_summary::slot_place_name_ids(sl2);
     let decoded = all.iter().flatten().count();
     let named = names.iter().flatten().count();
+    PreparedProfileSlotCaches {
+        all,
+        names,
+        maps,
+        place_names,
+        decoded,
+        named,
+        source_len: sl2.len(),
+    }
+}
+
+pub(crate) fn apply_prepared_profile_slot_caches(
+    prepared: PreparedProfileSlotCaches,
+    source: &str,
+) -> usize {
+    let PreparedProfileSlotCaches {
+        all,
+        names,
+        maps,
+        place_names,
+        decoded,
+        named,
+        source_len,
+    } = prepared;
     match PROFILE_SLOT_STATS_CACHE.lock() {
         Ok(mut guard) => *guard = Some(all),
         Err(poison) => *poison.into_inner() = Some(all),
@@ -1258,9 +1353,19 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "stats-text: per-slot cache loaded from {source} ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
-        sl2.len()
+        source_len
     ));
     decoded
+}
+
+/// Fill both per-slot caches from `sl2`, replacing whatever they held.
+///
+/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker ALREADY HAS the
+/// bytes of the save it is previewing: reloading from them costs a parse instead of another ~26 MB
+/// read, and it makes the caches describe the save whose slots are on screen.
+pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> usize {
+    let prepared = prepare_profile_slot_caches_from_bytes(sl2);
+    apply_prepared_profile_slot_caches(prepared, source)
 }
 
 /// Drop both per-slot caches so the next row populate re-reads the save that is actually active.
@@ -2016,7 +2121,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
-    let mut active_drive_cell: Option<usize> = None;
+    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -2050,7 +2155,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // means "exactly what the game drew", and until a row was actually hidden the re-assert
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
-            active_drive_cell = slot_info.as_ref().and_then(|info| info.active_drive_cell);
+            drive_strip_focus = slot_info.as_ref().and_then(|info| info.drive_strip_focus);
             // MERGED ROW HEADER (user request 2026-08-06/07): the name, `RL <level>` and (once
             // sourced) `WL <max weapon level>` render as ONE string in `PlayerName` instead of
             // three separately-placed fields. Composed HERE, before the visibility statement,
@@ -2338,18 +2443,18 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // original returned failed on every row because native teardown had already invalidated the
     // setter path. Constrain the row's own animated Cursor now; native hover later changes only its
     // visibility, preserving this cell-sized geometry.
-    if let Some(cell) = active_drive_cell {
+    if let Some(focus) = drive_strip_focus {
         if let Ok(base) = game_module_base() {
             if unsafe {
                 crate::experiments::startup_hooks::apply_drive_row_native_cursor(
-                    base, row_proxy, cell,
+                    base, row_proxy, focus,
                 )
             } {
                 let applies =
                     PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
                 if applies <= 4 || applies.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor constrained to cell={cell} inside populate ownership (applies={applies})"
+                        "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
                     ));
                 }
             } else {
@@ -2357,7 +2462,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
                 if failures <= 4 || failures.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership cell={cell} row=0x{row_proxy:x} (failures={failures})"
+                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
                     ));
                 }
             }

@@ -114,7 +114,7 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REFRESH_PENDING_DIALOG;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;

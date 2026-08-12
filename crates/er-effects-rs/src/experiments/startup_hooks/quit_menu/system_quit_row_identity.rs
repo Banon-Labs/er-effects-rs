@@ -143,41 +143,71 @@ pub(crate) unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Opti
     Some(QuitRowLabel::Foreign)
 }
 
-/// Classify a dispatched activation event with the game's own predicates -- the same two tests
-/// `PropertyNewButtonController`'s should-invoke predicate (`FUN_140974b00`) runs. The pad predicate
-/// short-circuits with no positional test; the mouse predicate is the one whose result the native
-/// code then hit-tests against a display object.
-pub(crate) unsafe fn system_quit_classify_activation_input(event: usize) -> QuitInputKind {
-    if event == 0 {
+/// Pure decision boundary for the two native activation predicates. The order is the native
+/// `FUN_140974b00` order: logical Accept wins when both predicates assert. Keeping the predicate
+/// calls injected makes the production-used short circuit red-capable without sampling Win32 state.
+pub(crate) fn system_quit_classify_activation_input_with(
+    row_input_gate: *const u8,
+    accept_pressed: impl FnOnce(*const u8) -> bool,
+    primary_pointer_pressed: impl FnOnce(*const u8) -> bool,
+) -> QuitInputKind {
+    if row_input_gate.is_null() {
         return QuitInputKind::Unknown;
     }
-    let pad = game_rva(MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA).ok();
-    let mouse = game_rva(MENU_VIEWER_PAD_MOUSE_CLICKED_RVA).ok();
-    if let Some(addr) = pad {
-        let predicate: unsafe extern "system" fn(usize) -> u8 =
-            unsafe { std::mem::transmute(addr) };
-        if unsafe { predicate(event) } != 0 {
-            return QuitInputKind::Confirm;
-        }
+    if accept_pressed(row_input_gate) {
+        QuitInputKind::Confirm
+    } else if primary_pointer_pressed(row_input_gate) {
+        QuitInputKind::MouseClick
+    } else {
+        QuitInputKind::Unknown
     }
-    if let Some(addr) = mouse {
-        let predicate: unsafe extern "system" fn(usize) -> u8 =
-            unsafe { std::mem::transmute(addr) };
-        if unsafe { predicate(event) } != 0 {
-            return QuitInputKind::MouseClick;
-        }
+}
+
+unsafe fn system_quit_native_activation_predicate(
+    row_input_gate: *const u8,
+    predicate_rva: u32,
+) -> bool {
+    let Ok(addr) = game_rva(predicate_rva) else {
+        return false;
+    };
+    let predicate: unsafe extern "system" fn(*const u8) -> u8 =
+        unsafe { std::mem::transmute(addr) };
+    unsafe { predicate(row_input_gate) != 0 }
+}
+
+pub(crate) unsafe fn system_quit_native_accept_pressed(row_input_gate: *const u8) -> bool {
+    unsafe {
+        system_quit_native_activation_predicate(row_input_gate, MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA)
     }
-    QuitInputKind::Unknown
+}
+
+pub(crate) unsafe fn system_quit_native_primary_pointer_pressed(row_input_gate: *const u8) -> bool {
+    unsafe {
+        system_quit_native_activation_predicate(row_input_gate, MENU_VIEWER_PAD_MOUSE_CLICKED_RVA)
+    }
+}
+
+/// Classify one row dispatch from the statically verified native `row_input_gate`. These are the
+/// same logical Accept (`0x22`) and primary-pointer press (`0x23`) predicates used by
+/// `PropertyNewButtonController`; no later global button state participates in provenance.
+pub(crate) unsafe fn system_quit_classify_activation_input(
+    row_input_gate: *const u8,
+) -> QuitInputKind {
+    system_quit_classify_activation_input_with(
+        row_input_gate,
+        |gate| unsafe { system_quit_native_accept_pressed(gate) },
+        |gate| unsafe { system_quit_native_primary_pointer_pressed(gate) },
+    )
 }
 
 /// Resolve which Quit row an activation belongs to, from live memory, and record the outcome.
 ///
 /// `activation_dialog` is the dialog the activation reached us with (`action_obj + 0x8`, i.e. the
-/// dialog captured inside the action lambda) and `event` the native event object (0 to skip input
-/// classification, which is telemetry only).
+/// dialog captured inside the action lambda) and `row_input_gate` is the native one-byte row input
+/// gate (null to skip input classification, which is telemetry only).
 pub(crate) unsafe fn system_quit_resolve_row_now(
     activation_dialog: usize,
-    event: usize,
+    row_input_gate: *const u8,
 ) -> QuitRowVerdict {
     let cursor = if activation_dialog >= 0x10000 {
         unsafe { safe_read_i32(activation_dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1)
@@ -196,7 +226,7 @@ pub(crate) unsafe fn system_quit_resolve_row_now(
         activation_dialog,
         cursor,
         unsafe { system_quit_row_label_at(activation_dialog, cursor) },
-        unsafe { system_quit_classify_activation_input(event) },
+        unsafe { system_quit_classify_activation_input(row_input_gate) },
     );
     let verdict = resolve_quit_row(&facts);
     system_quit_row_record_resolution(&facts, verdict);

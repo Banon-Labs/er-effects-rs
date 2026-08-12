@@ -83,7 +83,7 @@ sample_drive_row = ""
 [field.DriveCell_0]
 x = -420
 y = -18
-width = 34
+width = 32
 clip_height = 39
 font_height = 16
 align = "left"
@@ -94,7 +94,7 @@ sample_drive_row = "C:"
 [field.DriveCell_1]
 x = -388
 y = -18
-width = 34
+width = 32
 clip_height = 39
 font_height = 16
 align = "left"
@@ -105,7 +105,7 @@ sample_drive_row = "S:"
 [field.DriveCell_2]
 x = -356
 y = -18
-width = 34
+width = 32
 clip_height = 39
 font_height = 16
 align = "left"
@@ -116,7 +116,7 @@ sample_drive_row = "Z:"
 [field.CurrentPath]
 x = -180
 y = -18
-width = 700
+width = 600
 clip_height = 39
 font_height = 16
 align = "left"

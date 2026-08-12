@@ -39,9 +39,9 @@ use er_gfx::profile_05_010_layout::{
 };
 use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
-    DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
-    DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX, DRIVE_CELL_PITCH_PX,
-    STATS_FIELD_NAME,
+    DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_LEFT_PX,
+    DRIVE_BUTTON_NATIVE_ART_TOP_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX, DRIVE_CELL_CAPACITY,
+    DRIVE_CELL_FIELD_NAMES, STATS_FIELD_NAME,
 };
 use er_gfx::{CxformWithAlpha, Matrix, Movie, Rect, Tag};
 
@@ -66,14 +66,35 @@ fn fixed_from_px(px: f32) -> i32 {
 fn drive_cell_layout(profile_layout: &Profile05_010Layout, index: usize) -> FieldLayout {
     let mut field = profile_layout.field(DRIVE_CELL_FIELD_NAMES[0]).clone();
     let authored_pitch = profile_layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - field.x;
-    assert!((field.x - DRIVE_CELL_FIRST_X_PX).abs() < f32::EPSILON);
-    assert!((authored_pitch - DRIVE_CELL_PITCH_PX).abs() < f32::EPSILON);
-    field.x = DRIVE_CELL_FIRST_X_PX + DRIVE_CELL_PITCH_PX * index as f32;
+    field.x += authored_pitch * index as f32;
     field
 }
 
 fn fixed_from_scale(scale: f32) -> i32 {
     (scale * SCALE_ONE as f32).round() as i32
+}
+
+fn drive_control_button_matrix(
+    field: &FieldLayout,
+    button: &er_gfx::profile_05_010_layout::TransformLayout,
+) -> Matrix {
+    let scale_x = (field.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * button.scale_x;
+    let scale_y = (field.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * button.scale_y;
+    let target_left = field.x + button.x;
+    let target_top = field.y - 2.0 + button.y;
+    Matrix {
+        has_scale: true,
+        scale_nbits: 23,
+        scale_x: fixed_from_scale(scale_x),
+        scale_y: fixed_from_scale(scale_y),
+        has_rotate: false,
+        rotate_nbits: 0,
+        rotate_skew0: 0,
+        rotate_skew1: 0,
+        translate_nbits: 16,
+        translate_x: fixed_from_px(target_left - DRIVE_BUTTON_NATIVE_ART_LEFT_PX * scale_x),
+        translate_y: fixed_from_px(target_top - DRIVE_BUTTON_NATIVE_ART_TOP_PX * scale_y),
+    }
 }
 
 fn set_matrix_transform(
@@ -169,7 +190,16 @@ fn main() {
         })
         .unwrap_or_else(|e| panic!("load ProfileSelect layout schema: {e}"));
     let bytes = std::fs::read(&input).expect("read vanilla movie");
-    let mut movie = Movie::parse(&bytes).expect("parse vanilla movie");
+    let out = generate_stats_movie(&bytes, &profile_layout);
+    std::fs::write(&output, &out).expect("write edited movie");
+    println!("wrote {output}: {} -> {} bytes", bytes.len(), out.len());
+}
+
+/// Apply the authoritative structured generator transform in memory. Corpus-gated integration tests
+/// import this exact example module and compare its bytes with the checked-in edit-table path, so
+/// generator/table/fingerprint drift fails without versioning any game-derived bytes.
+pub fn generate_stats_movie(bytes: &[u8], profile_layout: &Profile05_010Layout) -> Vec<u8> {
+    let mut movie = Movie::parse(bytes).expect("parse vanilla movie");
 
     // Clone the Location field (char 70) as the structural template for the
     // stats field so every unspecified property stays native.
@@ -349,6 +379,19 @@ fn main() {
         Tag::PlaceObject2 { name: Some(n), .. } => Some(n.clone()),
         _ => None,
     };
+    let (normal_backing_flags, normal_backing_color_transform) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                flags,
+                character_id: Some(54),
+                name: None,
+                color_transform: Some(color_transform),
+                ..
+            } => Some((*flags, color_transform.clone())),
+            _ => None,
+        })
+        .expect("vanilla row backing carries normal browse-row color treatment");
 
     // OMIT the face box VISUALLY without UNPLACING it (user direction 2026-07-04:
     // omit the per-row portrait boxes to free area for text). The native row-populate
@@ -463,10 +506,10 @@ fn main() {
         );
     }
 
-    // Give every drive cell its own REAL button frame, cloned from the game's normal row-button art
-    // (char 54) and placed immediately behind its text. The runtime routes each cell as an independent
-    // hit target and applies the same visibility bit to both halves, so absent drives leave no empty
-    // button chrome.
+    // Give every drive cell its own visible button frame, cloned from the game's normal row-button
+    // art and color treatment and placed immediately behind its text. Runtime owns the independent
+    // focus/hit identities; these named children are chrome only. The same visibility bit applies to
+    // text and frame, so absent drives leave no empty button chrome.
     for (index, name) in DRIVE_BUTTON_FIELD_NAMES.iter().enumerate() {
         let depth = DRIVE_BUTTON_DEPTH_BASE + index as u16;
         assert!(
@@ -476,35 +519,15 @@ fn main() {
             "drive button depth {depth} must be unused in the vanilla row template"
         );
         let field = drive_cell_layout(&profile_layout, index);
-        let width = field.width as f32;
-        let height = field.clip_height as f32;
         let button = &profile_layout.row_chrome.drive_button;
-        let center_x = field.x - 2.0 + width * 0.5 + button.x;
-        let center_y = field.y - 2.0 + height * 0.5 + button.y;
         row.insert(
             row_show_frame,
             Tag::PlaceObject2 {
-                flags: 0x26,
+                flags: normal_backing_flags | 0x20,
                 depth,
                 character_id: Some(54),
-                matrix: Some(Matrix {
-                    has_scale: true,
-                    scale_nbits: 23,
-                    scale_x: fixed_from_scale(
-                        (width / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * button.scale_x,
-                    ),
-                    scale_y: fixed_from_scale(
-                        (height / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * button.scale_y,
-                    ),
-                    has_rotate: false,
-                    rotate_nbits: 0,
-                    rotate_skew0: 0,
-                    rotate_skew1: 0,
-                    translate_nbits: 16,
-                    translate_x: fixed_from_px(center_x),
-                    translate_y: fixed_from_px(center_y),
-                }),
-                color_transform: None,
+                matrix: Some(drive_control_button_matrix(&field, button)),
+                color_transform: Some(normal_backing_color_transform.clone()),
                 ratio: None,
                 name: Some((*name).to_owned()),
                 clip_depth: None,
@@ -529,30 +552,11 @@ fn main() {
     row.insert(
         row_show_frame,
         Tag::PlaceObject2 {
-            flags: 0x26,
+            flags: normal_backing_flags | 0x20,
             depth: CURRENT_PATH_BUTTON_DEPTH,
             character_id: Some(54),
-            matrix: Some(Matrix {
-                has_scale: true,
-                scale_nbits: 23,
-                scale_x: fixed_from_scale(
-                    (path.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * path_button.scale_x,
-                ),
-                scale_y: fixed_from_scale(
-                    (path.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
-                        * path_button.scale_y,
-                ),
-                has_rotate: false,
-                rotate_nbits: 0,
-                rotate_skew0: 0,
-                rotate_skew1: 0,
-                translate_nbits: 16,
-                translate_x: fixed_from_px(path.x - 2.0 + path.width as f32 * 0.5 + path_button.x),
-                translate_y: fixed_from_px(
-                    path.y - 2.0 + path.clip_height as f32 * 0.5 + path_button.y,
-                ),
-            }),
-            color_transform: None,
+            matrix: Some(drive_control_button_matrix(path, path_button)),
+            color_transform: Some(normal_backing_color_transform.clone()),
             ratio: None,
             name: Some(CURRENT_PATH_BUTTON_NAME.to_owned()),
             clip_depth: None,
@@ -846,7 +850,5 @@ fn main() {
             _ => {}
         }
     }
-    let out = movie.write().expect("serialize edited movie");
-    std::fs::write(&output, &out).expect("write edited movie");
-    println!("wrote {output}: {} -> {} bytes", bytes.len(), out.len());
+    movie.write().expect("serialize edited movie")
 }

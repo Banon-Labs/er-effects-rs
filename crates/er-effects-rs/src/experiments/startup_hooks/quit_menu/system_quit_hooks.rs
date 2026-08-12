@@ -618,6 +618,133 @@ pub(crate) fn mh_install_hook_once(
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TypedProfileUpdateInstallFailure {
+    Initialize(MH_STATUS),
+    Create(MH_STATUS),
+    NullTrampoline,
+    Enable(MH_STATUS),
+}
+
+/// Direct typed MinHook installer for the XMM1-bearing ProfileLoad MenuWindow update. This target
+/// cannot enter the integer-only `UnionFn` dispatcher: its second argument is an `f32` in XMM1.
+/// A created-but-not-enabled hook remains in the installing state so a later tick retries only
+/// `MH_EnableHook` instead of attempting a second `MH_CreateHook` and losing its trampoline.
+fn mh_install_profile_update_hook_once_with(
+    flag: &AtomicUsize,
+    orig: &AtomicUsize,
+    addr: usize,
+    handler: ProfileLoadMenuWindowUpdateFn,
+    initialize: impl FnOnce() -> MH_STATUS,
+    create: impl FnOnce(usize, ProfileLoadMenuWindowUpdateFn) -> (MH_STATUS, usize),
+    enable: impl FnOnce(usize) -> MH_STATUS,
+) -> Result<bool, TypedProfileUpdateInstallFailure> {
+    match flag.load(Ordering::Acquire) {
+        PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED_YES => return Ok(true),
+        PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLING
+            if orig.load(Ordering::Acquire) != HOOK_ORIGINAL_UNSET =>
+        {
+            return match enable(addr) {
+                MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {
+                    flag.store(
+                        PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED_YES,
+                        Ordering::Release,
+                    );
+                    Ok(true)
+                }
+                status => Err(TypedProfileUpdateInstallFailure::Enable(status)),
+            };
+        }
+        PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLING => return Ok(false),
+        _ => {}
+    }
+    if flag
+        .compare_exchange(
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED,
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return Ok(false);
+    }
+
+    match initialize() {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            flag.store(
+                PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED,
+                Ordering::Release,
+            );
+            return Err(TypedProfileUpdateInstallFailure::Initialize(status));
+        }
+    }
+    let (create_status, trampoline) = create(addr, handler);
+    if create_status != MH_STATUS::MH_OK {
+        flag.store(
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED,
+            Ordering::Release,
+        );
+        return Err(TypedProfileUpdateInstallFailure::Create(create_status));
+    }
+    if trampoline == 0 {
+        flag.store(
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED,
+            Ordering::Release,
+        );
+        return Err(TypedProfileUpdateInstallFailure::NullTrampoline);
+    }
+    orig.store(trampoline, Ordering::Release);
+    match enable(addr) {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {
+            flag.store(
+                PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED_YES,
+                Ordering::Release,
+            );
+            Ok(true)
+        }
+        status => Err(TypedProfileUpdateInstallFailure::Enable(status)),
+    }
+}
+
+pub(crate) fn install_profile_load_menu_window_update_hook() {
+    let Ok(addr) = game_rva(PROFILE_LOAD_MENU_WINDOW_UPDATE_RVA) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve shared MenuWindow update rva 0x{PROFILE_LOAD_MENU_WINDOW_UPDATE_RVA:x}"
+        ));
+        return;
+    };
+    let result = mh_install_profile_update_hook_once_with(
+        &PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED,
+        &PROFILE_LOAD_MENU_WINDOW_UPDATE_ORIG,
+        addr,
+        profile_load_menu_window_update_hook,
+        || unsafe { MH_Initialize() },
+        |target, detour| {
+            let mut trampoline = std::ptr::null_mut();
+            let status = unsafe {
+                crate::mh::MH_CreateHook(
+                    target as *mut c_void,
+                    detour as *mut c_void,
+                    &mut trampoline,
+                )
+            };
+            (status, trampoline as usize)
+        },
+        |target| unsafe { crate::mh::MH_EnableHook(target as *mut c_void) },
+    );
+    match result {
+        Ok(true) => append_autoload_debug(format_args!(
+            "mh-install: ProfileLoad scoped MenuWindow update installed typed-direct on 0x{addr:x}"
+        )),
+        Ok(false) => {}
+        Err(failure) => append_autoload_debug(format_args!(
+            "mh-install: ProfileLoad scoped MenuWindow update typed-direct failed: {failure:?}"
+        )),
+    }
+}
+
 pub(crate) fn install_system_quit_profile_load_activate_hook() {
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
         append_autoload_debug(format_args!(
@@ -670,4 +797,132 @@ pub(crate) fn install_system_quit_profile_load_job_run_hook() {
         &SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG,
         "ProfileLoadDialog load-job Run",
     );
+}
+
+#[cfg(test)]
+mod typed_profile_update_installer_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    unsafe extern "system" fn typed_detour(_: usize, _: f32, _: *const u8) {}
+    const _: ProfileLoadMenuWindowUpdateFn = typed_detour;
+
+    #[test]
+    fn typed_installer_creates_enables_and_publishes_the_trampoline_once() {
+        let flag = AtomicUsize::new(PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED);
+        let orig = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+        let initialized = Cell::new(0);
+        let created = Cell::new(0);
+        let enabled = Cell::new(0);
+        let installed = mh_install_profile_update_hook_once_with(
+            &flag,
+            &orig,
+            0x140745570,
+            typed_detour,
+            || {
+                initialized.set(initialized.get() + 1);
+                MH_STATUS::MH_ERROR_ALREADY_INITIALIZED
+            },
+            |target, detour| {
+                created.set(created.get() + 1);
+                assert_eq!(target, 0x140745570);
+                let _: ProfileLoadMenuWindowUpdateFn = detour;
+                (MH_STATUS::MH_OK, 0x1234_5678)
+            },
+            |target| {
+                enabled.set(enabled.get() + 1);
+                assert_eq!(target, 0x140745570);
+                MH_STATUS::MH_OK
+            },
+        );
+        assert_eq!(installed, Ok(true));
+        assert_eq!(initialized.get(), 1);
+        assert_eq!(created.get(), 1);
+        assert_eq!(enabled.get(), 1);
+        assert_eq!(orig.load(Ordering::Acquire), 0x1234_5678);
+        assert_eq!(
+            flag.load(Ordering::Acquire),
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED_YES
+        );
+
+        assert_eq!(
+            mh_install_profile_update_hook_once_with(
+                &flag,
+                &orig,
+                0x140745570,
+                typed_detour,
+                || panic!("installed retry must not initialize"),
+                |_, _| panic!("installed retry must not create"),
+                |_| panic!("installed retry must not enable"),
+            ),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn typed_installer_retries_enable_without_recreating_the_hook() {
+        let flag = AtomicUsize::new(PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED);
+        let orig = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+        let first = mh_install_profile_update_hook_once_with(
+            &flag,
+            &orig,
+            0x140745570,
+            typed_detour,
+            || MH_STATUS::MH_OK,
+            |_, _| (MH_STATUS::MH_OK, 0x8765_4321),
+            |_| MH_STATUS::MH_ERROR_MEMORY_PROTECT,
+        );
+        assert_eq!(
+            first,
+            Err(TypedProfileUpdateInstallFailure::Enable(
+                MH_STATUS::MH_ERROR_MEMORY_PROTECT
+            ))
+        );
+        assert_eq!(
+            flag.load(Ordering::Acquire),
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLING
+        );
+        assert_eq!(orig.load(Ordering::Acquire), 0x8765_4321);
+
+        let second = mh_install_profile_update_hook_once_with(
+            &flag,
+            &orig,
+            0x140745570,
+            typed_detour,
+            || panic!("enable retry must not initialize"),
+            |_, _| panic!("enable retry must not create"),
+            |_| MH_STATUS::MH_ERROR_ENABLED,
+        );
+        assert_eq!(second, Ok(true));
+        assert_eq!(
+            flag.load(Ordering::Acquire),
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_INSTALLED_YES
+        );
+    }
+
+    #[test]
+    fn typed_installer_resets_claim_after_create_failure() {
+        let flag = AtomicUsize::new(PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED);
+        let orig = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+        let result = mh_install_profile_update_hook_once_with(
+            &flag,
+            &orig,
+            0x140745570,
+            typed_detour,
+            || MH_STATUS::MH_OK,
+            |_, _| (MH_STATUS::MH_ERROR_ALREADY_CREATED, 0),
+            |_| panic!("failed create must not enable"),
+        );
+        assert_eq!(
+            result,
+            Err(TypedProfileUpdateInstallFailure::Create(
+                MH_STATUS::MH_ERROR_ALREADY_CREATED
+            ))
+        );
+        assert_eq!(
+            flag.load(Ordering::Acquire),
+            PROFILE_LOAD_MENU_WINDOW_UPDATE_NOT_INSTALLED
+        );
+        assert_eq!(orig.load(Ordering::Acquire), HOOK_ORIGINAL_UNSET);
+    }
 }

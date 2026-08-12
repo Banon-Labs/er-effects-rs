@@ -1557,13 +1557,196 @@ pub static SAVE_PICKER_REOPEN_PENDING: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_OPEN_SLOTS_PENDING: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_ACTION_OBJ: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Hidden/rebuilt System-row activations suppressed while picker mode or a picker transition owns
+/// input. This covers every System row, not just the duplicate file-browser row.
+pub static SAVE_PICKER_SYSTEM_ROW_ACTIVATION_SUPPRESSIONS: AtomicUsize = AtomicUsize::new(0);
+/// Suppressed `Load Character from File` activations from an underlying System controller while the
+/// picker owns input.
+pub static SAVE_PICKER_DUPLICATE_UNDERLYING_ACTIVATION_SUPPRESSIONS: AtomicUsize =
+    AtomicUsize::new(0);
+/// Reentrant load-source opens that matched the exact live picker or owner-zero resubmit identity
+/// and were consumed as no-op success before any restore/stage/native work.
+pub static SAVE_PICKER_OPEN_PREFLIGHT_COALESCES: AtomicUsize = AtomicUsize::new(0);
+/// Load-source opens rejected before any mutation because owner/System/action/boundary authority did
+/// not prove either an initial open or an exact duplicate.
+pub static SAVE_PICKER_OPEN_PREFLIGHT_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Dangling published ProfileSelect owners republished to zero because the object they pointed at
+/// was no longer a ProfileLoadDialog. Observed 2026-08-11: a path-editor return left the owner at a
+/// freed window whose vtable slot had been reused by the heap, and because `classify_picker_load_
+/// source_open` requires `profile_owner == 0` for an initial open, every later Load Character from
+/// File click was rejected forever -- the quit menu looked like it had no functionality at all.
+pub static SAVE_PICKER_STALE_OWNER_RELEASES: AtomicUsize = AtomicUsize::new(0);
+/// Latched picker modes released because the picker window was dead. `SAVE_PICKER_MODE_ACTIVE` gates
+/// `picker_system_row_activation_is_inert` BEFORE the open preflight runs, so a mode left latched
+/// after a native Escape teardown suppresses every System row -- Load Character from File and Return
+/// to Desktop alike -- and the menu appears completely unresponsive.
+pub static SAVE_PICKER_DEAD_MODE_RELEASES: AtomicUsize = AtomicUsize::new(0);
+/// Owning picker transitions declared abandoned after holding the System rows with an unchanged
+/// signature for too many pumps. `transition_owned` is a veto over every self-heal, so an unbounded
+/// one turns the safety guard into the wedge: observed 2026-08-11 with `owner_zero_pending=true`
+/// stuck on, holding the rows inert while silencing every release that would have recovered them.
+pub static SAVE_PICKER_TRANSITION_STALLS: AtomicUsize = AtomicUsize::new(0);
+/// Last dangling owner pointer released by the stale-owner invariant.
+pub static SAVE_PICKER_STALE_OWNER_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Last foreign vtable read out of a released dangling owner (the reuse evidence).
+pub static SAVE_PICKER_STALE_OWNER_LAST_VTABLE: AtomicUsize = AtomicUsize::new(0);
+/// Picker-tracked System dialog at the last preflight. `Initial` requires this to be zero, so a
+/// stale value rejects every open even when owner/mode are both already clear.
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_TRACKED_SYSTEM: AtomicUsize = AtomicUsize::new(0);
+/// Picker-tracked action object at the last preflight. Same `Initial == 0` requirement as above.
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_TRACKED_ACTION: AtomicUsize = AtomicUsize::new(0);
+/// Last suppression/preflight source: 1 action thunk, 2 controller, 3 open coalesce, 4 open reject.
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_SOURCE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_OWNER: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_SYSTEM: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_ACTION: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OPEN_PREFLIGHT_LAST_VTABLE: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REPOPULATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_RESUBMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// ProfileLoad callbacks accepted inside the exact picker MenuWindow update dynamic extent.
+pub static SAVE_PICKER_SOURCE_ACCEPTED_EVENTS: AtomicUsize = AtomicUsize::new(0);
+/// Accepted source events that committed one route intent. For CurrentPath this means only that the
+/// generation-owned editor request was queued; submit/result/application counters prove completion.
+pub static SAVE_PICKER_COMMITTED_EFFECTS: AtomicUsize = AtomicUsize::new(0);
+/// Accepted source events that terminated in a named fail-closed rejection.
+pub static SAVE_PICKER_NAMED_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Picker ProfileLoad callbacks observed after/outside their owning update dynamic extent.
+pub static SAVE_PICKER_UNEXPECTED_LATE_ACTIVATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Scoped picker MenuWindow updates forwarded to the original update body exactly once.
+pub static SAVE_PICKER_UPDATE_FORWARDS: AtomicUsize = AtomicUsize::new(0);
+/// Picker ProfileLoad originals suppressed so synthetic rows never queue native load jobs.
+pub static SAVE_PICKER_SUPPRESSED_PROFILE_LOAD_ORIGINALS: AtomicUsize = AtomicUsize::new(0);
+/// CurrentPath activation intent. This does not prove that the native editor was submitted or shown.
+pub static SAVE_PICKER_PATH_EDITOR_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+/// Gauge: 1 while a generation-owned CurrentPath request is waiting for native submission.
+pub static SAVE_PICKER_PATH_EDITOR_PENDING: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_SUBMIT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_SUBMIT_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_SUBMIT_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_SUBMIT_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Native SoftwareKeyboard phases reached only under an exact revalidated 05_010 Run token.
+pub static SAVE_PICKER_PATH_EDITOR_QUEUE_READY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_CONSTRUCTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_NATIVE_SUBMIT_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Gauge: 1 while validated submit ownership excludes every dialog reset/close/clear path.
+pub static SAVE_PICKER_PATH_EDITOR_SUBMIT_LEASE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Reset/close attempts deferred because validated native dialog submission still owned the dialog.
+pub static SAVE_PICKER_PATH_EDITOR_RESET_DEFERRED: AtomicUsize = AtomicUsize::new(0);
+/// Exact dialog+generation+owner close tickets drained under reset ownership.
+pub static SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_DRAINS: AtomicUsize = AtomicUsize::new(0);
+/// Deferred close tickets cancelled without native dereference after ownership stopped matching.
+pub static SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_CANCELS: AtomicUsize = AtomicUsize::new(0);
+/// Generation-owned calls observed at FUN_14081d3d0 (controller-state result gate).
+pub static SAVE_PICKER_PATH_EDITOR_RESULT_GATE_OWNED_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Generation-owned calls consumed at FUN_14081d220 before its null std::function invocation.
+pub static SAVE_PICKER_PATH_EDITOR_ACCEPT_CONTINUATION_OWNED_HITS: AtomicUsize =
+    AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_NATIVE_ACCEPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_NATIVE_CANCELS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_STALE_RESULTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_VALIDATION_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_APPLIED_DIRECTORIES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_REBUILDS_SCHEDULED: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_LIFECYCLE_INVARIANT_VIOLATIONS: AtomicUsize =
+    AtomicUsize::new(0);
+/// Monotonic generation that owns the current pending/active/result editor work.
+pub static SAVE_PICKER_PATH_EDITOR_GENERATION: AtomicUsize = AtomicUsize::new(0);
+/// Numeric lifecycle state; named values live beside the production path-editor adapter.
+pub static SAVE_PICKER_PATH_EDITOR_LAST_STATUS: AtomicUsize = AtomicUsize::new(0);
+/// Native ScrollBarV setter pairs executed after the exact SceneObjProxy dispatch preflight passed.
+pub static SAVE_PICKER_SCROLLBAR_DISPATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Native ScrollBarV setter pairs skipped because the proxy dispatch chain was no longer callable.
+pub static SAVE_PICKER_SCROLLBAR_DISPATCH_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Numeric `ScrollbarDispatchRejectReason` recorded by the most recent fail-closed skip.
+pub static SAVE_PICKER_SCROLLBAR_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Values read from `*(scrollbar+8)` and then `[vtable+8]` by the most recent failed preflight.
+pub static SAVE_PICKER_SCROLLBAR_LAST_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_SCROLLBAR_LAST_TARGET: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_ORDINARY_EFFECTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_DRIVE_SELECTIONS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_ACTIVATION_TERMINALS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Exact live ProfileSelect owner whose picker-model presentation must be replaced by a fresh
+/// native 05_010 window. Consumed only by the menu-pump close/resubmit path.
+pub static SAVE_PICKER_REFRESH_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Generation paired with `SAVE_PICKER_REFRESH_PENDING_DIALOG`; zero means unpublished/none.
+pub static SAVE_PICKER_REFRESH_PENDING_GENERATION: AtomicUsize = AtomicUsize::new(0);
+/// Logical picker refresh requests accepted from content or presentation transitions.
+pub static SAVE_PICKER_REFRESH_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+/// Requests folded into an already-pending close/resubmit transaction.
+pub static SAVE_PICKER_REFRESH_COALESCES: AtomicUsize = AtomicUsize::new(0);
+/// Exact-identity refresh requests that reached the native ProfileSelect close primitive.
+pub static SAVE_PICKER_REFRESH_NATIVE_CLOSES: AtomicUsize = AtomicUsize::new(0);
+/// Refresh generations for which the old ProfileSelect owner was observed cleared.
+pub static SAVE_PICKER_REFRESH_OWNER_CLEARED: AtomicUsize = AtomicUsize::new(0);
+/// Attempts to stage the latest picker model after owner clear and immediately before submit.
+pub static SAVE_PICKER_RESUBMIT_STAGE_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_RESUBMIT_STAGE_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_RESUBMIT_STAGE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Fresh 05_010 submit attempts made after a successful owner-cleared stage.
+pub static SAVE_PICKER_RESUBMIT_SUBMIT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Monotonic close/resubmit generation and identity diagnostics.
+pub static SAVE_PICKER_REFRESH_GENERATION: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_REFRESH_LAST_OLD_OWNER: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_REFRESH_LAST_OWNER_CLEARED_GENERATION: AtomicUsize = AtomicUsize::new(0);
+/// Refreshes completed without a close because native ownership was already observed as zero.
+pub static SAVE_PICKER_REFRESH_OWNER_ZERO_NO_CLOSES: AtomicUsize = AtomicUsize::new(0);
+/// Refresh pump attempts deferred because the current MenuWindowJob post did not carry an exact
+/// live `05_010_ProfileSelect` owner token.
+pub static SAVE_PICKER_REFRESH_NO_LIVE_TOKEN_DEFERS: AtomicUsize = AtomicUsize::new(0);
+/// Exact-generation path-editor return transaction. Every terminal SoftwareKeyboard outcome calls
+/// no native close and preserves the picker model until native parent-owner disappearance is proven.
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_PENDING_GENERATION: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_COALESCES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_NO_CLOSE_REOPENS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_OWNER_CLEARED: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PATH_EDITOR_RETURN_LAST_OWNER_CLEARED_GENERATION: AtomicUsize =
+    AtomicUsize::new(0);
+/// Published-owner zero transitions made only after the native owning window list proved the exact
+/// previously-published ProfileSelect pointer absent.
+pub static SAVE_PICKER_OWNER_ABSENT_PUBLICATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Provenance of the latest MenuWindowJob post offered to picker native maintenance:
+/// 0 other resource, 1 exact live ProfileSelect token, 2 ProfileSelect owner-zero, 3 rejected token.
+pub static SAVE_PICKER_PROFILE_RUN_SOURCE_LAST: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_TOKEN_ACCEPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_TOKEN_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_LAST_JOB: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_LAST_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_PROFILE_RUN_EXPECTED_VTABLE: AtomicUsize = AtomicUsize::new(0);
+/// Exact native MenuWindow push-list removal publication for a current ProfileSelect Run.
+pub static SAVE_PICKER_NATIVE_REMOVAL_BOUNDARY_HITS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_EXACT_PUBLICATIONS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_DEFERRED: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_STALE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_FOREIGN: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_NOT_PROVEN: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_NO_TRANSITION: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_LAST_JOB: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_LAST_LIST: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_LAST_OWNER_GENERATION: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_TICKET_HANDOFFS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_TICKET_RETRIES: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_NATIVE_REMOVAL_TICKET_COMMITS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OWNER_ZERO_LOOP_GUARD_MAX: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_OWNER_ZERO_LOOP_GUARD_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Last-moment central `0x1407ac890` close preflight. Rejection reason is the numeric
+/// `PickerNativeCloseRejectReason`; source identifies picked-file/refresh/deferred/destination.
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_CURRENT: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_EXPECTED_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_REJECT_REASON: AtomicUsize = AtomicUsize::new(0);
+pub static SAVE_PICKER_CLOSE_PREFLIGHT_LAST_SOURCE: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Which file-picker surface this session runs: 0 = the in-game `05_010` browser (default),
@@ -1953,6 +2136,14 @@ pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
 /// a boolean -- "the oracle never ran" must not read as a pass.
 pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_ZERO_SLOT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// 0 none, 1 invalid BND4/parse failure, 2 valid BND4 with zero readable slots.
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_LAST_REASON: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_SUPPRESSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_SWAP_POLL_RESTORE_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);

@@ -839,16 +839,48 @@ pub(crate) const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
 pub(crate) const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
 pub(crate) const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_ATTEMPTS;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_FAILURE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_LAST_REASON;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_SUPPRESSED_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_RESTORE_FAILURE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_ZERO_SLOT_COUNT;
 
-#[derive(Default)]
+pub(crate) const SAVE_SWAP_REJECTION_NONE: usize = 0;
+pub(crate) const SAVE_SWAP_REJECTION_PARSE_FAILURE: usize = 1;
+pub(crate) const SAVE_SWAP_REJECTION_ZERO_READABLE_SLOTS: usize = 2;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SystemQuitSaveSwapState {
+    /// Monotonic source for exact arm identity. Preserved across every state retirement.
+    pub(crate) next_generation: u64,
+    /// Generation that owns the currently armed snapshot; zero when unarmed.
+    pub(crate) arm_generation: u64,
     pub(crate) armed: bool,
     pub(crate) path: String,
     pub(crate) original_bytes: Vec<u8>,
     pub(crate) original_hash: u64,
     pub(crate) original_len: u64,
     pub(crate) original_modified_ns: u128,
+    /// Exact arm generation that successfully wrote/replaced the active file. Zero means this
+    /// generation has no file mutation to restore. Cleared only after exact original restoration.
+    pub(crate) file_mutated_generation: u64,
+    /// Exact arm generation whose live ProfileSummary bytes differ from `summary_snapshot`.
+    pub(crate) summary_mutated_generation: u64,
+    /// Fingerprint and reason for an invalid or zero-readable-slot candidate. Poll stays armed but
+    /// inert for identical bytes and retries only after candidate content changes.
+    pub(crate) rejected_candidate_hash: u64,
+    pub(crate) rejected_candidate_len: u64,
+    pub(crate) rejected_candidate_modified_ns: u128,
+    pub(crate) rejected_candidate_reason: usize,
+    /// Exact evidence that this externally observed candidate was replaced by original A. This
+    /// bridges validation and preview/rejection without a second unconditional write.
+    pub(crate) restored_candidate_generation: u64,
+    pub(crate) restored_candidate_hash: u64,
+    pub(crate) restored_candidate_len: u64,
+    pub(crate) restored_candidate_modified_ns: u128,
     pub(crate) candidate_bytes: Vec<u8>,
     pub(crate) candidate_hash: u64,
     pub(crate) candidate_slot_mask: usize,
@@ -864,6 +896,33 @@ pub(crate) struct SystemQuitSaveSwapState {
 
 pub(crate) static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> =
     OnceLock::new();
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_OPERATION_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_SUMMARY_PTR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_PREPARE_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_COMMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_FAIL_NEXT_RESTORE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn system_quit_save_swap_poll_test_active() -> bool {
+    #[cfg(test)]
+    {
+        return SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_SUMMARY_PTR.load(Ordering::SeqCst) != 0;
+    }
+    #[cfg(not(test))]
+    false
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SystemQuitSaveSwapArmIdentity {
+    pub(crate) generation: u64,
+    pub(crate) path: String,
+    pub(crate) original_hash: u64,
+}
 
 /// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
 /// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
@@ -904,6 +963,12 @@ pub(crate) fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, Sys
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+pub(crate) fn system_quit_save_swap_operation_lock() -> std::sync::MutexGuard<'static, ()> {
+    SYSTEM_QUIT_SAVE_SWAP_OPERATION_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub(crate) fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf29ce484222325u64;
     for b in bytes.iter().copied() {
@@ -924,22 +989,18 @@ pub(crate) fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
     Some((meta.len(), modified_ns))
 }
 
-pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
-    let Ok(bytes) = fs::read(path) else {
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: failed to snapshot active save '{path}' before opening replacement folder"
-        ));
-        return false;
-    };
-    let Some((len, modified_ns)) = system_quit_file_stamp(path) else {
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: failed to stat active save '{path}' before opening replacement folder"
-        ));
-        return false;
-    };
+pub(crate) fn system_quit_save_swap_publish_arm(
+    st: &mut SystemQuitSaveSwapState,
+    path: &str,
+    bytes: Vec<u8>,
+    len: u64,
+    modified_ns: u128,
+) -> SystemQuitSaveSwapArmIdentity {
+    let generation = st.next_generation.wrapping_add(1).max(1);
     let hash = system_quit_hash_bytes(&bytes);
-    let mut st = system_quit_save_swap_lock();
     *st = SystemQuitSaveSwapState {
+        next_generation: generation,
+        arm_generation: generation,
         armed: true,
         path: path.to_owned(),
         original_bytes: bytes,
@@ -948,13 +1009,52 @@ pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
         original_modified_ns: modified_ns,
         ..SystemQuitSaveSwapState::default()
     };
+    SystemQuitSaveSwapArmIdentity {
+        generation,
+        path: path.to_owned(),
+        original_hash: hash,
+    }
+}
+
+pub(crate) fn system_quit_save_swap_arm_original_identity(
+    path: &str,
+) -> Option<SystemQuitSaveSwapArmIdentity> {
+    let _operation = system_quit_save_swap_operation_lock();
+    let Ok(bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to snapshot active save '{path}' before opening replacement folder"
+        ));
+        return None;
+    };
+    let Some((len, modified_ns)) = system_quit_file_stamp(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to stat active save '{path}' before opening replacement folder"
+        ));
+        return None;
+    };
+    let identity = {
+        let mut st = system_quit_save_swap_lock();
+        system_quit_save_swap_publish_arm(&mut st, path, bytes, len, modified_ns)
+    };
     append_autoload_debug(format_args!(
-        "system-quit-save-swap: armed active-save snapshot path='{path}' len={len} hash=0x{hash:016x}; replacement preview will restore this file unless a foreign slot is selected"
+        "system-quit-save-swap: armed active-save snapshot generation={} path='{path}' len={len} hash=0x{:016x}; replacement preview will restore this file unless a foreign slot is selected",
+        identity.generation, identity.original_hash,
     ));
-    true
+    Some(identity)
+}
+
+pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
+    system_quit_save_swap_arm_original_identity(path).is_some()
 }
 
 pub(crate) unsafe fn system_quit_profile_summary_ptr() -> usize {
+    #[cfg(test)]
+    {
+        let test = SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_SUMMARY_PTR.load(Ordering::SeqCst);
+        if test != 0 {
+            return test;
+        }
+    }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gdm = game_data_man_ptr_or_null();
     if gdm == null {
@@ -1210,6 +1310,12 @@ pub(crate) fn save_bytes_have_any_character(bytes: &[u8]) -> bool {
     })
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PreparedProfileSummaryRecordEffects {
+    pub(crate) face_hash: usize,
+    pub(crate) place_name_unsourced: bool,
+}
+
 impl<'a> SerializedPlayerGameData<'a> {
     fn field(&self, offset: usize, len: usize) -> Option<&'a [u8]> {
         self.body
@@ -1342,9 +1448,9 @@ impl<'a> SerializedPlayerGameData<'a> {
         fallback_record: Option<&[u8]>,
         face_bytes: Option<&[u8]>,
         chr_asm_image: Option<&[u8; CHR_ASM_SIZE]>,
-    ) -> bool {
+    ) -> Option<PreparedProfileSummaryRecordEffects> {
         let Some(name_bytes) = self.name_bytes() else {
-            return false;
+            return None;
         };
         let slot_data =
             profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
@@ -1377,14 +1483,13 @@ impl<'a> SerializedPlayerGameData<'a> {
             // not SHOW it: the value still sitting there is the template character's, and the field
             // is unrecoverable otherwise (it is in no character body and the game cannot recompute
             // it from a map), so the row hides it rather than printing somebody else's place.
-            let slot_bit = 1usize << slot;
-            if let Some(place_name_id) = place_name_id {
+            let place_name_unsourced = if let Some(place_name_id) = place_name_id {
                 *(slot_data.wrapping_add(PROFILE_SUMMARY_PLACE_NAME_OFFSET) as *mut u32) =
                     place_name_id;
-                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_and(!slot_bit, Ordering::SeqCst);
+                false
             } else {
-                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_or(slot_bit, Ordering::SeqCst);
-            }
+                true
+            };
             // VISUAL IDENTITY (second-load wrong-head ROOT fix, user-identified 2026-07-06: "Banon in
             // all three windows"). The fallback record above is a STRUCTURAL template cloned from the
             // ORIGINAL save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe
@@ -1420,12 +1525,14 @@ impl<'a> SerializedPlayerGameData<'a> {
                         *(slot_data.wrapping_add(record_off) as *mut u8) = v;
                     }
                 }
-                PROFILE_PREVIEW_FACE_HASH[slot].store(
-                    er_gfx::title_05_000::fnv1a64(face) as usize,
-                    Ordering::SeqCst,
-                );
+                let face_hash = er_gfx::title_05_000::fnv1a64(face) as usize;
+                *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
+                    as *mut u8) = 1;
+                return Some(PreparedProfileSummaryRecordEffects {
+                    face_hash,
+                    place_name_unsourced,
+                });
             } else {
-                PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "system-quit-load-save-profiles: slot {slot} FOREIGN visual data unavailable (face_located={} chr_asm_located={}); record keeps the fallback character's face/equipment",
                     face_bytes.is_some(),
@@ -1434,8 +1541,11 @@ impl<'a> SerializedPlayerGameData<'a> {
             }
             *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
                 as *mut u8) = 1;
+            Some(PreparedProfileSummaryRecordEffects {
+                face_hash: 0,
+                place_name_unsourced,
+            })
         }
-        true
     }
 }
 

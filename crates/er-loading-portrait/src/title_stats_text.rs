@@ -253,6 +253,9 @@ impl RowSlotFieldVisibility {
             char_stats: false,
             drive_cells: std::array::from_fn(|index| index < drive_cell_count),
             current_path: drive_cell_count > 0,
+            // The drive row's full-width Backing stays visually absent. Runtime pointer movement
+            // enters row 0 through GridControl's verified native cursor setter, then the one native
+            // Cursor is resized to the exact cell/path bounds; Backing is not an invisible hit hack.
             backing: drive_cell_count == 0,
         }
     }
@@ -347,7 +350,8 @@ mod tests {
                 drive_cells: std::array::from_fn(|index| index < 3),
                 current_path: true,
                 backing: false,
-            }
+            },
+            "drive/path controls must not restore visible full-width Backing chrome"
         );
         assert_eq!(
             RowSlotFieldVisibility::NATIVE,

@@ -1,8 +1,112 @@
 use super::*;
 
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedForeignProfilePreview {
+    summary_bytes: Vec<u8>,
+    mask: usize,
+    preview_stats: Vec<Vec<u16>>,
+    effects: [PreparedProfileSummaryRecordEffects; TITLE_PROFILE_SLOT_COUNT],
+}
+
+pub(crate) fn prepare_foreign_profile_summary_preview_with(
+    active_slots: [bool; TITLE_PROFILE_SLOT_COUNT],
+    summary_snapshot: &[u8],
+    mut prepare_slot: impl FnMut(
+        usize,
+        usize,
+        Option<&[u8]>,
+    ) -> Option<(PreparedProfileSummaryRecordEffects, Vec<u16>)>,
+) -> Option<PreparedForeignProfilePreview> {
+    if summary_snapshot.len() != PROFILE_SUMMARY_TOTAL_BYTES {
+        return None;
+    }
+    let mut summary_bytes = summary_snapshot.to_vec();
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        let start = PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+        summary_bytes[start..start + PROFILE_SUMMARY_RECORD_STRIDE].fill(0);
+        summary_bytes[PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot] = 0;
+    }
+    let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT)
+        .find(|slot| summary_snapshot[PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot] != 0);
+    let mut mask = 0usize;
+    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
+    let mut effects = [PreparedProfileSummaryRecordEffects::default(); TITLE_PROFILE_SLOT_COUNT];
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        if !active_slots[slot] {
+            continue;
+        }
+        let fallback_src_slot = if summary_snapshot[PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot] != 0
+        {
+            Some(slot)
+        } else {
+            fallback_slot
+        };
+        let fallback = fallback_src_slot.and_then(|src_slot| {
+            let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
+            summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
+        });
+        let prepared_ptr = summary_bytes.as_mut_ptr() as usize;
+        let Some((slot_effects, stats)) = prepare_slot(slot, prepared_ptr, fallback) else {
+            continue;
+        };
+        effects[slot] = slot_effects;
+        preview_stats[slot] = stats;
+        mask |= 1usize << slot;
+    }
+    (mask != 0).then_some(PreparedForeignProfilePreview {
+        summary_bytes,
+        mask,
+        preview_stats,
+        effects,
+    })
+}
+
+pub(crate) fn commit_prepared_foreign_profile_preview_with(
+    state: &std::sync::Mutex<SystemQuitSaveSwapState>,
+    identity: &SystemQuitSaveSwapArmIdentity,
+    summary: usize,
+    summary_snapshot: Vec<u8>,
+    prepared: &PreparedForeignProfilePreview,
+    apply_summary: impl FnOnce(&[u8]),
+) -> bool {
+    let mut st = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !st.armed
+        || st.committed
+        || st.arm_generation != identity.generation
+        || st.path != identity.path
+        || st.original_hash != identity.original_hash
+    {
+        return false;
+    }
+    apply_summary(&prepared.summary_bytes);
+    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
+        st.summary_ptr = summary;
+        st.summary_snapshot = summary_snapshot;
+    }
+    st.summary_mutated_generation = identity.generation;
+    st.candidate_slot_mask = prepared.mask;
+    st.candidate_stats_utf16 = prepared.preview_stats.clone();
+    st.preview_applied = true;
+    st.rejected_candidate_hash = 0;
+    st.rejected_candidate_len = 0;
+    st.rejected_candidate_modified_ns = 0;
+    st.rejected_candidate_reason = SAVE_SWAP_REJECTION_NONE;
+    st.restored_candidate_generation = 0;
+    st.restored_candidate_hash = 0;
+    st.restored_candidate_len = 0;
+    st.restored_candidate_modified_ns = 0;
+    #[cfg(test)]
+    if system_quit_save_swap_poll_test_active() {
+        SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    true
+}
 pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
     base: usize,
     bytes: &[u8],
+    identity: &SystemQuitSaveSwapArmIdentity,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let summary = unsafe { system_quit_profile_summary_ptr() };
@@ -12,81 +116,60 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
         ));
         return 0;
     }
-    let mut st = system_quit_save_swap_lock();
-    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-        st.summary_ptr = summary;
-        st.summary_snapshot = unsafe {
-            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
-        };
-    }
-    let summary_snapshot = st.summary_snapshot.clone();
-    let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT).find(|slot| {
-        summary_snapshot
-            .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot)
-            .copied()
-            .unwrap_or(0)
-            != 0
-    });
-    unsafe {
-        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            core::ptr::write_bytes(
-                (summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE)
-                    as *mut u8,
-                0,
-                PROFILE_SUMMARY_RECORD_STRIDE,
-            );
-            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
-            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+    let summary_snapshot = {
+        let st = system_quit_save_swap_lock();
+        if st.arm_generation != identity.generation || !st.armed || st.committed {
+            return 0;
         }
-    }
-    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
-    drop(st);
-
+        if st.summary_ptr == summary && !st.summary_snapshot.is_empty() {
+            st.summary_snapshot.clone()
+        } else {
+            unsafe {
+                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
+                    .to_vec()
+            }
+        }
+    };
     let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: replacement preview refused -- active-slot bitmap unreadable"
         ));
         return 0;
     };
-    let mut mask = 0usize;
-    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
-    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-        if !active_slots.get(slot).copied().unwrap_or(false) {
-            continue;
-        }
-        if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
+    let Some(prepared) = prepare_foreign_profile_summary_preview_with(
+        active_slots,
+        &summary_snapshot,
+        |slot, prepared_summary, fallback| {
+            #[cfg(test)]
+            if system_quit_save_swap_poll_test_active() {
+                SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_PREPARE_COUNT.fetch_add(1, Ordering::SeqCst);
+                unsafe {
+                    *((prepared_summary
+                        + PROFILE_SUMMARY_RECORD_BASE
+                        + slot * PROFILE_SUMMARY_RECORD_STRIDE) as *mut u8) = 0xa0 | slot as u8;
+                    *((prepared_summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) =
+                        1;
+                }
+                return Some((
+                    PreparedProfileSummaryRecordEffects {
+                        face_hash: 0x1000 + slot,
+                        place_name_unsourced: false,
+                    },
+                    vec![slot as u16],
+                ));
+            }
+            let body = er_save_loader::bnd4::slot_body(bytes, slot).ok()?;
             let slot_body = SerializedSaveSlot::new(body);
-            let Some(pgd) = slot_body.player_game_data() else {
-                continue;
-            };
-            let Some(saved_map) = slot_body.saved_map() else {
-                continue;
-            };
-            let fallback_src_slot = if summary_snapshot
-                .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
-                .copied()
-                .unwrap_or(0)
-                != 0
-            {
-                Some(slot)
-            } else {
-                fallback_slot
-            };
-            let fallback = fallback_src_slot.and_then(|src_slot| {
-                let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
-                summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
-            });
+            let pgd = slot_body.player_game_data()?;
+            let saved_map = slot_body.saved_map()?;
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
-            // The place name is NOT in the character body -- the game writes it from the front-end
-            // manager at save time. It IS in the save's own stored summary table, so take it from
-            // there rather than deriving one from the map id.
             let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
             let face_bytes = slot_body.face_data_buffer_bytes(pgd);
             let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
-            if unsafe {
+            let effects = unsafe {
                 pgd.write_profile_summary_record(
                     base,
-                    summary,
+                    prepared_summary,
                     slot,
                     saved_map,
                     place_name_id,
@@ -95,72 +178,287 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                     face_bytes,
                     chr_asm_image.as_ref(),
                 )
-            } {
-                append_autoload_debug(format_args!(
-                    "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
-                ));
-                if let Some(stats) = pgd.stats_text_utf16() {
-                    preview_stats[slot] = stats;
-                }
-                mask |= 1usize << slot;
-            }
+            }?;
+            append_autoload_debug(format_args!(
+                "system-quit-load-save-profiles: prepared preview slot {slot} playtime_ticks={playtime_ticks}"
+            ));
+            Some((effects, pgd.stats_text_utf16().unwrap_or_default()))
+        },
+    ) else {
+        return 0;
+    };
+    let prepared_caches =
+        crate::experiments::startup_hooks::loading_cover::prepare_profile_slot_caches_from_bytes(
+            bytes,
+        );
+    if !commit_prepared_foreign_profile_preview_with(
+        system_quit_save_swap_state(),
+        identity,
+        summary,
+        summary_snapshot,
+        &prepared,
+        |prepared_bytes| unsafe {
+            core::ptr::copy_nonoverlapping(
+                prepared_bytes.as_ptr(),
+                summary as *mut u8,
+                prepared_bytes.len(),
+            );
+        },
+    ) {
+        return 0;
+    }
+    let mut unsourced_mask = 0usize;
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        PROFILE_PREVIEW_FACE_HASH[slot].store(prepared.effects[slot].face_hash, Ordering::SeqCst);
+        if prepared.effects[slot].place_name_unsourced && prepared.mask & (1usize << slot) != 0 {
+            unsourced_mask |= 1usize << slot;
         }
     }
-    if mask != 0 {
-        {
-            let mut st = system_quit_save_swap_lock();
-            st.candidate_slot_mask = mask;
-            st.candidate_stats_utf16 = preview_stats;
-            st.preview_applied = true;
-        }
-        // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
-        // ProfileSummary above now holds the previewed save's records, but the name and the whole
-        // attribute line on each row come from `PROFILE_SLOT_*_CACHE`, which was a process-lifetime
-        // latch: without this the picker showed the new save's levels and locations under the old
-        // save's names and stats. `bytes` is the previewed save itself, so this is a parse, not a
-        // second ~26 MB read.
-        let decoded =
-            crate::experiments::startup_hooks::loading_cover::load_profile_slot_caches_from_bytes(
-                bytes,
-                "picker-previewed save",
-            );
-        let reloads = PROFILE_SLOT_CACHE_PREVIEW_RELOADS.fetch_add(1, Ordering::SeqCst) + 1;
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: per-slot stats/name caches reloaded from the previewed save ({decoded}/10 slots, reloads={reloads})"
-        ));
-        PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(unsourced_mask, Ordering::SeqCst);
+    let decoded =
+        crate::experiments::startup_hooks::loading_cover::apply_prepared_profile_slot_caches(
+            prepared_caches,
+            "picker-previewed save",
+        );
+    let reloads = PROFILE_SLOT_CACHE_PREVIEW_RELOADS.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: committed value-owned ProfileSummary preview mask=0x{:x}; per-slot caches reloaded ({decoded}/10 slots, reloads={reloads})",
+        prepared.mask
+    ));
+    PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
+    if !system_quit_save_swap_poll_test_active() {
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
     }
-    mask
+    prepared.mask
 }
 
-pub(crate) fn system_quit_save_swap_restore_original_file(
+pub(crate) fn system_quit_save_swap_identity_matches(
     st: &SystemQuitSaveSwapState,
-    reason: &str,
+    identity: &SystemQuitSaveSwapArmIdentity,
 ) -> bool {
-    if st.path.is_empty() || st.original_bytes.is_empty() {
+    st.arm_generation == identity.generation
+        && st.path == identity.path
+        && st.original_hash == identity.original_hash
+}
+
+pub(crate) fn system_quit_save_swap_take_exact_with(
+    state: &std::sync::Mutex<SystemQuitSaveSwapState>,
+    identity: &SystemQuitSaveSwapArmIdentity,
+) -> Option<SystemQuitSaveSwapState> {
+    let mut guard = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !guard.armed || !system_quit_save_swap_identity_matches(&guard, identity) {
+        return None;
+    }
+    let next_generation = guard.next_generation;
+    let mut retired = std::mem::take(&mut *guard);
+    guard.next_generation = next_generation;
+    retired.next_generation = next_generation;
+    Some(retired)
+}
+
+pub(crate) fn system_quit_save_swap_poll_eligible(st: &SystemQuitSaveSwapState) -> bool {
+    st.armed && !st.committed && !st.path.is_empty() && st.arm_generation != 0
+}
+
+pub(crate) fn system_quit_save_swap_candidate_rejected(
+    st: &SystemQuitSaveSwapState,
+    hash: u64,
+    len: u64,
+    modified_ns: u128,
+) -> bool {
+    let _ = modified_ns;
+    hash != 0 && st.rejected_candidate_hash == hash && st.rejected_candidate_len == len
+}
+
+pub(crate) fn system_quit_save_swap_restore_summary_if_mutated_exact(
+    st: &mut SystemQuitSaveSwapState,
+    identity: &SystemQuitSaveSwapArmIdentity,
+) -> bool {
+    if !system_quit_save_swap_identity_matches(st, identity)
+        || st.summary_mutated_generation != identity.generation
+        || st.summary_ptr < 0x10000
+        || st.summary_snapshot.is_empty()
+    {
         return false;
     }
-    match fs::write(&st.path, &st.original_bytes) {
-        Ok(()) => {
-            append_autoload_debug(format_args!(
-                "system-quit-save-swap: restored active save file for {reason} path='{}' len={} hash=0x{:016x}",
-                st.path,
-                st.original_bytes.len(),
-                st.original_hash
-            ));
-            true
-        }
-        Err(err) => {
-            append_autoload_debug(format_args!(
-                "system-quit-save-swap: FAILED to restore active save file for {reason} path='{}': {err}",
-                st.path
-            ));
-            false
-        }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            st.summary_snapshot.as_ptr(),
+            st.summary_ptr as *mut u8,
+            st.summary_snapshot.len(),
+        );
     }
+    st.summary_mutated_generation = 0;
+    st.preview_applied = false;
+    st.candidate_slot_mask = 0;
+    st.candidate_stats_utf16.clear();
+    true
+}
+
+fn system_quit_save_swap_retire_exact_restored(
+    state: &std::sync::Mutex<SystemQuitSaveSwapState>,
+    identity: &SystemQuitSaveSwapArmIdentity,
+) -> Option<SystemQuitSaveSwapState> {
+    let mut guard = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !system_quit_save_swap_identity_matches(&guard, identity)
+        || guard.file_mutated_generation != 0
+        || guard.summary_mutated_generation != 0
+    {
+        return None;
+    }
+    let next_generation = guard.next_generation;
+    let mut retired = std::mem::take(&mut *guard);
+    guard.next_generation = next_generation;
+    retired.next_generation = next_generation;
+    Some(retired)
+}
+
+pub(crate) fn system_quit_save_swap_write_original_with(
+    st: &SystemQuitSaveSwapState,
+    reason: &str,
+    write: impl FnOnce(&str, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if st.path.is_empty() || st.original_bytes.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "save-swap original path/bytes missing",
+        ));
+    }
+    write(&st.path, &st.original_bytes).map_err(|err| {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: FAILED to restore active save file for {reason} path='{}': {err}",
+            st.path
+        ));
+        err
+    })?;
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: restored active save file for {reason} path='{}' len={} hash=0x{:016x}",
+        st.path,
+        st.original_bytes.len(),
+        st.original_hash
+    ));
+    Ok(())
+}
+
+pub(crate) fn system_quit_save_swap_restore_if_mutated_with(
+    st: &mut SystemQuitSaveSwapState,
+    identity: &SystemQuitSaveSwapArmIdentity,
+    reason: &str,
+    write: impl FnOnce(&str, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    if !system_quit_save_swap_identity_matches(st, identity)
+        || st.file_mutated_generation == 0
+        || st.file_mutated_generation != identity.generation
+    {
+        return Ok(false);
+    }
+    system_quit_save_swap_write_original_with(st, reason, write)?;
+    st.file_mutated_generation = 0;
+    Ok(true)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ObservedCandidateRecovery {
+    RestoreRequired,
+    AlreadyRestoredExact,
+}
+
+fn system_quit_save_swap_poll_write_original(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if SYSTEM_QUIT_SAVE_SWAP_POLL_TEST_FAIL_NEXT_RESTORE.swap(false, Ordering::SeqCst) {
+        return Err(std::io::Error::other(
+            "injected production-poll original restore failure",
+        ));
+    }
+    fs::write(path, bytes)
+}
+
+fn system_quit_save_swap_restore_observed_candidate_exact(
+    identity: &SystemQuitSaveSwapArmIdentity,
+    raw_hash: u64,
+    len: u64,
+    modified_ns: u128,
+) -> bool {
+    let mut st = system_quit_save_swap_lock();
+    if !system_quit_save_swap_identity_matches(&st, identity)
+        || !system_quit_save_swap_poll_eligible(&st)
+        || (st.file_mutated_generation != 0 && st.file_mutated_generation != identity.generation)
+    {
+        return false;
+    }
+    // The active file was replaced externally, but this exact arm now owns recovery of that
+    // observed mutation. Publish ownership before the fallible write and clear it only after A is
+    // back on disk through the same conditional accounting used by abort/normal restore.
+    st.file_mutated_generation = identity.generation;
+    if system_quit_save_swap_restore_if_mutated_with(
+        &mut st,
+        identity,
+        "externally-observed-candidate",
+        system_quit_save_swap_poll_write_original,
+    )
+    .is_err()
+    {
+        st.armed = false;
+        SYSTEM_QUIT_SAVE_SWAP_POLL_RESTORE_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: FAILED exact recovery for externally observed candidate generation={} path='{}' len={len} hash=0x{raw_hash:016x}; mutation evidence retained and poll disabled for normal-restore retry",
+            identity.generation, identity.path
+        ));
+        return false;
+    }
+    st.restored_candidate_generation = identity.generation;
+    st.restored_candidate_hash = raw_hash;
+    st.restored_candidate_len = len;
+    st.restored_candidate_modified_ns = modified_ns;
+    true
+}
+
+pub(crate) fn system_quit_save_swap_reject_observed_candidate_exact(
+    identity: &SystemQuitSaveSwapArmIdentity,
+    raw_hash: u64,
+    len: u64,
+    modified_ns: u128,
+    reason: usize,
+    recovery: ObservedCandidateRecovery,
+) -> bool {
+    if matches!(recovery, ObservedCandidateRecovery::RestoreRequired)
+        && !system_quit_save_swap_restore_observed_candidate_exact(
+            identity,
+            raw_hash,
+            len,
+            modified_ns,
+        )
+    {
+        return false;
+    }
+    let mut st = system_quit_save_swap_lock();
+    if !system_quit_save_swap_identity_matches(&st, identity)
+        || !system_quit_save_swap_poll_eligible(&st)
+        || st.file_mutated_generation != 0
+        || st.restored_candidate_generation != identity.generation
+        || st.restored_candidate_hash != raw_hash
+        || st.restored_candidate_len != len
+        || st.restored_candidate_modified_ns != modified_ns
+    {
+        return false;
+    }
+    st.rejected_candidate_hash = raw_hash;
+    st.rejected_candidate_len = len;
+    st.rejected_candidate_modified_ns = modified_ns;
+    st.rejected_candidate_reason = reason;
+    SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_LAST_REASON.store(reason, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: rejected externally observed candidate generation={} path='{}' len={len} hash=0x{raw_hash:016x} modified_ns={modified_ns} reason={reason}; original A restored and identical bytes are poll-inert",
+        identity.generation, identity.path
+    ));
+    true
 }
 
 /// Is a FOREIGN save's summary currently on screen (previewed, not yet committed)?
@@ -176,43 +474,148 @@ pub(crate) fn system_quit_foreign_preview_active() -> bool {
     st.preview_applied && !st.committed
 }
 
-pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
-    let mut st = system_quit_save_swap_lock();
-    if !st.preview_applied || st.committed {
-        return;
-    }
-    if st.summary_ptr >= 0x10000 && !st.summary_snapshot.is_empty() {
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                st.summary_snapshot.as_ptr(),
-                st.summary_ptr as *mut u8,
-                st.summary_snapshot.len(),
-            );
+pub(crate) unsafe fn system_quit_save_swap_abort_exact(
+    identity: &SystemQuitSaveSwapArmIdentity,
+    reason: &str,
+) -> bool {
+    let _operation = system_quit_save_swap_operation_lock();
+    let summary_restored = {
+        let mut st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_identity_matches(&st, identity) {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: stale abort ignored generation={} path='{}' reason={reason}",
+                identity.generation, identity.path
+            ));
+            return false;
         }
-        if let Ok(base) = game_module_base() {
+        system_quit_save_swap_restore_summary_if_mutated_exact(&mut st, identity)
+    };
+    if summary_restored {
+        if !system_quit_save_swap_poll_test_active()
+            && let Ok(base) = game_module_base()
+        {
             let refresh: unsafe extern "system" fn() =
                 unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
             unsafe { refresh() };
         }
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: restored live ProfileSummary snapshot for {reason} summary=0x{:x} bytes={}",
-            st.summary_ptr,
-            st.summary_snapshot.len()
-        ));
+        crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
+        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+        }
+        PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
+        clear_picker_presentation();
     }
-    // Symmetric with the reload on preview: the summary is the ORIGINAL save's again, so the caches
-    // describing the previewed save must go. Dropped rather than reloaded because the bytes of the
-    // active save are not in hand here -- the next row populate reads them.
-    crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
-    // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
-    // fingerprints no longer describe any slot, and neither does the preview's record of which slots
-    // it could not source a place name for.
-    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-        PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+    let file_restored = {
+        let mut st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_identity_matches(&st, identity) {
+            return false;
+        }
+        match system_quit_save_swap_restore_if_mutated_with(
+            &mut st,
+            identity,
+            reason,
+            |path, bytes| fs::write(path, bytes),
+        ) {
+            Ok(restored) => restored,
+            Err(_) => {
+                // Keep exact path/original bytes/mutation generation as retry evidence, but make the
+                // failed generation poll-inert. A later normal restore retries the write.
+                st.armed = false;
+                append_autoload_debug(format_args!(
+                    "system-quit-save-swap: exact abort retained generation={} restore evidence after write failure; poll disabled until retry",
+                    identity.generation
+                ));
+                return false;
+            }
+        }
+    };
+    let retired =
+        system_quit_save_swap_retire_exact_restored(system_quit_save_swap_state(), identity)
+            .is_some();
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: aborted exact arm generation={} path='{}' reason={reason} summary_restored={summary_restored} file_restored={file_restored} retired={retired}",
+        identity.generation, identity.path
+    ));
+    retired
+}
+
+pub(crate) struct SystemQuitSaveSwapArmGuard {
+    identity: Option<SystemQuitSaveSwapArmIdentity>,
+}
+
+impl SystemQuitSaveSwapArmGuard {
+    pub(crate) fn commit(mut self) -> SystemQuitSaveSwapArmIdentity {
+        self.identity
+            .take()
+            .expect("save-swap arm guard commits at most once")
     }
-    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
-    let _ = system_quit_save_swap_restore_original_file(&st, reason);
-    *st = SystemQuitSaveSwapState::default();
+}
+
+impl Drop for SystemQuitSaveSwapArmGuard {
+    fn drop(&mut self) {
+        if let Some(identity) = self.identity.take() {
+            unsafe { system_quit_save_swap_abort_exact(&identity, "initial-picker-open-abort") };
+        }
+    }
+}
+
+pub(crate) fn system_quit_save_swap_arm_original_transaction(
+    path: &str,
+) -> Option<SystemQuitSaveSwapArmGuard> {
+    system_quit_save_swap_arm_original_identity(path).map(|identity| SystemQuitSaveSwapArmGuard {
+        identity: Some(identity),
+    })
+}
+
+pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    let _operation = system_quit_save_swap_operation_lock();
+    let identity = {
+        let st = system_quit_save_swap_lock();
+        if st.committed || st.arm_generation == 0 {
+            return;
+        }
+        SystemQuitSaveSwapArmIdentity {
+            generation: st.arm_generation,
+            path: st.path.clone(),
+            original_hash: st.original_hash,
+        }
+    };
+    let summary_restored = {
+        let mut st = system_quit_save_swap_lock();
+        system_quit_save_swap_restore_summary_if_mutated_exact(&mut st, &identity)
+    };
+    if summary_restored {
+        if !system_quit_save_swap_poll_test_active()
+            && let Ok(base) = game_module_base()
+        {
+            let refresh: unsafe extern "system" fn() =
+                unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+            unsafe { refresh() };
+        }
+        crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
+        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+        }
+        PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
+        clear_picker_presentation();
+    }
+    let file_result = {
+        let mut st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_identity_matches(&st, &identity) {
+            return;
+        }
+        system_quit_save_swap_restore_if_mutated_with(&mut st, &identity, reason, |path, bytes| {
+            fs::write(path, bytes)
+        })
+    };
+    if file_result.is_err() {
+        let mut st = system_quit_save_swap_lock();
+        if system_quit_save_swap_identity_matches(&st, &identity) {
+            st.armed = false;
+        }
+        return;
+    }
+    let _ = system_quit_save_swap_retire_exact_restored(system_quit_save_swap_state(), &identity);
 }
 
 pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
@@ -220,19 +623,40 @@ pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     if tick % SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS != 0 {
         return;
     }
-    let (path, original_hash, original_len, original_modified_ns, preview_applied) = {
+    // Abort/restore/arm serialize with the entire poll, not just its first state read. Therefore an
+    // abort that retires a generation cannot be followed by a poll that already cloned its path.
+    let _operation = system_quit_save_swap_operation_lock();
+    let (
+        identity,
+        original_len,
+        original_modified_ns,
+        preview_applied,
+        rejected_hash,
+        rejected_len,
+        rejected_modified_ns,
+        rejected_reason,
+    ) = {
         let st = system_quit_save_swap_lock();
-        if !st.armed || st.committed || st.path.is_empty() {
+        if !system_quit_save_swap_poll_eligible(&st) {
             return;
         }
         (
-            st.path.clone(),
-            st.original_hash,
+            SystemQuitSaveSwapArmIdentity {
+                generation: st.arm_generation,
+                path: st.path.clone(),
+                original_hash: st.original_hash,
+            },
             st.original_len,
             st.original_modified_ns,
             st.preview_applied,
+            st.rejected_candidate_hash,
+            st.rejected_candidate_len,
+            st.rejected_candidate_modified_ns,
+            st.rejected_candidate_reason,
         )
     };
+    let path = identity.path.clone();
+    let original_hash = identity.original_hash;
     if preview_applied {
         return;
     }
@@ -249,34 +673,73 @@ pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     if raw_hash == original_hash {
         return;
     }
-    // Validate before restoring the active redirected save. A partial copy must not be captured as a
-    // foreign preview, and the old in-world save must remain the write target until the user commits.
-    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: replacement candidate changed but is not a valid BND4 yet path='{path}' len={len} hash=0x{raw_hash:016x}; waiting"
-        ));
+    if system_quit_save_swap_candidate_rejected(
+        &SystemQuitSaveSwapState {
+            rejected_candidate_hash: rejected_hash,
+            rejected_candidate_len: rejected_len,
+            rejected_candidate_modified_ns: rejected_modified_ns,
+            ..SystemQuitSaveSwapState::default()
+        },
+        raw_hash,
+        len,
+        modified_ns,
+    ) {
+        SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_SUPPRESSED_COUNT.fetch_add(1, Ordering::SeqCst);
+        let _ = system_quit_save_swap_reject_observed_candidate_exact(
+            &identity,
+            raw_hash,
+            len,
+            modified_ns,
+            rejected_reason,
+            ObservedCandidateRecovery::RestoreRequired,
+        );
         return;
     }
-    normalize_save_bytes_to_active_steam_id(base, &mut bytes, "system-quit-polled-candidate");
-    let hash = system_quit_hash_bytes(&bytes);
-    {
-        let st = system_quit_save_swap_lock();
-        if !system_quit_save_swap_restore_original_file(&st, "candidate-captured") {
-            return;
-        }
+    SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        let _ = system_quit_save_swap_reject_observed_candidate_exact(
+            &identity,
+            raw_hash,
+            len,
+            modified_ns,
+            SAVE_SWAP_REJECTION_PARSE_FAILURE,
+            ObservedCandidateRecovery::RestoreRequired,
+        );
+        return;
     }
-    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    if !system_quit_save_swap_poll_test_active() {
+        normalize_save_bytes_to_active_steam_id(base, &mut bytes, "system-quit-polled-candidate");
+    }
+    let hash = system_quit_hash_bytes(&bytes);
+    if !system_quit_save_swap_restore_observed_candidate_exact(
+        &identity,
+        raw_hash,
+        len,
+        modified_ns,
+    ) {
+        return;
+    }
+    let mask =
+        unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes, &identity) };
     if mask == 0 {
-        append_autoload_debug(format_args!(
-            "system-quit-save-swap: valid replacement candidate had no readable character slots path='{path}' len={len} hash=0x{hash:016x}; active file restored, preview not applied"
-        ));
+        SYSTEM_QUIT_SAVE_SWAP_POLL_ZERO_SLOT_COUNT.fetch_add(1, Ordering::SeqCst);
+        let _ = system_quit_save_swap_reject_observed_candidate_exact(
+            &identity,
+            raw_hash,
+            len,
+            modified_ns,
+            SAVE_SWAP_REJECTION_ZERO_READABLE_SLOTS,
+            ObservedCandidateRecovery::AlreadyRestoredExact,
+        );
         return;
     }
     let mut st = system_quit_save_swap_lock();
+    if !system_quit_save_swap_identity_matches(&st, &identity) {
+        return;
+    }
     st.candidate_bytes = bytes;
     st.candidate_hash = hash;
-    st.candidate_slot_mask = mask;
-    st.preview_applied = true;
     append_autoload_debug(format_args!(
         "system-quit-save-swap: applied FOREIGN ProfileSummary preview from replacement path='{path}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; active save file restored until the user selects a foreign slot"
     ));
@@ -319,7 +782,9 @@ pub(crate) unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> R
         ));
         return Err(());
     }
-    match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
+    match system_quit_save_swap_write_candidate_with(&mut st, |path, bytes| {
+        write_save_bytes_for_overwrite(path, bytes)
+    }) {
         Ok(()) => {
             st.committed = true;
             st.recommitted = false;
@@ -357,6 +822,21 @@ pub(crate) fn write_save_bytes_for_overwrite(path: &str, bytes: &[u8]) -> std::i
     fs::write(path, bytes)
 }
 
+pub(crate) fn system_quit_save_swap_write_candidate_with(
+    st: &mut SystemQuitSaveSwapState,
+    write: impl FnOnce(&str, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if st.arm_generation == 0 || st.path.is_empty() || st.candidate_bytes.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "save-swap candidate write lacks exact generation/path/bytes",
+        ));
+    }
+    write(&st.path, &st.candidate_bytes)?;
+    st.file_mutated_generation = st.arm_generation;
+    Ok(())
+}
+
 /// Re-commit the foreign candidate bytes AFTER the game's return-title save completes (bc4 terminal).
 /// The activation-time commit is CLOBBERED by that save whenever the picked slot shares the ACTIVE
 /// character's slot index: the return-title chain sets saveRequested and the game re-writes the active
@@ -376,7 +856,9 @@ pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     if !st.committed || st.recommitted || st.path.is_empty() || st.candidate_bytes.is_empty() {
         return;
     }
-    match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
+    match system_quit_save_swap_write_candidate_with(&mut st, |path, bytes| {
+        write_save_bytes_for_overwrite(path, bytes)
+    }) {
         Ok(()) => {
             st.recommitted = true;
             append_autoload_debug(format_args!(

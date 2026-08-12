@@ -90,7 +90,7 @@ use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
 use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
-use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
+use er_telemetry::counters::SAVE_PICKER_REFRESH_PENDING_DIALOG;
 use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
 use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;

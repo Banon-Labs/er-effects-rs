@@ -77,18 +77,22 @@ static UNIONS: Mutex<Vec<UnionEntry>> = Mutex::new(Vec::new());
 static UNION_HEADS: [AtomicUsize; MAX_UNION_SLOTS] =
     [const { AtomicUsize::new(0) }; MAX_UNION_SLOTS];
 
+unsafe fn dispatch_union_head(head: &AtomicUsize, a: usize, b: usize, c: usize, d: usize) -> usize {
+    let handler = head.load(Ordering::Acquire);
+    if handler == 0 {
+        return 0;
+    }
+    let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(handler) };
+    unsafe { f(a, b, c, d) }
+}
+
 unsafe extern "system" fn union_dispatch<const N: usize>(
     a: usize,
     b: usize,
     c: usize,
     d: usize,
 ) -> usize {
-    let head = UNION_HEADS[N].load(Ordering::Acquire);
-    if head == 0 {
-        return 0;
-    }
-    let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(head) };
-    unsafe { f(a, b, c, d) }
+    unsafe { dispatch_union_head(&UNION_HEADS[N], a, b, c, d) }
 }
 
 macro_rules! union_dispatchers {
@@ -100,6 +104,44 @@ static DISPATCHERS: [UnionFn; MAX_UNION_SLOTS] = union_dispatchers!(
     48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
     72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
 );
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnionPublicationPhase {
+    FirstOriginalReady,
+    FirstHeadReady,
+    AppendOriginalReady,
+    AppendLinked,
+}
+
+fn prepare_first_union_publication_with(
+    head: &AtomicUsize,
+    orig_slot: &AtomicUsize,
+    handler: usize,
+    trampoline: usize,
+    mut observe: impl FnMut(UnionPublicationPhase),
+) {
+    // The enabled dispatcher may observe `head` immediately. Publish the handler's forwarding
+    // target first, then release-publish the head; enabling the detour is a later operation.
+    orig_slot.store(trampoline, Ordering::Release);
+    observe(UnionPublicationPhase::FirstOriginalReady);
+    head.store(handler, Ordering::Release);
+    observe(UnionPublicationPhase::FirstHeadReady);
+}
+
+fn publish_appended_union_with(
+    previous_orig: &AtomicUsize,
+    appended_orig: &AtomicUsize,
+    handler: usize,
+    trampoline: usize,
+    mut observe: impl FnMut(UnionPublicationPhase),
+) {
+    // A concurrent dispatch may follow `previous_orig` as soon as the link is published. The
+    // appended handler must already have a valid forwarding target at that instant.
+    appended_orig.store(trampoline, Ordering::Release);
+    observe(UnionPublicationPhase::AppendOriginalReady);
+    previous_orig.store(handler, Ordering::Release);
+    observe(UnionPublicationPhase::AppendLinked);
+}
 
 /// Register `handler` on `target`, chaining through `orig_slot`. First registrant installs
 /// the dispatcher + owns the trampoline; later ones append and no handler is ever dropped.
@@ -123,11 +165,13 @@ pub unsafe fn register_union_hook(
         if entry.handlers.iter().any(|(h, _)| *h == handler_addr) {
             return Ok(());
         }
-        if let Some((_, prev_orig)) = entry.handlers.last() {
-            prev_orig.store(handler_addr, Ordering::Release); // prev -> new
-        }
-        orig_slot.store(entry.trampoline, Ordering::Release); // new -> game orig
+        let Some((_, prev_orig)) = entry.handlers.last().copied() else {
+            return Err(MH_STATUS::MH_ERROR_NOT_CREATED);
+        };
+        // Bookkeeping is complete before release-publishing the new link. Dispatches before the
+        // link still forward through the old trampoline; dispatches after it see a ready new orig.
         entry.handlers.push((handler_addr, orig_slot));
+        publish_appended_union_with(prev_orig, orig_slot, handler_addr, entry.trampoline, |_| {});
         hook_log(format_args!(
             "HOOK UNION: game addr 0x{target:x} now chains {} handlers (added {})",
             entry.handlers.len(),
@@ -148,18 +192,29 @@ pub unsafe fn register_union_hook(
         )
     }
     .ok()?;
-    match unsafe { MH_EnableHook(target as *mut c_void) } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {}
-        s => return Err(s),
-    }
-    UNION_HEADS[slot].store(handler_addr, Ordering::Release);
-    orig_slot.store(trampoline as usize, Ordering::Release); // sole handler -> game orig
+    let prior_orig = orig_slot.load(Ordering::Acquire);
+    prepare_first_union_publication_with(
+        &UNION_HEADS[slot],
+        orig_slot,
+        handler_addr,
+        trampoline as usize,
+        |_| {},
+    );
     unions.push(UnionEntry {
         target,
         trampoline: trampoline as usize,
         handlers: vec![(handler_addr, orig_slot)],
     });
-    Ok(())
+    match unsafe { MH_EnableHook(target as *mut c_void) } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => Ok(()),
+        status => {
+            unions.pop();
+            UNION_HEADS[slot].store(0, Ordering::Release);
+            orig_slot.store(prior_orig, Ordering::Release);
+            let _ = unsafe { MH_RemoveHook(target as *mut c_void) };
+            Err(status)
+        }
+    }
 }
 
 /// Central hook registry (2026-07-16). Every MinHook detour creation records its TARGET game address
@@ -250,6 +305,7 @@ unsafe extern "system" {
         pDetour: *mut c_void,
         ppOriginal: *mut *mut c_void,
     ) -> MH_STATUS;
+    pub fn MH_RemoveHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_EnableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_DisableHook(pTarget: *mut c_void) -> MH_STATUS;
@@ -311,5 +367,121 @@ impl MhHook {
     /// Disables a native detour through MinHook's queued API.
     pub unsafe fn queue_disable(&self) -> Result<(), MH_STATUS> {
         unsafe { MH_QueueDisableHook(self.addr) }.ok_context("MH_QueueDisableHook")
+    }
+}
+
+#[cfg(test)]
+mod union_publication_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::sync::atomic::AtomicUsize;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    static FIRST_ORIG: AtomicUsize = AtomicUsize::new(0);
+    static APPEND_FIRST_ORIG: AtomicUsize = AtomicUsize::new(0);
+    static APPEND_SECOND_ORIG: AtomicUsize = AtomicUsize::new(0);
+    static ORIGINAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static SECOND_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "system" fn native_original(a: usize, b: usize, c: usize, d: usize) -> usize {
+        ORIGINAL_CALLS.fetch_add(1, Ordering::SeqCst);
+        a + b + c + d
+    }
+
+    unsafe extern "system" fn first_handler(a: usize, b: usize, c: usize, d: usize) -> usize {
+        let original = FIRST_ORIG.load(Ordering::Acquire);
+        assert_ne!(original, 0, "dispatcher exposed handler before original");
+        let original: UnionFn = unsafe { std::mem::transmute(original) };
+        (unsafe { original(a, b, c, d) }) + 10
+    }
+
+    unsafe extern "system" fn append_first_handler(
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+    ) -> usize {
+        let original = APPEND_FIRST_ORIG.load(Ordering::Acquire);
+        assert_ne!(original, 0, "append link exposed an unset handler original");
+        let original: UnionFn = unsafe { std::mem::transmute(original) };
+        (unsafe { original(a, b, c, d) }) + 100
+    }
+
+    unsafe extern "system" fn append_second_handler(
+        a: usize,
+        b: usize,
+        c: usize,
+        d: usize,
+    ) -> usize {
+        SECOND_CALLS.fetch_add(1, Ordering::SeqCst);
+        let original = APPEND_SECOND_ORIG.load(Ordering::Acquire);
+        assert_ne!(original, 0, "appended handler observed unset original");
+        let original: UnionFn = unsafe { std::mem::transmute(original) };
+        (unsafe { original(a, b, c, d) }) + 20
+    }
+
+    #[test]
+    fn first_install_publishes_original_and_head_before_enable() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        FIRST_ORIG.store(0, Ordering::Release);
+        ORIGINAL_CALLS.store(0, Ordering::SeqCst);
+        let head = AtomicUsize::new(0);
+        let enabled = Cell::new(false);
+        prepare_first_union_publication_with(
+            &head,
+            &FIRST_ORIG,
+            first_handler as usize,
+            native_original as usize,
+            |phase| match phase {
+                UnionPublicationPhase::FirstOriginalReady => {
+                    assert!(!enabled.get());
+                    assert_eq!(head.load(Ordering::Acquire), 0);
+                    assert_eq!(FIRST_ORIG.load(Ordering::Acquire), native_original as usize);
+                }
+                UnionPublicationPhase::FirstHeadReady => {
+                    assert!(!enabled.get());
+                    assert_eq!(head.load(Ordering::Acquire), first_handler as usize);
+                    assert_eq!(FIRST_ORIG.load(Ordering::Acquire), native_original as usize);
+                }
+                _ => unreachable!(),
+            },
+        );
+        enabled.set(true);
+        let result = unsafe { dispatch_union_head(&head, 1, 2, 3, 4) };
+        assert_eq!(result, 20);
+        assert_eq!(ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn append_initializes_new_original_before_release_publishing_link() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        APPEND_FIRST_ORIG.store(native_original as usize, Ordering::Release);
+        APPEND_SECOND_ORIG.store(0, Ordering::Release);
+        ORIGINAL_CALLS.store(0, Ordering::SeqCst);
+        SECOND_CALLS.store(0, Ordering::SeqCst);
+        let head = AtomicUsize::new(append_first_handler as usize);
+        publish_appended_union_with(
+            &APPEND_FIRST_ORIG,
+            &APPEND_SECOND_ORIG,
+            append_second_handler as usize,
+            native_original as usize,
+            |phase| {
+                ORIGINAL_CALLS.store(0, Ordering::SeqCst);
+                SECOND_CALLS.store(0, Ordering::SeqCst);
+                let result = unsafe { dispatch_union_head(&head, 1, 2, 3, 4) };
+                match phase {
+                    UnionPublicationPhase::AppendOriginalReady => {
+                        assert_eq!(result, 110);
+                        assert_eq!(SECOND_CALLS.load(Ordering::SeqCst), 0);
+                    }
+                    UnionPublicationPhase::AppendLinked => {
+                        assert_eq!(result, 130);
+                        assert_eq!(SECOND_CALLS.load(Ordering::SeqCst), 1);
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
+            },
+        );
     }
 }

@@ -301,15 +301,13 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
         PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS.swap(window_runs as u64, Ordering::SeqCst);
     let view_on_screen = window_runs as u64 > previous_runs;
     let dialog = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-    let picker_rebuild_queued = view_on_screen
+    let picker_refresh_queued = view_on_screen
         && dialog != 0
         && SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
-        && SAVE_PICKER_REBUILD_PENDING_DIALOG
-            .compare_exchange(0, dialog, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok();
+        && save_picker_schedule_refresh_request(dialog, "live-editor-command");
     let queued = PROFILE_EDITOR_DEFERRED_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
-    let how = if picker_rebuild_queued {
-        "the picker is on screen: its menu-pump-owned native row rebuild is queued automatically"
+    let how = if picker_refresh_queued {
+        "the picker is on screen: a menu-pump-owned fresh 05_010 presentation is queued automatically"
     } else if view_on_screen {
         "the profile view is on screen outside the picker: scroll the list one row and it appears"
     } else {
@@ -541,6 +539,7 @@ unsafe fn apply_profile_editor_drive_button_probe(
 ) -> (u32, u32, String) {
     use er_gfx::title_05_010::{
         DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX,
+        DRIVE_BUTTON_NATIVE_ART_LEFT_PX, DRIVE_BUTTON_NATIVE_ART_TOP_PX,
         DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
     };
 
@@ -551,12 +550,15 @@ unsafe fn apply_profile_editor_drive_button_probe(
     let mut applied = 0u32;
     let mut unsupported = 0u32;
     for index in 0..live_drive_cell_count.min(DRIVE_BUTTON_FIELD_NAMES.len()) {
+        let scale_x = (field0.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x;
+        let scale_y =
+            (field0.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * relative.scale_y;
         let absolute = er_gfx::profile_05_010_layout::TransformLayout {
-            x: field0.x - 2.0 + field0.width as f32 * 0.5 + pitch * index as f32 + relative.x,
-            y: field0.y - 2.0 + field0.clip_height as f32 * 0.5 + relative.y,
-            scale_x: (field0.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x,
-            scale_y: (field0.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
-                * relative.scale_y,
+            x: field0.x + pitch * index as f32 + relative.x
+                - DRIVE_BUTTON_NATIVE_ART_LEFT_PX * scale_x,
+            y: field0.y - 2.0 + relative.y - DRIVE_BUTTON_NATIVE_ART_TOP_PX * scale_y,
+            scale_x,
+            scale_y,
             editable: relative.editable,
             source: relative.source.clone(),
         };
@@ -588,83 +590,61 @@ unsafe fn apply_profile_editor_drive_button_probe(
     )
 }
 
-fn drive_cell_cursor_transform(
-    active_cell: usize,
+fn drive_strip_cursor_transform(
+    focus: er_save_picker::DriveStripFocus,
 ) -> er_gfx::profile_05_010_layout::TransformLayout {
     use er_gfx::profile_05_010_layout::TransformLayout;
     use er_gfx::title_05_010::{
-        DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX, DRIVE_CELL_FIRST_X_PX,
-        DRIVE_CELL_HEIGHT_PX, DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX,
+        CURRENT_PATH_FIELD_NAME, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX,
+        DRIVE_BUTTON_NATIVE_ART_LEFT_PX, DRIVE_BUTTON_NATIVE_ART_TOP_PX,
+        DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
     };
 
-    let cached = PROFILE_EDITOR_LAST_LAYOUT
+    let layout = PROFILE_EDITOR_LAST_LAYOUT
         .get()
-        .and_then(|layout| layout.lock().ok())
-        .map(|layout| {
-            let field0 = layout.field("DriveCell_0");
-            let field1 = layout.field("DriveCell_1");
-            let relative = &layout.row_chrome.drive_button;
-            let cursor_body = &layout.row_chrome.cursor_body;
-            (
-                field0.x + (field1.x - field0.x) * active_cell as f32,
-                field0.y,
-                field0.width as f32,
-                field0.clip_height as f32,
-                relative.x,
-                relative.y,
-                relative.scale_x,
-                relative.scale_y,
-                cursor_body.scale_x,
-                cursor_body.scale_y,
-            )
-        });
-    let (
-        field_x,
-        field_y,
-        width,
-        height,
-        nudge_x,
-        nudge_y,
-        button_scale_x,
-        button_scale_y,
-        body_scale_x,
-        body_scale_y,
-    ) = cached.unwrap_or((
-        DRIVE_CELL_FIRST_X_PX + DRIVE_CELL_PITCH_PX * active_cell as f32,
-        DRIVE_CELL_Y_PX,
-        DRIVE_CELL_WIDTH_PX,
-        DRIVE_CELL_HEIGHT_PX,
-        -2.0,
-        0.0,
-        1.0,
-        1.0,
-        20.0,
-        1.0,
-    ));
+        .and_then(|layout| layout.lock().ok().map(|layout| layout.clone()))
+        .unwrap_or_else(|| er_gfx::profile_05_010_layout::shipped().clone());
+    let mut field = match focus {
+        er_save_picker::DriveStripFocus::Cell(cell) => {
+            let mut field = layout.field("DriveCell_0").clone();
+            let pitch = layout.field("DriveCell_1").x - field.x;
+            field.x += pitch * cell as f32;
+            field
+        }
+        er_save_picker::DriveStripFocus::CurrentPath => {
+            layout.field(CURRENT_PATH_FIELD_NAME).clone()
+        }
+    };
+    let relative = &layout.row_chrome.drive_button;
+    let cursor_body = &layout.row_chrome.cursor_body;
+    let button_scale_x = (field.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x;
+    let button_scale_y =
+        (field.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * relative.scale_y;
+    field.x += relative.x;
+    field.y += -2.0 + relative.y;
     TransformLayout {
-        x: field_x - 2.0 + width * 0.5 + nudge_x,
-        y: field_y - 2.0 + height * 0.5 + nudge_y,
+        x: field.x - DRIVE_BUTTON_NATIVE_ART_LEFT_PX * button_scale_x,
+        y: field.y - DRIVE_BUTTON_NATIVE_ART_TOP_PX * button_scale_y,
         // CursorBody is already scaled to full-row width inside this wrapper. Shrinking the outer
         // Cursor is equivalent to shrinking its body, but uses the setter path that runtime proved
         // valid. The nested CursorBody setter failed in both pre- and post-populate contexts.
-        scale_x: ((width / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * button_scale_x) / body_scale_x,
-        scale_y: ((height / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * button_scale_y) / body_scale_y,
+        scale_x: button_scale_x / cursor_body.scale_x,
+        scale_y: button_scale_y / cursor_body.scale_y,
         editable: false,
-        source: "native drive-row Cursor moves and shrinks as one setter-valid outer object"
+        source: "native drive-row Cursor follows the explicitly focused drive/path target"
             .to_owned(),
     }
 }
 
-/// Resize the row's own animated native Cursor to the active drive button. Visibility remains under
-/// the game's list-selection code: hovering or focusing row 0 shows this one cell-sized cursor;
-/// moving down hides it and shows only the destination row's untouched full-width cursor.
+/// Resize the row's one animated native Cursor to the explicitly focused drive/path subtarget.
+/// Visibility remains under the game's list-selection code; moving off the row still hides it.
 pub(crate) unsafe fn apply_drive_row_native_cursor(
     base: usize,
     row_proxy: usize,
-    active_cell: usize,
+    focus: er_save_picker::DriveStripFocus,
 ) -> bool {
     use er_gfx::title_05_010::DRIVE_CELL_CAPACITY;
-    if active_cell >= DRIVE_CELL_CAPACITY {
+    if matches!(focus, er_save_picker::DriveStripFocus::Cell(cell) if cell >= DRIVE_CELL_CAPACITY) {
         return false;
     }
     let Some((cursor_proxy, _cursor_slot)) =
@@ -672,7 +652,7 @@ pub(crate) unsafe fn apply_drive_row_native_cursor(
     else {
         return false;
     };
-    let transform = drive_cell_cursor_transform(active_cell);
+    let transform = drive_strip_cursor_transform(focus);
     let (applied, unsupported, _) = unsafe {
         apply_profile_editor_transform_to_proxy(base, cursor_proxy, &transform, "drive-row Cursor")
     };
@@ -1234,6 +1214,55 @@ unsafe fn set_scaleform_value_scale(
 mod tests {
     use super::*;
     use er_gfx::profile_05_010_protocol::{ProfileEditorCommand, RenderMode, SelectedKind};
+
+    #[test]
+    fn drive_and_path_cursor_transforms_use_the_same_canonical_control_bounds() {
+        let layout = er_gfx::profile_05_010_layout::shipped();
+        let visible_bounds = |transform: &er_gfx::profile_05_010_layout::TransformLayout| {
+            let scale_x = transform.scale_x * layout.row_chrome.cursor_body.scale_x;
+            let scale_y = transform.scale_y * layout.row_chrome.cursor_body.scale_y;
+            let left = er_gfx::title_05_010::DRIVE_BUTTON_NATIVE_ART_LEFT_PX;
+            let top = er_gfx::title_05_010::DRIVE_BUTTON_NATIVE_ART_TOP_PX;
+            let right = left + er_gfx::title_05_010::DRIVE_BUTTON_NATIVE_ART_WIDTH_PX;
+            let bottom = top + er_gfx::title_05_010::DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX;
+            [
+                transform.x + left * scale_x,
+                transform.y + top * scale_y,
+                transform.x + right * scale_x,
+                transform.y + bottom * scale_y,
+            ]
+        };
+        let expected_bounds = |field: &er_gfx::profile_05_010_layout::FieldLayout| {
+            let left = field.x + layout.row_chrome.drive_button.x;
+            let top = field.y - 2.0 + layout.row_chrome.drive_button.y;
+            [
+                left,
+                top,
+                left + field.width as f32,
+                top + field.clip_height as f32,
+            ]
+        };
+
+        for (focus, field_name) in [
+            (er_save_picker::DriveStripFocus::Cell(0), "DriveCell_0"),
+            (er_save_picker::DriveStripFocus::Cell(1), "DriveCell_1"),
+            (
+                er_save_picker::DriveStripFocus::CurrentPath,
+                er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME,
+            ),
+        ] {
+            let actual = visible_bounds(&drive_strip_cursor_transform(focus));
+            let expected = expected_bounds(layout.field(field_name));
+            for edge in 0..4 {
+                assert!(
+                    (actual[edge] - expected[edge]).abs() < 0.01,
+                    "{focus:?} edge {edge}: actual={} expected={} full_actual={actual:?} full_expected={expected:?}",
+                    actual[edge],
+                    expected[edge]
+                );
+            }
+        }
+    }
 
     #[test]
     fn live_command_status_serializes_ack_and_surface() {

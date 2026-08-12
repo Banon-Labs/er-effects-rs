@@ -203,8 +203,16 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
     }
     // No event object reaches an action thunk, so the input kind is unclassifiable here -- which
     // costs nothing, because the list cursor names the row for every input kind alike.
-    let verdict = unsafe { system_quit_resolve_row_now(dialog, 0) };
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, std::ptr::null()) };
     let verdict_text = system_quit_row_verdict_text(verdict);
+    if save_picker_system_rows_input_inert() {
+        record_picker_system_row_activation_suppression(
+            action_obj,
+            verdict.resolved_row(),
+            PICKER_OPEN_SOURCE_ACTION_THUNK_SUPPRESSED,
+        );
+        return 0;
+    }
     match verdict.resolved_row() {
         Some(QuitRow::LoadProfile) => {
             let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
@@ -320,11 +328,12 @@ pub(crate) unsafe extern "system" fn system_quit_return_desktop_action_hook(
     }
 }
 
+type PropertyNewButtonControllerActivateFn = unsafe extern "system" fn(usize, f32, *const u8);
+
 pub(crate) unsafe fn system_quit_forward_button_controller_activation(
     controller: usize,
-    event_kind: u32,
-    event_a: usize,
-    event_b: usize,
+    update_scalar: f32,
+    row_input_gate: *const u8,
 ) {
     let orig = PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
@@ -333,14 +342,13 @@ pub(crate) unsafe fn system_quit_forward_button_controller_activation(
         ));
         return;
     }
-    let original: unsafe extern "system" fn(usize, u32, usize, usize) =
-        unsafe { std::mem::transmute(orig) };
-    unsafe { original(controller, event_kind, event_a, event_b) };
+    let original: PropertyNewButtonControllerActivateFn = unsafe { std::mem::transmute(orig) };
+    unsafe { original(controller, update_scalar, row_input_gate) };
 }
 
 pub(crate) unsafe fn system_quit_controller_should_invoke_action(
     controller: usize,
-    event_a: usize,
+    row_input_gate: *const u8,
 ) -> bool {
     let Ok(predicate_addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA) else {
         append_autoload_debug(format_args!(
@@ -348,14 +356,14 @@ pub(crate) unsafe fn system_quit_controller_should_invoke_action(
         ));
         return false;
     };
-    let predicate: unsafe extern "system" fn(usize, usize) -> u8 =
+    let predicate: unsafe extern "system" fn(usize, *const u8) -> u8 =
         unsafe { std::mem::transmute(predicate_addr) };
-    unsafe { predicate(controller, event_a) != 0 }
+    unsafe { predicate(controller, row_input_gate) != 0 }
 }
 
 /// `PropertyNewButtonController::Activate` (dump `FUN_1409749f0`, vtable slot 2). Called once per
-/// frame per DISPATCHED row with the live event; the controller's own should-invoke predicate decides
-/// whether that event is a real confirm.
+/// frame per dispatched row with the floating update scalar and the row's one-byte input gate. The
+/// controller's own should-invoke predicate decides whether that native logical input activates it.
 ///
 /// The controller is used ONLY to scope the hook to the patched Quit tab. It cannot name a row: the
 /// dispatch collapses cloned buttons onto the native Return-to-Desktop controller, and the pointer at
@@ -363,31 +371,29 @@ pub(crate) unsafe fn system_quit_controller_should_invoke_action(
 /// `system_quit_resolve_row_now`, i.e. the dialog's own list cursor.
 pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hook(
     controller: usize,
-    event_kind: u32,
-    event_a: usize,
-    event_b: usize,
+    update_scalar: f32,
+    row_input_gate: *const u8,
 ) {
     if !system_quit_controller_is_a_quit_row(controller) {
-        // Not a row of the patched Quit tab: vanilla behaviour, untouched. While the save picker owns
-        // ProfileSelect, use the same event to capture a same-row drive-strip click before forwarding;
-        // the normal ProfileLoad activation hook will consume the pending cell.
-        if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
-            && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
-        {
-            unsafe { save_picker_note_drive_strip_click_event(event_a) };
-        }
+        // PropertyNewButtonController owns EditProperty/Quit rows, not ProfileLoad's GenericList
+        // activation. Foreign controllers are never picker provenance producers: forward the exact
+        // native update once and leave picker ownership to the scoped MenuWindow update hook.
         unsafe {
             system_quit_forward_button_controller_activation(
-                controller, event_kind, event_a, event_b,
+                controller,
+                update_scalar,
+                row_input_gate,
             )
         };
         return;
     }
     // Focus / per-frame update rather than a confirm: never routes, never quits.
-    if !unsafe { system_quit_controller_should_invoke_action(controller, event_a) } {
+    if !unsafe { system_quit_controller_should_invoke_action(controller, row_input_gate) } {
         unsafe {
             system_quit_forward_button_controller_activation(
-                controller, event_kind, event_a, event_b,
+                controller,
+                update_scalar,
+                row_input_gate,
             )
         };
         return;
@@ -397,8 +403,16 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     let dialog =
         unsafe { safe_read_usize(action_alias + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
             .unwrap_or(0);
-    let verdict = unsafe { system_quit_resolve_row_now(dialog, event_a) };
+    let verdict = unsafe { system_quit_resolve_row_now(dialog, row_input_gate) };
     let verdict_text = system_quit_row_verdict_text(verdict);
+    if save_picker_system_rows_input_inert() {
+        record_picker_system_row_activation_suppression(
+            action_alias,
+            verdict.resolved_row(),
+            PICKER_OPEN_SOURCE_CONTROLLER_SUPPRESSED,
+        );
+        return;
+    }
     match verdict.resolved_row() {
         Some(QuitRow::LoadProfile) => {
             let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
@@ -411,14 +425,14 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_profile_load_dialog(action_alias) };
             append_autoload_debug(format_args!(
-                "system-quit-dup: Load Profile controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened}; suppressing native button activation"
+                "system-quit-dup: Load Profile controller selected controller=0x{controller:x} {verdict_text} opened={opened}; suppressing native button activation"
             ));
         }
         Some(QuitRow::LoadSaveProfiles) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
             let opened = unsafe { system_quit_open_save_picker_menu(action_alias) };
             append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} event_kind={event_kind} opened={opened:?} (in-game save picker); suppressing native button activation"
+                "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} {verdict_text} opened={opened:?} (in-game save picker); suppressing native button activation"
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {
@@ -443,7 +457,9 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
                 ));
                 unsafe {
                     system_quit_forward_button_controller_activation(
-                        controller, event_kind, event_a, event_b,
+                        controller,
+                        update_scalar,
+                        row_input_gate,
                     )
                 };
                 return;
@@ -453,7 +469,9 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
                 // single authority over the irreversible step.
                 unsafe {
                     system_quit_forward_button_controller_activation(
-                        controller, event_kind, event_a, event_b,
+                        controller,
+                        update_scalar,
+                        row_input_gate,
                     )
                 };
                 return;
@@ -461,7 +479,7 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             unsafe { system_quit_save_game_request_save_only() };
             release_input_block_now();
             append_autoload_debug(format_args!(
-                "quit-to-desktop: Return-to-Desktop controller CLICK controller=0x{controller:x} action_alias=0x{action_alias:x} {verdict_text} event_kind={event_kind}; requested save + released cursor; INSTANT ExitProcess(0) (no teardown/loading screen)"
+                "quit-to-desktop: Return-to-Desktop controller CLICK controller=0x{controller:x} action_alias=0x{action_alias:x} {verdict_text}; requested save + released cursor; INSTANT ExitProcess(0) (no teardown/loading screen)"
             ));
             unsafe { ExitProcess(0) };
         }
@@ -470,17 +488,21 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
         Some(QuitRow::SaveGame) | None => {
             if verdict.resolved_row().is_none() {
                 append_autoload_debug(format_args!(
-                    "quit-to-desktop: controller confirm NOT routed controller=0x{controller:x} dialog=0x{dialog:x} {verdict_text} event_kind={event_kind}; forwarding the native activation, which the action-route hook gates again"
+                    "quit-to-desktop: controller confirm NOT routed controller=0x{controller:x} dialog=0x{dialog:x} {verdict_text}; forwarding the native activation, which the action-route hook gates again"
                 ));
             }
             unsafe {
                 system_quit_forward_button_controller_activation(
-                    controller, event_kind, event_a, event_b,
+                    controller,
+                    update_scalar,
+                    row_input_gate,
                 )
             };
         }
     }
 }
+
+const _: PropertyNewButtonControllerActivateFn = property_new_button_controller_activate_hook;
 
 pub(crate) fn wide_z(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
@@ -630,7 +652,20 @@ pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool
     };
     normalize_save_bytes_to_active_steam_id(base, &mut bytes, "system-quit-picker-selection");
     let hash = system_quit_hash_bytes(&bytes);
-    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    let _operation = system_quit_save_swap_operation_lock();
+    let identity = {
+        let st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_poll_eligible(&st) {
+            return false;
+        }
+        SystemQuitSaveSwapArmIdentity {
+            generation: st.arm_generation,
+            path: st.path.clone(),
+            original_hash: st.original_hash,
+        }
+    };
+    let mask =
+        unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes, &identity) };
     if mask == 0 {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         save_picker_set_visible_status(
@@ -644,10 +679,11 @@ pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool
     }
     {
         let mut st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_identity_matches(&st, &identity) {
+            return false;
+        }
         st.candidate_bytes = bytes;
         st.candidate_hash = hash;
-        st.candidate_slot_mask = mask;
-        st.preview_applied = true;
     }
     if crate::config::autoupdate_preferred_picker_dir_enabled()
         && let Some(parent) = Path::new(selected_path)

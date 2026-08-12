@@ -650,6 +650,33 @@ pub(crate) fn masquerade_preserved_job_take(job: usize) -> bool {
     false
 }
 
+const MENU_WINDOW_JOB_PUSH_TARGET_CAPACITY: i32 = 8;
+
+pub(crate) fn menu_window_push_target_contains_with(
+    vector: usize,
+    window: usize,
+    count: i32,
+    mut read_slot: impl FnMut(usize) -> Option<usize>,
+) -> Option<bool> {
+    if vector == 0 || window == 0 || !(0..=MENU_WINDOW_JOB_PUSH_TARGET_CAPACITY).contains(&count) {
+        return None;
+    }
+    let aligned = vector.wrapping_add(vector.wrapping_neg() & 7);
+    for index in 0..count as usize {
+        if read_slot(aligned + index * 8)? == window {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+unsafe fn menu_window_push_target_contains(vector: usize, window: usize) -> Option<bool> {
+    let count = unsafe { safe_read_i32(vector + MENU_WINDOW_LIST_COUNT_48_OFFSET) }?;
+    menu_window_push_target_contains_with(vector, window, count, |slot| unsafe {
+        safe_read_usize(slot)
+    })
+}
+
 /// Remove `window` from the job's push-target `DLFixedVector` (`*(job+0x50)`) via the game's own
 /// `FUN_140733e70`, replicating the cleanup the finalize can no longer reach. Returns true iff the
 /// removal ran. Validated before calling: the push-target pointer must be readable and its count
@@ -669,7 +696,7 @@ pub(crate) unsafe fn menu_window_remove_from_push_target(
         return false;
     }
     let count = unsafe { safe_read_i32(vector + MENU_WINDOW_LIST_COUNT_48_OFFSET) };
-    if !matches!(count, Some(c) if (1..=MENU_WINDOW_LIST_SANE_MAX_COUNT).contains(&c)) {
+    if !matches!(count, Some(c) if (1..=MENU_WINDOW_JOB_PUSH_TARGET_CAPACITY).contains(&c)) {
         return false;
     }
     let Ok(remove_addr) = game_rva(MENU_WINDOW_LIST_REMOVE_RVA as u32) else {
@@ -703,14 +730,29 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     r8: usize,
     r9: usize,
 ) {
+    let base = game_module_base().ok().filter(|&base| base != 0);
+    let removal_candidate =
+        SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && save_picker_resubmit_pending();
+    let mut captured = None;
     if job != 0
-        && let Some(base) = game_module_base().ok().filter(|&b| b != 0)
+        && let Some(base) = base
     {
+        let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
+        let window = unsafe { safe_read_usize(owning_addr) }.unwrap_or(0);
+        let list =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_PUSH_TARGET_50_OFFSET) }.unwrap_or(0);
+        if removal_candidate
+            && window != 0
+            && list != 0
+            && unsafe { safe_read_usize(window) } == Some(base + PROFILE_LOAD_DIALOG_VTABLE_RVA)
+            && unsafe { menu_window_push_target_contains(list, window) } == Some(true)
+        {
+            captured = picker_owner_lifetime().capture_native_removal(window, job, list);
+        }
+
         // PEEK, never take: unlike the destructor this is not the job's lifecycle end.
         let preserved_stale = masquerade_preserved_job_contains(job);
-        let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
-        if let Some(window) = unsafe { safe_read_usize(owning_addr) }
-            && window != 0
+        if window != 0
             && let Some((doomed, index)) =
                 unsafe { menu_window_doomed_event_index(window, base, preserved_stale) }
             && doomed
@@ -730,9 +772,63 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
         return;
     }
-    let f: unsafe extern "system" fn(usize, usize, usize, usize) =
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) =
         unsafe { std::mem::transmute(orig) };
-    unsafe { f(job, rdx, r8, r9) };
+    if !removal_candidate {
+        unsafe { original(job, rdx, r8, r9) };
+        return;
+    }
+
+    let hit = er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_BOUNDARY_HITS
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    if let Some(capture) = captured {
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_DIALOG
+            .store(capture.owner.dialog, Ordering::SeqCst);
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_JOB
+            .store(capture.owner.job, Ordering::SeqCst);
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_LIST
+            .store(capture.list, Ordering::SeqCst);
+    }
+    let disposition = native_menu_window_removal_boundary_with(
+        picker_owner_lifetime(),
+        captured,
+        || unsafe { original(job, rdx, r8, r9) },
+        |capture| {
+            (unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }) == Some(0)
+                && unsafe { menu_window_push_target_contains(capture.list, capture.owner.dialog) }
+                    == Some(false)
+        },
+        save_picker_exact_pending_resubmit_for_native_removal,
+        crate::save_picker_path_editor::apply_picker_owner_publication_now,
+    );
+    match disposition {
+        PickerNativeRemovalDisposition::Published => {}
+        PickerNativeRemovalDisposition::Deferred => {
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_DEFERRED
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        PickerNativeRemovalDisposition::Stale => {
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_STALE.fetch_add(1, Ordering::SeqCst);
+        }
+        PickerNativeRemovalDisposition::Foreign => {
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_FOREIGN
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        PickerNativeRemovalDisposition::RemovalNotProven => {
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_NOT_PROVEN
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        PickerNativeRemovalDisposition::NoTransition => {
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_NO_TRANSITION
+                .fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    if hit <= 32 || hit.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "save-picker-removal: native MenuWindow finalize boundary #{hit} job=0x{job:x} capture={captured:?} disposition={disposition:?}"
+        ));
+    }
 }
 
 /// Install the finalize guard. Idempotent. 0x7ada40 carries no other detour (MinHook allows one per
@@ -1238,64 +1334,64 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
     }
 }
 
-pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
-    dialog: usize,
-    b: usize,
-    c: usize,
-    d: usize,
-) -> usize {
+pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(dialog: usize) {
     let orig = SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileLoadDialog activation trampoline unset for dialog=0x{dialog:x} -- fail-closed return 0"
+            "system-quit-dup: ProfileLoadDialog activation trampoline unset for dialog=0x{dialog:x} -- fail-closed"
         ));
-        return 0;
+        return;
     }
-    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(orig) };
-    let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
-        base + PROFILE_LOAD_DIALOG_VTABLE_RVA
-    } else {
-        TITLE_OWNER_SCAN_START_ADDRESS
-    };
+    let original: ProfileLoadActivateFn = unsafe { std::mem::transmute(orig) };
+    let identity = save_picker_dialog_identity(dialog);
+    let vtable_matches =
+        identity.expected_vtable.is_some() && identity.actual_vtable == identity.expected_vtable;
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
-    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let profile_window = identity.active_dialog;
 
     // DIAGNOSTIC (2026-07-16): slot-click does nothing on native Windows 1.16.2 despite ghosting fixed.
-    // Log EVERY activation with the full gate inputs so ONE click pinpoints the failing condition
-    // (vt mismatch = wrong 1.16.2 RVA, or profile_window unset, or hidden unset).
+    // Log EVERY activation with the full gate inputs so ONE click pinpoints the failing condition.
+    // Missing module-base or vtable facts remain `None` and can never compare equal by sentinel.
     let flow_active_diag = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     append_autoload_debug(format_args!(
-        "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",
-        vt == expected_vt,
-        SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
-        if flow_active_diag && vt == expected_vt {
+        "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={vtable_matches} active_dialog_match={} base_resolved={} vtable_read={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",
+        dialog != 0 && dialog == profile_window,
+        identity.expected_vtable.is_some(),
+        identity.actual_vtable.is_some(),
+        usize::from(identity.picker_mode_active),
+        if flow_active_diag && vtable_matches {
             "ARM-load"
         } else {
             "forward-original(no-op)"
         }
     ));
 
-    // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
-    // menu picker OR the startup title picker), every slot activation is a browse action (up /
-    // switch drive / enter dir / page / pick file) -- never a character load. This hook is also
-    // the ONLY picker input the DLL receives from this window, which is why drive switching is a
-    // row rather than a left/right axis. Routed before ALL other logic:
-    // at the title the in-game predicate below is false (nothing hidden), but the picker still
-    // owns the dialog. Never forwards the native activation (which would arm a world load).
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt == expected_vt {
-        let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
-        // Split out from the shared total: a picker activation is a BROWSE step (up, enter dir,
-        // page, pick file), never a load. Summing both kinds into one counter is what let a reader
-        // divide the activation count by 2 and call the result a load count -- true only in a session
-        // with zero directory navigation. See er_telemetry::load_count.
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT.fetch_add(1, Ordering::SeqCst);
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
-        return unsafe { save_picker_handle_activation(dialog, cursor) };
+    // PICKER: only the exact active picker dialog with resolved module identity and its exact vtable
+    // may consume the synchronous callback. While picker mode is active, every absent/mismatched fact
+    // forwards the native original exactly once and returns; foreign dialogs are never late-rejected.
+    if identity.picker_mode_active {
+        let cursor = if identity.is_exact_active_picker() {
+            dialog
+                .checked_add(DIALOG_SLOT_CURSOR_B0C_OFFSET)
+                .and_then(|address| unsafe { safe_read_i32(address) })
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+        if identity.is_exact_active_picker() {
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT.fetch_add(1, Ordering::SeqCst);
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+        let adapter = PickerNativeLifecycleAdapter {
+            update_original: None,
+            profile_load_original: Some(original),
+            effect_sink: save_picker_handle_activation,
+            telemetry_sink: save_picker_commit_activation_context,
+        };
+        let _ = unsafe { adapter.dispatch_profile_load(identity, cursor) };
+        return;
     }
 
     // TIMING-INDEPENDENT GATE (2026-07-16): the old gate required `hidden` + `profile_window`, BOTH set
@@ -1305,9 +1401,10 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // route FIRE) plus the dialog vtable read right here -- both known AT click time, no run_post dependency,
     // so the click can't race a value it reads itself.
     let flow_active = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-    let system_quit_profile_active = flow_active && vt == expected_vt;
+    let system_quit_profile_active = flow_active && vtable_matches;
     if !system_quit_profile_active {
-        return unsafe { original(dialog, b, c, d) };
+        unsafe { original(dialog) };
+        return;
     }
 
     let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
@@ -1348,12 +1445,13 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             append_autoload_debug(format_args!(
                 "system-quit-dup: ProfileSelect slot activation IGNORED dialog=0x{dialog:x} cursor={cursor} bound={bound} -- slot holds no character; not arming a switch (would strand the game at a blank title)"
             ));
-            return unsafe { original(dialog, b, c, d) };
+            unsafe { original(dialog) };
+            return;
         }
         let foreign_save_committed =
             match unsafe { system_quit_save_swap_prepare_selected_slot(cursor) } {
                 Ok(committed) => committed,
-                Err(()) => return 0,
+                Err(()) => return,
             };
         unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
         // The arm only takes when the preserved System dialog is present; on success it advances the
@@ -1372,7 +1470,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             append_autoload_debug(format_args!(
                 "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
             ));
-            return 0;
+            return;
         }
         append_autoload_debug(format_args!(
             "system-quit-dup: ProfileSelect slot activation direct-arm did NOT take (no preserved System dialog) dialog=0x{dialog:x} cursor={cursor}; forwarding native activation"
@@ -1382,8 +1480,10 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     append_autoload_debug(format_args!(
         "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
     ));
-    unsafe { original(dialog, b, c, d) }
+    unsafe { original(dialog) };
 }
+
+const _: unsafe extern "system" fn(usize) = system_quit_profile_load_activate_hook;
 
 /// Advance the System->Quit repro autopilot to `next`, resetting the phase-local tick and the
 /// waiting-log latch.

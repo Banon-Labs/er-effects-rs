@@ -1,24 +1,8 @@
 use super::*;
 
-// In-game save-file picker rendered through the native `05_010_ProfileSelect` window.
-//
-// Replaces the System>Quit "Load Character from File" `GetOpenFileNameW` OS dialog (context switch
-// out of the game) with the same native 10-row window the character switcher already drives. The
-// rows are a browsable directory listing -- the drive switcher ALWAYS FIRST when present, then
-// destination-only `[ new ]`, up, dirs + mode-locked save files -- staged as synthetic
-// ProfileSummary records; the shared model lives in `experiments::save_picker` and owns the row
-// layout (see its module docs for the order and derived indices). It is also the surface the Save Game row
-// press opens directly, with no confirm in front of it. Directory/drive navigation and edge-hover
-// scroll-window restaging rebuild the row list in place via the game's own records-changed rebuild
-// (close + menu-pump resubmit as fallback). Picking a file feeds the validation/preview pipeline
-// the OS picker used (`system_quit_ingest_picked_save`) and then reopens the window as the normal
-// slot view, so the "pick file -> pick character" flow never leaves the game's visual system.
-//
-// The only input this window gives the DLL is ROW ACTIVATION: `system_quit_profile_load_activate_hook`
-// intercepts `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`) and reads the highlighted list
-// index out of `dialog+0xb0c`. Cursor movement, back and every other press stay inside the game's
-// own list widget. Directory and drive browse actions are row/cell activations; overflow scrolling is
-// handled by held-edge restaging so it does not consume visible rows.
+// In-game save-file picker rendered through native `05_010_ProfileSelect` rows. Directory and drive
+// navigation reserve exact owner-zero authority before staging a fresh owner. Row activation is
+// intercepted at `CS::ProfileLoadDialog` vtable slot 20 (`0x9a4670`); cursor/back remain native.
 
 /// Action object of the "Load Character from File" row; `system_quit_open_profile_load_dialog` derives
 /// the System dialog (action+0x8), submit queue and window list from it on every (re)submit.
@@ -43,15 +27,23 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
-/// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
-/// navigation/cell activation after restaging records; consumed by the Run hook.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_REBUILD_PENDING_DIALOG;
-/// 1 = the picker window was closed for a directory/page change; the menu-pump Run hook must
-/// resubmit a fresh `05_010` job (records already restaged) instead of restoring the System UI.
+/// Exact live owner whose latest picker model must be presented by a fresh native 05_010 window.
+pub(crate) use er_telemetry::counters::SAVE_PICKER_REFRESH_PENDING_DIALOG;
+/// 1 = the picker window is closing for a model/presentation change; the menu-pump Run hook must
+/// stage only after owner-zero and then submit a fresh `05_010` instead of restoring the System UI.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
+pub(crate) static SAVE_PICKER_LAYOUT_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+const PICKED_FILE_CLOSE_IDLE: usize = 0;
+const PICKED_FILE_CLOSE_ARMING: usize = 1;
+const PICKED_FILE_CLOSE_DEFERRED: usize = 2;
+const PICKED_FILE_CLOSE_FAILED: usize = 3;
+/// Picked-file ingestion succeeded and slot-view resubmit is armed, but picker mode/model may only
+/// clear after the owned native close sink runs or the exact ticket is safely cancelled.
+static SAVE_PICKER_PICKED_FILE_CLOSE_STATE: AtomicUsize = AtomicUsize::new(PICKED_FILE_CLOSE_IDLE);
 /// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
 /// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
@@ -98,111 +90,8 @@ pub(crate) fn save_picker_start_dir() -> Option<PathBuf> {
         .filter(|root| root.is_dir())
 }
 
-/// Write the model's visible browse rows into the live ProfileSummary records (record zeroed, name
-/// field = row label, slot marked occupied) and mark every slot BEYOND them unoccupied. Pure record
-/// transport -- no snapshot bookkeeping and no renderer refresh -- shared by the staging path below
-/// and the list-builder re-stage hook. Returns the number of OCCUPIED (visible) rows.
-///
-/// Occupancy is the row's existence, not a decoration. The native list builder `FUN_140875590`
-/// (1.16.2) walks slots 0..10 and appends a row only when the occupancy predicate `FUN_140261cd0`
-/// -- literally `ProfileSummary::saveSlotsStates[slot]`, summary+0x8+slot -- returns true, taking
-/// the row's name/level/playtime from the record at summary+0x18+slot*0x2a0. Two consequences:
-///
-///   * a slot marked unoccupied produces NO row at all. That is the only way to make a short
-///     listing render nothing below the last entry: a zeroed record still renders as a name plus
-///     `Level 0` and `0:00:00`, because those fields exist and are simply zero.
-///   * the appended rows are COMPACTED in slot order, so `slot index == visible list index` holds
-///     for the staged ProfileSummary prefix. Cursor values read from the live `05_010_ProfileSelect`
-///     dialog use the same dense row index; do not read the parent System/Quit dialog and try to
-///     compensate for the resulting garbage offset.
-pub(crate) unsafe fn save_picker_write_row_records(
-    model: &crate::experiments::save_picker::SavePickerModel,
-    summary: usize,
-) -> usize {
-    let visible = model
-        .visible_row_count()
-        .min(TITLE_PROFILE_SLOT_COUNT)
-        .min(crate::experiments::save_picker::PICKER_ROW_COUNT);
-    unsafe {
-        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            let record =
-                summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
-            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
-            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
-            if slot >= visible {
-                // Beyond the listing: no row. The record is already zeroed above, so nothing stale
-                // survives if the game's own save path (`FUN_140262270`, which also runs
-                // `MarkProfileIndexAsUsed`) flips this slot back to occupied between here and the
-                // native build -- and the list-builder re-stage hook re-runs this whole pass at
-                // every build site precisely to close that window.
-                *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
-                continue;
-            }
-            let mut label = model.row_label_utf16(slot);
-            if label.is_empty() {
-                // Unreachable: every visible row's label is non-empty by construction (pinned by
-                // the model's `every_visible_row_has_a_non_empty_label` test). Kept because an
-                // occupied slot with an empty name would fail the empty-slot activation guard, and
-                // dropping the row instead would break the prefix and misalign every row below it.
-                label = "-".encode_utf16().collect();
-            }
-            // Name field is 0x22 bytes (16 UTF-16 units + NUL); the record was zeroed above so
-            // truncated copies stay terminated.
-            let units = label.len().min(PROFILE_SUMMARY_NAME_BYTES / 2 - 1);
-            core::ptr::copy_nonoverlapping(label.as_ptr(), record as *mut u16, units);
-            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
-        }
-    }
-    visible
-}
-
-/// Stage the model's visible rows as synthetic ProfileSummary records (name field = row label;
-/// everything else zeroed) and leave the slots beyond them unoccupied. Snapshots the live summary
-/// first via the save-swap state -- occupancy bytes included -- so every existing backout path
-/// restores the user's real rows. Menu-thread only (record writes + renderer refresh -- same
-/// context the foreign-save preview uses).
-pub(crate) unsafe fn save_picker_stage_row_records(
-    model: &crate::experiments::save_picker::SavePickerModel,
-) -> bool {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let summary = unsafe { system_quit_profile_summary_ptr() };
-    if summary == null {
-        append_autoload_debug(format_args!(
-            "save-picker: cannot stage rows -- live ProfileSummary unavailable"
-        ));
-        return false;
-    }
-    {
-        let mut st = system_quit_save_swap_lock();
-        if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
-            st.summary_ptr = summary;
-            st.summary_snapshot = unsafe {
-                core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES)
-                    .to_vec()
-            };
-        }
-        // Mark the summary as replaced so `system_quit_save_swap_restore_profile_summary`
-        // restores the user's real rows on any backout path.
-        st.preview_applied = true;
-    }
-    let staged = unsafe { save_picker_write_row_records(model, summary) };
-    SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
-    if let Ok(base) = game_module_base() {
-        let refresh: unsafe extern "system" fn() =
-            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
-        unsafe { refresh() };
-    }
-    append_autoload_debug(format_args!(
-        "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' scroll={}/{} entries={} drives={}",
-        TITLE_PROFILE_SLOT_COUNT.saturating_sub(staged),
-        model.current_dir().display(),
-        model.scroll_offset(),
-        model.scroll_max(),
-        model.entry_count(),
-        model.drive_count()
-    ));
-    true
-}
+include!("save_picker_open_preflight.rs");
+include!("save_picker_initial_open.rs");
 
 /// Open the LOAD-source picker from the "Load Character from File" row action (menu thread). Which
 /// surface that is -- this in-game browser or the OS file dialog -- is decided in one place,
@@ -215,6 +104,38 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> Pic
 /// preview, arm the active save snapshot), then stages the browse rows and submits the
 /// `05_010_ProfileSelect` window.
 pub(crate) unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize) -> bool {
+    let _open_guard = match unsafe { begin_picker_load_source_open_preflight(action_obj) } {
+        PickerLoadSourceOpenPreflight::Initial(guard) => guard,
+        PickerLoadSourceOpenPreflight::Coalesced(decision, _) => {
+            append_autoload_debug(format_args!(
+                "save-picker: duplicate load-source open coalesced before mutation action=0x{action_obj:x} decision={decision:?}"
+            ));
+            return true;
+        }
+        PickerLoadSourceOpenPreflight::Rejected(facts) => {
+            // Name EVERY precondition. `classify_picker_load_source_open` folds six of them into one
+            // `Rejected`, and twice now a wedge has been diagnosed by inference instead of evidence
+            // because this line printed only the action pointer.
+            append_autoload_debug(format_args!(
+                "save-picker: load-source open REJECTED action=0x{action_obj:x} \
+                 mode_active={} owner=0x{:x} owner_vtable=0x{:x} expected_vtable=0x{:x} \
+                 live_owner_authorized={} owner_zero_pending={} activation_system=0x{:x} \
+                 tracked_system=0x{:x} tracked_action=0x{:x} exact_parent_authority={} \
+                 -- Initial needs !mode_active && owner==0 && !owner_zero_pending && tracked_system==0 && tracked_action==0 && exact_parent_authority",
+                facts.mode_active,
+                facts.profile_owner,
+                facts.profile_vtable,
+                facts.expected_profile_vtable,
+                facts.live_owner_authorized,
+                facts.owner_zero_resubmit_pending,
+                facts.activation_system,
+                facts.tracked_system,
+                facts.tracked_action,
+                facts.exact_parent_authority,
+            ));
+            return false;
+        }
+    };
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {
@@ -224,57 +145,55 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu_in_game(action_obj: usize
         }
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-picker-reopen") };
-    if !system_quit_save_swap_arm_original(&save_path) {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        return false;
-    }
-    let Some(start_dir) = save_picker_start_dir() else {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker: refused to open -- no readable start directory (preferred/save-dir/default-root all unavailable)"
-        ));
-        return false;
-    };
-    // Runtime-flavor extension filter: vanilla offers `.sl2`; Seamless offers both `.co2` and
-    // `.sl2` so vanilla saves can be loaded/imported while ERSC owns the session. Same mode source
-    // as the ingest pipeline (launcher hint, then module latch).
-    let seamless = save_picker_seamless_mode_after_settle("system-quit-picker-open");
-    let model = if seamless {
-        crate::experiments::save_picker::SavePickerModel::open_with_extensions(
-            &start_dir,
-            &["co2", "sl2"],
-        )
-    } else {
-        crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
-    };
-    if !unsafe { save_picker_stage_row_records(&model) } {
-        return false;
-    }
-    *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
-    SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
-    SAVE_PICKER_ACTION_OBJ.store(action_obj, Ordering::SeqCst);
-    SAVE_PICKER_SYSTEM_DIALOG.store(
-        unsafe { safe_read_usize(action_obj + SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET) }
-            .unwrap_or(0),
-        Ordering::SeqCst,
+    clear_picker_presentation();
+    let opened_dir = std::cell::RefCell::new(None::<String>);
+    let opened = execute_picker_initial_open_sequence_with(
+        || {
+            system_quit_save_swap_arm_original_transaction(&save_path)
+                .map(|arm| PickerInitialOpenAttemptGuard::new(arm, action_obj))
+        },
+        || {
+            let start_dir = save_picker_start_dir();
+            if start_dir.is_none() {
+                append_autoload_debug(format_args!(
+                    "save-picker: refused to open -- no readable start directory (preferred/save-dir/default-root all unavailable)"
+                ));
+            }
+            start_dir
+        },
+        |start_dir| {
+            *opened_dir.borrow_mut() = Some(start_dir.display().to_string());
+            // Runtime-flavor extension filter: vanilla offers `.sl2`; Seamless offers both `.co2`
+            // and `.sl2` so vanilla saves can be loaded/imported while ERSC owns the session.
+            let seamless = save_picker_seamless_mode_after_settle("system-quit-picker-open");
+            Some(if seamless {
+                crate::experiments::save_picker::SavePickerModel::open_with_extensions(
+                    &start_dir,
+                    &["co2", "sl2"],
+                )
+            } else {
+                crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
+            })
+        },
+        |model| unsafe { save_picker_stage_row_records(model) },
+        |attempt, model| attempt.publish_model(model),
+        || unsafe { system_quit_open_profile_load_dialog(action_obj) },
+        |attempt| {
+            let identity = attempt.commit();
+            append_autoload_debug(format_args!(
+                "save-picker: initial open transferred save-swap arm generation={} path='{}' to live preview ownership",
+                identity.generation, identity.path
+            ));
+        },
     );
-    SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
-    SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
     if !opened {
-        // Roll back: restore rows + drop the model so the System menu stays coherent.
-        unsafe { system_quit_save_swap_restore_profile_summary("save-picker-open-failed") };
-        *crate::experiments::save_picker::active_save_picker_lock() = None;
-        SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
-        SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
-        SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         return false;
     }
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "save-picker: opened in-game picker action=0x{action_obj:x} dir='{}' ext=.{}",
-        start_dir.display(),
+        opened_dir.borrow().as_deref().unwrap_or("<unknown>"),
         crate::experiments::save_picker::active_save_picker_lock()
             .as_ref()
             .map(|model| model.extension().to_owned())
@@ -321,6 +240,7 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
         return false;
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
+    clear_picker_presentation();
     // Same mode-locked filter as the load picker: the destination list shows the containers the
     // active runtime flavor understands.
     let seamless = save_picker_seamless_mode_after_settle("system-quit-save-dest-picker-open");
@@ -338,15 +258,19 @@ pub(crate) unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: us
     SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
     SAVE_PICKER_DEST_MODE.store(1, Ordering::SeqCst);
     SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
-    SAVE_PICKER_SYSTEM_DIALOG.store(system_dialog, Ordering::SeqCst);
-    SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
-    SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
+    let _ = save_picker_publish_system_dialog(system_dialog);
+    save_picker_set_reopen_pending(0);
+    clear_picker_refresh_request();
+    clear_path_editor_return_reopen_request();
+    clear_picker_pending_resubmit_transition();
+    save_picker_set_open_slots_pending(0);
     if !unsafe { system_quit_open_profile_load_dialog_on(system_dialog) } {
         unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open-failed") };
+        clear_picker_presentation();
         *crate::experiments::save_picker::active_save_picker_lock() = None;
         SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
         SAVE_PICKER_DEST_MODE.store(0, Ordering::SeqCst);
-        SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+        let _ = save_picker_publish_system_dialog(0);
         append_autoload_debug(format_args!(
             "save-dest-picker: 05_010 submit FAILED for dialog=0x{system_dialog:x}"
         ));
@@ -399,31 +323,17 @@ pub(crate) fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: 
 }
 
 #[cfg(test)]
-mod save_picker_menu_stage_transition_tests {
-    use super::save_flow_menu_stage_cas;
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[test]
-    fn stage_cas_resets_ticks_only_when_expected_stage_matches() {
-        let stage = AtomicUsize::new(3);
-        let ticks = AtomicUsize::new(41);
-
-        assert_eq!(save_flow_menu_stage_cas(&stage, &ticks, 3, 8), Ok(3));
-        assert_eq!(stage.load(Ordering::SeqCst), 8);
-        assert_eq!(ticks.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn stage_cas_refuses_stale_menu_thread_decisions() {
-        let stage = AtomicUsize::new(9);
-        let ticks = AtomicUsize::new(41);
-
-        assert_eq!(save_flow_menu_stage_cas(&stage, &ticks, 3, 8), Err(9));
-        assert_eq!(stage.load(Ordering::SeqCst), 9);
-        assert_eq!(ticks.load(Ordering::SeqCst), 41);
-    }
-}
+#[path = "save_picker_initial_open_tests.rs"]
+mod save_picker_initial_open_tests;
+#[cfg(test)]
+#[path = "save_picker_menu_stage_transition_tests.rs"]
+mod save_picker_menu_stage_transition_tests;
+#[cfg(test)]
+#[path = "save_picker_open_preflight_tests.rs"]
+mod save_picker_open_preflight_tests;
+#[cfg(test)]
+#[path = "save_swap_transaction_tests.rs"]
+mod save_swap_transaction_tests;
 
 /// Handle a destination-browser activation (menu thread, from `save_picker_handle_activation`).
 /// `target` already exists -> the overwrite confirm; otherwise the commit is staged and the picker
@@ -486,10 +396,7 @@ pub(crate) unsafe fn save_dest_handle_picked_target(
     }
 }
 
-/// Stage the destination commit and close the browser. The save-flow tick takes over once the
-/// picker window has finished tearing down (the native close also restores the user's real
-/// ProfileSummary rows and re-shows the System windows, which is exactly the state the close-all
-/// sequence expects).
+/// Stage the destination commit and close the browser for the save-flow tick.
 pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reason: &str) {
     if !save_flow_menu_enter_stage(
         SAVE_FLOW_STAGE_DEST_BROWSE,
@@ -512,156 +419,361 @@ pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reas
     ));
 }
 
-/// Route a `05_010` slot activation while the picker owns the window (menu thread, called from
-/// the activate hook BEFORE any character-switch logic). Returns the hook's return value.
-///
-/// This is the ONLY signal the native window hands us, so it carries every browse action: up,
-/// enter directory, switch drive, page, pick file, `[ new ]`. The model decides which from the row
-/// index; a listing change of any kind comes back as `Repopulate` and is serviced identically.
-pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
+/// Route one native-accepted picker activation; never forward ProfileLoad behavior.
+pub(crate) unsafe fn save_picker_handle_activation(
+    dialog: usize,
+    cursor: i32,
+    provenance: er_save_picker::DriveStripActivationProvenance,
+) -> er_save_picker::PickerSourceDecision {
     use crate::experiments::save_picker::PickerActivation;
-    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
-        append_autoload_debug(format_args!(
-            "save-picker: activation ignored invalid native cursor={cursor}"
-        ));
-        return 0;
-    };
-    let mut open_path_editor = false;
-    let activation = {
+    let model_row = save_picker_model_row_from_native_cursor(cursor);
+    let decision = {
         let mut guard = crate::experiments::save_picker::active_save_picker_lock();
-        let Some(model) = guard.as_mut() else {
+        er_save_picker::route_picker_source_activation(
+            true,
+            true,
+            guard.as_mut(),
+            model_row,
+            provenance,
+        )
+    };
+    let reported = decision.clone();
+    let activation = match decision {
+        er_save_picker::PickerSourceDecision::ForwardNative => {
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+            return er_save_picker::PickerSourceDecision::Rejected(
+                er_save_picker::PickerSourceRejection::UnknownSource,
+            );
+        }
+        er_save_picker::PickerSourceDecision::Rejected(reason) => {
+            SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-picker: activation with no model (native_cursor={cursor} model_row={model_row}); ignoring"
+                "save-picker-activation: named rejection dialog=0x{dialog:x} cursor={cursor} model_row={model_row:?} source={provenance:?} reason={reason:?}"
             ));
-            return 0;
-        };
-        let pending_cell = SAVE_PICKER_DRIVE_STRIP_PENDING_CELL
-            .swap(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, Ordering::SeqCst);
-        if model.drive_row() == Some(model_row) {
-            let cell_count = model.drive_strip_cell_count();
-            if pending_cell == SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING {
-                open_path_editor = true;
-                PickerActivation::Ignored
-            } else if let Some(cell) =
-                save_picker_pending_drive_strip_cell(pending_cell, cell_count)
-            {
-                if model.activate_drive_strip_cell(cell) {
-                    append_autoload_debug(format_args!(
-                        "save-picker: native drive-row activation selected pending cell={cell} native_cursor={cursor} model_row={model_row} cells={cell_count}"
-                    ));
-                    PickerActivation::Repopulate
-                } else {
-                    append_autoload_debug(format_args!(
-                        "save-picker: native drive-row activation rejected pending cell={cell} native_cursor={cursor} model_row={model_row} cells={cell_count}"
-                    ));
-                    PickerActivation::Ignored
-                }
-            } else {
-                // A mouse drive selection always carries a pending cell from the event hook. A bare
-                // row Accept therefore means "edit the complete path" regardless of where the OS
-                // pointer happens to rest; stale mouse position must not turn keyboard Accept into a
-                // drive change.
-                open_path_editor = true;
-                PickerActivation::Ignored
-            }
-        } else {
-            model.activate(model_row)
+            return reported;
+        }
+        er_save_picker::PickerSourceDecision::Effect(
+            er_save_picker::PickerNativeActivationEffect::Model(activation),
+        ) => {
+            SAVE_PICKER_ORDINARY_EFFECTS.fetch_add(1, Ordering::SeqCst);
+            activation
+        }
+        er_save_picker::PickerSourceDecision::Effect(
+            er_save_picker::PickerNativeActivationEffect::RequestPathEditor,
+        ) => {
+            SAVE_PICKER_PATH_EDITOR_REQUESTS.fetch_add(1, Ordering::SeqCst);
+            save_picker_request_path_editor(dialog);
+            append_autoload_debug(format_args!(
+                "save-picker-path: scoped activation requested editor dialog=0x{dialog:x} native_cursor={cursor} model_row={model_row:?}"
+            ));
+            SAVE_PICKER_COMMITTED_EFFECTS.fetch_add(1, Ordering::SeqCst);
+            return reported;
+        }
+        er_save_picker::PickerSourceDecision::Effect(
+            er_save_picker::PickerNativeActivationEffect::DriveSelected(cell),
+        ) => {
+            SAVE_PICKER_DRIVE_SELECTIONS.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: scoped drive activation selected cell={cell} native_cursor={cursor} model_row={model_row:?}"
+            ));
+            PickerActivation::Repopulate
+        }
+        er_save_picker::PickerSourceDecision::Effect(
+            er_save_picker::PickerNativeActivationEffect::Ignored,
+        ) => {
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+            return er_save_picker::PickerSourceDecision::Rejected(
+                er_save_picker::PickerSourceRejection::ModelIgnored,
+            );
         }
     };
-    if open_path_editor {
-        save_picker_request_path_editor(dialog);
-        append_autoload_debug(format_args!(
-            "save-picker-path: native drive-row activation requested editor dialog=0x{dialog:x} native_cursor={cursor} model_row={model_row}"
-        ));
-        return 0;
-    }
     match activation {
         PickerActivation::Repopulate => {
-            let staged = {
-                let guard = crate::experiments::save_picker::active_save_picker_lock();
-                match guard.as_ref() {
-                    Some(model) => unsafe { save_picker_stage_row_records(model) },
-                    None => false,
-                }
-            };
-            if staged {
+            if save_picker_schedule_refresh_request(dialog, "activation-repopulate") {
                 SAVE_PICKER_REPOPULATE_COUNT.fetch_add(1, Ordering::SeqCst);
-                // Refresh row text via the game's OWN records-changed rebuild (the delete-save
-                // flow's primitive): re-reads the rewritten records, rewrites the bound,
-                // re-selects the cursor and re-decorates -- no window close, no System-UI flash.
-                // The decorate pass reads per-row snapshots, so the record writes above are
-                // invisible without it. DEFERRED to the menu-pump Run hook: the native delete
-                // flow runs this rebuild as a queued job AFTER the decide returns, never inside
-                // the widget's own input dispatch. Fallback there: close + resubmit.
-                SAVE_PICKER_REBUILD_PENDING_DIALOG.store(dialog, Ordering::SeqCst);
             }
-            0
         }
         PickerActivation::PickedFile(path) if SAVE_PICKER_DEST_MODE.load(Ordering::SeqCst) != 0 => {
-            // DESTINATION browser: an existing container was picked as the save target, so the
-            // final overwrite confirm decides. No ingest/preview -- nothing is being loaded.
             unsafe { save_dest_handle_picked_target(dialog, path, "picked-file") };
-            0
         }
         PickerActivation::PickedNewFile(path) => {
-            // `[ new ]`: save into the browsed folder under the loaded save's own filename. If
-            // that file already exists there, fall into the Box3 overwrite confirm rather than
-            // silently clobbering it.
             unsafe { save_dest_handle_picked_target(dialog, path, "new-row") };
-            0
         }
         PickerActivation::PickedFile(path) => {
-            // IN-GAME (System>Quit) site only: the pick feeds the existing preview/candidate
-            // pipeline and reopens the window as the slot view. The STARTUP no-save site does NOT
-            // use this native-window path -- it uses the DLL-drawn overlay picker
-            // (`save_picker_overlay.rs`) because the game's menu assets are not ready at the
-            // held save-check stage.
             let Some(path_str) = path.to_str() else {
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
                 save_picker_set_visible_status(
                     er_save_picker::PickRejection::PathNotUtf8.status_message("SL2"),
                 );
-                return 0;
+                SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+                return er_save_picker::PickerSourceDecision::Rejected(
+                    er_save_picker::PickerSourceRejection::ModelIgnored,
+                );
             };
             if unsafe { system_quit_ingest_picked_save(path_str) } {
                 SAVE_PICKER_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-                *crate::experiments::save_picker::active_save_picker_lock() = None;
-                SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
-                SAVE_PICKER_OPEN_SLOTS_PENDING.store(1, Ordering::SeqCst);
-                unsafe { save_picker_native_close(dialog, "picked-file") };
+                let route = er_save_picker::run_picked_file_close_route(
+                    || {
+                        save_picker_set_open_slots_pending(1);
+                        SAVE_PICKER_PICKED_FILE_CLOSE_STATE
+                            .store(PICKED_FILE_CLOSE_ARMING, Ordering::SeqCst);
+                    },
+                    || unsafe { save_picker_native_close(dialog, "picked-file") },
+                    save_picker_finish_picked_file_close,
+                );
+                if route == er_save_picker::PickedFileCloseRoute::Deferred {
+                    if save_picker_path_editor_deferred_close_pending() {
+                        SAVE_PICKER_PICKED_FILE_CLOSE_STATE
+                            .store(PICKED_FILE_CLOSE_DEFERRED, Ordering::SeqCst);
+                    } else {
+                        // No owned ticket exists to finish this transition. Keep picker mode/model
+                        // live and disarm slot resubmit rather than opening D2 over D1.
+                        SAVE_PICKER_PICKED_FILE_CLOSE_STATE
+                            .store(PICKED_FILE_CLOSE_IDLE, Ordering::SeqCst);
+                        save_picker_set_open_slots_pending(0);
+                    }
+                }
             } else {
-                // Invalid container: stay in the picker so the user can choose another file.
-                // The ingest pipeline already restaged nothing (preview only applies on
-                // success), but our browse rows were untouched -- the window stays coherent.
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+                SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+                return er_save_picker::PickerSourceDecision::Rejected(
+                    er_save_picker::PickerSourceRejection::ModelIgnored,
+                );
             }
-            0
         }
-        PickerActivation::Ignored => 0,
+        PickerActivation::Ignored => {
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+            return er_save_picker::PickerSourceDecision::Rejected(
+                er_save_picker::PickerSourceRejection::ModelIgnored,
+            );
+        }
+    }
+    SAVE_PICKER_COMMITTED_EFFECTS.fetch_add(1, Ordering::SeqCst);
+    reported
+}
+
+fn save_picker_finish_picked_file_close() {
+    *crate::experiments::save_picker::active_save_picker_lock() = None;
+    SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
+    SAVE_PICKER_PICKED_FILE_CLOSE_STATE.store(PICKED_FILE_CLOSE_IDLE, Ordering::SeqCst);
+}
+
+include!("save_picker_native_owner.rs");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PickerRefreshCloseResolution {
+    Retained,
+    RetiredClearReopen,
+    NotOwned,
+}
+
+fn apply_picker_refresh_close_with(
+    request: PickerRefreshRequest,
+    close: PickerRefreshCloseDisposition,
+    mut retire: impl FnMut(PickerRefreshRequest, bool) -> bool,
+) -> PickerRefreshCloseResolution {
+    match close {
+        PickerRefreshCloseDisposition::Closed => PickerRefreshCloseResolution::Retained,
+        PickerRefreshCloseDisposition::Deferred(_)
+        | PickerRefreshCloseDisposition::ResetInProgress
+        | PickerRefreshCloseDisposition::PreflightRejected => {
+            PickerRefreshCloseResolution::Retained
+        }
+        PickerRefreshCloseDisposition::Rejected
+        | PickerRefreshCloseDisposition::Cancelled(_)
+        | PickerRefreshCloseDisposition::ResolveFailed => {
+            if retire(request, false) {
+                PickerRefreshCloseResolution::RetiredClearReopen
+            } else {
+                PickerRefreshCloseResolution::NotOwned
+            }
+        }
     }
 }
 
-/// Native cancel-close (SetResult(Failed) + window close) -- same primitive the character-switch
-/// pick uses; runs in menu ownership from the activate hook.
-pub(crate) unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
-    if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
-        let close_fn: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
-        unsafe { close_fn(dialog) };
-        SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker: native-closed picker window dialog=0x{dialog:x} reason={reason}"
-        ));
-    } else {
-        append_autoload_debug(format_args!(
-            "save-picker: FAILED to resolve native close rva for dialog=0x{dialog:x} reason={reason}"
-        ));
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PickerRefreshRetryOutcome {
+    Deferred,
+    DrainedClosed { dialog: usize },
+    DrainedFailed { dialog: usize },
+    Cancelled { dialog: usize },
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PickerRefreshRetryResolution {
+    NotOwned,
+    Retained,
+    RetiredClearReopen,
+}
+
+fn apply_picker_refresh_retry_with(
+    request: Option<PickerRefreshRequest>,
+    outcome: PickerRefreshRetryOutcome,
+    mut retire: impl FnMut(PickerRefreshRequest, bool) -> bool,
+) -> PickerRefreshRetryResolution {
+    let Some(request) = request else {
+        return PickerRefreshRetryResolution::NotOwned;
+    };
+    match outcome {
+        PickerRefreshRetryOutcome::Deferred | PickerRefreshRetryOutcome::None => {
+            PickerRefreshRetryResolution::Retained
+        }
+        PickerRefreshRetryOutcome::DrainedClosed { dialog } if dialog == request.dialog => {
+            PickerRefreshRetryResolution::Retained
+        }
+        PickerRefreshRetryOutcome::DrainedFailed { dialog }
+        | PickerRefreshRetryOutcome::Cancelled { dialog }
+            if dialog == request.dialog =>
+        {
+            if retire(request, false) {
+                PickerRefreshRetryResolution::RetiredClearReopen
+            } else {
+                PickerRefreshRetryResolution::NotOwned
+            }
+        }
+        _ => PickerRefreshRetryResolution::NotOwned,
     }
+}
+
+pub(crate) unsafe fn save_picker_retry_deferred_native_close(
+    observation: PickerProfileRunObservation,
+) -> er_save_picker::PathEditorCloseRetryGate {
+    let live_token = observation.live_token();
+    if let Some(ticket) = save_picker_path_editor_deferred_close_ticket()
+        && (!picker_deferred_close_token_allows(observation, ticket.dialog)
+            || !observation
+                .live_token()
+                .is_some_and(save_picker_profile_token_still_current))
+    {
+        return er_save_picker::PathEditorCloseRetryGate::Deferred;
+    }
+    let refresh_request = load_picker_refresh_request();
+    match save_picker_path_editor_retry_deferred_close(|dialog| {
+        live_token.is_some_and(|token| {
+            token.dialog == dialog
+                && unsafe {
+                    save_picker_invoke_native_close(token, "deferred-path-editor-lease").is_closed()
+                }
+        })
+    }) {
+        er_save_picker::PathEditorDeferredCloseDisposition::None => {
+            let _ = apply_picker_refresh_retry_with(
+                refresh_request,
+                PickerRefreshRetryOutcome::None,
+                retire_picker_refresh_request,
+            );
+            if save_picker_path_editor_reset_active() {
+                return er_save_picker::PathEditorCloseRetryGate::Deferred;
+            }
+            match SAVE_PICKER_PICKED_FILE_CLOSE_STATE.load(Ordering::SeqCst) {
+                PICKED_FILE_CLOSE_DEFERRED => {
+                    // The exact ticket was cancelled by an owner-identity observation before retry.
+                    // Cancellation is a safe close resolution: clear mode now, then abort this tick so
+                    // D2 cannot open until a later no-ticket tick.
+                    save_picker_finish_picked_file_close();
+                    er_save_picker::PathEditorCloseRetryGate::Drained
+                }
+                PICKED_FILE_CLOSE_FAILED => er_save_picker::PathEditorCloseRetryGate::Deferred,
+                _ => er_save_picker::PathEditorCloseRetryGate::NoTicket,
+            }
+        }
+        er_save_picker::PathEditorDeferredCloseDisposition::Deferred(_) => {
+            let _ = apply_picker_refresh_retry_with(
+                refresh_request,
+                PickerRefreshRetryOutcome::Deferred,
+                retire_picker_refresh_request,
+            );
+            er_save_picker::PathEditorCloseRetryGate::Deferred
+        }
+        er_save_picker::PathEditorDeferredCloseDisposition::Drained { ticket, closed } => {
+            if closed
+                && let Some(request) =
+                    refresh_request.filter(|request| request.dialog == ticket.dialog)
+            {
+                let _latch_guard = resubmit_latch_lock();
+                if !any_resubmit_reserved() {
+                    SAVE_PICKER_REFRESH_CLOSE_REQUESTED_GENERATION
+                        .store(request.generation, Ordering::SeqCst);
+                    let _ = arm_picker_pending_resubmit_transition(
+                        request.dialog,
+                        0,
+                        request.generation,
+                    );
+                }
+            }
+            let refresh_resolution = apply_picker_refresh_retry_with(
+                refresh_request,
+                if closed {
+                    PickerRefreshRetryOutcome::DrainedClosed {
+                        dialog: ticket.dialog,
+                    }
+                } else {
+                    PickerRefreshRetryOutcome::DrainedFailed {
+                        dialog: ticket.dialog,
+                    }
+                },
+                retire_picker_refresh_request,
+            );
+            if closed {
+                SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_DRAINS.fetch_add(1, Ordering::SeqCst);
+                if SAVE_PICKER_PICKED_FILE_CLOSE_STATE.load(Ordering::SeqCst)
+                    == PICKED_FILE_CLOSE_DEFERRED
+                {
+                    save_picker_finish_picked_file_close();
+                }
+            } else if SAVE_PICKER_PICKED_FILE_CLOSE_STATE.load(Ordering::SeqCst)
+                == PICKED_FILE_CLOSE_DEFERRED
+            {
+                SAVE_PICKER_PICKED_FILE_CLOSE_STATE
+                    .store(PICKED_FILE_CLOSE_FAILED, Ordering::SeqCst);
+            }
+            append_autoload_debug(format_args!(
+                "save-picker: owned deferred close drained dialog=0x{:x} generation={} closed={closed} refresh_resolution={refresh_resolution:?}",
+                ticket.dialog, ticket.generation
+            ));
+            if closed || refresh_resolution == PickerRefreshRetryResolution::RetiredClearReopen {
+                er_save_picker::PathEditorCloseRetryGate::Drained
+            } else {
+                er_save_picker::PathEditorCloseRetryGate::Deferred
+            }
+        }
+        er_save_picker::PathEditorDeferredCloseDisposition::Cancelled(ticket) => {
+            SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_CANCELS.fetch_add(1, Ordering::SeqCst);
+            let refresh_resolution = apply_picker_refresh_retry_with(
+                refresh_request,
+                PickerRefreshRetryOutcome::Cancelled {
+                    dialog: ticket.dialog,
+                },
+                retire_picker_refresh_request,
+            );
+            if SAVE_PICKER_PICKED_FILE_CLOSE_STATE.load(Ordering::SeqCst)
+                == PICKED_FILE_CLOSE_DEFERRED
+            {
+                save_picker_finish_picked_file_close();
+            }
+            append_autoload_debug(format_args!(
+                "save-picker: stale deferred close cancelled without native dereference dialog=0x{:x} generation={} refresh_resolution={refresh_resolution:?}",
+                ticket.dialog, ticket.generation
+            ));
+            er_save_picker::PathEditorCloseRetryGate::Drained
+        }
+    }
+}
+
+fn picker_resubmit_pending_with(refresh_reopen: usize, open_slots: usize) -> bool {
+    refresh_reopen != 0 || open_slots != 0
 }
 
 /// True while a picker-driven close must NOT run the normal restore path (a resubmit is queued).
 pub(crate) fn save_picker_resubmit_pending() -> bool {
-    SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0
-        || SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0
+    picker_resubmit_pending_with(
+        SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst),
+        SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst),
+    )
 }
 
 const PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET: usize = 0xa38;
@@ -669,106 +781,919 @@ const GRID_CONTROL_SCROLLBAR_OFFSET: usize = 0x1a8;
 const PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET: usize =
     PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + GRID_CONTROL_SCROLLBAR_OFFSET;
 const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
+/// Native GridControl cursor router (`FUN_140738d40`, ER 1.16.2). Static proof: it calls the
+/// validated index setter `FUN_14073bc10`, refreshes the Cursor display through `FUN_1407396f0`,
+/// and emits the old/new selection callback through `FUN_14073b3f0`. This is the same route used by
+/// ProfileLoadDialog and other native list owners; do not write `grid+0xd4` directly.
+const MENU_ITEM_LIST_CURSOR_SETTER_RVA: usize = 0x738d40;
 const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
 const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
+/// `ScrollBarV` begins with `CSMenuVisibleComponent`; its `SceneObjProxy` starts at +8.
+/// `FUN_140733340` loads `*(scrollbar+8)` and calls slot +8 from that table.
+const SCROLLBAR_VISIBLE_PROXY_OFFSET: usize = 0x08;
+const SCROLLBAR_VISIBLE_PROXY_DISPATCH_SLOT: usize = 0x08;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// `FUN_140757af0` returns a client-local point, not movie-stage or OS-screen coordinates.
+/// 1.16.2 static proof: it calls `FUN_14075d6e0`, which reads the native event payload's integer
+/// x/y and subtracts `g_GxDrawContext->field_0x128->{0x110,0x114}` (the render-window/client
+/// origin), then converts those client pixels to floats. Its menu callers feed that result to
+/// client-space hit-test helpers. Runtime proof agrees: raw `(1808,639)` in the validated
+/// 3840x2160 ER client maps to movie stage `(-56.0,-220.5)`, matching the independently converted
+/// live pointer `(-56.3,-220.2)`; interpreting the raw pair as movie stage cannot hit any control.
 const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
 const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
 const PROFILE_SELECT_MOVIE_HEIGHT_PX: f32 = 1080.0;
 /// `ProfileList` is placed at root movie x=960 and every nested ItemList/row placement has identity
-/// x; `save_picker_client_point_to_movie_stage` subtracts that same half-width. Drive-cell row-local
-/// x is therefore already the mouse stage x -- no guessed scale/offset belongs here. The native
-/// frame's visible shape starts about four pixels before the authored text-field x.
-const DRIVE_STRIP_HIT_LEFT_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_FIRST_X_PX - 4.0;
-const DRIVE_STRIP_CELL_PITCH_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_PITCH_PX;
-const DRIVE_STRIP_CELL_HIT_WIDTH_PX: f32 = DRIVE_STRIP_CELL_PITCH_PX;
+/// x; `save_picker_client_point_to_movie_stage` subtracts that same half-width. Drive/path row-local
+/// x is therefore already the mouse stage x. Hit geometry comes from the shipped editor schema, the
+/// same source the generator uses for text and button chrome.
+fn drive_strip_hit_geometry() -> (f32, f32, f32) {
+    let layout = er_gfx::profile_05_010_layout::shipped();
+    let first = layout.field(er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES[0]);
+    let second = layout.field(er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES[1]);
+    (
+        first.x + layout.row_chrome.drive_button.x,
+        second.x - first.x,
+        first.width as f32,
+    )
+}
 const _: () =
     assert!(er_save_picker::DRIVE_STRIP_MAX_CELLS <= er_gfx::title_05_010::DRIVE_CELL_CAPACITY);
 /// Live `05_010_ProfileSelect` cursor values are already staged model-row indices. The old +2
 /// observation came from reading the parent System/Quit dialog, not the live ProfileSelect dialog.
 const PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET: i32 = 0;
-const SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL: usize = usize::MAX;
-const SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING: usize = usize::MAX - 1;
-static SAVE_PICKER_DRIVE_STRIP_PENDING_CELL: AtomicUsize =
-    AtomicUsize::new(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL);
-const SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK: usize = 1 << 0;
-const SAVE_PICKER_DRIVE_STRIP_LEFT_MASK: usize = 1 << 1;
-const SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK: usize = 1 << 2;
-static SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+const SAVE_PICKER_DRIVE_STRIP_LEFT_MASK: usize = 1 << 0;
+const SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK: usize = 1 << 1;
+const SAVE_PICKER_ACTIVATION_RING_CAPACITY: usize = 64;
+pub(crate) type ProfileLoadMenuWindowUpdateFn = unsafe extern "system" fn(usize, f32, *const u8);
+pub(crate) type ProfileLoadActivateFn = unsafe extern "system" fn(usize);
+pub(crate) type PickerActivationEffectSink = unsafe fn(
+    usize,
+    i32,
+    er_save_picker::DriveStripActivationProvenance,
+) -> er_save_picker::PickerSourceDecision;
+pub(crate) type PickerActivationTelemetrySink = fn(PickerActivationContext);
+static SAVE_PICKER_ACTIVATION_SEQ: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
-unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
-    if event == 0 {
+#[derive(Clone, Copy, Debug, Default)]
+struct PickerPhysicalClickDiagnostic {
+    raw_event_client: Option<(f32, f32)>,
+    event_stage: Option<(f32, f32)>,
+    live_stage: Option<(f32, f32)>,
+    event_target: Option<er_save_picker::DriveStripFocus>,
+    live_target: Option<er_save_picker::DriveStripFocus>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PickerPhysicalActivationClassification {
+    provenance: er_save_picker::DriveStripActivationProvenance,
+    diagnostic: Option<PickerPhysicalClickDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PickerActivationContext {
+    seq: u64,
+    source: &'static str,
+    dialog: usize,
+    row_input_gate: usize,
+    cursor: i32,
+    model_row: Option<usize>,
+    layout_generation: u64,
+    layout_hash: u64,
+    provenance: er_save_picker::DriveStripActivationProvenance,
+    physical_click: Option<PickerPhysicalClickDiagnostic>,
+    callback_count: usize,
+    route_count: usize,
+    effect_count: usize,
+    update_forward_count: usize,
+    profile_load_original_count: usize,
+    terminal_count: usize,
+    route: &'static str,
+    effect: &'static str,
+    terminal: &'static str,
+}
+
+const PICKER_LIFECYCLE_CONTEXT_MISSING: u32 = 1 << 0;
+const PICKER_LIFECYCLE_CALLBACK_DUPLICATED: u32 = 1 << 1;
+const PICKER_LIFECYCLE_EFFECT_INVALID: u32 = 1 << 2;
+const PICKER_LIFECYCLE_NATIVE_ORIGINAL_IN_PICKER: u32 = 1 << 3;
+const PICKER_LIFECYCLE_NO_CALLBACK_TERMINAL_MISSING: u32 = 1 << 4;
+const PICKER_LIFECYCLE_LATE_LABEL_INVALID: u32 = 1 << 5;
+const PICKER_LIFECYCLE_FOREIGN_SUPPRESSED: u32 = 1 << 6;
+const PICKER_LIFECYCLE_TELEMETRY_INVALID: u32 = 1 << 7;
+const PICKER_LIFECYCLE_ROUTE_INVALID: u32 = 1 << 8;
+
+#[derive(Clone, Copy, Debug)]
+struct PickerLifecycleInvariantObservation {
+    identity_exact: bool,
+    context_present_at_callback: bool,
+    telemetry_count: usize,
+    context: PickerActivationContext,
+}
+
+/// Production lifecycle invariant validator. The adapter calls this immediately before every
+/// telemetry delivery; mutation tests exercise this same function rather than a source-only copy.
+fn validate_picker_lifecycle_invariants(observation: PickerLifecycleInvariantObservation) -> u32 {
+    let context = observation.context;
+    let mut violations = 0;
+    if context.callback_count != 0 && !observation.context_present_at_callback {
+        violations |= PICKER_LIFECYCLE_CONTEXT_MISSING;
+    }
+    if context.callback_count > 1 {
+        violations |= PICKER_LIFECYCLE_CALLBACK_DUPLICATED;
+    }
+    if context.effect_count > 1
+        || ((context.terminal == "committed" || context.terminal == "route-committed")
+            && context.effect_count != 1)
+    {
+        violations |= PICKER_LIFECYCLE_EFFECT_INVALID;
+    }
+    if observation.identity_exact && context.profile_load_original_count != 0 {
+        violations |= PICKER_LIFECYCLE_NATIVE_ORIGINAL_IN_PICKER;
+    }
+    if !observation.identity_exact && context.profile_load_original_count == 0 {
+        violations |= PICKER_LIFECYCLE_FOREIGN_SUPPRESSED;
+    }
+    let known_no_callback = context.callback_count == 0
+        && context.provenance
+            != er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation;
+    if known_no_callback
+        && (context.terminal_count != 1
+            || context.terminal != "native-matcher-no-callback"
+            || context.effect != "native-matcher-no-callback")
+    {
+        violations |= PICKER_LIFECYCLE_NO_CALLBACK_TERMINAL_MISSING;
+    }
+    if context.source == "profile-load-late"
+        && (context.terminal_count != 1
+            || context.terminal != "late"
+            || context.effect != "late"
+            || context.callback_count != 1
+            || context.effect_count != 0)
+    {
+        violations |= PICKER_LIFECYCLE_LATE_LABEL_INVALID;
+    }
+    if observation.telemetry_count != 1 {
+        violations |= PICKER_LIFECYCLE_TELEMETRY_INVALID;
+    }
+    if context.route_count != context.callback_count.max(1)
+        || context.terminal_count != 1
+        || context.update_forward_count > 1
+    {
+        violations |= PICKER_LIFECYCLE_ROUTE_INVALID;
+    }
+    violations
+}
+
+fn deliver_picker_activation_telemetry(
+    context: PickerActivationContext,
+    telemetry_sink: PickerActivationTelemetrySink,
+) {
+    let violations = validate_picker_lifecycle_invariants(PickerLifecycleInvariantObservation {
+        identity_exact: true,
+        context_present_at_callback: true,
+        telemetry_count: 1,
+        context,
+    });
+    if violations != 0 {
+        SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-activation: lifecycle invariant violations=0x{violations:x} seq={}",
+            context.seq
+        ));
+    }
+    telemetry_sink(context);
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PickerActivationRingRecord {
+    context: PickerActivationContext,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PickerDialogIdentity {
+    pub(crate) picker_mode_active: bool,
+    pub(crate) dialog: usize,
+    pub(crate) active_dialog: usize,
+    pub(crate) expected_vtable: Option<usize>,
+    pub(crate) actual_vtable: Option<usize>,
+}
+
+impl PickerDialogIdentity {
+    pub(crate) fn is_exact_active_picker(self) -> bool {
+        self.picker_mode_active
+            && self.dialog != 0
+            && self.dialog == self.active_dialog
+            && self.expected_vtable.is_some()
+            && self.actual_vtable == self.expected_vtable
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PickerProfileLoadDispatch {
+    OriginalForwarded,
+    PickerSuppressed,
+}
+
+/// Production lifecycle seam for the two native functions that bracket one picker activation.
+/// The ABI-sensitive originals and the observable effect/telemetry sinks are explicit inputs, so
+/// tests execute the same context-before-update, synchronous-callback, and finalize-after-update
+/// ordering as the installed hooks.
+#[derive(Clone, Copy)]
+pub(crate) struct PickerNativeLifecycleAdapter {
+    pub(crate) update_original: Option<ProfileLoadMenuWindowUpdateFn>,
+    pub(crate) profile_load_original: Option<ProfileLoadActivateFn>,
+    pub(crate) effect_sink: PickerActivationEffectSink,
+    pub(crate) telemetry_sink: PickerActivationTelemetrySink,
+}
+
+static SAVE_PICKER_ACTIVATION_RING: OnceLock<
+    Mutex<std::collections::VecDeque<PickerActivationRingRecord>>,
+> = OnceLock::new();
+
+std::thread_local! {
+    static SAVE_PICKER_SCOPED_ACTIVATION: std::cell::RefCell<Option<PickerActivationContext>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct PickerActivationScope {
+    previous: Option<PickerActivationContext>,
+    finished: bool,
+}
+
+impl PickerActivationScope {
+    fn enter(context: PickerActivationContext) -> Self {
+        let previous = SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| slot.replace(Some(context)));
+        Self {
+            previous,
+            finished: false,
+        }
+    }
+
+    fn finish(mut self) -> Option<PickerActivationContext> {
+        let current = SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| slot.replace(self.previous.take()));
+        self.finished = true;
+        current
+    }
+}
+
+impl Drop for PickerActivationScope {
+    fn drop(&mut self) {
+        if !self.finished {
+            SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| {
+                slot.replace(self.previous.take());
+            });
+        }
+    }
+}
+
+fn save_picker_layout_hash() -> u64 {
+    let (first_left, pitch, width) = drive_strip_hit_geometry();
+    [first_left.to_bits(), pitch.to_bits(), width.to_bits()]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+fn save_picker_push_activation_record(context: PickerActivationContext) {
+    let ring =
+        SAVE_PICKER_ACTIVATION_RING.get_or_init(|| Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(mut ring) = ring.lock() {
+        if ring.len() == SAVE_PICKER_ACTIVATION_RING_CAPACITY {
+            ring.pop_front();
+        }
+        ring.push_back(PickerActivationRingRecord { context });
+    } else {
+        SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+fn save_picker_point_json(point: Option<(f32, f32)>) -> String {
+    point.map_or_else(|| "null".to_owned(), |(x, y)| format!("[{x:.3},{y:.3}]"))
+}
+
+fn save_picker_target_json(target: Option<er_save_picker::DriveStripFocus>) -> String {
+    target.map_or_else(|| "null".to_owned(), |target| format!("\"{target:?}\""))
+}
+
+pub(crate) fn save_picker_activation_ring_json() -> String {
+    let Some(ring) = SAVE_PICKER_ACTIVATION_RING.get() else {
+        return "[]".to_owned();
+    };
+    let Ok(ring) = ring.lock() else {
+        return "[]".to_owned();
+    };
+    let mut output = String::from("[");
+    for (index, record) in ring.iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        let c = record.context;
+        let physical = c.physical_click.unwrap_or_default();
+        output.push_str(&format!(
+            "{{\"seq\":{},\"source\":\"{}\",\"dialog\":{},\"gate\":{},\"cursor\":{},\"model_row\":{},\"layout_generation\":{},\"layout_hash\":{},\"classification\":\"{:?}\",\"raw_event_client\":{},\"event_stage\":{},\"live_stage\":{},\"event_target\":{},\"live_target\":{},\"route\":\"{}\",\"effect\":\"{}\",\"update_forward\":{},\"profile_load_original\":{},\"callbacks\":{},\"terminal\":\"{}\"}}",
+            c.seq,
+            c.source,
+            c.dialog,
+            c.row_input_gate,
+            c.cursor,
+            c.model_row.map_or(-1, |row| row as isize),
+            c.layout_generation,
+            c.layout_hash,
+            c.provenance,
+            save_picker_point_json(physical.raw_event_client),
+            save_picker_point_json(physical.event_stage),
+            save_picker_point_json(physical.live_stage),
+            save_picker_target_json(physical.event_target),
+            save_picker_target_json(physical.live_target),
+            c.route,
+            c.effect,
+            c.update_forward_count,
+            c.profile_load_original_count,
+            c.callback_count,
+            c.terminal,
+        ));
+    }
+    output.push(']');
+    output
+}
+
+unsafe fn save_picker_event_client_point(row_input_gate: *const u8) -> Option<(f32, f32)> {
+    if row_input_gate.is_null() {
         return None;
     }
     let Ok(base) = game_module_base() else {
         return None;
     };
-    let point_fn: unsafe extern "system" fn(usize, *mut u64) -> *mut u64 =
+    let point_fn: unsafe extern "system" fn(*const u8, *mut u64) -> *mut u64 =
         unsafe { std::mem::transmute(base + MENU_VIEWER_EVENT_POINT_RVA) };
     let mut packed = 0_u64;
-    unsafe { point_fn(event, &mut packed as *mut u64) };
+    unsafe { point_fn(row_input_gate, &mut packed as *mut u64) };
     let x = f32::from_bits(packed as u32);
     let y = f32::from_bits((packed >> 32) as u32);
     (x.is_finite() && y.is_finite()).then_some((x, y))
 }
 
-pub(crate) unsafe fn save_picker_note_drive_strip_click_event(event: usize) {
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
-        return;
+/// Bind a native logical activation source to picker provenance. The physical resolver is called
+/// only for the event-bound primary-pointer branch, so later pointer coordinates can accept or
+/// reject a physical target but cannot turn keyboard/pad Accept into physical input.
+fn save_picker_provenance_from_native_source(
+    source: QuitInputKind,
+    classify_physical: impl FnOnce() -> er_save_picker::DriveStripActivationProvenance,
+) -> er_save_picker::DriveStripActivationProvenance {
+    match source {
+        QuitInputKind::Confirm => {
+            er_save_picker::DriveStripActivationProvenance::KeyboardOrPadAccept
+        }
+        QuitInputKind::MouseClick => classify_physical(),
+        QuitInputKind::Unknown => {
+            er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation
+        }
     }
-    let dialog = save_picker_live_profile_dialog();
-    if dialog == 0 {
-        return;
+}
+
+/// Production composition boundary for one native picker row dispatch. The hook supplies the two
+/// statically verified event-bound predicates and the physical target classifier directly; global
+/// button state is not an input to this seam. Accept keeps native precedence over PrimaryPointerPress,
+/// and physical target classification runs only for the latter.
+pub(crate) fn save_picker_compose_activation_provenance_with(
+    row_input_gate: *const u8,
+    accept_pressed: impl FnOnce(*const u8) -> bool,
+    primary_pointer_pressed: impl FnOnce(*const u8) -> bool,
+    classify_physical: impl FnOnce(*const u8) -> er_save_picker::DriveStripActivationProvenance,
+) -> er_save_picker::DriveStripActivationProvenance {
+    let source = system_quit_classify_activation_input_with(
+        row_input_gate,
+        accept_pressed,
+        primary_pointer_pressed,
+    );
+    save_picker_provenance_from_native_source(source, || classify_physical(row_input_gate))
+}
+
+unsafe fn save_picker_physical_activation_provenance(
+    dialog: usize,
+    cursor: i32,
+    row_input_gate: *const u8,
+) -> PickerPhysicalActivationClassification {
+    let rejected = |diagnostic| PickerPhysicalActivationClassification {
+        provenance: er_save_picker::DriveStripActivationProvenance::RejectedPhysicalClick,
+        diagnostic,
+    };
+    let Some(live_cursor) = (unsafe { save_picker_native_cursor_for_event(dialog) }) else {
+        return rejected(None);
+    };
+    if live_cursor != cursor {
+        append_autoload_debug(format_args!(
+            "save-picker: physical activation rejected cursor disagreement source={cursor} live={live_cursor} dialog=0x{dialog:x}"
+        ));
+        return rejected(None);
     }
-    let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+    let cursor = live_cursor;
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
-        return;
+        return rejected(None);
     };
-    let Some((x, y)) = (unsafe { save_picker_event_point(event) }) else {
-        return;
-    };
-    let cell_count = {
+    let (drive_row, cell_count, controls_visible) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_ref() else {
+            return rejected(None);
+        };
+        (
+            model.drive_row(),
+            model.drive_strip_cell_count(),
+            model.status_message().is_none(),
+        )
+    };
+    if let Some(provenance) = er_save_picker::classify_picker_physical_row(model_row, drive_row) {
+        return PickerPhysicalActivationClassification {
+            provenance,
+            diagnostic: None,
+        };
+    }
+    let Some(drive_row) = drive_row else {
+        return PickerPhysicalActivationClassification {
+            provenance:
+                er_save_picker::DriveStripActivationProvenance::OrdinaryRowPhysicalActivation,
+            diagnostic: None,
+        };
+    };
+
+    let mut diagnostic = PickerPhysicalClickDiagnostic::default();
+    let Some((event_client_x, event_client_y)) =
+        (unsafe { save_picker_event_client_point(row_input_gate) })
+    else {
+        return rejected(Some(diagnostic));
+    };
+    diagnostic.raw_event_client = Some((event_client_x, event_client_y));
+    let Some(geometry) = (unsafe { save_picker_validated_game_window_geometry() }) else {
+        return rejected(Some(diagnostic));
+    };
+    let Some((event_stage_x, event_stage_y)) = geometry
+        .viewport
+        .client_point_to_movie_stage(event_client_x, event_client_y)
+    else {
+        return rejected(Some(diagnostic));
+    };
+    diagnostic.event_stage = Some((event_stage_x, event_stage_y));
+    let Some(live_pointer) = (unsafe { save_picker_validated_game_pointer_from(geometry) }) else {
+        return rejected(Some(diagnostic));
+    };
+    diagnostic.live_stage = Some((live_pointer.stage_x, live_pointer.stage_y));
+
+    let bounds = save_picker_drive_strip_pointer_bounds(drive_row);
+    let event_target = er_save_picker::route_drive_strip_native_click(
+        geometry.window,
+        model_row,
+        drive_row,
+        controls_visible,
+        cell_count,
+        event_stage_x,
+        event_stage_y,
+        bounds,
+    );
+    let live_target = er_save_picker::route_drive_strip_native_click(
+        live_pointer.window,
+        model_row,
+        drive_row,
+        controls_visible,
+        cell_count,
+        live_pointer.stage_x,
+        live_pointer.stage_y,
+        bounds,
+    );
+    diagnostic.event_target = event_target;
+    diagnostic.live_target = live_target;
+    let Some(target) = er_save_picker::agree_drive_strip_click_targets(event_target, live_target)
+    else {
+        append_autoload_debug(format_args!(
+            "save-picker: physical click rejected raw_event_client=({event_client_x:.1},{event_client_y:.1}) event_stage=({event_stage_x:.1},{event_stage_y:.1}) live_stage=({:.1},{:.1}) event_target={event_target:?} live_target={live_target:?} native_cursor={cursor} drive_row={drive_row} cells={cell_count}",
+            live_pointer.stage_x, live_pointer.stage_y
+        ));
+        return rejected(Some(diagnostic));
+    };
+    append_autoload_debug(format_args!(
+        "save-picker: native physical-click transaction resolved native_cursor={cursor} drive_row={drive_row} raw_event_client=({event_client_x:.1},{event_client_y:.1}) event_stage=({event_stage_x:.1},{event_stage_y:.1}) live_stage=({:.1},{:.1}) event_target={event_target:?} live_target={live_target:?} cells={cell_count} target={target:?}",
+        live_pointer.stage_x, live_pointer.stage_y
+    ));
+    PickerPhysicalActivationClassification {
+        provenance: er_save_picker::DriveStripActivationProvenance::AcceptedPhysicalClick(target),
+        diagnostic: Some(diagnostic),
+    }
+}
+
+fn save_picker_decision_labels(
+    decision: &er_save_picker::PickerSourceDecision,
+) -> (&'static str, &'static str, &'static str, usize) {
+    match decision {
+        er_save_picker::PickerSourceDecision::ForwardNative => {
+            ("forward-native", "none", "forwarded", 0)
+        }
+        er_save_picker::PickerSourceDecision::Rejected(reason) => match reason {
+            er_save_picker::PickerSourceRejection::MissingModel => {
+                ("reject", "missing-model", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::InvalidModelRow => {
+                ("reject", "invalid-row", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::UnknownSource => {
+                ("reject", "unknown-source", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::RejectedPhysicalClick => {
+                ("reject", "physical-rejected", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::CrossRowProvenance => {
+                ("reject", "cross-row", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::StatusOwnedRow => {
+                ("reject", "status-owned", "rejected", 0)
+            }
+            er_save_picker::PickerSourceRejection::DuplicateCallback => {
+                ("reject", "duplicate", "duplicate", 0)
+            }
+            er_save_picker::PickerSourceRejection::LateCallback => ("reject", "late", "late", 0),
+            er_save_picker::PickerSourceRejection::ModelIgnored => {
+                ("reject", "model-ignored", "rejected", 0)
+            }
+        },
+        er_save_picker::PickerSourceDecision::Effect(effect) => match effect {
+            er_save_picker::PickerNativeActivationEffect::Model(_) => {
+                ("ordinary", "model", "committed", 1)
+            }
+            er_save_picker::PickerNativeActivationEffect::DriveSelected(_) => {
+                ("drive", "drive-selected", "committed", 1)
+            }
+            er_save_picker::PickerNativeActivationEffect::RequestPathEditor => {
+                ("path-editor", "path-editor-requested", "route-committed", 1)
+            }
+            er_save_picker::PickerNativeActivationEffect::Ignored => {
+                ("reject", "ignored", "rejected", 0)
+            }
+        },
+    }
+}
+
+unsafe fn save_picker_route_scoped_profile_load_callback_with(
+    dialog: usize,
+    cursor: i32,
+    effect_sink: PickerActivationEffectSink,
+) -> bool {
+    let context = SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let context = slot.as_mut()?;
+        if context.dialog != dialog {
+            return None;
+        }
+        context.callback_count += 1;
+        Some(*context)
+    });
+    let Some(context) = context else {
+        return false;
+    };
+    SAVE_PICKER_SOURCE_ACCEPTED_EVENTS.fetch_add(1, Ordering::SeqCst);
+    if context.callback_count != 1 {
+        SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+        SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+        SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| {
+            if let Some(current) = slot.borrow_mut().as_mut() {
+                current.route_count += 1;
+                current.route = "reject";
+                current.effect = "duplicate";
+                current.terminal = "duplicate-callback";
+            }
+        });
+        return true;
+    }
+    let decision = unsafe { effect_sink(dialog, cursor, context.provenance) };
+    let (route, effect, terminal, effect_count) = save_picker_decision_labels(&decision);
+    SAVE_PICKER_SCOPED_ACTIVATION.with(|slot| {
+        if let Some(current) = slot.borrow_mut().as_mut() {
+            current.route_count += 1;
+            current.effect_count += effect_count;
+            current.terminal_count += 1;
+            current.route = route;
+            current.effect = effect;
+            current.terminal = terminal;
+        }
+    });
+    true
+}
+
+pub(crate) fn save_picker_commit_activation_context(context: PickerActivationContext) {
+    SAVE_PICKER_ACTIVATION_TERMINALS.fetch_add(context.terminal_count, Ordering::SeqCst);
+    save_picker_push_activation_record(context);
+    append_autoload_debug(format_args!(
+        "save-picker-activation: seq={} source={} class={:?} route={} effect={} update_forward={} profile_load_original={} terminal={} callbacks={} dialog=0x{:x} cursor={} model_row={:?} layout={}:0x{:016x}",
+        context.seq,
+        context.source,
+        context.provenance,
+        context.route,
+        context.effect,
+        context.update_forward_count,
+        context.profile_load_original_count,
+        context.terminal,
+        context.callback_count,
+        context.dialog,
+        context.cursor,
+        context.model_row,
+        context.layout_generation,
+        context.layout_hash,
+    ));
+}
+
+fn save_picker_record_unexpected_late_activation_with(
+    dialog: usize,
+    cursor: i32,
+    telemetry_sink: PickerActivationTelemetrySink,
+) {
+    let seq = SAVE_PICKER_ACTIVATION_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    SAVE_PICKER_UNEXPECTED_LATE_ACTIVATIONS.fetch_add(1, Ordering::SeqCst);
+    SAVE_PICKER_SOURCE_ACCEPTED_EVENTS.fetch_add(1, Ordering::SeqCst);
+    SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+    let context = PickerActivationContext {
+        seq,
+        source: "profile-load-late",
+        dialog,
+        row_input_gate: 0,
+        cursor,
+        model_row: save_picker_model_row_from_native_cursor(cursor),
+        layout_generation: SAVE_PICKER_LAYOUT_GENERATION.load(Ordering::SeqCst),
+        layout_hash: save_picker_layout_hash(),
+        provenance: er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation,
+        physical_click: None,
+        callback_count: 1,
+        route_count: 1,
+        effect_count: 0,
+        update_forward_count: 0,
+        profile_load_original_count: 0,
+        terminal_count: 1,
+        route: "reject",
+        effect: "late",
+        terminal: "late",
+    };
+    deliver_picker_activation_telemetry(context, telemetry_sink);
+}
+
+impl PickerNativeLifecycleAdapter {
+    unsafe fn run_update_with(
+        self,
+        identity: PickerDialogIdentity,
+        update_scalar: f32,
+        row_input_gate: *const u8,
+        make_context: impl FnOnce() -> PickerActivationContext,
+    ) {
+        let Some(original) = self.update_original else {
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
             return;
         };
-        if model.drive_row() != Some(model_row) {
+        if !identity.is_exact_active_picker() {
+            unsafe { original(identity.dialog, update_scalar, row_input_gate) };
             return;
         }
-        model.drive_strip_cell_count()
+
+        let scope = PickerActivationScope::enter(make_context());
+        unsafe { original(identity.dialog, update_scalar, row_input_gate) };
+        SAVE_PICKER_UPDATE_FORWARDS.fetch_add(1, Ordering::SeqCst);
+        let Some(mut context) = scope.finish() else {
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            return;
+        };
+        context.update_forward_count = 1;
+        if context.callback_count == 0 {
+            if context.provenance
+                == er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation
+            {
+                return;
+            }
+            SAVE_PICKER_SOURCE_ACCEPTED_EVENTS.fetch_add(1, Ordering::SeqCst);
+            SAVE_PICKER_NAMED_REJECTIONS.fetch_add(1, Ordering::SeqCst);
+            SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            context.route_count = 1;
+            context.terminal_count = 1;
+            context.route = "reject";
+            context.effect = "native-matcher-no-callback";
+            context.terminal = "native-matcher-no-callback";
+        }
+        deliver_picker_activation_telemetry(context, self.telemetry_sink);
+    }
+
+    pub(crate) unsafe fn dispatch_profile_load(
+        self,
+        identity: PickerDialogIdentity,
+        cursor: i32,
+    ) -> PickerProfileLoadDispatch {
+        if !identity.is_exact_active_picker() {
+            if let Some(original) = self.profile_load_original {
+                unsafe { original(identity.dialog) };
+            } else {
+                SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            }
+            return PickerProfileLoadDispatch::OriginalForwarded;
+        }
+
+        SAVE_PICKER_SUPPRESSED_PROFILE_LOAD_ORIGINALS.fetch_add(1, Ordering::SeqCst);
+        if !unsafe {
+            save_picker_route_scoped_profile_load_callback_with(
+                identity.dialog,
+                cursor,
+                self.effect_sink,
+            )
+        } {
+            save_picker_record_unexpected_late_activation_with(
+                identity.dialog,
+                cursor,
+                self.telemetry_sink,
+            );
+        }
+        PickerProfileLoadDispatch::PickerSuppressed
+    }
+}
+
+pub(crate) fn save_picker_dialog_identity(dialog: usize) -> PickerDialogIdentity {
+    let expected_vtable = game_module_base()
+        .ok()
+        .and_then(|base| base.checked_add(PROFILE_LOAD_DIALOG_VTABLE_RVA));
+    PickerDialogIdentity {
+        picker_mode_active: SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0,
+        dialog,
+        active_dialog: SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst),
+        expected_vtable,
+        actual_vtable: (dialog != 0)
+            .then(|| unsafe { safe_read_usize(dialog) })
+            .flatten(),
+    }
+}
+
+fn save_picker_profile_load_original() -> Option<ProfileLoadActivateFn> {
+    let original = SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    (original != HOOK_ORIGINAL_UNSET)
+        .then(|| unsafe { std::mem::transmute::<usize, ProfileLoadActivateFn>(original) })
+}
+
+pub(crate) unsafe extern "system" fn profile_load_menu_window_update_hook(
+    dialog: usize,
+    update_scalar: f32,
+    row_input_gate: *const u8,
+) {
+    let original = PROFILE_LOAD_MENU_WINDOW_UPDATE_ORIG.load(Ordering::SeqCst);
+    let update_original = (original != HOOK_ORIGINAL_UNSET)
+        .then(|| unsafe { std::mem::transmute::<usize, ProfileLoadMenuWindowUpdateFn>(original) });
+    let adapter = PickerNativeLifecycleAdapter {
+        update_original,
+        profile_load_original: save_picker_profile_load_original(),
+        effect_sink: save_picker_handle_activation,
+        telemetry_sink: save_picker_commit_activation_context,
     };
-    if cell_count == 0 {
-        return;
+    let identity = save_picker_dialog_identity(dialog);
+    unsafe {
+        adapter.run_update_with(identity, update_scalar, row_input_gate, || {
+            let cursor = unsafe { save_picker_native_cursor_for_event(dialog) }.unwrap_or(-1);
+            let mut physical_click = None;
+            let provenance = save_picker_compose_activation_provenance_with(
+                row_input_gate,
+                |gate| unsafe { system_quit_native_accept_pressed(gate) },
+                |gate| unsafe { system_quit_native_primary_pointer_pressed(gate) },
+                |gate| {
+                    let classification =
+                        unsafe { save_picker_physical_activation_provenance(dialog, cursor, gate) };
+                    physical_click = classification.diagnostic;
+                    classification.provenance
+                },
+            );
+            PickerActivationContext {
+                seq: SAVE_PICKER_ACTIVATION_SEQ.fetch_add(1, Ordering::SeqCst) + 1,
+                source: "menu-window-update",
+                dialog,
+                row_input_gate: row_input_gate as usize,
+                cursor,
+                model_row: save_picker_model_row_from_native_cursor(cursor),
+                layout_generation: SAVE_PICKER_LAYOUT_GENERATION.load(Ordering::SeqCst),
+                layout_hash: save_picker_layout_hash(),
+                provenance,
+                physical_click,
+                callback_count: 0,
+                route_count: 0,
+                effect_count: 0,
+                update_forward_count: 0,
+                profile_load_original_count: 0,
+                terminal_count: 0,
+                route: "none",
+                effect: "none",
+                terminal: "none",
+            }
+        });
     }
-    if let Some(cell) = save_picker_drive_strip_cell_from_x(x, cell_count) {
-        SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(cell, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker: drive-strip click native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count} -> cell={cell}"
-        ));
-    } else if save_picker_current_path_contains_x(x) {
-        SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(
-            SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING,
-            Ordering::SeqCst,
-        );
-        append_autoload_debug(format_args!(
-            "save-picker-path: click armed native text editor native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1}"
-        ));
+}
+
+const _: ProfileLoadMenuWindowUpdateFn = profile_load_menu_window_update_hook;
+
+#[cfg(test)]
+#[path = "picker_native_lifecycle_adapter_tests.rs"]
+mod picker_native_lifecycle_adapter_tests;
+#[cfg(test)]
+#[path = "save_picker_scrollbar_tests.rs"]
+mod save_picker_scrollbar_tests;
+
+// Legacy latch encoding remains only as a pure unit-test fixture. Production ownership is the
+// thread-local scoped context above; no process-global pending atomic exists.
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL: usize = usize::MAX;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING: usize = usize::MAX - 1;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_REJECTED_PHYSICAL_PENDING: usize = usize::MAX - 2;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_ORDINARY_PHYSICAL_PENDING: usize = usize::MAX - 3;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_CONSUMED_ACTIVATION_PENDING: usize = usize::MAX - 4;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_KEYBOARD_ACCEPT_PENDING: usize = usize::MAX - 5;
+#[cfg(test)]
+const SAVE_PICKER_DRIVE_STRIP_UNKNOWN_ACTIVATION_PENDING: usize = usize::MAX - 6;
+#[cfg(test)]
+std::thread_local! {
+    static TEST_PENDING_ACTIVATION: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL) };
+}
+#[cfg(test)]
+fn save_picker_encode_pending_drive_strip_target(target: er_save_picker::DriveStripFocus) -> usize {
+    match target {
+        er_save_picker::DriveStripFocus::Cell(cell) => cell,
+        er_save_picker::DriveStripFocus::CurrentPath => SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING,
+    }
+}
+#[cfg(test)]
+fn save_picker_decode_pending_drive_strip_target(
+    pending: usize,
+    cell_count: usize,
+) -> Option<er_save_picker::DriveStripFocus> {
+    if pending == SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING {
+        Some(er_save_picker::DriveStripFocus::CurrentPath)
     } else {
-        append_autoload_debug(format_args!(
-            "save-picker: drive-row click outside drive/path controls native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count}"
-        ));
+        (pending < cell_count).then_some(er_save_picker::DriveStripFocus::Cell(pending))
     }
 }
-
-fn save_picker_current_path_contains_x(x: f32) -> bool {
-    (er_gfx::title_05_010::CURRENT_PATH_X_PX
-        ..er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX)
-        .contains(&x)
+#[cfg(test)]
+fn save_picker_decode_drive_strip_activation_provenance(
+    pending: usize,
+    cell_count: usize,
+) -> er_save_picker::DriveStripActivationProvenance {
+    match pending {
+        SAVE_PICKER_DRIVE_STRIP_KEYBOARD_ACCEPT_PENDING => {
+            er_save_picker::DriveStripActivationProvenance::KeyboardOrPadAccept
+        }
+        SAVE_PICKER_DRIVE_STRIP_ORDINARY_PHYSICAL_PENDING => {
+            er_save_picker::DriveStripActivationProvenance::OrdinaryRowPhysicalActivation
+        }
+        SAVE_PICKER_DRIVE_STRIP_REJECTED_PHYSICAL_PENDING => {
+            er_save_picker::DriveStripActivationProvenance::RejectedPhysicalClick
+        }
+        SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL
+        | SAVE_PICKER_DRIVE_STRIP_CONSUMED_ACTIVATION_PENDING
+        | SAVE_PICKER_DRIVE_STRIP_UNKNOWN_ACTIVATION_PENDING => {
+            er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation
+        }
+        pending => er_save_picker::DriveStripActivationProvenance::physical_click(
+            save_picker_decode_pending_drive_strip_target(pending, cell_count),
+        ),
+    }
 }
-
-fn save_picker_pending_drive_strip_cell(pending_cell: usize, cell_count: usize) -> Option<usize> {
-    (pending_cell != SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL && pending_cell < cell_count)
-        .then_some(pending_cell)
+#[cfg(test)]
+fn save_picker_arm_drive_strip_activation_provenance(
+    provenance: er_save_picker::DriveStripActivationProvenance,
+) {
+    let pending = match provenance {
+        er_save_picker::DriveStripActivationProvenance::AcceptedPhysicalClick(target) => {
+            save_picker_encode_pending_drive_strip_target(target)
+        }
+        er_save_picker::DriveStripActivationProvenance::RejectedPhysicalClick => {
+            SAVE_PICKER_DRIVE_STRIP_REJECTED_PHYSICAL_PENDING
+        }
+        er_save_picker::DriveStripActivationProvenance::OrdinaryRowPhysicalActivation => {
+            SAVE_PICKER_DRIVE_STRIP_ORDINARY_PHYSICAL_PENDING
+        }
+        er_save_picker::DriveStripActivationProvenance::KeyboardOrPadAccept => {
+            SAVE_PICKER_DRIVE_STRIP_KEYBOARD_ACCEPT_PENDING
+        }
+        er_save_picker::DriveStripActivationProvenance::UnknownNativeActivation => {
+            SAVE_PICKER_DRIVE_STRIP_UNKNOWN_ACTIVATION_PENDING
+        }
+    };
+    TEST_PENDING_ACTIVATION.with(|cell| cell.set(pending));
+}
+#[cfg(test)]
+fn save_picker_clear_pending_drive_strip_target() {
+    TEST_PENDING_ACTIVATION.with(|cell| cell.set(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL));
+}
+#[cfg(test)]
+fn save_picker_take_drive_strip_activation_provenance(
+    cell_count: usize,
+) -> er_save_picker::DriveStripActivationProvenance {
+    TEST_PENDING_ACTIVATION.with(|cell| {
+        let pending = cell.replace(SAVE_PICKER_DRIVE_STRIP_CONSUMED_ACTIVATION_PENDING);
+        save_picker_decode_drive_strip_activation_provenance(pending, cell_count)
+    })
 }
 
 fn save_picker_model_row_from_native_cursor(cursor: i32) -> Option<usize> {
@@ -777,28 +1702,11 @@ fn save_picker_model_row_from_native_cursor(cursor: i32) -> Option<usize> {
         .then_some(row as usize)
 }
 
-fn save_picker_live_profile_dialog() -> usize {
+pub(crate) fn save_picker_live_profile_dialog() -> usize {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst)
 }
 
-unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
-    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
-        return false;
-    }
-    if let Ok(rebuild_addr) = game_rva(PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA) {
-        let rebuild: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(rebuild_addr) };
-        unsafe { rebuild(dialog) };
-        append_autoload_debug(format_args!(
-            "save-picker: menu-pump in-place list rebuild dialog=0x{dialog:x} reason={reason} via 0x{rebuild_addr:x}"
-        ));
-        true
-    } else {
-        SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
-        unsafe { save_picker_native_close(dialog, reason) };
-        false
-    }
-}
+include!("save_picker_refresh_request.rs");
 
 fn save_picker_client_point_to_movie_stage(
     client_x: f32,
@@ -806,401 +1714,219 @@ fn save_picker_client_point_to_movie_stage(
     client_width: f32,
     client_height: f32,
 ) -> Option<(f32, f32)> {
-    if !(client_x.is_finite()
-        && client_y.is_finite()
-        && client_width.is_finite()
-        && client_height.is_finite())
-        || client_width <= 0.0
-        || client_height <= 0.0
-    {
-        return None;
+    er_save_picker::DriveStripMovieViewport {
+        client_origin_screen_x: 0.0,
+        client_origin_screen_y: 0.0,
+        client_width,
+        client_height,
+        movie_width: PROFILE_SELECT_MOVIE_WIDTH_PX,
+        movie_height: PROFILE_SELECT_MOVIE_HEIGHT_PX,
     }
-    // 05_010 is authored as a fixed 1920x1080 movie. The user's actual window/monitor resolution is
-    // deliberately not assumed: map through the movie rectangle fitted into the live client area,
-    // preserving aspect ratio and removing any letterbox/pillarbox margin first.
-    let movie_aspect = PROFILE_SELECT_MOVIE_WIDTH_PX / PROFILE_SELECT_MOVIE_HEIGHT_PX;
-    let client_aspect = client_width / client_height;
-    let (content_x, content_y, content_w, content_h) = if client_aspect > movie_aspect {
-        let content_w = client_height * movie_aspect;
-        (
-            (client_width - content_w) * 0.5,
-            0.0,
-            content_w,
-            client_height,
-        )
-    } else {
-        let content_h = client_width / movie_aspect;
-        (
-            0.0,
-            (client_height - content_h) * 0.5,
-            client_width,
-            content_h,
-        )
-    };
-    let in_content_x = client_x - content_x;
-    let in_content_y = client_y - content_y;
-    if in_content_x < 0.0
-        || in_content_y < 0.0
-        || in_content_x >= content_w
-        || in_content_y >= content_h
-    {
-        return None;
-    }
-    let stage_x = (in_content_x / content_w) * PROFILE_SELECT_MOVIE_WIDTH_PX
-        - PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5;
-    let stage_y = (in_content_y / content_h) * PROFILE_SELECT_MOVIE_HEIGHT_PX
-        - PROFILE_SELECT_MOVIE_HEIGHT_PX * 0.5;
-    Some((stage_x, stage_y))
+    .client_point_to_movie_stage(client_x, client_y)
 }
 
-fn save_picker_drive_strip_cell_from_live_cursor(cell_count: usize) -> Option<(usize, f32, f32)> {
+fn save_picker_drive_strip_pointer_bounds(
+    drive_row: usize,
+) -> er_save_picker::DriveStripPointerBounds {
+    let layout = er_gfx::profile_05_010_layout::shipped();
+    let drive = layout.field(er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES[0]);
+    let path = layout.field(er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME);
+    let (first_cell_left, cell_pitch, cell_width) = drive_strip_hit_geometry();
+    let row_pitch = er_gfx::title_05_010::COMPACT_ROW_PITCH_PX as f32;
+    let row_center_y = drive_row as f32 * row_pitch
+        - (er_gfx::title_05_010::COMPACT_VISIBLE_ROW_COUNT as f32 * row_pitch) * 0.5
+        + row_pitch * 0.5;
+    er_save_picker::DriveStripPointerBounds {
+        first_cell_left,
+        cell_pitch,
+        cell_width,
+        path_left: path.x + layout.row_chrome.drive_button.x,
+        path_width: path.width as f32,
+        row_top: row_center_y + drive.y - 2.0 + layout.row_chrome.drive_button.y,
+        row_height: drive.clip_height as f32,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ValidatedGameWindowGeometry {
+    hwnd: windows::Win32::Foundation::HWND,
+    window: er_save_picker::DriveStripWindowFacts,
+    viewport: er_save_picker::DriveStripMovieViewport,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ValidatedGamePointer {
+    window: er_save_picker::DriveStripWindowFacts,
+    stage_x: f32,
+    stage_y: f32,
+    packed_position: u64,
+}
+
+/// Capture one immutable client origin/rect/viewport from the exact ER HWND. Both event-local and
+/// live screen coordinates must use this value; no second window lookup or geometry sample may
+/// enter one physical-click classification.
+unsafe fn save_picker_validated_game_window_geometry() -> Option<ValidatedGameWindowGeometry> {
     use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetForegroundWindow, GetWindowRect,
+        GetClientRect, GetForegroundWindow, GetWindowThreadProcessId,
     };
 
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.0.is_null() {
+    let hwnd = crate::experiments::game_main_window();
+    if hwnd.0.is_null() || unsafe { GetForegroundWindow() } != hwnd {
         return None;
     }
-    let mut point = POINT::default();
-    if unsafe { GetCursorPos(&mut point) }.is_err() {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == 0 || pid != unsafe { GetCurrentProcessId() } {
         return None;
     }
     let mut rect = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+    if unsafe { GetClientRect(hwnd, &mut rect) }.is_err() {
         return None;
     }
-    let width = (rect.right - rect.left).max(1) as f32;
-    let height = (rect.bottom - rect.top).max(1) as f32;
-    let window_x = point.x - rect.left;
-    let window_y = point.y - rect.top;
-    let (stage_x, stage_y) =
-        save_picker_client_point_to_movie_stage(window_x as f32, window_y as f32, width, height)?;
-    save_picker_drive_strip_cell_from_x(stage_x, cell_count).map(|cell| (cell, stage_x, stage_y))
-}
-
-fn save_picker_drive_strip_cell_from_x(x: f32, cell_count: usize) -> Option<usize> {
-    if cell_count == 0 || !x.is_finite() {
+    let width = rect.right.checked_sub(rect.left)?;
+    let height = rect.bottom.checked_sub(rect.top)?;
+    if width <= 0 || height <= 0 {
         return None;
     }
-    let local_x = x - DRIVE_STRIP_HIT_LEFT_PX;
-    if local_x < 0.0 {
+    let mut client_origin = POINT::default();
+    if !unsafe { ClientToScreen(hwnd, &mut client_origin) }.as_bool() {
         return None;
     }
-    let cell = (local_x / DRIVE_STRIP_CELL_PITCH_PX).floor() as usize;
-    if cell >= cell_count {
+    let viewport = er_save_picker::DriveStripMovieViewport {
+        client_origin_screen_x: client_origin.x as f32,
+        client_origin_screen_y: client_origin.y as f32,
+        client_width: width as f32,
+        client_height: height as f32,
+        movie_width: PROFILE_SELECT_MOVIE_WIDTH_PX,
+        movie_height: PROFILE_SELECT_MOVIE_HEIGHT_PX,
+    };
+    // Exercise the production transform now so an invalid origin/client/movie viewport cannot be
+    // represented as validated geometry even when the live pointer is sampled later.
+    viewport.client_point_to_movie_stage(0.0, 0.0).or_else(|| {
+        viewport.client_point_to_movie_stage(width as f32 * 0.5, height as f32 * 0.5)
+    })?;
+    Some(ValidatedGameWindowGeometry {
+        hwnd,
+        window: er_save_picker::DriveStripWindowFacts {
+            hwnd_present: true,
+            foreground_matches: true,
+            same_process: true,
+            client_geometry_valid: true,
+            pointer_in_client: true,
+        },
+        viewport,
+    })
+}
+
+unsafe fn save_picker_validated_game_pointer_from(
+    geometry: ValidatedGameWindowGeometry,
+) -> Option<ValidatedGamePointer> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow};
+
+    if unsafe { GetForegroundWindow() } != geometry.hwnd {
         return None;
     }
-    let in_cell_x = local_x - cell as f32 * DRIVE_STRIP_CELL_PITCH_PX;
-    (in_cell_x < DRIVE_STRIP_CELL_HIT_WIDTH_PX).then_some(cell)
+    let mut screen_point = POINT::default();
+    if unsafe { GetCursorPos(&mut screen_point) }.is_err() {
+        return None;
+    }
+    let (stage_x, stage_y) = geometry
+        .viewport
+        .screen_point_to_movie_stage(screen_point.x as f32, screen_point.y as f32)?;
+    let (client_x, client_y) = geometry
+        .viewport
+        .screen_point_to_client(screen_point.x as f32, screen_point.y as f32)?;
+    Some(ValidatedGamePointer {
+        window: geometry.window,
+        stage_x,
+        stage_y,
+        packed_position: u64::from(client_x) | (u64::from(client_y) << 32),
+    })
 }
 
-#[cfg(test)]
-mod drive_strip_hit_tests {
-    use super::*;
-
-    #[test]
-    fn every_possible_drive_cell_lives_in_the_clickable_player_name_band() {
-        assert_eq!(
-            save_picker_drive_strip_cell_from_x(DRIVE_STRIP_HIT_LEFT_PX + 0.1, 26),
-            Some(0)
-        );
-        assert_eq!(
-            save_picker_drive_strip_cell_from_x(
-                DRIVE_STRIP_HIT_LEFT_PX + 12.0 * DRIVE_STRIP_CELL_PITCH_PX + 0.1,
-                26,
-            ),
-            Some(12)
-        );
-        assert_eq!(
-            save_picker_drive_strip_cell_from_x(
-                DRIVE_STRIP_HIT_LEFT_PX + 25.0 * DRIVE_STRIP_CELL_PITCH_PX + 0.1,
-                26,
-            ),
-            Some(25)
-        );
-        assert_eq!(
-            save_picker_drive_strip_cell_from_x(
-                DRIVE_STRIP_HIT_LEFT_PX + 26.0 * DRIVE_STRIP_CELL_PITCH_PX,
-                26,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn native_drive_buttons_render_only_the_drive_name_and_use_color_for_selection() {
-        let selected = save_picker_drive_cell_html_utf16(">C:<");
-        let idle = save_picker_drive_cell_html_utf16("[S:]");
-        let selected = String::from_utf16(&selected[..selected.len() - 1]).expect("valid UTF-16");
-        let idle = String::from_utf16(&idle[..idle.len() - 1]).expect("valid UTF-16");
-        assert!(selected.contains("C:"));
-        assert!(!selected.contains(">>C:<"));
-        assert!(selected.contains("#d8a052"));
-        assert!(idle.contains("S:"));
-        assert!(!idle.contains(">[S:]"));
-        assert!(idle.contains("#8f887a"));
-    }
-
-    #[test]
-    fn one_physical_arrow_source_produces_exactly_one_drive_action() {
-        // Old path: async keyboard poll fired on tick one, then the DInput edge fired on tick two.
-        // The async arrow is now ignored; only the native-input edge becomes an action.
-        assert_eq!(
-            drive_strip_pressed_mask(0, SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK, 0),
-            0
-        );
-        assert_eq!(
-            drive_strip_pressed_mask(
-                SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK,
-                SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK,
-                crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK,
-            ),
-            SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK
-        );
-    }
-
-    #[test]
-    fn activation_prefers_event_time_pending_drive_cell() {
-        assert_eq!(save_picker_pending_drive_strip_cell(0, 3), Some(0));
-        assert_eq!(save_picker_pending_drive_strip_cell(1, 3), Some(1));
-        assert_eq!(save_picker_pending_drive_strip_cell(2, 3), Some(2));
-        assert_eq!(save_picker_pending_drive_strip_cell(3, 3), None);
-        assert_eq!(
-            save_picker_pending_drive_strip_cell(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, 3),
-            None
-        );
-    }
-
-    #[test]
-    fn complete_path_hit_target_is_distinct_from_drive_cells() {
-        assert!(save_picker_current_path_contains_x(
-            er_gfx::title_05_010::CURRENT_PATH_X_PX
-        ));
-        assert!(save_picker_current_path_contains_x(
-            er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX
-                - 0.1
-        ));
-        assert!(!save_picker_current_path_contains_x(
-            er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX
-        ));
-        assert_eq!(
-            save_picker_pending_drive_strip_cell(
-                SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING,
-                DRIVE_STRIP_MAX_CELLS,
-            ),
-            None,
-            "the path-editor sentinel must never alias a drive-cell selection"
-        );
-    }
-
-    #[test]
-    fn live_profile_select_cursor_is_the_model_row_index() {
-        assert_eq!(save_picker_model_row_from_native_cursor(-1), None);
-        assert_eq!(save_picker_model_row_from_native_cursor(0), Some(0));
-        assert_eq!(save_picker_model_row_from_native_cursor(1), Some(1));
-        assert_eq!(save_picker_model_row_from_native_cursor(9), Some(9));
-        assert_eq!(save_picker_model_row_from_native_cursor(10), None);
-    }
-
-    fn client_x_for_stage_x(stage_x: f32, client_width: f32, client_height: f32) -> f32 {
-        let movie_aspect = PROFILE_SELECT_MOVIE_WIDTH_PX / PROFILE_SELECT_MOVIE_HEIGHT_PX;
-        let client_aspect = client_width / client_height;
-        if client_aspect > movie_aspect {
-            let content_w = client_height * movie_aspect;
-            ((client_width - content_w) * 0.5)
-                + ((stage_x + PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5) / PROFILE_SELECT_MOVIE_WIDTH_PX)
-                    * content_w
-        } else {
-            ((stage_x + PROFILE_SELECT_MOVIE_WIDTH_PX * 0.5) / PROFILE_SELECT_MOVIE_WIDTH_PX)
-                * client_width
-        }
-    }
-
-    #[test]
-    fn live_cursor_mapping_uses_fixed_movie_stage_not_user_resolution() {
-        let second_cell_x = DRIVE_STRIP_HIT_LEFT_PX + DRIVE_STRIP_CELL_PITCH_PX + 0.1;
-        for (client_width, client_height) in [
-            (1920.0, 1080.0),
-            (2560.0, 1440.0),
-            (3440.0, 1440.0),
-            (1024.0, 768.0),
-        ] {
-            let client_x = client_x_for_stage_x(second_cell_x, client_width, client_height);
-            let client_y = client_height * 0.5;
-            let (stage_x, stage_y) = save_picker_client_point_to_movie_stage(
-                client_x,
-                client_y,
-                client_width,
-                client_height,
-            )
-            .expect("point should lie inside the fitted movie stage");
-            assert!(
-                (stage_x - second_cell_x).abs() < 0.02,
-                "client {client_width}x{client_height} mapped x={stage_x}, not the fixed movie-stage boundary {second_cell_x}"
-            );
-            assert!(stage_y.abs() < 0.02);
-            assert_eq!(save_picker_drive_strip_cell_from_x(stage_x, 26), Some(1));
-        }
-    }
-
-    #[test]
-    fn live_cursor_mapping_rejects_pillarbox_margin() {
-        assert_eq!(
-            save_picker_client_point_to_movie_stage(100.0, 720.0, 3440.0, 1440.0),
-            None,
-            "ultrawide pillarbox margin must not be treated as movie coordinates"
-        );
-    }
+/// Read the pointer only through one validated snapshot of the actual ER client HWND.
+unsafe fn save_picker_validated_game_pointer() -> Option<ValidatedGamePointer> {
+    let geometry = unsafe { save_picker_validated_game_window_geometry() }?;
+    unsafe { save_picker_validated_game_pointer_from(geometry) }
 }
 
-fn drive_strip_pressed_mask(prev_down: usize, down_mask: usize, nav_edges: usize) -> usize {
-    let mut pressed = (down_mask & !prev_down) & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
-    if nav_edges & crate::experiments::SAVE_PICKER_NAV_LEFT_MASK != 0 {
-        pressed |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
+/// Event cursor read with a last-moment published-owner/vtable lease.
+unsafe fn save_picker_native_cursor_for_event(dialog: usize) -> Option<i32> {
+    if dialog == 0 {
+        return None;
     }
-    if nav_edges & crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK != 0 {
-        pressed |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
-    }
-    pressed
-}
-
-/// Menu-pump-owned drive-strip mouse/keyboard handling. The native ProfileSelect list exposes only
-/// one hit target per row, so `[C:]  [S:]  [Z:]` can never be true native sub-buttons. While the
-/// native cursor is on the drive row, sample input edges in the menu pump and mutate the picker model
-/// directly: mouse uses the live X coordinate; Left/Right cycle to the adjacent drive.
-pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
-    let dialog = save_picker_live_profile_dialog();
-    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
-        SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.store(0, Ordering::SeqCst);
-        let _ = crate::experiments::save_picker_take_user_nav_edges();
-        return;
-    }
-    crate::experiments::ensure_save_picker_user_nav_input_hooks_installed();
-    let mut down_mask = 0usize;
-    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
-        down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
-    }
-    // Keyboard/controller arrows come ONLY from the DInput/XInput edge latch. Polling the same
-    // physical key through GetAsyncKeyState as well delivered one action here and a second action
-    // when the native-input edge arrived a few milliseconds later (runtime log 2026-08-08).
-    let prev_down = SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.swap(down_mask, Ordering::SeqCst);
-    let nav_edges = crate::experiments::save_picker_take_user_nav_edges();
-    let pressed = drive_strip_pressed_mask(prev_down, down_mask, nav_edges);
     let Ok(base) = game_module_base() else {
-        return;
+        return None;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
+    let token = save_picker_current_live_token(dialog)?;
+    let getter: unsafe extern "system" fn(usize) -> i32 =
         unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
-    let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
-    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
-        if pressed != 0 {
-            append_autoload_debug(format_args!(
-                "save-picker-nav: pressed_mask=0x{pressed:x} ignored invalid native_cursor={cursor}"
-            ));
-        }
-        return;
-    };
-    let (on_drive_row, drive_row) = {
-        let guard = crate::experiments::save_picker::active_save_picker_lock();
-        let Some(model) = guard.as_ref() else {
-            return;
-        };
-        let drive_row = model.drive_row();
-        (drive_row == Some(model_row), drive_row)
-    };
-    if pressed == 0 {
-        return;
-    }
-    if !on_drive_row {
-        append_autoload_debug(format_args!(
-            "save-picker-nav: pressed_mask=0x{pressed:x} ignored native_cursor={cursor} model_row={model_row} drive_row={drive_row:?}"
-        ));
-        return;
-    }
-
-    #[derive(Clone, Copy)]
-    enum DriveStripPumpAction {
-        Cell { cell: usize, x: f32, y: f32 },
-        Cycle { forward: bool },
-    }
-
-    let action = if pressed & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK != 0 {
-        let chosen = {
-            let guard = crate::experiments::save_picker::active_save_picker_lock();
-            let Some(model) = guard.as_ref() else {
-                return;
-            };
-            save_picker_drive_strip_cell_from_live_cursor(model.drive_strip_cell_count())
-        };
-        let Some((cell, x, y)) = chosen else {
-            append_autoload_debug(format_args!(
-                "save-picker: drive-strip pump mouse ignored at native_cursor={cursor} model_row={model_row}; no cell under stage cursor pressed_mask=0x{pressed:x}"
-            ));
-            return;
-        };
-        DriveStripPumpAction::Cell { cell, x, y }
-    } else if pressed & SAVE_PICKER_DRIVE_STRIP_LEFT_MASK != 0 {
-        DriveStripPumpAction::Cycle { forward: false }
-    } else if pressed & SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK != 0 {
-        DriveStripPumpAction::Cycle { forward: true }
-    } else {
-        return;
-    };
-
-    let changed = {
-        let mut guard = crate::experiments::save_picker::active_save_picker_lock();
-        let Some(model) = guard.as_mut() else {
-            return;
-        };
-        match action {
-            DriveStripPumpAction::Cell { cell, .. } => model.activate_drive_strip_cell(cell),
-            DriveStripPumpAction::Cycle { forward } => model.cycle_drive_from_drive_strip(forward),
-        }
-    };
-
-    match action {
-        DriveStripPumpAction::Cell { cell, x, y } => append_autoload_debug(format_args!(
-            "save-picker: drive-strip pump mouse native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cell={cell} changed={changed}"
-        )),
-        DriveStripPumpAction::Cycle { forward } => append_autoload_debug(format_args!(
-            "save-picker: drive-strip pump key native_cursor={cursor} model_row={model_row} direction={} changed={changed}",
-            if forward { "right" } else { "left" }
-        )),
-    }
-    if !changed {
-        return;
-    }
-    let staged = {
-        let guard = crate::experiments::save_picker::active_save_picker_lock();
-        match guard.as_ref() {
-            Some(model) => unsafe { save_picker_stage_row_records(model) },
-            None => false,
-        }
-    };
-    if staged {
-        append_autoload_debug(format_args!(
-            "save-picker: drive-strip pump restaged browse rows at native_cursor={cursor} model_row={model_row} pressed_mask=0x{pressed:x}"
-        ));
-        unsafe { save_picker_rebuild_profile_dialog_now(dialog, "drive-strip-pump") };
-    }
+    execute_picker_live_token_call_with(
+        token,
+        save_picker_live_profile_dialog,
+        |owner| unsafe { safe_read_usize(owner) },
+        |owner| unsafe { getter(owner + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) },
+    )
+    .ok()
+    .map(|(_, _, cursor)| cursor)
 }
 
-fn save_picker_scrollbar_packed_state(current: usize, page: usize, total: usize) -> usize {
-    (current.min(0xffff) & 0xffff)
-        | ((page.min(0xffff) & 0xffff) << 16)
-        | ((total.min(0xffff) & 0xffff) << 32)
+/// Menu-pump maintenance cursor read. The unforgeable argument is produced only by the current
+/// exact `05_010_ProfileSelect` Run post after owner identity and vtable validation.
+unsafe fn save_picker_native_cursor(token: PickerProfileRunToken) -> Option<i32> {
+    let Ok(base) = game_module_base() else {
+        return None;
+    };
+    let getter: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
+    execute_picker_live_token_call_with(
+        token,
+        save_picker_live_profile_dialog,
+        |dialog| unsafe { safe_read_usize(dialog) },
+        |dialog| unsafe { getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) },
+    )
+    .ok()
+    .map(|(_, _, cursor)| cursor)
 }
 
-/// Menu-pump-owned native scrollbar maintenance. The compact picker still stages only ten
-/// `ProfileSummary` rows, so do not change the native GridControl item count here: that would let
-/// native cursor movement address unstaged rows. Instead, drive the embedded native `ScrollBarV`
-/// controller directly through the same total/current setters the game uses, with the verified
-/// owner pointer at `ProfileLoadDialog + 0xbe0` (`grid + 0x1a8`).
-pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar() {
-    let window = save_picker_live_profile_dialog();
-    if window == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+/// Focus a native ProfileSelect row through GridControl's own validated cursor route.
+unsafe fn save_picker_set_native_row_focus(token: PickerProfileRunToken, row: usize) -> bool {
+    if row >= crate::experiments::save_picker::PICKER_ROW_COUNT {
+        return false;
+    }
+    let Ok(base) = game_module_base() else {
+        return false;
+    };
+    let setter: unsafe extern "system" fn(usize, i32, u8) -> u8 =
+        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_SETTER_RVA) };
+    let accepted = execute_picker_live_token_call_with(
+        token,
+        save_picker_live_profile_dialog,
+        |dialog| unsafe { safe_read_usize(dialog) },
+        |dialog| unsafe {
+            setter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, row as i32, 0) != 0
+        },
+    )
+    .ok()
+    .is_some_and(|(_, _, accepted)| accepted);
+    let observed = unsafe { save_picker_native_cursor(token) } == Some(row as i32);
+    accepted && observed
+}
+
+include!("save_picker_drive_strip_pump.rs");
+
+/// Menu-pump scrollbar maintenance; each setter takes a fresh owner/vtable lease.
+pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar(token: PickerProfileRunToken) {
+    let window = token.dialog;
+    if !save_picker_profile_token_still_current(token)
+        || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0
+        || save_picker_path_editor_blocks_profile_refresh()
+        || save_picker_resubmit_pending()
+    {
         SAVE_PICKER_SCROLLBAR_LAST_SYNC.store(usize::MAX, Ordering::SeqCst);
         return;
     }
@@ -1219,44 +1945,91 @@ pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar() {
         )
     };
 
-    let Ok(set_total_addr) = game_rva(SCROLLBAR_CONTROL_SET_TOTAL_RVA) else {
-        return;
-    };
-    let Ok(set_position_addr) = game_rva(SCROLLBAR_CONTROL_SET_POSITION_RVA) else {
+    let Ok(base) = game_module_base() else {
         return;
     };
     let scrollbar = window + PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET;
     let set_total: unsafe extern "system" fn(usize, i32) =
-        unsafe { std::mem::transmute(set_total_addr) };
+        unsafe { std::mem::transmute(base + SCROLLBAR_CONTROL_SET_TOTAL_RVA as usize) };
     let set_position: unsafe extern "system" fn(usize, i32) =
-        unsafe { std::mem::transmute(set_position_addr) };
-
-    unsafe { set_total(scrollbar, total.min(i32::MAX as usize) as i32) };
-    unsafe { set_position(scrollbar, current.min(i32::MAX as usize) as i32) };
+        unsafe { std::mem::transmute(base + SCROLLBAR_CONTROL_SET_POSITION_RVA as usize) };
+    let applied = save_picker_apply_native_scrollbar_with(
+        base,
+        scrollbar,
+        total.min(i32::MAX as usize) as i32,
+        current.min(i32::MAX as usize) as i32,
+        |address| unsafe { safe_read_usize(address) },
+        |owner, value| {
+            execute_picker_live_token_call_with(
+                token,
+                save_picker_live_profile_dialog,
+                |dialog| unsafe { safe_read_usize(dialog) },
+                |_| unsafe { set_total(owner, value) },
+            )
+            .is_ok()
+        },
+        |owner, value| {
+            execute_picker_live_token_call_with(
+                token,
+                save_picker_live_profile_dialog,
+                |dialog| unsafe { safe_read_usize(dialog) },
+                |_| unsafe { set_position(owner, value) },
+            )
+            .is_ok()
+        },
+    );
+    let target = match applied {
+        Ok(Some(target)) => {
+            er_telemetry::counters::SAVE_PICKER_SCROLLBAR_DISPATCH_CALLS
+                .fetch_add(1, Ordering::SeqCst);
+            target
+        }
+        Ok(None) => {
+            er_telemetry::counters::SAVE_PICKER_SCROLLBAR_DISPATCH_SKIPS
+                .fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+        Err(rejection) => {
+            let skips = er_telemetry::counters::SAVE_PICKER_SCROLLBAR_DISPATCH_SKIPS
+                .fetch_add(1, Ordering::SeqCst)
+                + 1;
+            er_telemetry::counters::SAVE_PICKER_SCROLLBAR_LAST_REJECT_REASON
+                .store(rejection.reason as usize, Ordering::SeqCst);
+            er_telemetry::counters::SAVE_PICKER_SCROLLBAR_LAST_VTABLE
+                .store(rejection.vtable, Ordering::SeqCst);
+            er_telemetry::counters::SAVE_PICKER_SCROLLBAR_LAST_TARGET
+                .store(rejection.target, Ordering::SeqCst);
+            if skips <= 8 || skips.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "save-picker: native scrollbar sync SKIPPED fail-closed reason={:?} scrollbar=0x{scrollbar:x} vtable=0x{:x} target=0x{:x} skips={skips}",
+                    rejection.reason, rejection.vtable, rejection.target
+                ));
+            }
+            return;
+        }
+    };
 
     let packed = save_picker_scrollbar_packed_state(current, page, total);
     if SAVE_PICKER_SCROLLBAR_LAST_SYNC.swap(packed, Ordering::SeqCst) != packed {
         append_autoload_debug(format_args!(
-            "save-picker: native scrollbar sync current={current} page={page} total={total} scrollbar=0x{scrollbar:x}"
+            "save-picker: native scrollbar sync current={current} page={page} total={total} scrollbar=0x{scrollbar:x} target=0x{target:x}"
         ));
     }
 }
 
-/// Menu-pump-owned scroll-window maintenance. The native ProfileSelect backing list has only ten
-/// row models, so long directory listings are represented as a sliding ten-row window with no page
-/// or pseudo-scroll rows. When the native cursor rests on a window edge, the model advances and this
-/// queues the same in-place rebuild used by directory/drive navigation.
-pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
-    let dialog = save_picker_live_profile_dialog();
-    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+/// Edge-scroll maintenance over the ten-row native window.
+pub(crate) unsafe fn save_picker_menu_pump_edge_scroll(token: PickerProfileRunToken) {
+    let dialog = token.dialog;
+    if !save_picker_profile_token_still_current(token)
+        || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0
+        || save_picker_path_editor_blocks_profile_refresh()
+        || save_picker_resubmit_pending()
+    {
         return;
     }
-    let Ok(base) = game_module_base() else {
+    let Some(cursor) = (unsafe { save_picker_native_cursor(token) }) else {
         return;
     };
-    let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
-        unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
-    let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
         return;
     };
@@ -1270,59 +2043,371 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
     if !scrolled {
         return;
     }
-    let staged = {
-        let guard = crate::experiments::save_picker::active_save_picker_lock();
-        match guard.as_ref() {
-            Some(model) => unsafe { save_picker_stage_row_records(model) },
-            None => false,
-        }
-    };
-    if staged {
+    if save_picker_schedule_refresh_request(dialog, "edge-scroll") {
         append_autoload_debug(format_args!(
-            "save-picker: edge-scroll restaged browse rows at native_cursor={cursor} model_row={model_row}"
+            "save-picker: edge-scroll queued fresh-owner presentation at native_cursor={cursor} model_row={model_row}"
         ));
-        unsafe { save_picker_rebuild_profile_dialog_now(dialog, "edge-scroll-pump") };
     }
 }
 
-/// Menu-pump-owned in-place list rebuild (called from the MenuWindowJob::Run hook). Runs the
-/// native records-changed rebuild queued by a picker navigation; falls back to close+resubmit
-/// when the rebuild fn cannot be resolved.
-pub(crate) unsafe fn save_picker_menu_pump_rebuild() {
-    let dialog = SAVE_PICKER_REBUILD_PENDING_DIALOG.swap(0, Ordering::SeqCst);
-    if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PickerRefreshConsumeDisposition {
+    NativeRemovalHandoff,
+    Deferred,
+    AwaitingOwnerDisappearance,
+    AwaitingLiveToken,
+    OwnerAlreadyCleared,
+    StaleIdentity,
+    AlreadyClosing,
+    CloseRequested(PickerRefreshCloseDisposition),
+}
+
+fn consume_picker_refresh_with_native_removal(
+    native_removal_owns_request: bool,
+    request: PickerRefreshRequest,
+    current_dialog: usize,
+    picker_active: bool,
+    modal_blocked: bool,
+    other_close_pending: bool,
+    matching_path_return_pending: bool,
+    observation: PickerProfileRunObservation,
+    arm_reopen: impl FnOnce(),
+    close: impl FnOnce(PickerProfileRunToken) -> PickerRefreshCloseDisposition,
+) -> PickerRefreshConsumeDisposition {
+    if native_removal_owns_request {
+        return PickerRefreshConsumeDisposition::NativeRemovalHandoff;
+    }
+    if !picker_active || request.dialog == 0 {
+        return PickerRefreshConsumeDisposition::StaleIdentity;
+    }
+    if current_dialog == 0 {
+        if other_close_pending {
+            return PickerRefreshConsumeDisposition::AlreadyClosing;
+        }
+        arm_reopen();
+        return PickerRefreshConsumeDisposition::OwnerAlreadyCleared;
+    }
+    // Identity is first: an old dialog may never hide behind an unrelated AlreadyClosing state.
+    if request.dialog != current_dialog {
+        return PickerRefreshConsumeDisposition::StaleIdentity;
+    }
+    // SoftwareKeyboard owns the parent finish. A matching exact-generation no-close return always
+    // outranks content refresh: wait for native disappearance, then stage the changed model at zero.
+    if matching_path_return_pending {
+        return PickerRefreshConsumeDisposition::AwaitingOwnerDisappearance;
+    }
+    if modal_blocked {
+        return PickerRefreshConsumeDisposition::Deferred;
+    }
+    if other_close_pending {
+        return PickerRefreshConsumeDisposition::AlreadyClosing;
+    }
+    let Some(token) = observation
+        .live_token()
+        .filter(|token| token.dialog == request.dialog && token.dialog == current_dialog)
+    else {
+        return PickerRefreshConsumeDisposition::AwaitingLiveToken;
+    };
+    arm_reopen();
+    PickerRefreshConsumeDisposition::CloseRequested(close(token))
+}
+
+fn consume_picker_refresh_with(
+    request: PickerRefreshRequest,
+    current_dialog: usize,
+    picker_active: bool,
+    modal_blocked: bool,
+    other_close_pending: bool,
+    matching_path_return_pending: bool,
+    observation: PickerProfileRunObservation,
+    arm_reopen: impl FnOnce(),
+    close: impl FnOnce(PickerProfileRunToken) -> PickerRefreshCloseDisposition,
+) -> PickerRefreshConsumeDisposition {
+    consume_picker_refresh_with_native_removal(
+        false,
+        request,
+        current_dialog,
+        picker_active,
+        modal_blocked,
+        other_close_pending,
+        matching_path_return_pending,
+        observation,
+        arm_reopen,
+        close,
+    )
+}
+
+include!("save_picker_owner_zero_recovery.rs");
+
+/// Consume one exact refresh request in menu-pump ownership. A native close is possible only when
+/// this exact post carries the current live `05_010_ProfileSelect` owner token. Generic MenuWindow
+/// posts retain the request without dereferencing the published pointer.
+pub(crate) unsafe fn save_picker_menu_pump_refresh(observation: PickerProfileRunObservation) {
+    let Some(request) = load_picker_refresh_request() else {
         return;
+    };
+    // Exact native removal transfers this refresh's latches to the one-shot picker-submit ticket.
+    // Do not re-enter OwnerAlreadyCleared on every generic MenuWindow post while stage/submit retries.
+    let native_removal_owns_request = save_picker_native_removal_owns_refresh(request);
+    let current = save_picker_live_profile_dialog();
+    let disposition = consume_picker_refresh_with_native_removal(
+        native_removal_owns_request,
+        request,
+        current,
+        SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0,
+        save_picker_path_editor_blocks_profile_refresh(),
+        SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0,
+        save_picker_path_editor_return_pending_for(request.dialog)
+            || SAVE_PICKER_REFRESH_CLOSE_REQUESTED_GENERATION.load(Ordering::SeqCst)
+                == request.generation,
+        observation,
+        || {
+            let _latch_guard = resubmit_latch_lock();
+            if !any_resubmit_reserved() {
+                SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
+                let _ =
+                    arm_picker_pending_resubmit_transition(request.dialog, 0, request.generation);
+            }
+        },
+        |token| unsafe { save_picker_refresh_native_close(token, "fresh-owner-refresh") },
+    );
+    match disposition {
+        PickerRefreshConsumeDisposition::NativeRemovalHandoff => {}
+        PickerRefreshConsumeDisposition::Deferred => {}
+        PickerRefreshConsumeDisposition::AwaitingOwnerDisappearance => {
+            er_telemetry::counters::SAVE_PICKER_REFRESH_NO_LIVE_TOKEN_DEFERS
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        PickerRefreshConsumeDisposition::AwaitingLiveToken => {
+            er_telemetry::counters::SAVE_PICKER_REFRESH_NO_LIVE_TOKEN_DEFERS
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        PickerRefreshConsumeDisposition::OwnerAlreadyCleared => {
+            if save_picker_native_removal_authority().is_some() {
+                er_telemetry::counters::SAVE_PICKER_OWNER_ZERO_LOOP_GUARD_VIOLATIONS
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+            let retired = false;
+            er_telemetry::counters::SAVE_PICKER_REFRESH_OWNER_ZERO_NO_CLOSES
+                .fetch_add(1, Ordering::SeqCst);
+            let spins = save_picker_owner_zero_spin_tick(request.generation);
+            if spins == 1 {
+                // One line per generation naming EACH conjunct. The 2026-08-11 run produced 36,501
+                // identical "resubmit remains armed" lines that proved the ticket was rejected but
+                // could not say which predicate rejected it.
+                save_picker_log_owner_zero_ticket_rejection(request);
+            }
+            if spins <= 2 || spins == SAVE_PICKER_OWNER_ZERO_SPIN_LIMIT {
+                append_autoload_debug(format_args!(
+                    "save-picker: refresh generation={} reached owner-zero without native close old_owner=0x{:x} retired={retired} spins={spins}; fresh-owner resubmit remains armed",
+                    request.generation, request.dialog
+                ));
+            }
+            if spins >= SAVE_PICKER_OWNER_ZERO_SPIN_LIMIT {
+                // The picker window is gone and the resubmit will not land. Holding
+                // SAVE_PICKER_MODE_ACTIVE here keeps suppressing every underlying System row, so
+                // the user is left in a quit menu whose buttons all do nothing. Releasing picker
+                // ownership is strictly better than an invisible menu that eats input forever.
+                unsafe { save_picker_release_wedged_owner_zero_refresh(request) };
+            }
+        }
+        PickerRefreshConsumeDisposition::StaleIdentity => {
+            let retired = retire_picker_refresh_request(request, false);
+            append_autoload_debug(format_args!(
+                "save-picker: dropped stale refresh without dereference requested=0x{:x} generation={} current=0x{current:x} retired={retired}",
+                request.dialog, request.generation
+            ));
+        }
+        PickerRefreshConsumeDisposition::AlreadyClosing => {
+            let retired = retire_picker_refresh_request(request, false);
+            er_telemetry::counters::SAVE_PICKER_REFRESH_COALESCES.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: refresh generation={} retired without close because another picker close owns the transition retired={retired}",
+                request.generation
+            ));
+        }
+        PickerRefreshConsumeDisposition::CloseRequested(close) => {
+            if close == PickerRefreshCloseDisposition::Closed {
+                let _latch_guard = resubmit_latch_lock();
+                if !any_resubmit_reserved() {
+                    SAVE_PICKER_REFRESH_CLOSE_REQUESTED_GENERATION
+                        .store(request.generation, Ordering::SeqCst);
+                    let _ = arm_picker_pending_resubmit_transition(
+                        request.dialog,
+                        0,
+                        request.generation,
+                    );
+                }
+            }
+            let resolution =
+                apply_picker_refresh_close_with(request, close, retire_picker_refresh_request);
+            append_autoload_debug(format_args!(
+                "save-picker: fresh-owner close disposition={close:?} old_owner=0x{:x} generation={} resolution={resolution:?} reopen={}",
+                request.dialog,
+                request.generation,
+                SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst)
+            ));
+        }
     }
-    unsafe { save_picker_rebuild_profile_dialog_now(dialog, "queued-navigation") };
 }
 
-/// Menu-pump-owned resubmit: called from `system_quit_menu_window_job_run_hook` (the proven
-/// submit context) once the closed picker window has left the list. Returns true when a resubmit
-/// was performed (or is still pending), i.e. the caller must skip the System-UI restore.
-pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
+/// Owner-zero menu-pump resubmit without dereferencing the closed dialog.
+pub(crate) unsafe fn save_picker_menu_pump_resubmit(authority: PickerOuterPostAuthority) -> bool {
     if !save_picker_resubmit_pending() {
         return false;
     }
-    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
-        // Old window still live; wait for its close to finish.
+    let old_owner = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    if old_owner != 0 {
         return true;
     }
     // Reopen through the System dialog the window was submitted from. The destination browser has
-    // no row action object at all (the save flow opens it), so the dialog -- not the action -- is
-    // the identity that survives both paths.
-    let system_dialog = SAVE_PICKER_SYSTEM_DIALOG.load(Ordering::SeqCst);
-    if system_dialog == 0 {
+    // no row action object at all (the save flow opens it), so the dialog -- not the dead 05_010
+    // owner -- is the identity that survives both paths.
+    let system_identity = save_picker_system_dialog_identity();
+    let system_dialog = system_identity.map_or(0, |identity| identity.dialog);
+    let expected = match authority {
+        PickerOuterPostAuthority::NativeRemoval(authority) => Some(authority.pending),
+        PickerOuterPostAuthority::Profile(PickerProfileRunObservation::OwnerCleared(cleared)) => {
+            Some(cleared.pending)
+        }
+        _ => save_picker_pending_resubmit_transition(),
+    };
+    if let Some(abandoned) = abandon_lost_system_dialog_resubmit_with(
+        system_dialog,
+        expected,
+        abandon_picker_pending_resubmit_for_system_dialog_loss,
+    ) {
         append_autoload_debug(format_args!(
-            "save-picker: resubmit pending but the owning System dialog was lost; abandoning reopen"
+            "save-picker: owning System dialog lost; atomic pending-resubmit abandonment={abandoned}"
         ));
-        SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
-        SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
         return false;
     }
+    if let Some(expected) = expected {
+        let bound_system = PickerSystemDialogIdentity {
+            dialog: expected.system_dialog,
+            generation: expected.system_dialog_generation,
+        };
+        if system_identity != Some(bound_system) {
+            let abandoned = abandon_picker_pending_resubmit_for_system_dialog_loss(Some(expected));
+            append_autoload_debug(format_args!(
+                "save-picker: System-dialog identity changed before resubmit; exact old transition abandonment={abandoned}"
+            ));
+            return false;
+        }
+    }
     let reopen_as_picker = SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0;
-    SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
-    SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    let opened = unsafe { system_quit_open_profile_load_dialog_on(system_dialog) };
+    if reopen_as_picker {
+        if let Some(request) = load_path_editor_return_reopen_request()
+            && er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_LAST_OWNER_CLEARED_GENERATION
+                .swap(request.generation, Ordering::SeqCst)
+                != request.generation
+        {
+            er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_OWNER_CLEARED
+                .fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-path: observed parent owner zero for no-close return dialog=0x{:x} generation={}",
+                request.dialog, request.generation
+            ));
+        }
+        let generation =
+            er_telemetry::counters::SAVE_PICKER_REFRESH_GENERATION.load(Ordering::SeqCst);
+        if er_telemetry::counters::SAVE_PICKER_REFRESH_LAST_OWNER_CLEARED_GENERATION
+            .swap(generation, Ordering::SeqCst)
+            != generation
+        {
+            er_telemetry::counters::SAVE_PICKER_REFRESH_OWNER_CLEARED
+                .fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: observed old owner cleared for refresh generation={generation}"
+            ));
+        }
+    }
+    let stage_latest_model = || {
+        er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+        let snapshot = {
+            let guard = crate::experiments::save_picker::active_save_picker_lock();
+            guard.as_ref().map(PickerRowStageSnapshot::from_model)
+        };
+        let staged = snapshot
+            .as_ref()
+            .is_some_and(|snapshot| unsafe { save_picker_stage_row_snapshot(snapshot) });
+        if staged {
+            er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_SUCCESSES
+                .fetch_add(1, Ordering::SeqCst);
+        } else {
+            er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_FAILURES
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        staged
+    };
+    let disposition = match authority {
+        PickerOuterPostAuthority::NativeRemoval(removal_authority) if reopen_as_picker => {
+            execute_picker_native_removal_resubmit(
+                removal_authority,
+                stage_latest_model,
+                || {
+                    let _ = unsafe { rollback_picker_staged_presentation() };
+                },
+                || {
+                    let _ = commit_picker_staged_presentation();
+                },
+                || {
+                    er_telemetry::counters::SAVE_PICKER_RESUBMIT_SUBMIT_ATTEMPTS
+                        .fetch_add(1, Ordering::SeqCst);
+                    unsafe { system_quit_open_profile_load_dialog_on(system_dialog) }
+                },
+            )
+        }
+        PickerOuterPostAuthority::Profile(PickerProfileRunObservation::OwnerCleared(
+            cleared_authority,
+        )) if reopen_as_picker => execute_picker_owner_cleared_resubmit(
+            PickerOwnerClearedResubmitAuthority {
+                picker: cleared_authority,
+                system: PickerSystemDialogIdentity {
+                    dialog: cleared_authority.pending.system_dialog,
+                    generation: cleared_authority.pending.system_dialog_generation,
+                },
+            },
+            stage_latest_model,
+            || {
+                let _ = unsafe { rollback_picker_staged_presentation() };
+            },
+            || {
+                let _ = commit_picker_staged_presentation();
+            },
+            || {
+                er_telemetry::counters::SAVE_PICKER_RESUBMIT_SUBMIT_ATTEMPTS
+                    .fetch_add(1, Ordering::SeqCst);
+                unsafe { system_quit_open_profile_load_dialog_on(system_dialog) }
+            },
+        ),
+        PickerOuterPostAuthority::DestinationParent(_) if !reopen_as_picker => {
+            execute_picker_destination_resubmit(
+                old_owner,
+                system_identity.expect("nonzero dialog has synchronized identity"),
+                || picker_outer_authority_still_current(authority),
+                || {
+                    er_telemetry::counters::SAVE_PICKER_RESUBMIT_SUBMIT_ATTEMPTS
+                        .fetch_add(1, Ordering::SeqCst);
+                },
+                || unsafe { system_quit_open_profile_load_dialog_on(system_dialog) },
+            )
+        }
+        _ => PickerResubmitDisposition::AuthorizationLost,
+    };
+    commit_picker_native_removal_after_resubmit(authority, disposition);
+    apply_picker_resubmit_model_lifetime_with(disposition, reopen_as_picker, || {
+        *crate::experiments::save_picker::active_save_picker_lock() = None;
+        SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
+    });
+    let PickerResubmitDisposition::Submitted { opened } = disposition else {
+        if disposition == PickerResubmitDisposition::StageFailed {
+            append_autoload_debug(format_args!(
+                "save-picker: owner-cleared row staging failed; keeping refresh pending and submitting nothing"
+            ));
+        }
+        return true;
+    };
     if opened {
         SAVE_PICKER_RESUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
@@ -1336,13 +2421,9 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
         return true;
     }
     append_autoload_debug(format_args!(
-        "save-picker: menu-pump resubmit FAILED (dialog=0x{system_dialog:x}); falling back to System-UI restore"
+        "save-picker: menu-pump native resubmit returned false (dialog=0x{system_dialog:x}); exact picker/destination transition remains armed for retry"
     ));
-    if reopen_as_picker {
-        *crate::experiments::save_picker::active_save_picker_lock() = None;
-        SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
-    }
-    false
+    true
 }
 
 /// Escape text for the Scaleform-HTML SetText path (the `ErStats` row fields parse with bHTML=1,
@@ -1419,6 +2500,13 @@ pub(crate) fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
     save_picker_browse_html_utf16_color(display, color)
 }
 
+/// Resting colour of the CurrentPath control -- the same parchment tone the surrounding native
+/// ProfileSelect text uses.
+const SAVE_PICKER_PATH_NORMAL_COLOR: &str = "#b8b1a2";
+/// Colour for a path the user submitted that failed validation. Yellow rather than red: the entry
+/// is correctable, not an error state, and the folder the picker is showing has not changed.
+const SAVE_PICKER_PATH_INVALID_COLOR: &str = "#e8c34a";
+
 pub(crate) fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
@@ -1428,10 +2516,16 @@ pub(crate) fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
     if model.drive_row() != Some(row) {
         return Some(vec![0]);
     }
-    let text = model.current_dir().to_str()?;
+    // A rejected submission renders in place of the current directory, in the invalid colour, so
+    // the user sees what they typed and can correct it. `clear_status_message` (which every
+    // successful navigation calls) drops it, returning the control to the normal colour.
+    let (text, color) = match model.rejected_path_text() {
+        Some(rejected) => (rejected, SAVE_PICKER_PATH_INVALID_COLOR),
+        None => (model.current_dir().to_str()?, SAVE_PICKER_PATH_NORMAL_COLOR),
+    };
     let escaped = save_picker_html_escape(text);
     let html =
-        format!("<p align=\"left\"><font size=\"16\" color=\"#b8b1a2\">{escaped}</font></p>");
+        format!("<p align=\"left\"><font size=\"16\" color=\"{color}\">{escaped}</font></p>");
     Some(html.encode_utf16().chain(core::iter::once(0)).collect())
 }
 
@@ -1525,8 +2619,8 @@ pub(crate) struct RowSlotInfo {
     /// Number of populated drive-strip cells on this row. Zero outside the drive row and while a
     /// visible status message temporarily owns its field band.
     pub(crate) drive_cell_count: usize,
-    /// Active drive cell whose geometry the row's native animated Cursor must follow.
-    pub(crate) active_drive_cell: Option<usize>,
+    /// Explicit drive/path subtarget whose geometry the row's one native animated Cursor follows.
+    pub(crate) drive_strip_focus: Option<er_save_picker::DriveStripFocus>,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
@@ -1539,7 +2633,7 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
-    let (last_saved, er_stats, drive_cell_count, active_drive_cell) = {
+    let (last_saved, er_stats, drive_cell_count, drive_strip_focus) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let model = guard.as_ref()?;
         let has_auxiliary_lines = model.row_auxiliary_lines(row).is_some();
@@ -1548,21 +2642,21 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
         } else {
             0
         };
-        let active_drive_cell = (drive_cell_count > 0)
-            .then(|| model.drive_strip_active_cell())
+        let drive_strip_focus = (drive_cell_count > 0)
+            .then(|| model.drive_strip_presented_focus())
             .flatten();
         (
             model.row_last_saved(row),
             has_auxiliary_lines || model.row_file_characters(row).is_some(),
             drive_cell_count,
-            active_drive_cell,
+            drive_strip_focus,
         )
     };
     Some(RowSlotInfo {
         location: last_saved.and_then(save_picker_last_saved_text),
         er_stats,
         drive_cell_count,
-        active_drive_cell,
+        drive_strip_focus,
     })
 }
 
@@ -1668,8 +2762,9 @@ mod save_picker_row_slot_info_tests {
 /// row staging and the builder's record read left that slot's record holding the LOADED character,
 /// which then rendered as a stray browse row (user report: `[ up .. ]`, <current character name>,
 /// <save file name>). Rewriting the records here, on the same menu thread that immediately reads
-/// them, closes that window for EVERY build site with one seam -- the dialog ctor/bind paths and
-/// the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`) all call this builder.
+/// them, closes that window for EVERY supported build site with one seam -- fresh dialog
+/// construction and native-owned delete chains call this builder. Picker refresh code never calls
+/// those delete callbacks or partial list-bind workers directly.
 pub(crate) unsafe extern "system" fn save_picker_profile_list_builder_hook(
     out_list: usize,
 ) -> usize {
@@ -1755,8 +2850,47 @@ pub(crate) fn install_save_picker_list_builder_hook() {
     }
 }
 
-/// Clear picker state on any full reset of the ProfileSelect hide machinery (backout/restore).
-pub(crate) fn save_picker_reset(source: &str) {
+fn save_picker_reset_state_now(source: &str, publish_system_clear: bool) {
+    let was_active = SAVE_PICKER_MODE_ACTIVE.swap(0, Ordering::SeqCst) != 0;
+    let had_model = crate::experiments::save_picker::active_save_picker_lock()
+        .take()
+        .is_some();
+    save_picker_set_reopen_pending(0);
+    clear_picker_refresh_request();
+    clear_path_editor_return_reopen_request();
+    clear_picker_pending_resubmit_transition();
+    save_picker_set_open_slots_pending(0);
+    SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
+    if publish_system_clear {
+        let _ = save_picker_publish_system_dialog(0);
+    }
+    clear_picker_presentation();
+    let was_destination = SAVE_PICKER_DEST_MODE.swap(0, Ordering::SeqCst) != 0;
+    if was_active || had_model {
+        SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker: reset (source={source}, was_active={was_active}, had_model={had_model}, destination={was_destination})"
+        ));
+    }
+}
+
+pub(crate) fn save_picker_apply_deferred_resubmit_reset() {
+    let Some((reset_guard, action)) = claim_deferred_picker_reset_transaction() else {
+        return;
+    };
+    unsafe {
+        match action {
+            PickerDeferredResetAction::PickerState { source } => {
+                system_quit_apply_claimed_profile_reset(&source, &reset_guard);
+            }
+            PickerDeferredResetAction::RestoreRealWindows { base, source } => {
+                system_quit_apply_claimed_restore_real_system_windows(base, &source, &reset_guard);
+            }
+        }
+    }
+}
+
+pub(crate) fn save_picker_reset_source_is_applicable(source: &str) -> bool {
     if missing_save_selection_pending() {
         // STARTUP (title) picker: the model and the staged browse rows outlive any single window.
         // Backing out of the dialog returns to the no-save title menu with the rows still staged,
@@ -1765,26 +2899,17 @@ pub(crate) fn save_picker_reset(source: &str) {
         append_autoload_debug(format_args!(
             "save-picker: reset skipped while missing-save selection pending (source={source}); picker stays armed for native Load Game reopen"
         ));
-        return;
+        return false;
     }
-    let was_active = SAVE_PICKER_MODE_ACTIVE.swap(0, Ordering::SeqCst) != 0;
-    let had_model = crate::experiments::save_picker::active_save_picker_lock()
-        .take()
-        .is_some();
-    SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
-    SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
-    SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
-    // The DEST-mode latch dies with the window, but the chosen destination and the commit latch
-    // deliberately do NOT: closing the picker is exactly how a confirmed destination commit
-    // proceeds, and the save-flow tick still needs the target after this reset runs.
-    let was_destination = SAVE_PICKER_DEST_MODE.swap(0, Ordering::SeqCst) != 0;
-    if was_active || had_model {
-        SAVE_PICKER_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker: reset (source={source}, was_active={was_active}, had_model={had_model}, destination={was_destination})"
-        ));
-    }
+    true
+}
+
+pub(crate) fn save_picker_reset_under_claimed_transaction(
+    source: &str,
+    _reset_lease: &PathEditorResetLeaseGuard,
+    _reset_guard: &PickerResetTransactionGuard<'_>,
+) {
+    save_picker_reset_state_now(source, true);
 }
 
 // ===========================================================================

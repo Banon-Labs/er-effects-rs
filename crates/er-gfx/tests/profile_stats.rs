@@ -9,6 +9,8 @@
 //! `cargo run -p er-gfx --example make_05_010_stats` for byte-level debugging.
 
 mod common;
+#[path = "../examples/make_05_010_stats.rs"]
+mod structured_generator;
 
 use er_gfx::profile_05_010_layout::Profile05_010Layout;
 use er_gfx::raster::RasterFont;
@@ -17,9 +19,10 @@ use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX,
     COMPACT_SCROLLBAR_TOP_Y_PX, COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX,
     COMPACT_VISIBLE_ROW_COUNT, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
-    DRIVE_BUTTON_FIELD_NAMES, DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX,
-    DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX, EDITED_FNV1A64, EDITED_LEN,
-    STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
+    DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_LEFT_PX,
+    DRIVE_BUTTON_NATIVE_ART_TOP_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX, DRIVE_CELL_CAPACITY,
+    DRIVE_CELL_FIELD_NAMES, EDITED_FNV1A64, EDITED_LEN, STATS_FIELD_NAME, StatsPanelError,
+    VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
 };
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
@@ -53,6 +56,19 @@ fn schema_px(px: f32) -> i32 {
 
 fn schema_scale(scale: f32) -> i32 {
     (scale * SCALE_ONE as f32).round() as i32
+}
+
+fn native_button_visible_bounds(matrix: &Matrix) -> (f32, f32, f32, f32) {
+    let scale_x = matrix.scale_x as f32 / SCALE_ONE as f32;
+    let scale_y = matrix.scale_y as f32 / SCALE_ONE as f32;
+    let x = matrix.translate_x as f32 / 20.0;
+    let y = matrix.translate_y as f32 / 20.0;
+    (
+        x + DRIVE_BUTTON_NATIVE_ART_LEFT_PX * scale_x,
+        y + DRIVE_BUTTON_NATIVE_ART_TOP_PX * scale_y,
+        x + (DRIVE_BUTTON_NATIVE_ART_LEFT_PX + DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * scale_x,
+        y + (DRIVE_BUTTON_NATIVE_ART_TOP_PX + DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * scale_y,
+    )
 }
 
 fn read_vanilla_or_skip() -> Option<Vec<u8>> {
@@ -144,6 +160,24 @@ fn stats_panel_of_vanilla_matches_generated_fingerprint() {
     let out = stats_panel(&vanilla).expect("edits must apply cleanly to the known vanilla movie");
     assert_eq!(out.len(), EDITED_LEN);
     assert_eq!(fnv1a64(&out), EDITED_FNV1A64);
+}
+
+#[test]
+fn structured_generator_matches_checked_edit_table_and_fingerprint() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in layout parses");
+    let generated = structured_generator::generate_stats_movie(&vanilla, &layout);
+    let table_output =
+        stats_panel(&vanilla).expect("checked edit table applies to the known vanilla movie");
+    assert_eq!(
+        generated, table_output,
+        "structured generator and checked-in edit table drifted"
+    );
+    assert_eq!(generated.len(), EDITED_LEN);
+    assert_eq!(fnv1a64(&generated), EDITED_FNV1A64);
 }
 
 /// Structural gates on the edited movie: the face box stays PLACED (so the
@@ -717,6 +751,7 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
+        CURRENT_PATH_FIELD_NAME,
     ]
     .into_iter()
     .chain(DRIVE_CELL_FIELD_NAMES);
@@ -1015,6 +1050,11 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
         (DRIVE_CELL_FIELD_NAMES[0], "C:", None),
         (DRIVE_CELL_FIELD_NAMES[1], "S:", None),
         (DRIVE_CELL_FIELD_NAMES[2], "Z:", None),
+        (
+            CURRENT_PATH_FIELD_NAME,
+            "Z:\\home\\banon\\Elden Ring Saves",
+            None,
+        ),
     ];
     // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
     // redundant content hygiene), and the timestamp is staged into Location.
@@ -1142,6 +1182,11 @@ fn stats_panel_output_keeps_save_picker_rendered_text_inside_the_visible_row_con
         ("DriveCell_0", "C:", None),
         ("DriveCell_1", "S:", None),
         ("DriveCell_2", "Z:", None),
+        (
+            CURRENT_PATH_FIELD_NAME,
+            "Z:\\home\\banon\\Elden Ring Saves",
+            None,
+        ),
         (STATS_FIELD_NAME, "PARENT FOLDER / Go to save-files", None),
         (
             STATS_FIELD_NAME,
@@ -1181,6 +1226,7 @@ fn stats_panel_output_keeps_inline_text_field_centers_inside_compact_row_slot() 
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
+        CURRENT_PATH_FIELD_NAME,
     ]
     .into_iter()
     .chain(DRIVE_CELL_FIELD_NAMES);
@@ -1501,38 +1547,50 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
     let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
         .expect("checked-in visual editor schema parses");
     let drive_template = layout.field(DRIVE_CELL_FIELD_NAMES[0]);
-    assert_eq!(drive_template.x, DRIVE_CELL_FIRST_X_PX);
-    assert_eq!(drive_template.y, DRIVE_CELL_Y_PX);
-    assert_eq!(drive_template.width as f32, DRIVE_CELL_WIDTH_PX);
-    assert_eq!(
-        layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - drive_template.x,
-        DRIVE_CELL_PITCH_PX
-    );
-    let button_center_offset_twips =
-        ((drive_template.width as f32 * 0.5 - 2.0 + layout.row_chrome.drive_button.x) * 20.0)
-            .round() as i32;
-    let button_center_y_twips = (drive_template.y - 2.0
-        + drive_template.clip_height as f32 * 0.5
-        + layout.row_chrome.drive_button.y)
-        .mul_add(20.0, 0.0)
-        .round() as i32;
+    let drive_pitch = layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - drive_template.x;
+    assert_eq!(DRIVE_BUTTON_NATIVE_ART_WIDTH_PX, 56.0);
+    assert_eq!(DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, 54.0);
+    assert!(drive_template.width as f32 <= drive_pitch);
+    let (backing_flags, backing_color_transform) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                flags,
+                character_id: Some(54),
+                name: Some(name),
+                color_transform: Some(color_transform),
+                ..
+            } if name == "Backing" => Some((*flags, color_transform)),
+            _ => None,
+        })
+        .expect("normal Backing carries its browse-row color treatment");
+    assert_ne!(backing_flags & 0x08, 0);
+    let mut previous_right = f32::NEG_INFINITY;
 
     for index in 0..DRIVE_CELL_CAPACITY {
         let button_name = DRIVE_BUTTON_FIELD_NAMES[index];
         let text_name = DRIVE_CELL_FIELD_NAMES[index];
-        let (button_depth, button_character, button_matrix) = row
-            .iter()
-            .find_map(|tag| match tag {
-                Tag::PlaceObject2 {
-                    depth,
-                    character_id,
-                    matrix: Some(matrix),
-                    name: Some(name),
-                    ..
-                } if name == button_name => Some((*depth, *character_id, matrix)),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("row template places {button_name}"));
+        let (button_depth, button_character, button_flags, button_color_transform, button_matrix) =
+            row.iter()
+                .find_map(|tag| match tag {
+                    Tag::PlaceObject2 {
+                        depth,
+                        character_id,
+                        flags,
+                        matrix: Some(matrix),
+                        name: Some(name),
+                        color_transform,
+                        ..
+                    } if name == button_name => Some((
+                        *depth,
+                        *character_id,
+                        *flags,
+                        color_transform.as_ref(),
+                        matrix,
+                    )),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("row template places {button_name}"));
         let (text_depth, text_matrix) = row
             .iter()
             .find_map(|tag| match tag {
@@ -1555,31 +1613,63 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
             button_depth < text_depth,
             "{button_name} must render behind {text_name}"
         );
+        assert_ne!(button_flags & 0x08, 0, "{button_name} retains a CXFORM");
+        assert_eq!(
+            button_color_transform,
+            Some(backing_color_transform),
+            "{button_name} must match normal browse-row brightness/alpha treatment"
+        );
         assert!(
             button_matrix.has_scale && button_matrix.scale_x > 0 && button_matrix.scale_y > 0,
             "{button_name} must have visible nonzero button geometry: {button_matrix:?}"
         );
+        let (left, top, right, bottom) = native_button_visible_bounds(button_matrix);
+        let expected_left =
+            drive_template.x + drive_pitch * index as f32 + layout.row_chrome.drive_button.x;
+        let expected_top = drive_template.y - 2.0 + layout.row_chrome.drive_button.y;
         assert!(
-            (button_matrix.translate_x - (text_matrix.translate_x + button_center_offset_twips))
-                .abs()
-                <= 20,
-            "{button_name} must be optically aligned under {text_name}: button={button_matrix:?} text={text_matrix:?}"
+            (left - expected_left).abs() < 0.05,
+            "{button_name} left={left} expected={expected_left}"
         );
+        assert!((right - (expected_left + drive_template.width as f32)).abs() < 0.05);
+        assert!((top - expected_top).abs() < 0.05);
+        assert!((bottom - (expected_top + drive_template.clip_height as f32)).abs() < 0.05);
+        assert!(
+            left >= previous_right - 0.05,
+            "adjacent drive chrome overlaps: previous_right={previous_right} left={left}"
+        );
+        assert!((right - left) <= drive_pitch + 0.05);
+        previous_right = right;
         assert_eq!(
-            button_matrix.translate_y, button_center_y_twips,
-            "{button_name} must use the user's authored vertical center"
+            text_matrix.translate_x,
+            schema_px(drive_template.x + drive_pitch * index as f32)
         );
     }
 
-    let (path_button_depth, path_button_character) = row
+    let (
+        path_button_depth,
+        path_button_character,
+        path_button_flags,
+        path_button_color_transform,
+        path_button_matrix,
+    ) = row
         .iter()
         .find_map(|tag| match tag {
             Tag::PlaceObject2 {
                 depth,
                 character_id,
+                flags,
+                matrix: Some(matrix),
                 name: Some(name),
+                color_transform,
                 ..
-            } if name == CURRENT_PATH_BUTTON_NAME => Some((*depth, *character_id)),
+            } if name == CURRENT_PATH_BUTTON_NAME => Some((
+                *depth,
+                *character_id,
+                *flags,
+                color_transform.as_ref(),
+                matrix,
+            )),
             _ => None,
         })
         .expect("row template places the full-path button");
@@ -1596,6 +1686,15 @@ fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
         .expect("row template places the full-path text field");
     assert_eq!(path_button_character, Some(54));
     assert!(path_button_depth < path_text_depth);
+    assert_ne!(path_button_flags & 0x08, 0);
+    assert_eq!(path_button_color_transform, Some(backing_color_transform));
+    let path = layout.field(CURRENT_PATH_FIELD_NAME);
+    let (path_left, path_top, path_right, path_bottom) =
+        native_button_visible_bounds(path_button_matrix);
+    assert!((path_left - (path.x + layout.row_chrome.drive_button.x)).abs() < 0.05);
+    assert!((path_right - (path_left + path.width as f32)).abs() < 0.05);
+    assert!((path_top - (path.y - 2.0 + layout.row_chrome.drive_button.y)).abs() < 0.05);
+    assert!((path_bottom - (path_top + path.clip_height as f32)).abs() < 0.05);
 
     let first = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[0]);
     let last = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[DRIVE_CELL_CAPACITY - 1]);

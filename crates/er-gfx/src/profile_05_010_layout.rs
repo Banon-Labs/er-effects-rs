@@ -496,6 +496,34 @@ impl Profile05_010Layout {
                 )));
             }
         }
+        let drive0 = self.field("DriveCell_0");
+        let drive1 = self.field("DriveCell_1");
+        let drive2 = self.field("DriveCell_2");
+        let drive_pitch = drive1.x - drive0.x;
+        if drive_pitch <= 0.0
+            || (drive2.x - drive1.x - drive_pitch).abs() > f32::EPSILON
+            || drive0.width as f32 > drive_pitch
+            || drive1.width as f32 > drive_pitch
+            || drive2.width as f32 > drive_pitch
+        {
+            return Err(LayoutError::InvalidValue(
+                "drive cells must use one positive pitch and each width must fit within that pitch"
+                    .to_owned(),
+            ));
+        }
+        let path = self.field("CurrentPath");
+        const DRIVE_PATH_GUTTER_PX: f32 = 4.0;
+        if drive2.x + drive2.width as f32 + DRIVE_PATH_GUTTER_PX > path.x {
+            return Err(LayoutError::InvalidValue(format!(
+                "field.CurrentPath must start at least {DRIVE_PATH_GUTTER_PX}px after the authored drive controls"
+            )));
+        }
+        let normal_right_margin = -drive0.x;
+        if path.x + path.width as f32 > normal_right_margin {
+            return Err(LayoutError::InvalidValue(format!(
+                "field.CurrentPath right edge must stay within the normal drive-row margin {normal_right_margin}px"
+            )));
+        }
         if self.list.visible_rows != 10 {
             return Err(LayoutError::InvalidValue(
                 "list.visible_rows must stay 10; increasing native grid item count breaks picker scrollbar/native rows".to_owned(),
@@ -679,6 +707,21 @@ mod tests {
         assert!(layout.row_chrome.drive_button.editable);
         assert_eq!(layout.list.visible_rows, 10);
         assert_eq!(layout.list.row_pitch, 48);
+    }
+
+    #[test]
+    fn drive_and_path_controls_fit_the_normal_row_margins() {
+        let layout = Profile05_010Layout::parse(SHIPPED_LAYOUT_TOML).expect("schema parses");
+        let drive0 = layout.field("DriveCell_0");
+        let drive1 = layout.field("DriveCell_1");
+        let path = layout.field("CurrentPath");
+        let pitch = drive1.x - drive0.x;
+        assert!(drive0.width as f32 <= pitch);
+        assert_eq!(path.x + path.width as f32, -drive0.x);
+
+        let err = Profile05_010Layout::parse("[field.CurrentPath]\nwidth = 700\n")
+            .expect_err("oversized path chrome must fail the row-margin contract");
+        assert!(err.to_string().contains("normal drive-row margin"), "{err}");
     }
 
     #[test]

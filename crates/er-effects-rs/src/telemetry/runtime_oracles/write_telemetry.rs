@@ -472,16 +472,153 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // `oracle_save_picker_surface` states which picker this session runs (0 in-game, 1 OS dialog)
     // regardless of whether one ever opened, so a report never has to guess the mode.
     body.push_str(&format!(
-        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        "  \"oracle_save_picker_surface\": {},\n  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_system_row_activation_suppressions\": {},\n  \"oracle_save_picker_duplicate_underlying_activation_suppressions\": {},\n  \"oracle_save_picker_open_preflight_coalesces\": {},\n  \"oracle_save_picker_open_preflight_rejections\": {},\n  \"oracle_save_picker_open_preflight_last_source\": {},\n  \"oracle_save_picker_open_preflight_last_owner\": {},\n  \"oracle_save_picker_open_preflight_last_system\": {},\n  \"oracle_save_picker_open_preflight_last_action\": {},\n  \"oracle_save_picker_open_preflight_last_vtable\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n  \"oracle_save_picker_refresh_pending_dialog\": {},\n  \"oracle_save_picker_refresh_pending_generation\": {},\n  \"oracle_save_picker_refresh_requests\": {},\n  \"oracle_save_picker_refresh_coalesces\": {},\n  \"oracle_save_picker_refresh_native_closes\": {},\n  \"oracle_save_picker_refresh_owner_cleared\": {},\n  \"oracle_save_picker_refresh_generation\": {},\n  \"oracle_save_picker_refresh_last_old_owner\": {},\n  \"oracle_save_picker_resubmit_stage_attempts\": {},\n  \"oracle_save_picker_resubmit_stage_successes\": {},\n  \"oracle_save_picker_resubmit_stage_failures\": {},\n  \"oracle_save_picker_resubmit_submit_attempts\": {},\n",
         SAVE_PICKER_SURFACE.load(Ordering::SeqCst),
         SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
         SAVE_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_SYSTEM_ROW_ACTIVATION_SUPPRESSIONS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_DUPLICATE_UNDERLYING_ACTIVATION_SUPPRESSIONS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_COALESCES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_REJECTIONS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_LAST_SOURCE.load(Ordering::SeqCst),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_LAST_OWNER.load(Ordering::SeqCst)
+        ),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_LAST_SYSTEM.load(Ordering::SeqCst)
+        ),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_LAST_ACTION.load(Ordering::SeqCst)
+        ),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_OPEN_PREFLIGHT_LAST_VTABLE.load(Ordering::SeqCst)
+        ),
         SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_PICK_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_PICK_REJECT_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_RESUBMIT_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_CANCEL_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
+        SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_PENDING_DIALOG.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_PENDING_GENERATION.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_REQUESTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_COALESCES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_NATIVE_CLOSES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_OWNER_CLEARED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_GENERATION.load(Ordering::SeqCst),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_REFRESH_LAST_OLD_OWNER.load(Ordering::SeqCst)
+        ),
+        er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_ATTEMPTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_SUCCESSES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_RESUBMIT_STAGE_FAILURES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_RESUBMIT_SUBMIT_ATTEMPTS.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"oracle_save_picker_refresh_owner_zero_no_closes\": {},\n  \"oracle_save_picker_refresh_no_live_token_defers\": {},\n  \"oracle_save_picker_path_editor_return_pending_dialog\": {},\n  \"oracle_save_picker_path_editor_return_pending_generation\": {},\n  \"oracle_save_picker_path_editor_return_requests\": {},\n  \"oracle_save_picker_path_editor_return_coalesces\": {},\n  \"oracle_save_picker_path_editor_return_no_close_reopens\": {},\n  \"oracle_save_picker_path_editor_return_owner_cleared\": {},\n  \"oracle_save_picker_owner_absent_publications\": {},\n  \"oracle_save_picker_profile_run_source_last\": {},\n  \"oracle_save_picker_profile_run_token_accepts\": {},\n  \"oracle_save_picker_profile_run_token_rejections\": {},\n  \"oracle_save_picker_profile_run_last_job\": {},\n  \"oracle_save_picker_profile_run_last_dialog\": {},\n  \"oracle_save_picker_profile_run_last_vtable\": {},\n  \"oracle_save_picker_profile_run_expected_vtable\": {},\n  \"oracle_save_picker_close_preflight_attempts\": {},\n  \"oracle_save_picker_close_preflight_rejections\": {},\n  \"oracle_save_picker_close_preflight_last_dialog\": {},\n  \"oracle_save_picker_close_preflight_last_current\": {},\n  \"oracle_save_picker_close_preflight_last_vtable\": {},\n  \"oracle_save_picker_close_preflight_last_expected_vtable\": {},\n  \"oracle_save_picker_close_preflight_last_reject_reason\": {},\n  \"oracle_save_picker_close_preflight_last_source\": {},\n",
+        er_telemetry::counters::SAVE_PICKER_REFRESH_OWNER_ZERO_NO_CLOSES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_REFRESH_NO_LIVE_TOKEN_DEFERS.load(Ordering::SeqCst),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_PENDING_DIALOG.load(Ordering::SeqCst)),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_PENDING_GENERATION.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_REQUESTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_COALESCES.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_NO_CLOSE_REOPENS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_RETURN_OWNER_CLEARED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OWNER_ABSENT_PUBLICATIONS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_SOURCE_LAST.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_TOKEN_ACCEPTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_TOKEN_REJECTIONS.load(Ordering::SeqCst),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_LAST_JOB.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_LAST_DIALOG.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_LAST_VTABLE.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_PROFILE_RUN_EXPECTED_VTABLE.load(Ordering::SeqCst)),
+        er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_ATTEMPTS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_REJECTIONS.load(Ordering::SeqCst),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_DIALOG.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_CURRENT.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_VTABLE.load(Ordering::SeqCst)),
+        format_scan_ptr(er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_EXPECTED_VTABLE.load(Ordering::SeqCst)),
+        er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_REJECT_REASON.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_CLOSE_PREFLIGHT_LAST_SOURCE.load(Ordering::SeqCst),
+    ));
+    body.push_str(&format!(
+        "  \"oracle_save_picker_native_removal_boundary_hits\": {},\n  \"oracle_save_picker_native_removal_exact_publications\": {},\n  \"oracle_save_picker_native_removal_deferred\": {},\n  \"oracle_save_picker_native_removal_stale\": {},\n  \"oracle_save_picker_native_removal_foreign\": {},\n  \"oracle_save_picker_native_removal_not_proven\": {},\n  \"oracle_save_picker_native_removal_no_transition\": {},\n  \"oracle_save_picker_native_removal_last_dialog\": {},\n  \"oracle_save_picker_native_removal_last_job\": {},\n  \"oracle_save_picker_native_removal_last_list\": {},\n  \"oracle_save_picker_native_removal_last_owner_generation\": {},\n  \"oracle_save_picker_native_removal_ticket_handoffs\": {},\n  \"oracle_save_picker_native_removal_ticket_retries\": {},\n  \"oracle_save_picker_native_removal_ticket_commits\": {},\n  \"oracle_save_picker_owner_zero_loop_guard_max\": {},\n  \"oracle_save_picker_owner_zero_loop_guard_violations\": {},\n",
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_BOUNDARY_HITS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_EXACT_PUBLICATIONS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_DEFERRED.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_STALE.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_FOREIGN.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_NOT_PROVEN.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_NO_TRANSITION.load(Ordering::SeqCst),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_DIALOG.load(Ordering::SeqCst)
+        ),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_JOB.load(Ordering::SeqCst)
+        ),
+        format_scan_ptr(
+            er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_LIST.load(Ordering::SeqCst)
+        ),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_LAST_OWNER_GENERATION
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_TICKET_HANDOFFS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_TICKET_RETRIES
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_NATIVE_REMOVAL_TICKET_COMMITS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OWNER_ZERO_LOOP_GUARD_MAX.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_OWNER_ZERO_LOOP_GUARD_VIOLATIONS
+            .load(Ordering::SeqCst),
+    ));
+    body.push_str(&format!(
+        "  \"oracle_save_picker_source_accepted_events\": {},\n  \"oracle_save_picker_committed_effects\": {},\n  \"oracle_save_picker_named_rejections\": {},\n  \"oracle_save_picker_unexpected_late_activations\": {},\n  \"oracle_save_picker_update_forwards\": {},\n  \"oracle_save_picker_suppressed_profile_load_originals\": {},\n  \"oracle_save_picker_path_editor_requests\": {},\n  \"oracle_save_picker_path_editor_pending\": {},\n  \"oracle_save_picker_path_editor_submit_attempts\": {},\n  \"oracle_save_picker_path_editor_submit_successes\": {},\n  \"oracle_save_picker_path_editor_submit_failures\": {},\n  \"oracle_save_picker_path_editor_submit_rejections\": {},\n  \"oracle_save_picker_path_editor_queue_ready_calls\": {},\n  \"oracle_save_picker_path_editor_constructor_calls\": {},\n  \"oracle_save_picker_path_editor_native_submit_calls\": {},\n  \"oracle_save_picker_path_editor_submit_lease_active\": {},\n  \"oracle_save_picker_path_editor_reset_deferred\": {},\n  \"oracle_save_picker_path_editor_deferred_close_drains\": {},\n  \"oracle_save_picker_path_editor_deferred_close_cancels\": {},\n  \"oracle_save_picker_path_editor_result_gate_owned_hits\": {},\n  \"oracle_save_picker_path_editor_accept_continuation_owned_hits\": {},\n  \"oracle_save_picker_path_editor_native_accepts\": {},\n  \"oracle_save_picker_path_editor_native_cancels\": {},\n  \"oracle_save_picker_path_editor_stale_results\": {},\n  \"oracle_save_picker_path_editor_validation_rejections\": {},\n  \"oracle_save_picker_path_editor_applied_directories\": {},\n  \"oracle_save_picker_path_editor_rebuilds_scheduled\": {},\n  \"oracle_save_picker_path_editor_lifecycle_invariant_violations\": {},\n  \"oracle_save_picker_path_editor_generation\": {},\n  \"oracle_save_picker_path_editor_last_status\": {},\n  \"oracle_save_picker_scrollbar_dispatch_calls\": {},\n  \"oracle_save_picker_scrollbar_dispatch_skips\": {},\n  \"oracle_save_picker_scrollbar_last_reject_reason\": {},\n  \"oracle_save_picker_scrollbar_last_vtable\": {},\n  \"oracle_save_picker_scrollbar_last_target\": {},\n  \"oracle_save_picker_ordinary_effects\": {},\n  \"oracle_save_picker_drive_selections\": {},\n  \"oracle_save_picker_activation_terminals\": {},\n  \"oracle_save_picker_activation_invariant_violations\": {},\n  \"oracle_save_picker_activation_ring\": {},\n",
+        SAVE_PICKER_SOURCE_ACCEPTED_EVENTS.load(Ordering::SeqCst),
+        SAVE_PICKER_COMMITTED_EFFECTS.load(Ordering::SeqCst),
+        SAVE_PICKER_NAMED_REJECTIONS.load(Ordering::SeqCst),
+        SAVE_PICKER_UNEXPECTED_LATE_ACTIVATIONS.load(Ordering::SeqCst),
+        SAVE_PICKER_UPDATE_FORWARDS.load(Ordering::SeqCst),
+        SAVE_PICKER_SUPPRESSED_PROFILE_LOAD_ORIGINALS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_REQUESTS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_PENDING.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_SUBMIT_ATTEMPTS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_SUBMIT_SUCCESSES.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_SUBMIT_FAILURES.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_SUBMIT_REJECTIONS.load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_QUEUE_READY_CALLS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_CONSTRUCTOR_CALLS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SAVE_PICKER_PATH_EDITOR_NATIVE_SUBMIT_CALLS
+            .load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_SUBMIT_LEASE_ACTIVE.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_RESET_DEFERRED.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_DRAINS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_CANCELS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_RESULT_GATE_OWNED_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_ACCEPT_CONTINUATION_OWNED_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_NATIVE_ACCEPTS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_NATIVE_CANCELS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_STALE_RESULTS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_VALIDATION_REJECTIONS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_APPLIED_DIRECTORIES.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_REBUILDS_SCHEDULED.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_LIFECYCLE_INVARIANT_VIOLATIONS.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_GENERATION.load(Ordering::SeqCst),
+        SAVE_PICKER_PATH_EDITOR_LAST_STATUS.load(Ordering::SeqCst),
+        SAVE_PICKER_SCROLLBAR_DISPATCH_CALLS.load(Ordering::SeqCst),
+        SAVE_PICKER_SCROLLBAR_DISPATCH_SKIPS.load(Ordering::SeqCst),
+        SAVE_PICKER_SCROLLBAR_LAST_REJECT_REASON.load(Ordering::SeqCst),
+        SAVE_PICKER_SCROLLBAR_LAST_VTABLE.load(Ordering::SeqCst),
+        SAVE_PICKER_SCROLLBAR_LAST_TARGET.load(Ordering::SeqCst),
+        SAVE_PICKER_ORDINARY_EFFECTS.load(Ordering::SeqCst),
+        SAVE_PICKER_DRIVE_SELECTIONS.load(Ordering::SeqCst),
+        SAVE_PICKER_ACTIVATION_TERMINALS.load(Ordering::SeqCst),
+        SAVE_PICKER_ACTIVATION_INVARIANT_VIOLATIONS.load(Ordering::SeqCst),
+        save_picker_activation_ring_json(),
     ));
     // OS file-dialog surface. Only meaningful while `oracle_save_picker_surface` is 1, and that is
     // the point: with the default key they are all 0, which IS the non-regression proof for the
@@ -664,6 +801,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_profile_slot_cache_preview_reloads\": {},\n  \"oracle_profile_slot_cache_invalidations\": {},\n",
         er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
         er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"oracle_system_quit_save_swap_poll_parse_attempts\": {},\n  \"oracle_system_quit_save_swap_poll_parse_failures\": {},\n  \"oracle_system_quit_save_swap_poll_zero_slots\": {},\n  \"oracle_system_quit_save_swap_poll_rejections\": {},\n  \"oracle_system_quit_save_swap_poll_rejection_last_reason\": {},\n  \"oracle_system_quit_save_swap_poll_rejection_suppressed\": {},\n  \"oracle_system_quit_save_swap_poll_restore_failures\": {},\n",
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_ATTEMPTS
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_PARSE_FAILURE_COUNT
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_ZERO_SLOT_COUNT
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_COUNT
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_LAST_REASON
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_REJECTION_SUPPRESSED_COUNT
+            .load(Ordering::SeqCst),
+        er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_RESTORE_FAILURE_COUNT
+            .load(Ordering::SeqCst)
     ));
     // Save-file rows showing when the file was last written in place of the native playtime.
     // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`

@@ -51,6 +51,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // Save Game confirm is read from the game's own `MenuJobResult` instead of guessed from
     // dialog fields (the 2026-07-28 defect where a fresh box resolved itself to No).
     install_menu_job_emit_result_hook();
+    install_profile_load_menu_window_update_hook();
     install_system_quit_profile_load_activate_hook();
     install_system_quit_profile_load_confirmed_hook();
     install_system_quit_profile_load_job_run_hook();

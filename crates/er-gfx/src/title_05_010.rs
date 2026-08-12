@@ -49,28 +49,18 @@ pub const CHAR_STATS_FIELD_NAME: &str = "ErCharStats";
 /// pair for every possible mounted drive instead of baking the current machine's drive count into the
 /// asset. Runtime visibility shows only the populated prefix.
 pub const DRIVE_CELL_CAPACITY: usize = 26;
-/// Authored row-local x of the first drive button's text field.
-pub const DRIVE_CELL_FIRST_X_PX: f32 = -420.0;
-/// Authored row-local distance between adjacent drive buttons.
-pub const DRIVE_CELL_PITCH_PX: f32 = 32.0;
-/// Authored text/button dimensions. Native button/cursor art scales to these bounds.
-pub const DRIVE_CELL_WIDTH_PX: f32 = 34.0;
-pub const DRIVE_CELL_HEIGHT_PX: f32 = 39.0;
-/// Raw visible bounds of the native normal-button frame reused by every drive button.
-pub const DRIVE_BUTTON_NATIVE_ART_WIDTH_PX: f32 = 39.0;
-pub const DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX: f32 = 37.5;
+/// Raw visible bounds of the native normal-button frame reused by every drive button. Character 54
+/// contains external image 40 (`MENU_FL_SelectWaku`) at `(-27,-27)` with a `56x54` target; the
+/// smaller vector shape inside it is not the sprite's visible bound.
+pub const DRIVE_BUTTON_NATIVE_ART_LEFT_PX: f32 = -27.0;
+pub const DRIVE_BUTTON_NATIVE_ART_TOP_PX: f32 = -27.0;
+pub const DRIVE_BUTTON_NATIVE_ART_WIDTH_PX: f32 = 56.0;
+pub const DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX: f32 = 54.0;
 /// Full current-directory control occupying the drive row's reclaimed right side.
 pub const CURRENT_PATH_FIELD_NAME: &str = "CurrentPath";
 pub const CURRENT_PATH_FIELD_NAME_NUL: &str = "CurrentPath\0";
 pub const CURRENT_PATH_BUTTON_NAME: &str = "CurrentPathButton";
 pub const CURRENT_PATH_BUTTON_NAME_NUL: &str = "CurrentPathButton\0";
-pub const CURRENT_PATH_X_PX: f32 = -180.0;
-pub const CURRENT_PATH_Y_PX: f32 = -18.0;
-pub const CURRENT_PATH_WIDTH_PX: f32 = 700.0;
-pub const CURRENT_PATH_HEIGHT_PX: f32 = 39.0;
-/// The button/text field is centered on the 48px row when its 40px box starts here: the edit-text
-/// bounds themselves begin at -2px, so `-18 + (-2..38)` centers at zero.
-pub const DRIVE_CELL_Y_PX: f32 = -18.0;
 
 macro_rules! indexed_names {
     ($prefix:literal, $suffix:literal) => {
@@ -149,9 +139,9 @@ pub const VANILLA_LEN: usize = 14388;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0xfc22_4f43_7a73_13f3;
 /// Length of the compact stats-panel output for the known vanilla input.
-pub const EDITED_LEN: usize = 17618;
+pub const EDITED_LEN: usize = 17780;
 /// [`fnv1a64`] of the compact stats-panel output for the known vanilla input.
-pub const EDITED_FNV1A64: u64 = 0x80a6_1976_bdfd_4359;
+pub const EDITED_FNV1A64: u64 = 0xd273_f5bf_d2de_87ea;
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the generated asset).

@@ -99,11 +99,13 @@ pub(crate) fn sq_repro_load_switch_mode() -> bool {
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
 /// signals so the state machine re-detects them fresh for this switch (they hold stale pointers from
 /// the prior switch otherwise). Called before OPEN_MENU for every switch.
-pub(crate) fn sq_repro_begin_switch() {
+pub(crate) fn sq_repro_begin_switch() -> bool {
+    if !unsafe { system_quit_reset_profile_select_state("sq-repro-begin-switch") } {
+        return false;
+    }
     SQ_REPRO_CONFIRM_BASELINE.store(sq_repro_confirm_count(), Ordering::SeqCst);
     SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
     SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
     // TO_PROFILE one-shot latches: reset PER SWITCH so switch #2+ re-builds the Quit-tab pane, re-captures
@@ -166,6 +168,7 @@ pub(crate) fn sq_repro_begin_switch() {
         gx_cmd_queue_hist_top(8),
         gx_cmd_queue_bucket_summary()
     ));
+    true
 }
 
 /// KEYBOARD MIRROR (native Windows): map a fabricated gamepad wButtons value to the equivalent DInput
@@ -309,7 +312,9 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     // Diagnostic mode: 0 switches, no load. Nothing to drive without the menu-nav.
                     sq_repro_transition(SQ_REPRO_STATE_DONE);
                 } else if let Ok(base) = game_rva(0) {
-                    sq_repro_begin_switch();
+                    if !sq_repro_begin_switch() {
+                        return;
+                    }
                     let slot = sq_repro_target_slot();
                     unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
                     append_autoload_debug(format_args!(
@@ -421,7 +426,9 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 }
                 // More loads to drive: arm the NEXT switch the SAME menu-free programmatic way (no menu-nav,
                 // no focus-steal) instead of OPEN_MENU. bd CORRECT-disable-custom-onclick.
-                sq_repro_begin_switch();
+                if !sq_repro_begin_switch() {
+                    return;
+                }
                 if let Ok(base) = game_rva(0) {
                     let slot = sq_repro_target_slot();
                     unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
@@ -461,7 +468,9 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     ));
                     sq_repro_transition(SQ_REPRO_STATE_DONE);
                 } else {
-                    sq_repro_begin_switch();
+                    if !sq_repro_begin_switch() {
+                        return;
+                    }
                     if let Ok(base) = game_rva(0) {
                         let slot = sq_repro_target_slot();
                         unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
@@ -1150,7 +1159,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // next quit-menu open repopulate them fresh via the MenuWindowJob::Run hook, so the hide
                 // + input behave identically to the first switch. (Manual B-to-back had the same effect
                 // by forcing a fresh window; this makes it automatic.)
-                unsafe {
+                let _ = unsafe {
                     system_quit_reset_profile_select_state("post-switch-commit-menu-hygiene")
                 };
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);

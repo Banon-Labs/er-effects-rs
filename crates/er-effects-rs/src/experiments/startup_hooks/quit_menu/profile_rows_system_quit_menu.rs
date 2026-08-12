@@ -868,10 +868,21 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     ));
 }
 
-pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
-    save_picker_reset(source);
+unsafe fn system_quit_reset_profile_select_state_under_claimed(
+    source: &str,
+    reset_lease: &PathEditorResetLeaseGuard,
+    reset_guard: &PickerResetTransactionGuard<'_>,
+) {
+    save_picker_reset_under_claimed_transaction(source, reset_lease, reset_guard);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
-    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    let cancelled_close = match save_picker_path_editor_publish_owner(0, 0) {
+        PickerOwnerPublicationDisposition::Published(publication) => publication.cancelled_close,
+        PickerOwnerPublicationDisposition::Deferred
+        | PickerOwnerPublicationDisposition::Stale { .. } => None,
+    };
+    if cancelled_close.is_some() {
+        SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_CANCELS.fetch_add(1, Ordering::SeqCst);
+    }
     // The 05_010 rows are going away, so the live-layout editor must stop believing it can still
     // write to their text fields. Only the profile-row surface is dropped: the title-load current
     // row is owned by the title screen and outlives this teardown.
@@ -887,6 +898,40 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
     append_autoload_debug(format_args!(
         "system-quit-dup: reset ProfileSelect hide state source={source}"
     ));
+}
+
+pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) -> bool {
+    if !save_picker_reset_source_is_applicable(source) {
+        return false;
+    }
+    match begin_picker_state_reset_transaction(source) {
+        PickerResetBegin::Claimed(reset_guard) => {
+            unsafe { system_quit_apply_claimed_profile_reset(source, &reset_guard) };
+            true
+        }
+        PickerResetBegin::Deferred { newly_recorded } => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: profile reset deferred source={source} newly_recorded={newly_recorded}"
+            ));
+            false
+        }
+        PickerResetBegin::Coalesced => false,
+    }
+}
+
+pub(crate) unsafe fn system_quit_apply_claimed_profile_reset(
+    source: &str,
+    reset_guard: &PickerResetTransactionGuard<'_>,
+) {
+    if !save_picker_reset_source_is_applicable(source) {
+        return;
+    }
+    let Some(reset_lease) = save_picker_path_editor_begin_reset(source) else {
+        return;
+    };
+    unsafe {
+        system_quit_reset_profile_select_state_under_claimed(source, &reset_lease, reset_guard)
+    };
 }
 
 /// Clear a stale `CSMenuMan->disableSaveMenu` (BOOL @ +0x13c) so the native quit-save can run during a
@@ -1123,22 +1168,18 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
     true
 }
 
-pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
-    if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
-        unsafe { system_quit_reset_profile_select_state(source) };
-        return;
-    }
+unsafe fn system_quit_restore_real_system_windows_claimed(
+    base: usize,
+    source: &str,
+    reset_lease: &PathEditorResetLeaseGuard,
+    reset_guard: &PickerResetTransactionGuard<'_>,
+) {
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-        // Keep the native quit-save unblocked every frame the switch is active. On a 2nd in-process switch a
-        // stale CSMenuMan->disableSaveMenu aborts the quit-save so bc4 freezes at 1 and the world never tears
-        // down; clearing it once at the REQUEST can be re-set before the save orchestrator polls, so we also
-        // clear it here on the per-frame switch-active path (no-op once it is 0). See RE note on the offset.
+    if base != 0 && phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
         unsafe { system_quit_clear_disable_save_menu(base, source) };
-        // Diagnostic: name which of the save orchestrator's three gates is freezing bc4 at 1 on switch 2.
         unsafe { system_quit_log_save_gates(base, source) };
         let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
         let submitted =
@@ -1148,17 +1189,23 @@ pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source
             "system-quit-dup: skip restore real windows after quickload handoff source={source} phase={phase} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} direct_chain_submitted={submitted}; leaving old System UI hidden during native transition"
         ));
         if submitted {
+            unsafe {
+                system_quit_reset_profile_select_state_under_claimed(
+                    source,
+                    reset_lease,
+                    reset_guard,
+                )
+            };
             SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
-            unsafe { system_quit_reset_profile_select_state(source) };
         }
         return;
     }
-    let restored_top = if top != 0 {
+    let restored_top = if base != 0 && top != 0 {
         unsafe { system_quit_menu_window_set_visible_and_flags(base, top, true, source) }
     } else {
         false
     };
-    let restored_option = if option != 0 && option != top {
+    let restored_option = if base != 0 && option != 0 && option != top {
         let restored =
             unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
         unsafe {
@@ -1174,17 +1221,78 @@ pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source
         false
     };
     append_autoload_debug(format_args!(
-        "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
+        "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option} base=0x{base:x}"
     ));
     unsafe { system_quit_save_swap_restore_profile_summary(source) };
-    unsafe { system_quit_reset_profile_select_state(source) };
+    unsafe {
+        system_quit_reset_profile_select_state_under_claimed(source, reset_lease, reset_guard)
+    };
     if restored_top || restored_option {
         SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
     }
 }
 
+pub(crate) unsafe fn system_quit_apply_claimed_restore_real_system_windows(
+    base: usize,
+    source: &str,
+    reset_guard: &PickerResetTransactionGuard<'_>,
+) {
+    if !save_picker_reset_source_is_applicable(source) {
+        return;
+    }
+    let Some(reset_lease) = save_picker_path_editor_begin_reset(source) else {
+        return;
+    };
+    unsafe {
+        system_quit_restore_real_system_windows_claimed(base, source, &reset_lease, reset_guard)
+    };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SystemQuitRestoreResetDisposition {
+    Applied,
+    Deferred { newly_recorded: bool },
+    Coalesced,
+}
+
+pub(crate) fn execute_system_quit_restore_reset_with<'a>(
+    begin: impl FnOnce() -> PickerResetBegin<'a>,
+    apply_claimed: impl FnOnce(&PickerResetTransactionGuard<'a>),
+) -> SystemQuitRestoreResetDisposition {
+    match begin() {
+        PickerResetBegin::Claimed(reset_guard) => {
+            apply_claimed(&reset_guard);
+            SystemQuitRestoreResetDisposition::Applied
+        }
+        PickerResetBegin::Deferred { newly_recorded } => {
+            SystemQuitRestoreResetDisposition::Deferred { newly_recorded }
+        }
+        PickerResetBegin::Coalesced => SystemQuitRestoreResetDisposition::Coalesced,
+    }
+}
+
+pub(crate) unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
+    if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
+        let _ = unsafe { system_quit_reset_profile_select_state(source) };
+        return;
+    }
+    if !save_picker_reset_source_is_applicable(source) {
+        return;
+    }
+    let disposition = execute_system_quit_restore_reset_with(
+        || begin_picker_restore_reset_transaction(base, source),
+        |reset_guard| unsafe {
+            system_quit_apply_claimed_restore_real_system_windows(base, source, reset_guard)
+        },
+    );
+    if let SystemQuitRestoreResetDisposition::Deferred { newly_recorded } = disposition {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: restore/reset deferred with zero mutation source={source} base=0x{base:x} newly_recorded={newly_recorded}"
+        ));
+    }
+}
+
 pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
     if !hidden {
@@ -1211,12 +1319,8 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
                 };
             } else {
                 unsafe {
-                    system_quit_save_swap_restore_profile_summary(
-                        "profile-select-closed-without-load-no-base",
-                    )
-                };
-                unsafe {
-                    system_quit_reset_profile_select_state(
+                    system_quit_restore_real_system_windows(
+                        0,
                         "profile-select-closed-without-load-no-base",
                     )
                 };
@@ -1231,22 +1335,35 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
     if list == 0 {
         return;
     }
-    let count = unsafe { safe_read_usize(list + 0x48) }.unwrap_or(0);
-    let still_present = (0..count.min(8)).any(|idx| {
-        unsafe { safe_read_usize(system_quit_list_slot_addr(list, idx)) }.unwrap_or(NULL) == profile
-    });
-    if still_present {
-        return;
+    let presence = picker_owner_list_presence_with(
+        profile,
+        unsafe { safe_read_usize(list + 0x48) },
+        |idx| unsafe { safe_read_usize(system_quit_list_slot_addr(list, idx)) },
+    );
+    match presence {
+        PickerOwnerListPresence::Ambiguous | PickerOwnerListPresence::Present => return,
+        PickerOwnerListPresence::Absent => {}
     }
-    if save_picker_resubmit_pending() {
-        // Mid picker navigation: the window left the list on its way to a menu-pump-owned
-        // resubmit; restoring from this game-task tick would clobber the staged rows.
+    let path_editor_return_ticket = save_picker_path_editor_ticket_for_absent_parent(profile);
+    if path_editor_return_ticket.is_some() || save_picker_owner_transition_pending_for(profile) {
+        // Exact list absence is native ownership evidence. Publish zero through the same
+        // generation-aware path-editor owner coordinator, but preserve picker model/reopen state;
+        // the next menu-pump post performs owner-zero staging and fresh submit. Queue a path-editor
+        // return only after the compare-publish succeeds, so a concurrent newer owner cannot
+        // inherit a stale generation's return request.
+        if save_picker_publish_absent_profile_owner(profile)
+            && let Some(ticket) = path_editor_return_ticket
+        {
+            let _ = save_picker_arm_path_editor_return_reopen(ticket, "owner-list-absence");
+        }
         return;
     }
     if let Ok(base) = game_module_base() {
         unsafe { system_quit_restore_real_system_windows(base, "restore-real-profile-left-list") };
     } else {
-        unsafe { system_quit_reset_profile_select_state("restore-real-profile-left-list-no-base") };
+        let _ = unsafe {
+            system_quit_reset_profile_select_state("restore-real-profile-left-list-no-base")
+        };
     }
 }
 
@@ -1686,8 +1803,22 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
+    let mut profile_run_facts: Option<(usize, usize)> = None;
+    let mut destination_parent_token: Option<PickerDestinationParentToken> = None;
     if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
         crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    }
+    if filename == "02_990_TextInput" {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            // This is the final native-lifetime observation for the path editor. Terminal state
+            // retires lifecycle ownership here, before any later picker-pump work can retain the
+            // SoftwareKeyboard session after the 02_990 proxy begins teardown.
+            save_picker_note_path_editor_window_state(owner, state);
+        }
     }
     if matches!(
         filename.as_str(),
@@ -1721,10 +1852,40 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 // window's MenuWindowJob; nothing else in the process is that direct about it.
                 er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
                     .fetch_add(1, Ordering::SeqCst);
-                SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
+                let (previous, cancelled_close) =
+                    match save_picker_path_editor_publish_owner(owner, job) {
+                        PickerOwnerPublicationDisposition::Published(publication) => {
+                            (publication.previous, publication.cancelled_close)
+                        }
+                        PickerOwnerPublicationDisposition::Deferred => (
+                            SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst),
+                            None,
+                        ),
+                        PickerOwnerPublicationDisposition::Stale { actual } => (actual, None),
+                    };
+                if let Some(ticket) = cancelled_close {
+                    SAVE_PICKER_PATH_EDITOR_DEFERRED_CLOSE_CANCELS.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "save-picker-path: observed owner changed to 0x{owner:x}; cancelled stale deferred close dialog=0x{:x} generation={} without native dereference before publishing the new owner",
+                        ticket.dialog, ticket.generation
+                    ));
+                }
+                previous
             }
             _ => 0,
         };
+        if matches!(
+            filename.as_str(),
+            "02_040_OptionSetting" | "02_041_OptionSetting_Trial"
+        ) {
+            destination_parent_token = observe_picker_destination_parent_with(
+                true,
+                job,
+                owner,
+                owner_vt,
+                SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst),
+            );
+        }
         let log_idx = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT.fetch_add(1, Ordering::SeqCst);
         if log_idx < 64 || filename == "05_010_ProfileSelect" {
             append_autoload_debug(format_args!(
@@ -1744,6 +1905,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             }
         }
         if filename == "05_010_ProfileSelect" {
+            profile_run_facts = Some((owner, owner_vt));
             if let Ok(base) = game_module_base() {
                 if owner == 0 {
                     // Picker navigation/pick closes the window with a queued resubmit; keep the
@@ -1825,26 +1987,87 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // the user just declined: with the OS surface that reopened comdlg32 ~57 ms after every Cancel,
     // forever, with no way out of the flow (bd `er-effects-rs-rsxi`). The tick's OpenTimeout could
     // not save it either, because each reopen blocks the whole frame, so the budget never accrued.
-    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
-        let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
-        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
-            SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
-        } else {
-            // The one path that legitimately re-arms. Counted so a run can prove which one it took:
-            // in OS mode this must stay 0, and any positive value is the reopen loop returning.
-            SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
+    // The deferred-close gate owns the ENTIRE picker tick. A deferred submit/reset transaction,
+    // and the same tick that drains/cancels D1, must not open a destination picker, pump/rebuild D1,
+    // or resubmit D2. Only a later NoTicket tick may run these closures.
+    let picker_observation = match profile_run_facts {
+        Some((owner, owner_vtable)) => {
+            save_picker_observe_profile_select_run(true, job, owner, owner_vtable)
         }
-    }
-    // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
-    // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
-    // navigation/pick close (same submit-context rule as the return-title chain below).
-    unsafe { save_picker_menu_pump_path_editor() };
-    unsafe { save_picker_menu_pump_drive_strip_mouse() };
-    unsafe { save_picker_menu_pump_native_scrollbar() };
-    unsafe { save_picker_menu_pump_edge_scroll() };
-    unsafe { save_picker_menu_pump_rebuild() };
-    if save_picker_resubmit_pending() {
-        let _ = unsafe { save_picker_menu_pump_resubmit() };
+        None => save_picker_observe_profile_select_run(false, job, 0, 0),
+    };
+    let picker_outer_authority = if profile_run_facts.is_some() {
+        PickerOuterPostAuthority::Profile(picker_observation)
+    } else if let Some(authority) = save_picker_native_removal_authority()
+        .filter(|authority| save_picker_native_removal_authority_still_current(*authority))
+    {
+        // The exact ProfileSelect Run has already removed its owning window from this job's native
+        // push-target list. That one-shot ticket is the only picker-submit authority a generic
+        // MenuWindow post may inherit; arbitrary generic resources remain inert.
+        PickerOuterPostAuthority::NativeRemoval(authority)
+    } else if let Some(token) = destination_parent_token {
+        PickerOuterPostAuthority::DestinationParent(token)
+    } else {
+        PickerOuterPostAuthority::Other
+    };
+    let initial_open_pending = SAVE_PICKER_OPEN_SLOTS_PENDING.load(Ordering::SeqCst) != 0;
+    let reopen_pending = save_picker_resubmit_pending() && !initial_open_pending;
+    let picker_outer_permissions = picker_outer_post_permissions_with(
+        picker_outer_authority,
+        SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0,
+        initial_open_pending,
+        reopen_pending,
+    );
+    let native_maintenance_observation = picker_outer_permissions
+        .run_live_profile(PickerProfileRunObservation::Live)
+        .unwrap_or(PickerProfileRunObservation::OtherResource);
+    let picker_gate = er_save_picker::run_picker_tick_after_close_gate(
+        || unsafe { save_picker_retry_deferred_native_close(picker_observation) },
+        || {
+            let _ = picker_outer_permissions.run_destination(|| {
+                if !picker_outer_authority_still_current(picker_outer_authority) {
+                    return;
+                }
+                let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+                if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged()
+                {
+                    SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+                } else {
+                    // The one path that legitimately re-arms. Counted so a run can prove which one it took:
+                    // in OS mode this must stay 0, and any positive value is the reopen loop returning.
+                    SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+        },
+        || {
+            // Self-heal a picker whose window died without any removal boundary (native Escape is
+            // the minimal repro). Left alone, the latched mode suppresses EVERY System row before
+            // the open preflight can run, so the quit menu stops responding entirely. Pointer-free
+            // and fail-closed, so it may run from any MenuWindow post.
+            let _ = unsafe { release_orphaned_picker_state() };
+            // Path-editor state is pointer-free and may advance from any MenuWindow post. Every
+            // native ProfileLoad maintenance call additionally requires this post's exact live
+            // 05_010 owner token; generic jobs cannot dereference the published dialog.
+            pump_picker_native_maintenance_with(
+                native_maintenance_observation,
+                || unsafe { save_picker_menu_pump_path_editor_pointer_free() },
+                |token| unsafe { save_picker_menu_pump_path_editor_native_submit(token) },
+                |token| unsafe { save_picker_menu_pump_drive_strip_mouse(token) },
+                |token| unsafe { save_picker_menu_pump_native_scrollbar(token) },
+                |token| unsafe { save_picker_menu_pump_edge_scroll(token) },
+            );
+        },
+        || unsafe { save_picker_menu_pump_refresh(picker_observation) },
+        || {
+            let _ = picker_outer_permissions.run_picker_submit(|| {
+                if picker_outer_authority_still_current(picker_outer_authority) {
+                    let _ = unsafe { save_picker_menu_pump_resubmit(picker_outer_authority) };
+                }
+            });
+        },
+    );
+    if picker_gate != er_save_picker::PathEditorCloseRetryGate::NoTicket {
+        return;
     }
     // MENU-PUMP-OWNED return-title submit. This hook IS the game's menu pump executing a
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
