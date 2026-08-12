@@ -19,7 +19,8 @@ use er_gfx::title_05_010::{
     COMPACT_VISIBLE_ROW_COUNT, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
     DRIVE_BUTTON_FIELD_NAMES, DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX,
     DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX, EDITED_FNV1A64, EDITED_LEN,
-    STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
+    ROW_HIT_AREA_NAME, STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN,
+    is_known_vanilla, stats_panel,
 };
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
@@ -1290,10 +1291,15 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             _ => None,
         })
         .expect("edited movie keeps row backing shape 53 bounds");
+    // Depth 1 is the vanilla full-row backing. It is selected by DEPTH, not by "the first char-54
+    // placement": char 54 is reused by every `DriveButton_*`, by `CurrentPathButton`, and by the
+    // invisible `HitArea`, so a character-id search would resolve whichever one happens to be
+    // serialized first.
     let (backing, backing_name) = row
         .iter()
         .find_map(|t| match t {
             Tag::PlaceObject2 {
+                depth: 1,
                 character_id: Some(54),
                 matrix: Some(m),
                 name,
@@ -1301,7 +1307,7 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             } => Some((m, name.as_deref())),
             _ => None,
         })
-        .expect("row template places row backing char 54");
+        .expect("row template places row backing char 54 at depth 1");
     assert_eq!(
         backing_name,
         Some("Backing"),
@@ -1425,6 +1431,245 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             "CursorBody should keep the shared 54px button art at the same height as Backing"
         );
     }
+}
+
+/// Axis-aligned scale+translate of a placement, in the units the AABB test uses.
+fn placement_transform(matrix: Option<&Matrix>) -> (f64, f64, f64, f64) {
+    let Some(m) = matrix else {
+        return (1.0, 1.0, 0.0, 0.0);
+    };
+    assert!(
+        !m.has_rotate || (m.rotate_skew0 == 0 && m.rotate_skew1 == 0),
+        "the row hit-box chain must stay axis-aligned or this comparison is meaningless: {m:?}"
+    );
+    let (sx, sy) = if m.has_scale {
+        (
+            f64::from(m.scale_x) / f64::from(SCALE_ONE),
+            f64::from(m.scale_y) / f64::from(SCALE_ONE),
+        )
+    } else {
+        (1.0, 1.0)
+    };
+    (sx, sy, f64::from(m.translate_x), f64::from(m.translate_y))
+}
+
+/// Bounds of character `id` in its OWN coordinate space, in twips -- what the engine's
+/// `GetBounds` (vtbl `+0x1f0`) hands the row hit test before the inverse world transform.
+/// Shapes contribute their `shape_bounds`, GFx external images (tag 1009) their target rect, and
+/// a sprite the union of its children under their placement matrices.
+fn character_bounds(movie: &Movie, id: u16) -> (f64, f64, f64, f64) {
+    for tag in &movie.tags {
+        match tag {
+            Tag::DefineShape {
+                shape_id,
+                shape_bounds,
+                ..
+            } if *shape_id == id => {
+                return (
+                    f64::from(shape_bounds.x_min),
+                    f64::from(shape_bounds.x_max),
+                    f64::from(shape_bounds.y_min),
+                    f64::from(shape_bounds.y_max),
+                );
+            }
+            Tag::DefineEditText {
+                character_id,
+                bounds,
+                ..
+            } if *character_id == id => {
+                return (
+                    f64::from(bounds.x_min),
+                    f64::from(bounds.x_max),
+                    f64::from(bounds.y_min),
+                    f64::from(bounds.y_max),
+                );
+            }
+            // GFX_DefineExternalImage2: u32 characterId, u16 format, u16 targetW, u16 targetH.
+            Tag::Unknown {
+                code: 1009, raw, ..
+            } if raw.len() >= 10
+                && u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) == u32::from(id) =>
+            {
+                let w = f64::from(u16::from_le_bytes([raw[6], raw[7]])) * 20.0;
+                let h = f64::from(u16::from_le_bytes([raw[8], raw[9]])) * 20.0;
+                return (0.0, w, 0.0, h);
+            }
+            Tag::DefineSprite {
+                id: sprite, tags, ..
+            } if *sprite == id => {
+                let mut union: Option<(f64, f64, f64, f64)> = None;
+                for child in tags {
+                    let (child_id, matrix) = match child {
+                        Tag::PlaceObject2 {
+                            character_id: Some(c),
+                            matrix,
+                            ..
+                        }
+                        | Tag::PlaceObject3 {
+                            character_id: Some(c),
+                            matrix,
+                            ..
+                        } => (*c, matrix.as_ref()),
+                        _ => continue,
+                    };
+                    let b = character_bounds(movie, child_id);
+                    let (sx, sy, tx, ty) = placement_transform(matrix);
+                    let placed = (b.0 * sx + tx, b.1 * sx + tx, b.2 * sy + ty, b.3 * sy + ty);
+                    union = Some(match union {
+                        None => placed,
+                        Some(u) => (
+                            u.0.min(placed.0),
+                            u.1.max(placed.1),
+                            u.2.min(placed.2),
+                            u.3.max(placed.3),
+                        ),
+                    });
+                }
+                return union.unwrap_or_else(|| panic!("sprite {id} places no character"));
+            }
+            _ => {}
+        }
+    }
+    panic!("no definition for character {id}");
+}
+
+/// Row-space AABB of a named row child, resolved the way the native hit test resolves it.
+fn row_child_hit_box(movie: &Movie, name: &str) -> (f64, f64, f64, f64) {
+    let row = row_template(movie);
+    let (character_id, matrix) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(c),
+                matrix,
+                name: Some(n),
+                ..
+            } if n == name => Some((*c, matrix.as_ref())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("row template places {name}"));
+    let b = character_bounds(movie, character_id);
+    let (sx, sy, tx, ty) = placement_transform(matrix);
+    (b.0 * sx + tx, b.1 * sx + tx, b.2 * sy + ty, b.3 * sy + ty)
+}
+
+/// THE ROW'S MOUSE TARGET, AND THE PROOF IT DID NOT MOVE FOR ANYONE ELSE.
+///
+/// `GridControl::HandleMouse` -> `FUN_140736c90` asks `FUN_14074b0d0` for each row's hit object,
+/// and that resolver takes the child named `HitArea` first, `Cursor` second, and the cell itself
+/// last; `FUN_140d7ff40` then hit-tests THAT ONE object's bounds (`GetBounds` at vtbl `+0x1f0`,
+/// inverse world transform, AABB, then `PointTestLocal` at `+0x200` with mask 0 -- a bounds test,
+/// no visibility term, which is why an alpha-0 plate is still a valid target). Without a
+/// `HitArea`, the row's mouse target IS `Cursor` -- the sprite the drive-row runtime shrinks onto
+/// the focused sub-control, which is why the drive row was hoverable only where focus already was.
+///
+/// The catch is that sprite 76 is ONE template for every row, including the character-slot views.
+/// So the gate is not "a HitArea exists" but "the hit box is bit-identical to the full-row `Cursor`
+/// it takes over from" -- computed here through both character chains rather than asserted from
+/// the matrices, because `Backing`/char 54 and `CursorBody`/char 73 are different art.
+#[test]
+fn injected_row_hit_area_reproduces_the_full_row_cursor_hit_box_exactly() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let row = row_template(&movie);
+
+    let (hit_depth, hit_character, hit_matrix, hit_color) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                character_id,
+                matrix: Some(matrix),
+                name: Some(name),
+                color_transform,
+                ..
+            } if name == ROW_HIT_AREA_NAME => {
+                Some((*depth, *character_id, matrix, color_transform))
+            }
+            _ => None,
+        })
+        .expect("row template places the full-row HitArea");
+
+    // Never renders. This plate spans every row of a shared template, so a visible one would paint
+    // a solid bar across the whole list rather than merely looking wrong.
+    assert_eq!(
+        hit_color
+            .as_ref()
+            .and_then(|cx| cx.mult)
+            .map(|mult| mult[3]),
+        Some(0),
+        "HitArea alpha multiply must be 0: {hit_color:?}"
+    );
+    // Reuses the row's own backing art at the backing transform, so the hoverable band is the
+    // drawn row.
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    assert_eq!(hit_character, Some(54));
+    assert_eq!(
+        hit_matrix.translate_x,
+        schema_px(layout.row_chrome.hit_area.x)
+    );
+    assert_eq!(
+        hit_matrix.translate_y,
+        schema_px(layout.row_chrome.hit_area.y)
+    );
+    assert_eq!(
+        hit_matrix.scale_x,
+        schema_scale(layout.row_chrome.hit_area.scale_x)
+    );
+    assert_eq!(
+        hit_matrix.scale_y,
+        schema_scale(layout.row_chrome.hit_area.scale_y)
+    );
+
+    // On the visible frame, or the row has no such child at all.
+    let hit_pos = row
+        .iter()
+        .position(
+            |t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == ROW_HIT_AREA_NAME),
+        )
+        .expect("HitArea placement present");
+    let first_show_frame = row
+        .iter()
+        .position(|t| matches!(t, Tag::ShowFrame { .. }))
+        .expect("row template has a visible-frame ShowFrame");
+    assert!(hit_pos < first_show_frame);
+
+    // Only the row backing sits below it.
+    let below: Vec<u16> = row
+        .iter()
+        .filter_map(|t| match t {
+            Tag::PlaceObject2 { depth, .. } | Tag::PlaceObject3 { depth, .. }
+                if *depth < hit_depth =>
+            {
+                Some(*depth)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        below,
+        vec![1],
+        "only the row backing (depth 1) may sit below the hit target: {below:?}"
+    );
+
+    // THE SHARED-ROW GATE: the hit box the engine will now use must be the one it used before.
+    let hit_box = row_child_hit_box(&movie, ROW_HIT_AREA_NAME);
+    let cursor_box = row_child_hit_box(&movie, "Cursor");
+    assert_eq!(
+        hit_box, cursor_box,
+        "HitArea must reproduce the full-row Cursor hit box exactly, or every character-slot row's \
+         mouse target moves: hit={hit_box:?} cursor={cursor_box:?}"
+    );
+    // And that box really is the full visible row, not some collapsed remnant that happens to match.
+    assert!(
+        hit_box.0 <= f64::from(PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX * 20)
+            && hit_box.1 >= f64::from(PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX * 20),
+        "row hit box must span the visible row content area: {hit_box:?}"
+    );
 }
 
 #[test]

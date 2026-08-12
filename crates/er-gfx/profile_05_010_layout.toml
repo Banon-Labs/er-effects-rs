@@ -144,6 +144,15 @@ opacity = 1
 editable = true
 source = "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art"
 
+[row_chrome.hit_area]
+x = -17.3
+y = 0
+scale_x = 20
+scale_y = 1
+opacity = 0
+editable = false
+source = "invisible full-row mouse target: HitArea/char54. GridControl's hit resolver (FUN_14074b0d0) prefers a child named HitArea over Cursor, so the row stays hoverable end to end while the drive-row runtime shrinks Cursor onto the focused sub-control"
+
 [row_chrome.cursor]
 x = -17.3
 y = 0
@@ -165,7 +174,7 @@ source = "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 
 [row_chrome.drive_button]
 x = -2
 y = 0
-scale_x = 0.7352941176470589
+scale_x = 0.991
 scale_y = 1
 opacity = 0.55
 editable = true

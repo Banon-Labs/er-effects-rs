@@ -37,7 +37,10 @@ FIELD_NAMES = [
     "DriveCell_2",
     "CurrentPath",
 ]
-CHROME_NAMES = ["backing", "cursor", "cursor_body", "drive_button", "path_button"]
+# `hit_area` is the row's invisible mouse target, not visual chrome: it is baked alpha-0 and the
+# Rust schema validator rejects any other opacity. It is listed here so the editor round-trips the
+# section instead of dropping it (or raising KeyError on load).
+CHROME_NAMES = ["backing", "hit_area", "cursor", "cursor_body", "drive_button", "path_button"]
 MODES = ["load_character", "save_picker", "drive_row"]
 MAX_TEXT_FIELD_WIDTH_PX = 1500
 MAX_TEXT_FIELD_FONT_HEIGHT_PX = 80
@@ -611,7 +614,7 @@ async function load(){ const r=await fetch('/schema',{cache:'no-store'}); if(!r.
 async function watchSchema(){ try { if(document.getElementById('watchSchema').checked && Date.now()>=schemaWatchSuppressedUntil){ const meta=await schemaMeta(); const stamp=Number(meta.mtime_ns||0); if(lastSchemaMtimeNs && stamp!=lastSchemaMtimeNs){ const r=await fetch('/schema',{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); data=await r.json(); lastSchemaMtimeNs=stamp; renderTree(); renderEditor(); draw(); document.getElementById('schemaWatch').className='ok'; document.getElementById('schemaWatch').textContent='external TOML edit loaded; runtime control + hot rebuild started'; await postSchema({data,render_mode:renderMode(),selected:payloadSelected(),text_probe:false}); await fetch('/rebuild',{method:'POST'}); poll(); } else if(!lastSchemaMtimeNs) lastSchemaMtimeNs=stamp; } } catch(e){ document.getElementById('schemaWatch').className='bad'; document.getElementById('schemaWatch').textContent='schema watch failed: '+String(e); showError(e); } finally { setTimeout(watchSchema,500); } }
 function showError(err){ const msg=(err&&err.stack)||String(err); document.getElementById('log').textContent='EDITOR JS ERROR\n'+msg; console.error(err); }
 function objectList(){ return [['path_editor','ActivePathEditor'],['clip','EntryNameClip']].concat(fields.map(n=>['field',n]), chromeObjects.map(n=>['chrome',n]), [['list','list']]); }
-function chromeLabel(name){ return ({backing:'normal row backing (Backing/char54)', cursor:'highlight wrapper (Cursor/char75)', cursor_body:'highlight inner body (Cursor/CursorBody/char73)', drive_button:'all drive button frames (DriveButton_*)', path_button:'full-path button frame (CurrentPathButton)'})[name] || name; }
+function chromeLabel(name){ return ({backing:'normal row backing (Backing/char54)', hit_area:'invisible full-row mouse target (HitArea/char54)', cursor:'highlight wrapper (Cursor/char75)', cursor_body:'highlight inner body (Cursor/CursorBody/char73)', drive_button:'all drive button frames (DriveButton_*)', path_button:'full-path button frame (CurrentPathButton)'})[name] || name; }
 function objectLabel(kind,name){ if(kind=='path_editor') return 'ACTIVE DRIVE-PATH EDITOR — 02_990'; if(kind=='clip') return 'PLAYER NAME ONLY — EntryNameClip'; if(kind=='field'&&name=='CurrentPath') return 'READ-ONLY DRIVE PATH LABEL — CurrentPath'; if(kind=='field') return 'text '+name; if(kind=='chrome') return 'chrome '+chromeLabel(name); return 'list'; }
 function renderTree(){ const t=document.getElementById('tree'); t.innerHTML=''; for(const [kind,name] of objectList()){ const b=document.createElement('button'); b.className=(selected.kind==kind&&selected.name==name)?'sel':''; b.textContent=objectLabel(kind,name); b.onclick=()=>{selected={kind,name};renderTree();renderEditor();draw();}; t.appendChild(b);} }
 function getObj(){ if(selected.kind=='path_editor') return data.path_editor; if(selected.kind=='clip') return data.fields.PlayerName; if(selected.kind=='field') return data.fields[selected.name]; if(selected.kind=='chrome') return data.row_chrome[selected.name]; return data.list; }

@@ -678,6 +678,48 @@ const GRID_CONTROL_SCROLLBAR_OFFSET: usize = 0x1a8;
 const PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET: usize =
     PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + GRID_CONTROL_SCROLLBAR_OFFSET;
 const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
+/// The field `MENU_ITEM_LIST_CURSOR_GETTER_RVA` reads: `FUN_140739e20` is exactly
+/// `*(undefined4 *)(param_1 + 0xd4)`. `GridControl::HandleMouse` writes the same field on a hit.
+const MENU_ITEM_LIST_CURSOR_FIELD_OFFSET: usize = 0xd4;
+/// `FUN_14073bc10(grid, index)` -- the native SELECT-INDEX primitive, not a field poke.
+///
+/// Writing `+0xd4` directly changes which row is selected without any of the side effects that
+/// make the selection VISIBLE: the highlight stays where it was while the logical cursor moves
+/// somewhere else (reported 2026-08-12 as the wheel scrolling rows "but the chrome doesn't travel
+/// with it"). This is the function the game's own mouse handler calls after resolving a hit
+/// (`GridControl::HandleMouse` -> `FUN_140736c90` returns the cell -> `FUN_14073bc10(grid, cell)`),
+/// and it bounds-checks the index, runs `FUN_140739830`, and only then writes `+0xd4`.
+///
+/// Address byte-verified against `eldenring-deobf.bin`: the prologue
+/// `48 89 5c 24 18 89 54 24 10 57 48 83 ec 20 44 8b 99 dc 00 00 00` occurs exactly ONCE in the
+/// image, at `0x14073bc10` (1.16.2 dump VA == deobf VA == runtime VA, shift 0).
+const MENU_ITEM_LIST_SET_CURSOR_RVA: usize = 0x73bc10;
+/// The grid's ensure-visible bases, column and row: `FUN_140739830` measures the target as
+/// `index % cols - [+0xe0]` and `index / cols - [+0x348]`.
+///
+/// `+0x348` IS THE SCROLLBAR POSITION, not a private grid field. The scrollbar control is embedded
+/// at `grid+0x1a8` and `ScrollbarControl::SetPosition` (`FUN_14074db60`) writes `scrollbar+0x1a0`
+/// -- and `0x1a8 + 0x1a0 == 0x348`. The native list scrolls its view BY that position: the game's
+/// design is one item array plus a moving window.
+///
+/// The picker inverts that: it stages only the ten VISIBLE rows and scrolls by re-staging them, so
+/// its cursor indices are always 0..9 while the scrollbar carries a model-space position (row 8 of
+/// 32). Those two spaces disagree, so any native ensure-visible decides the selection is far above
+/// the window and scrolls to it -- resetting the scrollbar to 0, which is the list "re-orienting"
+/// under a hover and one wheel notch travelling two rows (live log 2026-08-12: base 8 while
+/// scroll_offset=8/32, reset to 0 by the select call).
+const GRID_CONTROL_VIEW_COL_BASE_OFFSET: usize = 0xe0;
+const GRID_CONTROL_VIEW_ROW_BASE_OFFSET: usize = 0x348;
+/// Item count, columns and rows-per-view on the grid, read only to explain the index space in the
+/// log (`FUN_14073bc10` bounds-checks the index against exactly these).
+const GRID_CONTROL_ITEM_COUNT_OFFSET: usize = 0xd0;
+const GRID_CONTROL_COLUMNS_OFFSET: usize = 0xd8;
+const GRID_CONTROL_ROWS_OFFSET: usize = 0xdc;
+/// Selection row observed at the END of the previous edge-scroll pump tick, i.e. before the native
+/// list consumed this tick's key. `EDGE_SCROLL_NO_PREV_CURSOR` means "no usable prior sample".
+static SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR: AtomicUsize =
+    AtomicUsize::new(EDGE_SCROLL_NO_PREV_CURSOR);
+const EDGE_SCROLL_NO_PREV_CURSOR: usize = usize::MAX;
 const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
 const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1180,6 +1222,7 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         return;
     }
     crate::experiments::ensure_save_picker_user_nav_input_hooks_installed();
+    install_save_picker_set_cursor_hook();
     let mut down_mask = 0usize;
     if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
         down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
@@ -1188,7 +1231,11 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     // physical key through GetAsyncKeyState as well delivered one action here and a second action
     // when the native-input edge arrived a few milliseconds later (runtime log 2026-08-08).
     let prev_down = SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.swap(down_mask, Ordering::SeqCst);
-    let nav_edges = crate::experiments::save_picker_take_user_nav_edges();
+    // Left/right only: up/down belong to the edge-scroll pump in this same tick.
+    let nav_edges = crate::experiments::save_picker_take_user_nav_edges_for(
+        crate::experiments::SAVE_PICKER_NAV_LEFT_MASK
+            | crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK,
+    );
     let pressed = drive_strip_pressed_mask(prev_down, down_mask, nav_edges);
     let Ok(base) = game_module_base() else {
         return;
@@ -1232,7 +1279,14 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
                     Some((DriveStripPointerHit::CurrentPath, _, _)) => {
                         model.focus_current_path_from_drive_strip()
                     }
-                    _ => model.focus_active_drive_from_drive_strip(),
+                    Some((DriveStripPointerHit::Cell(_), _, _)) => {
+                        model.focus_active_drive_from_drive_strip()
+                    }
+                    // Pointer hit NOTHING on the row. Treating that as a drive-cell hover used to
+                    // yank focus back off CurrentPath on any jog through the 20px dead zone between
+                    // the cell band and the path control -- and since the focused sub-control is
+                    // also the row's native hit area, that re-locked the pointer out of the path.
+                    None => false,
                 })
             };
             if changed {
@@ -1250,6 +1304,18 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         return;
     }
     if !on_drive_row {
+        // LEFT CLICK ON A LIST ROW = ACCEPT. Raising the native Confirm event rather than calling an
+        // activation path directly means the click goes through the SAME chain as every other accept
+        // (keyboard, pad, the native confirm handler and its hooks), so a row cannot behave one way
+        // when clicked and another way when confirmed. Right-click already reached the context menu
+        // natively; this is the missing half of the pair.
+        if pressed & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK != 0 {
+            let raised = unsafe { save_picker_raise_confirm_menu_event() };
+            append_autoload_debug(format_args!(
+                "save-picker: left click accepts native_cursor={cursor} model_row={model_row} confirm_raised={raised}"
+            ));
+            return;
+        }
         append_autoload_debug(format_args!(
             "save-picker-nav: pressed_mask=0x{pressed:x} ignored native_cursor={cursor} model_row={model_row} drive_row={drive_row:?}"
         ));
@@ -1409,13 +1475,261 @@ pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar() {
     }
 }
 
+/// Learned `CSMenuManImp+0x90` event ids for vertical menu movement. `MoveA`(0x00) and `MoveB`(0x45)
+/// are the two ids the vertical-move predicate reads, but which one is UP and which is DOWN is not
+/// recorded anywhere -- so they are learned live, from a tick where exactly one id is set and
+/// exactly one direction is pressed on a device. `MENU_EVENT_ID_UNLEARNED` until then.
+static SAVE_PICKER_MENU_EVENT_DOWN_ID: AtomicUsize = AtomicUsize::new(MENU_EVENT_ID_UNLEARNED);
+static SAVE_PICKER_MENU_EVENT_UP_ID: AtomicUsize = AtomicUsize::new(MENU_EVENT_ID_UNLEARNED);
+const MENU_EVENT_ID_UNLEARNED: usize = usize::MAX;
+
+/// A press deferred at an extreme row, waiting for the native wrap it is about to cause, and how
+/// many pump ticks it may wait. Four ticks is generous for a wrap the list performs on the very
+/// next frame, and short enough that an unredeemed press cannot resurface as a phantom step later.
+static SAVE_PICKER_PENDING_WRAP_MASK: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_PENDING_WRAP_TICKS: AtomicUsize = AtomicUsize::new(0);
+const PENDING_WRAP_MAX_TICKS: usize = 4;
+
+/// Vertical menu events dropped at a listing limit; diagnostic only.
+static SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
+/// Selection moves with no key/pad/wheel behind them, i.e. the pointer; diagnostic only.
+static SAVE_PICKER_POINTER_CURSOR_MOVES: AtomicUsize = AtomicUsize::new(0);
+/// Times the grid scrolled its own view during a select and had to be put back.
+static SAVE_PICKER_GRID_VIEW_RESTORES: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_GRID_GEOMETRY_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+/// The live `CSMenuManImp` keystate bitmap (`+0x90`), one byte per menu event id.
+unsafe fn save_picker_menu_event_keystate() -> Option<*mut u8> {
+    let base = game_module_base().ok()?;
+    let inputmgr = unsafe { *((base + CS_MENU_MAN_GLOBAL_RVA) as *const usize) };
+    (inputmgr != 0).then(|| (inputmgr + INPUTMGR_BITMAP_90_OFFSET) as *mut u8)
+}
+
+/// Learn which vertical event id means DOWN and which means UP, from an unambiguous frame.
+///
+/// Ambiguous frames are skipped rather than guessed: getting this backwards would suppress the
+/// direction that still has somewhere to go, which is worse than not suppressing at all.
+unsafe fn save_picker_learn_vertical_menu_event_ids(down: bool, up: bool) {
+    if down == up
+        || SAVE_PICKER_MENU_EVENT_DOWN_ID.load(Ordering::SeqCst) != MENU_EVENT_ID_UNLEARNED
+    {
+        return;
+    }
+    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
+        return;
+    };
+    let a_set = unsafe { *keystate.add(MENU_EVENT_MOVE_A_00) } & MENU_EVENT_PRESSED_BIT != 0;
+    let b_set = unsafe { *keystate.add(MENU_EVENT_MOVE_B_45) } & MENU_EVENT_PRESSED_BIT != 0;
+    if a_set == b_set {
+        return;
+    }
+    let pressed_id = if a_set {
+        MENU_EVENT_MOVE_A_00
+    } else {
+        MENU_EVENT_MOVE_B_45
+    };
+    let other_id = if a_set {
+        MENU_EVENT_MOVE_B_45
+    } else {
+        MENU_EVENT_MOVE_A_00
+    };
+    let (down_id, up_id) = if down {
+        (pressed_id, other_id)
+    } else {
+        (other_id, pressed_id)
+    };
+    SAVE_PICKER_MENU_EVENT_UP_ID.store(up_id, Ordering::SeqCst);
+    SAVE_PICKER_MENU_EVENT_DOWN_ID.store(down_id, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker: learned vertical menu event ids down=0x{down_id:x} up=0x{up_id:x}"
+    ));
+}
+
+static SAVE_PICKER_SET_CURSOR_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_SET_CURSOR_NEUTRALISED: AtomicUsize = AtomicUsize::new(0);
+
+/// `FUN_14073bc10` detour: neutralise the ensure-visible base for EVERY select on the picker's list.
+///
+/// The wheel step can zero the base around its own call, but the game makes this call itself on
+/// every mouse hover and click, and those resets are what re-orient the list under a stationary
+/// pointer. Hooking is the only place to reach them: the base and the index are in different spaces
+/// (scrollbar model-space vs view-space 0..9) and only this function compares the two.
+pub(crate) unsafe extern "system" fn save_picker_set_cursor_hook(list: usize, index: u32) -> u64 {
+    let orig_addr = SAVE_PICKER_SET_CURSOR_ORIG.load(Ordering::SeqCst);
+    if orig_addr == 0 {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, u32) -> u64 =
+        unsafe { std::mem::transmute(orig_addr) };
+    // Only the picker's own list, and only while the picker owns the screen: every other menu in
+    // the game uses this grid the way it was designed and must keep its native scrolling.
+    let dialog = save_picker_live_profile_dialog();
+    let ours = dialog != 0
+        && SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        && list == dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET;
+    if !ours {
+        return unsafe { orig(list, index) };
+    }
+    let before = unsafe { save_picker_grid_view_base(list) };
+    if before != (0, 0) {
+        unsafe { save_picker_set_grid_view_base(list, (0, 0)) };
+    }
+    let ret = unsafe { orig(list, index) };
+    let after = unsafe { save_picker_grid_view_base(list) };
+    if after != before {
+        unsafe { save_picker_set_grid_view_base(list, before) };
+        let n = SAVE_PICKER_SET_CURSOR_NEUTRALISED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 20 || n % 50 == 0 {
+            append_autoload_debug(format_args!(
+                "save-picker: native select neutralised #{n} index={index} view {before:?} (call left {after:?})"
+            ));
+        }
+    }
+    ret
+}
+
+pub(crate) fn install_save_picker_set_cursor_hook() {
+    if SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Ok(addr) = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve select-index rva 0x{MENU_ITEM_LIST_SET_CURSOR_RVA:x}"
+        ));
+        SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            save_picker_set_cursor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SAVE_PICKER_SET_CURSOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "save-picker: queue_enable select-index failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "save-picker: hooked list select-index FUN_14073bc10 0x{addr:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "save-picker: select-index MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "save-picker: MhHook::new select-index failed: {status:?}"
+        )),
+    }
+}
+
+/// The grid's own view-scroll base as `(column, row)`.
+unsafe fn save_picker_grid_view_base(list: usize) -> (i32, i32) {
+    unsafe {
+        (
+            *((list + GRID_CONTROL_VIEW_COL_BASE_OFFSET) as *const i32),
+            *((list + GRID_CONTROL_VIEW_ROW_BASE_OFFSET) as *const i32),
+        )
+    }
+}
+
+unsafe fn save_picker_set_grid_view_base(list: usize, base: (i32, i32)) {
+    unsafe {
+        *((list + GRID_CONTROL_VIEW_COL_BASE_OFFSET) as *mut i32) = base.0;
+        *((list + GRID_CONTROL_VIEW_ROW_BASE_OFFSET) as *mut i32) = base.1;
+    }
+}
+
+/// Log the grid's index space once per picker session: the select call bounds-checks against these,
+/// and whether the cursor index is absolute or view-relative depends on them.
+unsafe fn save_picker_log_grid_geometry_once(list: usize) {
+    if SAVE_PICKER_GRID_GEOMETRY_LOGGED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let (count, cols, rows) = unsafe {
+        (
+            *((list + GRID_CONTROL_ITEM_COUNT_OFFSET) as *const i32),
+            *((list + GRID_CONTROL_COLUMNS_OFFSET) as *const i32),
+            *((list + GRID_CONTROL_ROWS_OFFSET) as *const i32),
+        )
+    };
+    let view = unsafe { save_picker_grid_view_base(list) };
+    append_autoload_debug(format_args!(
+        "save-picker: grid geometry count={count} cols={cols} rows={rows} view_base={view:?}"
+    ));
+}
+
+/// Raise the native Confirm menu event, as a device would.
+///
+/// This is the accept path itself, not an imitation of one: the keystate byte at
+/// `CSMenuManImp+0x90+0x3d` is what the menu's own confirm predicate reads, so everything
+/// downstream -- the native handler, our activation hook, the dest/overwrite routing -- runs
+/// identically to a keyboard or pad accept.
+unsafe fn save_picker_raise_confirm_menu_event() -> bool {
+    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
+        return false;
+    };
+    unsafe { *keystate.add(MENU_EVENT_CONFIRM_3D) |= MENU_EVENT_PRESSED_BIT };
+    true
+}
+
+/// Clear this frame's vertical menu event so the native list never moves.
+///
+/// The list animates its own cursor move the instant it consumes the event, so a correction written
+/// afterwards still lets the animation play -- which is what a player sees at the end of a listing
+/// as a scroll that "happens" and then undoes itself. This runs from the MenuWindowJob::Run POST
+/// hook: `Run` is the producer that sets `+0x90[id] |= 1`, and the menu's own Update consumes it
+/// later in the frame, so clearing here lands between the two.
+unsafe fn save_picker_clear_vertical_menu_event(down: bool) -> bool {
+    let id = if down {
+        SAVE_PICKER_MENU_EVENT_DOWN_ID.load(Ordering::SeqCst)
+    } else {
+        SAVE_PICKER_MENU_EVENT_UP_ID.load(Ordering::SeqCst)
+    };
+    if id == MENU_EVENT_ID_UNLEARNED {
+        return false;
+    }
+    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
+        return false;
+    };
+    let byte = unsafe { keystate.add(id) };
+    if unsafe { *byte } & MENU_EVENT_PRESSED_BIT == 0 {
+        return false;
+    }
+    unsafe { *byte &= !MENU_EVENT_PRESSED_BIT };
+    true
+}
+
 /// Menu-pump-owned scroll-window maintenance. The native ProfileSelect backing list has only ten
 /// row models, so long directory listings are represented as a sliding ten-row window with no page
 /// or pseudo-scroll rows. When the native cursor rests on a window edge, the model advances and this
 /// queues the same in-place rebuild used by directory/drive navigation.
+/// Scroll the ten-row native window by one row per explicit UP/DOWN press taken at an edge row.
+/// Consuming the latch unconditionally (even when the picker is not live) keeps a press made
+/// elsewhere from being replayed into the list the next time the picker opens.
 pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
+    let up_mask = crate::experiments::SAVE_PICKER_NAV_UP_MASK;
+    let down_mask = crate::experiments::SAVE_PICKER_NAV_DOWN_MASK;
+    let wheel_up_mask = crate::experiments::SAVE_PICKER_NAV_WHEEL_UP_MASK;
+    let wheel_down_mask = crate::experiments::SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
+    let nav_edges = crate::experiments::save_picker_take_user_nav_edges_for(
+        up_mask | down_mask | wheel_up_mask | wheel_down_mask,
+    );
+    let wheel_down = nav_edges & wheel_down_mask != 0;
+    let wheel_up = nav_edges & wheel_up_mask != 0;
+    let held = crate::experiments::save_picker_user_nav_held();
     let dialog = save_picker_live_profile_dialog();
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
         return;
     }
     let Ok(base) = game_module_base() else {
@@ -1424,17 +1738,215 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
     let cursor_getter: unsafe extern "system" fn(usize) -> i32 =
         unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
-    let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
+    unsafe { save_picker_log_grid_geometry_once(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    // Remember where the selection was BEFORE this tick's key was read. The native list moves and
+    // wraps its own cursor the moment it sees the press, so by the time this pump runs the sampled
+    // row is already the wrap destination -- at the bottom row a DOWN press reads back as the
+    // drives row. Judging the edge on the post-press row is why holding DOWN stopped scrolling.
+    let prev_cursor = SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.swap(
+        usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
+        Ordering::SeqCst,
+    );
+    let (last_visible_row, at_scroll_top, at_scroll_bottom) = {
+        let guard = crate::experiments::save_picker::active_save_picker_lock();
+        let Some(model) = guard.as_ref() else {
+            return;
+        };
+        (
+            model.visible_row_count().saturating_sub(1),
+            model.scroll_offset() == 0,
+            model.scroll_offset() >= model.scroll_max(),
+        )
+    };
+    let edge_down = nav_edges & down_mask != 0;
+    let edge_up = nav_edges & up_mask != 0;
+    unsafe {
+        save_picker_learn_vertical_menu_event_ids(
+            edge_down || held & down_mask != 0,
+            edge_up || held & up_mask != 0,
+        )
+    };
+    // SUPPRESS AT A HARD LIMIT, every tick rather than only when an edge was latched. The listing
+    // has nothing further that way, so the native list must not move at all -- not move-and-be-
+    // corrected, which is the same pixels animating for a change that never happens. Checked from
+    // the cursor's CURRENT row so the very first press is caught, not just the repeats after it.
+    let blocked = if cursor >= 0 && usize::try_from(cursor).is_ok_and(|c| c >= last_visible_row) {
+        at_scroll_bottom.then_some(true)
+    } else if cursor == 0 {
+        at_scroll_top.then_some(false)
+    } else {
+        None
+    };
+    if let Some(blocked_down) = blocked {
+        if unsafe { save_picker_clear_vertical_menu_event(blocked_down) } {
+            let n = SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 || n % 50 == 0 {
+                append_autoload_debug(format_args!(
+                    "save-picker: suppressed vertical menu event #{n} at listing limit down={blocked_down} cursor={cursor} last_visible_row={last_visible_row}"
+                ));
+            }
+            SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
+                usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
+                Ordering::SeqCst,
+            );
+            return;
+        }
+    }
+    // NATIVE SELECTION MOVE: the cursor changed with no latched input of ours behind it. Named for
+    // what it measures rather than a guessed cause -- reading it as "the pointer" is how a wheel
+    // detent's NATIVE step got mistaken for mouse movement, and a duplicate step shipped on top of
+    // it. The model's scroll state rides along because a report of rows re-orienting cannot be
+    // attributed without knowing whether OUR window moved or the game re-laid itself out.
+    if nav_edges == 0
+        && !wheel_down
+        && !wheel_up
+        && held == 0
+        && prev_cursor != EDGE_SCROLL_NO_PREV_CURSOR
+        && prev_cursor != usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR)
+    {
+        let n = SAVE_PICKER_POINTER_CURSOR_MOVES.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 40 || n % 25 == 0 {
+            let (offset, max) = {
+                let guard = crate::experiments::save_picker::active_save_picker_lock();
+                guard
+                    .as_ref()
+                    .map(|model| (model.scroll_offset(), model.scroll_max()))
+                    .unwrap_or((usize::MAX, usize::MAX))
+            };
+            append_autoload_debug(format_args!(
+                "save-picker: native selection move #{n} {prev_cursor} -> {cursor} scroll_offset={offset}/{max} last_visible_row={last_visible_row}"
+            ));
+        }
+    }
+    // Did the native list just WRAP? A wrap is a jump between the two extreme rows in one sample,
+    // and it is the only motion the list makes that the player never asked for. Detecting the wrap
+    // itself -- rather than only the key edge that caused the first one -- is what covers a HELD
+    // direction: the menu auto-repeats and each repeat moves the cursor, but only the first press
+    // ever produces an edge, so an edge-only rule guards one step and lets every later repeat wrap.
+    let wrapped_from = (prev_cursor != EDGE_SCROLL_NO_PREV_CURSOR)
+        .then(|| {
+            let prev = i64::try_from(prev_cursor).unwrap_or(-1);
+            let now = i64::from(cursor);
+            let last = i64::try_from(last_visible_row).unwrap_or(0);
+            if last <= 0 {
+                None
+            } else if prev == last && now == 0 {
+                Some(down_mask)
+            } else if prev == 0 && now == last {
+                Some(up_mask)
+            } else {
+                None
+            }
+        })
+        .flatten();
+    // Age out a deferred press whose wrap never arrived, so it cannot be redeemed much later.
+    let pending = SAVE_PICKER_PENDING_WRAP_MASK.load(Ordering::SeqCst);
+    if pending != 0 && SAVE_PICKER_PENDING_WRAP_TICKS.fetch_sub(1, Ordering::SeqCst) <= 1 {
+        SAVE_PICKER_PENDING_WRAP_MASK.store(0, Ordering::SeqCst);
+        SAVE_PICKER_PENDING_WRAP_TICKS.store(0, Ordering::SeqCst);
+    }
+    // A wrap only counts as navigation when that direction is actually held on a device, or when a
+    // press we deliberately deferred is still owed its step. Without that check a fast MOUSE sweep
+    // across the list -- hover writes the same cursor field -- would read as a wrap and get yanked
+    // back under the pointer.
+    let wrap_nav = wrapped_from
+        .filter(|mask| held & mask != 0 || pending & mask != 0)
+        .unwrap_or(0);
+    // ONE PRESS, ONE STEP. At an extreme row the native list ALWAYS wraps, so the key edge and the
+    // wrap it causes are the SAME press seen one tick apart. Acting on both scrolled the window
+    // twice and rebuilt the list twice for a single press -- visible in the live log as two
+    // `reason=edge-scroll-pump` rebuilds 29ms apart, and on screen as the list running away faster
+    // than the presses. Defer to the wrap at an extreme row; act on the edge only where no wrap can
+    // follow. The pending latch carries the press across the gap so a tap released before the wrap
+    // is sampled still gets its step.
+    // A WHEEL detent is exempt from that deferral: the native list does not wrap for the wheel, so
+    // there is no wrap coming to defer to. Deferring one anyway is why the wheel did nothing at
+    // exactly the top and bottom rows -- the only rows where the wheel has to do the work itself.
+    let wheel_nav = wheel_down || wheel_up;
+    let edge_at_extreme = (edge_down && prev_cursor == last_visible_row)
+        || (edge_up && prev_cursor == 0 && last_visible_row > 0);
+    if wrap_nav == 0 && edge_at_extreme && !wheel_nav {
+        SAVE_PICKER_PENDING_WRAP_MASK.store(
+            if edge_down { down_mask } else { up_mask },
+            Ordering::SeqCst,
+        );
+        SAVE_PICKER_PENDING_WRAP_TICKS.store(PENDING_WRAP_MAX_TICKS, Ordering::SeqCst);
+        return;
+    }
+    if wrap_nav != 0 {
+        SAVE_PICKER_PENDING_WRAP_MASK.store(0, Ordering::SeqCst);
+        SAVE_PICKER_PENDING_WRAP_TICKS.store(0, Ordering::SeqCst);
+    }
+    let down = ((nav_edges | wrap_nav) & down_mask != 0) || wheel_down;
+    let up = ((nav_edges | wrap_nav) & up_mask != 0) || wheel_up;
+    // A simultaneous up+down edge has no direction; ignore rather than pick one arbitrarily.
+    if up == down {
+        return;
+    }
+    // Key and pad steps are judged from the row held BEFORE the press, because the native list has
+    // already moved its cursor by the time this runs. A wheel detent is sampled from the CURRENT
+    // row instead: the native list handles the wheel within the same tick rather than a tick later,
+    // and a one-tick-old sample would misjudge the edge after any mouse movement, since hover writes
+    // the same cursor field.
+    let wheel_only = wheel_nav && (nav_edges & (up_mask | down_mask)) == 0 && wrap_nav == 0;
+    let press_row = if wheel_only || prev_cursor == EDGE_SCROLL_NO_PREV_CURSOR {
+        cursor
+    } else {
+        i32::try_from(prev_cursor).unwrap_or(cursor)
+    };
+    let Some(model_row) = save_picker_model_row_from_native_cursor(press_row) else {
         return;
     };
-    let scrolled = {
+    let outcome = {
         let mut guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
             return;
         };
-        model.edge_scroll_from_native_cursor_tick(model_row)
+        model.scroll_window_from_edge_press(model_row, down)
     };
-    if !scrolled {
+    let Some(outcome) = outcome else {
+        // Away from an edge there is no window work AND no cursor work: the native list moves its
+        // own selection for a key, a pad direction AND a wheel detent.
+        //
+        // The wheel case was mis-read twice. It looked inert because at the top and bottom rows the
+        // native list has nowhere to go (it does not wrap for the wheel), so the only rows where
+        // nothing happened were the rows where the WINDOW should have scrolled instead. Adding a
+        // step here to "fix" that gave every detent two moves -- the live log caught mine at
+        // `row 9 -> 8` and the game's own at `8 -> 7` one millisecond later, which is precisely the
+        // two-row jump. Off an edge, the wheel belongs entirely to the game.
+        return;
+    };
+    let pinned_row = outcome.pin_row();
+    // Hold the native selection on the row the press acted from. The list cursor is a plain field
+    // (`FUN_140739e20` is just `*(u32 *)(list + 0xd4)`), and the game's own GridControl mouse hit
+    // writes it directly, so a write is the native mechanism rather than a poke around one. Without
+    // this the selection leaves the edge after each press and the window stops advancing -- and at a
+    // hard limit the native list has already wrapped the cursor to the far end of the listing, so
+    // the same write is what keeps the selection from teleporting there.
+    //
+    // A WHEEL step is exempt: it never moved the native cursor, so there is nothing to hold, and
+    // writing anyway drags the selection off whatever row the POINTER is over -- the mouse and the
+    // wheel fighting each other for the same field, which reads as mouse row navigation being
+    // broken.
+    let native_pin = (!wheel_only)
+        .then(|| i32::try_from(pinned_row).ok())
+        .flatten()
+        .and_then(|row| row.checked_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET));
+    if let Some(native_pin) = native_pin {
+        unsafe {
+            *((dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + MENU_ITEM_LIST_CURSOR_FIELD_OFFSET)
+                as *mut i32) = native_pin;
+        }
+        // The sample stored at the top of this function is where the native list PUT the cursor,
+        // which is the wrap destination we just overrode. Held keys repeat on consecutive ticks, so
+        // leaving that stale value here would make the next press judge its edge from a row the
+        // selection never visibly occupied.
+        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(pinned_row, Ordering::SeqCst);
+    }
+    if !outcome.scrolled() {
+        append_autoload_debug(format_args!(
+            "save-picker: edge-press held at listing limit down={down} press_row={press_row} model_row={model_row} wrap_target={cursor} pinned_native_row={native_pin:?}"
+        ));
         return;
     }
     let staged = {
@@ -1446,7 +1958,7 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
     };
     if staged {
         append_autoload_debug(format_args!(
-            "save-picker: edge-scroll restaged browse rows at native_cursor={cursor} model_row={model_row}"
+            "save-picker: edge-scroll restaged browse rows post_press_cursor={cursor} press_row={press_row} model_row={model_row} pinned_native_row={native_pin:?}"
         ));
         unsafe { save_picker_rebuild_profile_dialog_now(dialog, "edge-scroll-pump") };
     }

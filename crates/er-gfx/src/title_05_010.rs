@@ -63,6 +63,15 @@ pub const DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX: f32 = 37.5;
 pub const CURRENT_PATH_FIELD_NAME: &str = "CurrentPath";
 pub const CURRENT_PATH_FIELD_NAME_NUL: &str = "CurrentPath\0";
 pub const CURRENT_PATH_BUTTON_NAME: &str = "CurrentPathButton";
+/// Instance name of the row's invisible full-row mouse target.
+///
+/// This one is NOT ours to choose. `GridControl::HandleMouse` resolves a row's hit object through
+/// `FUN_14074b0d0` (1.16.2), which looks up exactly this name before falling back to `Cursor` and
+/// then to the cell itself, and hit-tests the resolved object's own bounds. The literal lives at
+/// `0x142a8fa08` and is the only occurrence in the image, referenced by nothing but that resolver
+/// and its static initializer -- so adding this child changes the row's mouse target and nothing
+/// else.
+pub const ROW_HIT_AREA_NAME: &str = "HitArea";
 pub const CURRENT_PATH_BUTTON_NAME_NUL: &str = "CurrentPathButton\0";
 pub const CURRENT_PATH_X_PX: f32 = -180.0;
 pub const CURRENT_PATH_Y_PX: f32 = -18.0;
@@ -149,9 +158,9 @@ pub const VANILLA_LEN: usize = 14388;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0xfc22_4f43_7a73_13f3;
 /// Length of the compact stats-panel output for the known vanilla input.
-pub const EDITED_LEN: usize = 17780;
+pub const EDITED_LEN: usize = 17813;
 /// [`fnv1a64`] of the compact stats-panel output for the known vanilla input.
-pub const EDITED_FNV1A64: u64 = 0x1218_430d_81ab_9511;
+pub const EDITED_FNV1A64: u64 = 0x954f_bed1_0623_d651;
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the generated asset).
