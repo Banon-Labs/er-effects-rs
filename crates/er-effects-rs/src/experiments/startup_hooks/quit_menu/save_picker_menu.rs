@@ -520,12 +520,18 @@ pub(crate) unsafe fn save_dest_stage_commit_and_close_picker(dialog: usize, reas
 /// index; a listing change of any kind comes back as `Repopulate` and is serviced identically.
 pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -> usize {
     use crate::experiments::save_picker::PickerActivation;
+    if save_picker_path_editor_active() {
+        // 02_990 owns Accept/Back while active. Never let the frozen ProfileSelect row interpret the
+        // same edge as a browse action.
+        return 0;
+    }
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
         append_autoload_debug(format_args!(
             "save-picker: activation ignored invalid native cursor={cursor}"
         ));
         return 0;
     };
+    let mut open_path_editor = false;
     let activation = {
         let mut guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
@@ -538,7 +544,13 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             .swap(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, Ordering::SeqCst);
         if model.drive_row() == Some(model_row) {
             let cell_count = model.drive_strip_cell_count();
-            if let Some(cell) = save_picker_pending_drive_strip_cell(pending_cell, cell_count) {
+            if pending_cell == SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING {
+                model.focus_current_path_from_drive_strip();
+                open_path_editor = true;
+                PickerActivation::Ignored
+            } else if let Some(cell) =
+                save_picker_pending_drive_strip_cell(pending_cell, cell_count)
+            {
                 if model.activate_drive_strip_cell(cell) {
                     append_autoload_debug(format_args!(
                         "save-picker: native drive-row activation selected pending cell={cell} native_cursor={cursor} model_row={model_row} cells={cell_count}"
@@ -550,32 +562,28 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
                     ));
                     PickerActivation::Ignored
                 }
+            } else if model.drive_strip_focus()
+                == Some(er_save_picker::DriveStripFocus::CurrentPath)
+            {
+                open_path_editor = true;
+                PickerActivation::Ignored
             } else {
-                match save_picker_drive_strip_cell_from_live_cursor(cell_count) {
-                    Some((cell, x, y)) if model.activate_drive_strip_cell(cell) => {
-                        append_autoload_debug(format_args!(
-                            "save-picker: native drive-row activation selected live cell={cell} native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cells={cell_count} pending={pending_cell}"
-                        ));
-                        PickerActivation::Repopulate
-                    }
-                    Some((cell, x, y)) => {
-                        append_autoload_debug(format_args!(
-                            "save-picker: native drive-row activation rejected live cell={cell} native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cells={cell_count} pending={pending_cell}"
-                        ));
-                        PickerActivation::Ignored
-                    }
-                    None => {
-                        append_autoload_debug(format_args!(
-                            "save-picker: native drive-row activation ignored at native_cursor={cursor} model_row={model_row}; no drive cell under live cursor and no pending click cell (cells={cell_count} pending={pending_cell})"
-                        ));
-                        PickerActivation::Ignored
-                    }
-                }
+                // Accept belongs to the focused sub-control. A bare row activation while a drive
+                // cell owns focus is inert; Right from the final drive or pointer hover/click moves
+                // focus to CurrentPath first.
+                PickerActivation::Ignored
             }
         } else {
             model.activate(model_row)
         }
     };
+    if open_path_editor {
+        save_picker_request_path_editor(dialog);
+        append_autoload_debug(format_args!(
+            "save-picker-path: native drive-row activation requested editor dialog=0x{dialog:x} native_cursor={cursor} model_row={model_row}"
+        ));
+        return 0;
+    }
     match activation {
         PickerActivation::Repopulate => {
             let staged = {
@@ -673,22 +681,32 @@ const MENU_ITEM_LIST_CURSOR_GETTER_RVA: usize = 0x739e20;
 const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
 const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS: AtomicUsize = AtomicUsize::new(0);
 const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
 const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
 const PROFILE_SELECT_MOVIE_HEIGHT_PX: f32 = 1080.0;
-const DRIVE_STRIP_HIT_LEFT_PX: f32 = -292.0;
-const DRIVE_STRIP_CELL_PITCH_PX: f32 = 78.0;
+/// `ProfileList` is placed at root movie x=960 and every nested ItemList/row placement has identity
+/// x; `save_picker_client_point_to_movie_stage` subtracts that same half-width. Drive-cell row-local
+/// x is therefore already the mouse stage x -- no guessed scale/offset belongs here. The native
+/// frame's visible shape starts about four pixels before the authored text-field x.
+const DRIVE_STRIP_HIT_LEFT_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_FIRST_X_PX - 4.0;
+const DRIVE_STRIP_CELL_PITCH_PX: f32 = er_gfx::title_05_010::DRIVE_CELL_PITCH_PX;
 const DRIVE_STRIP_CELL_HIT_WIDTH_PX: f32 = DRIVE_STRIP_CELL_PITCH_PX;
+const _: () =
+    assert!(er_save_picker::DRIVE_STRIP_MAX_CELLS <= er_gfx::title_05_010::DRIVE_CELL_CAPACITY);
 /// Live `05_010_ProfileSelect` cursor values are already staged model-row indices. The old +2
 /// observation came from reading the parent System/Quit dialog, not the live ProfileSelect dialog.
 const PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET: i32 = 0;
 const SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL: usize = usize::MAX;
+const SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING: usize = usize::MAX - 1;
 static SAVE_PICKER_DRIVE_STRIP_PENDING_CELL: AtomicUsize =
     AtomicUsize::new(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL);
 const SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK: usize = 1 << 0;
 const SAVE_PICKER_DRIVE_STRIP_LEFT_MASK: usize = 1 << 1;
 const SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK: usize = 1 << 2;
 static SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_DRIVE_STRIP_LAST_POINTER_BITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
 
 unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
     if event == 0 {
@@ -707,7 +725,7 @@ unsafe fn save_picker_event_point(event: usize) -> Option<(f32, f32)> {
 }
 
 pub(crate) unsafe fn save_picker_note_drive_strip_click_event(event: usize) {
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 || save_picker_path_editor_active() {
         return;
     }
     let dialog = save_picker_live_profile_dialog();
@@ -734,16 +752,44 @@ pub(crate) unsafe fn save_picker_note_drive_strip_click_event(event: usize) {
     if cell_count == 0 {
         return;
     }
-    let Some(cell) = save_picker_drive_strip_cell_from_x(x, cell_count) else {
+    if let Some(cell) = save_picker_drive_strip_cell_from_x(x, cell_count) {
+        SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(cell, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-picker: drive-strip click outside skinny cells native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count}"
+            "save-picker: drive-strip click native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count} -> cell={cell}"
         ));
-        return;
-    };
-    SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(cell, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "save-picker: drive-strip click native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count} -> cell={cell}"
-    ));
+    } else if save_picker_current_path_contains_x(x) {
+        SAVE_PICKER_DRIVE_STRIP_PENDING_CELL.store(
+            SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "save-picker-path: click armed native text editor native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1}"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "save-picker: drive-row click outside drive/path controls native_cursor={cursor} model_row={model_row} x={x:.1} y={y:.1} cells={cell_count}"
+        ));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DriveStripPointerHit {
+    Cell(usize),
+    CurrentPath,
+}
+
+fn save_picker_drive_strip_hit_from_x(x: f32, cell_count: usize) -> Option<DriveStripPointerHit> {
+    save_picker_drive_strip_cell_from_x(x, cell_count)
+        .map(DriveStripPointerHit::Cell)
+        .or_else(|| {
+            save_picker_current_path_contains_x(x).then_some(DriveStripPointerHit::CurrentPath)
+        })
+}
+
+fn save_picker_current_path_contains_x(x: f32) -> bool {
+    (er_gfx::title_05_010::CURRENT_PATH_X_PX
+        ..er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX)
+        .contains(&x)
 }
 
 fn save_picker_pending_drive_strip_cell(pending_cell: usize, cell_count: usize) -> Option<usize> {
@@ -761,8 +807,36 @@ fn save_picker_live_profile_dialog() -> usize {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst)
 }
 
+/// Final derived vtable installed by `FUN_140875590` on
+/// `BasicViewItemList<MenuSaveDataSummary,10>`. During destruction it regresses through
+/// `0x2ad53c8` and `0x2a9e598`; slot `+8` is then pure virtual. The records-changed rebuild calls
+/// that slot at `FUN_1409a2cf0+0x3d`, so the exact derived vtable is a hard precondition.
+const PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA: usize = 0x2ad5400;
+const PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET: usize = 0x1260;
+
+fn save_picker_rebuild_target_is_live(
+    dialog_vtable: usize,
+    list_vtable: usize,
+    game_base: usize,
+) -> bool {
+    dialog_vtable == game_base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA
+        && list_vtable == game_base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA
+}
+
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    let Ok(base) = game_module_base() else {
+        return false;
+    };
+    let dialog_vtable = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    let list_vtable =
+        unsafe { safe_read_usize(dialog + PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET) }.unwrap_or(0);
+    if !save_picker_rebuild_target_is_live(dialog_vtable, list_vtable, base) {
+        append_autoload_debug(format_args!(
+            "save-picker: dropped in-place list rebuild for terminal/unbound dialog=0x{dialog:x} reason={reason} dialog_vt=0x{dialog_vtable:x} list_vt=0x{list_vtable:x}; native rebuild would purecall at game+0x9a2d2d"
+        ));
         return false;
     }
     if let Ok(rebuild_addr) = game_rva(PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA) {
@@ -777,6 +851,30 @@ unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) ->
         SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
         unsafe { save_picker_native_close(dialog, reason) };
         false
+    }
+}
+
+#[cfg(test)]
+mod rebuild_liveness_tests {
+    use super::*;
+
+    #[test]
+    fn rebuild_requires_the_live_dialog_and_final_derived_list_vtables() {
+        let base = 0x140000000;
+        let dialog = base + er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
+        let list = base + PROFILE_SELECT_DERIVED_LIST_VTABLE_RVA;
+        assert!(save_picker_rebuild_target_is_live(dialog, list, base));
+        assert!(!save_picker_rebuild_target_is_live(
+            dialog,
+            base + 0x2ad53c8,
+            base
+        ));
+        assert!(!save_picker_rebuild_target_is_live(
+            dialog,
+            base + 0x2a9e598,
+            base
+        ));
+        assert!(!save_picker_rebuild_target_is_live(0, list, base));
     }
 }
 
@@ -833,7 +931,9 @@ fn save_picker_client_point_to_movie_stage(
     Some((stage_x, stage_y))
 }
 
-fn save_picker_drive_strip_cell_from_live_cursor(cell_count: usize) -> Option<(usize, f32, f32)> {
+fn save_picker_drive_strip_hit_from_live_cursor(
+    cell_count: usize,
+) -> Option<(DriveStripPointerHit, f32, f32)> {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetForegroundWindow, GetWindowRect,
@@ -857,7 +957,7 @@ fn save_picker_drive_strip_cell_from_live_cursor(cell_count: usize) -> Option<(u
     let window_y = point.y - rect.top;
     let (stage_x, stage_y) =
         save_picker_client_point_to_movie_stage(window_x as f32, window_y as f32, width, height)?;
-    save_picker_drive_strip_cell_from_x(stage_x, cell_count).map(|cell| (cell, stage_x, stage_y))
+    save_picker_drive_strip_hit_from_x(stage_x, cell_count).map(|hit| (hit, stage_x, stage_y))
 }
 
 fn save_picker_drive_strip_cell_from_x(x: f32, cell_count: usize) -> Option<usize> {
@@ -881,14 +981,65 @@ mod drive_strip_hit_tests {
     use super::*;
 
     #[test]
-    fn drive_cells_live_in_clickable_player_name_band() {
-        assert_eq!(save_picker_drive_strip_cell_from_x(-292.0, 3), Some(0));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-214.1, 3), Some(0));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-214.0, 3), Some(1));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-136.1, 3), Some(1));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-136.0, 3), Some(2));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-58.1, 3), Some(2));
-        assert_eq!(save_picker_drive_strip_cell_from_x(-58.0, 3), None);
+    fn every_possible_drive_cell_lives_in_the_clickable_player_name_band() {
+        assert_eq!(
+            save_picker_drive_strip_cell_from_x(DRIVE_STRIP_HIT_LEFT_PX + 0.1, 26),
+            Some(0)
+        );
+        assert_eq!(
+            save_picker_drive_strip_cell_from_x(
+                DRIVE_STRIP_HIT_LEFT_PX + 12.0 * DRIVE_STRIP_CELL_PITCH_PX + 0.1,
+                26,
+            ),
+            Some(12)
+        );
+        assert_eq!(
+            save_picker_drive_strip_cell_from_x(
+                DRIVE_STRIP_HIT_LEFT_PX + 25.0 * DRIVE_STRIP_CELL_PITCH_PX + 0.1,
+                26,
+            ),
+            Some(25)
+        );
+        assert_eq!(
+            save_picker_drive_strip_cell_from_x(
+                DRIVE_STRIP_HIT_LEFT_PX + 26.0 * DRIVE_STRIP_CELL_PITCH_PX,
+                26,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn native_drive_buttons_render_only_the_drive_name_and_use_color_for_selection() {
+        let selected = save_picker_drive_cell_html_utf16(">C:<");
+        let idle = save_picker_drive_cell_html_utf16("[S:]");
+        let selected = String::from_utf16(&selected[..selected.len() - 1]).expect("valid UTF-16");
+        let idle = String::from_utf16(&idle[..idle.len() - 1]).expect("valid UTF-16");
+        assert!(selected.contains("C:"));
+        assert!(selected.contains("size=\"20\""));
+        assert!(!selected.contains(">>C:<"));
+        assert!(selected.contains("#d8a052"));
+        assert!(idle.contains("S:"));
+        assert!(!idle.contains(">[S:]"));
+        assert!(idle.contains("#8f887a"));
+    }
+
+    #[test]
+    fn one_physical_arrow_source_produces_exactly_one_drive_action() {
+        // Old path: async keyboard poll fired on tick one, then the DInput edge fired on tick two.
+        // The async arrow is now ignored; only the native-input edge becomes an action.
+        assert_eq!(
+            drive_strip_pressed_mask(0, SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK, 0),
+            0
+        );
+        assert_eq!(
+            drive_strip_pressed_mask(
+                SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK,
+                SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK,
+                crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK,
+            ),
+            SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK
+        );
     }
 
     #[test]
@@ -901,6 +1052,43 @@ mod drive_strip_hit_tests {
             save_picker_pending_drive_strip_cell(SAVE_PICKER_DRIVE_STRIP_NO_PENDING_CELL, 3),
             None
         );
+    }
+
+    #[test]
+    fn complete_path_hit_target_is_distinct_from_drive_cells() {
+        assert!(save_picker_current_path_contains_x(
+            er_gfx::title_05_010::CURRENT_PATH_X_PX
+        ));
+        assert!(save_picker_current_path_contains_x(
+            er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX
+                - 0.1
+        ));
+        assert!(!save_picker_current_path_contains_x(
+            er_gfx::title_05_010::CURRENT_PATH_X_PX + er_gfx::title_05_010::CURRENT_PATH_WIDTH_PX
+        ));
+        assert_eq!(
+            save_picker_drive_strip_hit_from_x(
+                er_gfx::title_05_010::CURRENT_PATH_X_PX + 1.0,
+                DRIVE_STRIP_MAX_CELLS,
+            ),
+            Some(DriveStripPointerHit::CurrentPath)
+        );
+        assert_eq!(
+            save_picker_pending_drive_strip_cell(
+                SAVE_PICKER_DRIVE_STRIP_PATH_EDITOR_PENDING,
+                DRIVE_STRIP_MAX_CELLS,
+            ),
+            None,
+            "the path-editor sentinel must never alias a drive-cell selection"
+        );
+    }
+
+    #[test]
+    fn entering_path_edit_mode_immediately_hides_the_read_only_path_label() {
+        save_picker_reset_path_editor_state();
+        save_picker_request_path_editor(0x1234);
+        assert_eq!(save_picker_current_path_text(0), Some(vec![0]));
+        save_picker_reset_path_editor_state();
     }
 
     #[test]
@@ -928,13 +1116,14 @@ mod drive_strip_hit_tests {
 
     #[test]
     fn live_cursor_mapping_uses_fixed_movie_stage_not_user_resolution() {
+        let second_cell_x = DRIVE_STRIP_HIT_LEFT_PX + DRIVE_STRIP_CELL_PITCH_PX + 0.1;
         for (client_width, client_height) in [
             (1920.0, 1080.0),
             (2560.0, 1440.0),
             (3440.0, 1440.0),
             (1024.0, 768.0),
         ] {
-            let client_x = client_x_for_stage_x(-214.0, client_width, client_height);
+            let client_x = client_x_for_stage_x(second_cell_x, client_width, client_height);
             let client_y = client_height * 0.5;
             let (stage_x, stage_y) = save_picker_client_point_to_movie_stage(
                 client_x,
@@ -944,11 +1133,11 @@ mod drive_strip_hit_tests {
             )
             .expect("point should lie inside the fitted movie stage");
             assert!(
-                (stage_x + 214.0).abs() < 0.02,
-                "client {client_width}x{client_height} mapped x={stage_x}, not the fixed movie-stage boundary"
+                (stage_x - second_cell_x).abs() < 0.02,
+                "client {client_width}x{client_height} mapped x={stage_x}, not the fixed movie-stage boundary {second_cell_x}"
             );
             assert!(stage_y.abs() < 0.02);
-            assert_eq!(save_picker_drive_strip_cell_from_x(stage_x, 3), Some(1));
+            assert_eq!(save_picker_drive_strip_cell_from_x(stage_x, 26), Some(1));
         }
     }
 
@@ -962,14 +1151,31 @@ mod drive_strip_hit_tests {
     }
 }
 
+fn drive_strip_pressed_mask(prev_down: usize, down_mask: usize, nav_edges: usize) -> usize {
+    let mut pressed = (down_mask & !prev_down) & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
+    if nav_edges & crate::experiments::SAVE_PICKER_NAV_LEFT_MASK != 0 {
+        pressed |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
+    }
+    if nav_edges & crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK != 0 {
+        pressed |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
+    }
+    pressed
+}
+
 /// Menu-pump-owned drive-strip mouse/keyboard handling. The native ProfileSelect list exposes only
 /// one hit target per row, so `[C:]  [S:]  [Z:]` can never be true native sub-buttons. While the
 /// native cursor is on the drive row, sample input edges in the menu pump and mutate the picker model
 /// directly: mouse uses the live X coordinate; Left/Right cycle to the adjacent drive.
 pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
+    if save_picker_path_editor_active() {
+        SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.store(0, Ordering::SeqCst);
+        let _ = crate::experiments::save_picker_take_user_nav_edges();
+        return;
+    }
     let dialog = save_picker_live_profile_dialog();
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.store(0, Ordering::SeqCst);
+        SAVE_PICKER_DRIVE_STRIP_LAST_POINTER_BITS.store(u64::MAX, Ordering::SeqCst);
         let _ = crate::experiments::save_picker_take_user_nav_edges();
         return;
     }
@@ -978,24 +1184,12 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
         down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
     }
-    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x25) < 0 } {
-        down_mask |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
-    }
-    if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x27) < 0 } {
-        down_mask |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
-    }
+    // Keyboard/controller arrows come ONLY from the DInput/XInput edge latch. Polling the same
+    // physical key through GetAsyncKeyState as well delivered one action here and a second action
+    // when the native-input edge arrived a few milliseconds later (runtime log 2026-08-08).
     let prev_down = SAVE_PICKER_DRIVE_STRIP_INPUT_DOWN_MASK.swap(down_mask, Ordering::SeqCst);
-    let mut pressed = down_mask & !prev_down;
     let nav_edges = crate::experiments::save_picker_take_user_nav_edges();
-    if nav_edges & crate::experiments::SAVE_PICKER_NAV_LEFT_MASK != 0 {
-        pressed |= SAVE_PICKER_DRIVE_STRIP_LEFT_MASK;
-    }
-    if nav_edges & crate::experiments::SAVE_PICKER_NAV_RIGHT_MASK != 0 {
-        pressed |= SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK;
-    }
-    if pressed == 0 {
-        return;
-    }
+    let pressed = drive_strip_pressed_mask(prev_down, down_mask, nav_edges);
     let Ok(base) = game_module_base() else {
         return;
     };
@@ -1003,22 +1197,58 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         unsafe { std::mem::transmute(base + MENU_ITEM_LIST_CURSOR_GETTER_RVA) };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     let Some(model_row) = save_picker_model_row_from_native_cursor(cursor) else {
-        append_autoload_debug(format_args!(
-            "save-picker-nav: pressed_mask=0x{pressed:x} ignored invalid native_cursor={cursor}"
-        ));
+        if pressed != 0 {
+            append_autoload_debug(format_args!(
+                "save-picker-nav: pressed_mask=0x{pressed:x} ignored invalid native_cursor={cursor}"
+            ));
+        }
         return;
     };
-    let (on_drive_row, drive_row) = {
+    let (on_drive_row, drive_row, drive_cell_count) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_ref() else {
-            append_autoload_debug(format_args!(
-                "save-picker-nav: pressed_mask=0x{pressed:x} ignored no active model native_cursor={cursor} model_row={model_row}"
-            ));
             return;
         };
         let drive_row = model.drive_row();
-        (drive_row == Some(model_row), drive_row)
+        (
+            drive_row == Some(model_row),
+            drive_row,
+            model.drive_strip_cell_count(),
+        )
     };
+    if pressed == 0 {
+        let hover = on_drive_row
+            .then(|| save_picker_drive_strip_hit_from_live_cursor(drive_cell_count))
+            .flatten();
+        let pointer_bits = hover
+            .map(|(_, x, y)| u64::from(x.to_bits()) | (u64::from(y.to_bits()) << 32))
+            .unwrap_or(u64::MAX);
+        let moved = SAVE_PICKER_DRIVE_STRIP_LAST_POINTER_BITS.swap(pointer_bits, Ordering::SeqCst)
+            != pointer_bits;
+        if moved {
+            let changed = {
+                let mut guard = crate::experiments::save_picker::active_save_picker_lock();
+                guard.as_mut().is_some_and(|model| match hover {
+                    Some((DriveStripPointerHit::CurrentPath, _, _)) => {
+                        model.focus_current_path_from_drive_strip()
+                    }
+                    _ => model.focus_active_drive_from_drive_strip(),
+                })
+            };
+            if changed {
+                let staged = {
+                    let guard = crate::experiments::save_picker::active_save_picker_lock();
+                    guard
+                        .as_ref()
+                        .is_some_and(|model| unsafe { save_picker_stage_row_records(model) })
+                };
+                if staged {
+                    SAVE_PICKER_REBUILD_PENDING_DIALOG.store(dialog, Ordering::SeqCst);
+                }
+            }
+        }
+        return;
+    }
     if !on_drive_row {
         append_autoload_debug(format_args!(
             "save-picker-nav: pressed_mask=0x{pressed:x} ignored native_cursor={cursor} model_row={model_row} drive_row={drive_row:?}"
@@ -1029,6 +1259,7 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     #[derive(Clone, Copy)]
     enum DriveStripPumpAction {
         Cell { cell: usize, x: f32, y: f32 },
+        CurrentPath { x: f32, y: f32 },
         Cycle { forward: bool },
     }
 
@@ -1038,15 +1269,18 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
             let Some(model) = guard.as_ref() else {
                 return;
             };
-            save_picker_drive_strip_cell_from_live_cursor(model.drive_strip_cell_count())
+            save_picker_drive_strip_hit_from_live_cursor(model.drive_strip_cell_count())
         };
-        let Some((cell, x, y)) = chosen else {
+        let Some((hit, x, y)) = chosen else {
             append_autoload_debug(format_args!(
-                "save-picker: drive-strip pump mouse ignored at native_cursor={cursor} model_row={model_row}; no cell under stage cursor pressed_mask=0x{pressed:x}"
+                "save-picker: drive-strip pump mouse ignored at native_cursor={cursor} model_row={model_row}; no drive/path control under stage cursor pressed_mask=0x{pressed:x}"
             ));
             return;
         };
-        DriveStripPumpAction::Cell { cell, x, y }
+        match hit {
+            DriveStripPointerHit::Cell(cell) => DriveStripPumpAction::Cell { cell, x, y },
+            DriveStripPointerHit::CurrentPath => DriveStripPumpAction::CurrentPath { x, y },
+        }
     } else if pressed & SAVE_PICKER_DRIVE_STRIP_LEFT_MASK != 0 {
         DriveStripPumpAction::Cycle { forward: false }
     } else if pressed & SAVE_PICKER_DRIVE_STRIP_RIGHT_MASK != 0 {
@@ -1062,6 +1296,7 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         };
         match action {
             DriveStripPumpAction::Cell { cell, .. } => model.activate_drive_strip_cell(cell),
+            DriveStripPumpAction::CurrentPath { .. } => model.focus_current_path_from_drive_strip(),
             DriveStripPumpAction::Cycle { forward } => model.cycle_drive_from_drive_strip(forward),
         }
     };
@@ -1069,6 +1304,9 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     match action {
         DriveStripPumpAction::Cell { cell, x, y } => append_autoload_debug(format_args!(
             "save-picker: drive-strip pump mouse native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} cell={cell} changed={changed}"
+        )),
+        DriveStripPumpAction::CurrentPath { x, y } => append_autoload_debug(format_args!(
+            "save-picker-path: path control focused by mouse native_cursor={cursor} model_row={model_row} stage_x={x:.1} stage_y={y:.1} changed={changed}"
         )),
         DriveStripPumpAction::Cycle { forward } => append_autoload_debug(format_args!(
             "save-picker: drive-strip pump key native_cursor={cursor} model_row={model_row} direction={} changed={changed}",
@@ -1132,6 +1370,29 @@ pub(crate) unsafe fn save_picker_menu_pump_native_scrollbar() {
         return;
     };
     let scrollbar = window + PROFILE_LOAD_DIALOG_SCROLLBAR_OFFSET;
+    // Both setters call FUN_14074dcc0, which immediately executes
+    // `call [*(scrollbar+8)+8]` to toggle the embedded visible component. ProfileSelect's native
+    // in-place rebuild can leave that component unbound between teardown/rebind frames. Calling the
+    // setter then jumps through NULL (observed crash: rcx=dialog+0xbe8, ret=game+0x73334f).
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let visible_value = unsafe { safe_read_usize(scrollbar + 8) }.unwrap_or(0);
+    let set_visible_target = if visible_value != 0 {
+        unsafe { safe_read_usize(visible_value + 8) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if set_visible_target == 0 || !vtable_in_game_image(set_visible_target, base) {
+        let skips = SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        if skips <= 8 || skips.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "save-picker: native scrollbar sync skipped dead/unbound visible proxy #{skips} dialog=0x{window:x} scrollbar=0x{scrollbar:x} value=0x{visible_value:x} set_visible=0x{set_visible_target:x}"
+            ));
+        }
+        SAVE_PICKER_SCROLLBAR_LAST_SYNC.store(usize::MAX, Ordering::SeqCst);
+        return;
+    }
     let set_total: unsafe extern "system" fn(usize, i32) =
         unsafe { std::mem::transmute(set_total_addr) };
     let set_position: unsafe extern "system" fn(usize, i32) =
@@ -1279,12 +1540,15 @@ pub(crate) fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
 
 pub(crate) fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
     // Match the native ProfileSelect filename/timestamp fields; the asset gives ErStats a native-height box.
-    const SIZE: &str = "24";
+    save_picker_html_utf16_color_size(text, color, 24)
+}
+
+fn save_picker_html_utf16_color_size(text: &str, color: &str, font_height: i32) -> Vec<u16> {
     if text.is_empty() {
         return vec![0];
     }
     let mut s = String::from("<p align=\"left\"><font size=\"");
-    s.push_str(SIZE);
+    s.push_str(&font_height.to_string());
     s.push_str("\" color=\"");
     s.push_str(color);
     s.push_str("\">");
@@ -1305,12 +1569,57 @@ pub(crate) fn save_picker_set_visible_status(message: er_save_picker::PickerStat
 pub(crate) const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 34;
 
 pub(crate) fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
-    let color = if text.starts_with('>') {
-        "#d8a052"
+    // The button frame already supplies the visual boundary. Keep the model's `>C:<` / `[S:]`
+    // wrappers for the boot overlay and selection semantics, but do not render that punctuation
+    // inside the compact native button -- it clips before the drive letter does.
+    let (selected, display) = if let Some(inner) = text
+        .strip_prefix('>')
+        .and_then(|inner| inner.strip_suffix('<'))
+    {
+        (true, inner)
+    } else if let Some(inner) = text
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+    {
+        (false, inner)
     } else {
-        "#8f887a"
+        (false, text)
     };
-    save_picker_browse_html_utf16_color(text, color)
+    let color = if selected { "#d8a052" } else { "#8f887a" };
+    let font_height = profile_editor_field_font_height("DriveCell_0");
+    save_picker_html_utf16_color_size(display, color, font_height)
+}
+
+/// CurrentPath control colours: the parchment tone the rest of the picker chrome uses, and the
+/// warning gold reserved for an entry the picker refused.
+const SAVE_PICKER_PATH_NORMAL_COLOR: &str = "#b8b1a2";
+const SAVE_PICKER_PATH_INVALID_COLOR: &str = "#e8c34a";
+
+pub(crate) fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
+    if save_picker_path_editor_active() {
+        return Some(vec![0]);
+    }
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
+        return None;
+    }
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    let model = guard.as_ref()?;
+    if model.drive_row() != Some(row) {
+        return Some(vec![0]);
+    }
+    // A rejected entry outranks the real folder: the user sees exactly what they typed, marked
+    // invalid, until they correct it (any successful commit or navigation refreshes the listing,
+    // which drops the rejected text and returns this control to the normal colour).
+    let (text, color) = match model.rejected_path_text() {
+        Some(rejected) => (rejected, SAVE_PICKER_PATH_INVALID_COLOR),
+        None => (model.current_dir().to_str()?, SAVE_PICKER_PATH_NORMAL_COLOR),
+    };
+    let escaped = save_picker_html_escape(text);
+    let font_height = profile_editor_field_font_height("CurrentPath");
+    let html = format!(
+        "<p align=\"left\"><font size=\"{font_height}\" color=\"{color}\">{escaped}</font></p>"
+    );
+    Some(html.encode_utf16().chain(core::iter::once(0)).collect())
 }
 
 pub(crate) fn save_picker_drive_cell_text(row: usize, cell: usize) -> Option<Vec<u16>> {
@@ -1391,7 +1700,7 @@ pub(crate) fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Ve
 ///
 /// The `Level` caption/value and bottom `PlayTime` are hidden for every picker row. The remaining
 /// fields are row-kind-specific: a save-file row can stage its timestamp into top-right `Location`,
-/// metadata rows own `ErStats`, and only the drive-cycle row owns `DriveCell_0..2`.
+/// metadata rows own `ErStats`, and only the drive-cycle row owns populated `DriveCell_0..25` cells.
 pub(crate) struct RowSlotInfo {
     /// Replacement text for the `Location` field (when the file was last written), or `None` to hide
     /// the field -- which is what every non-file row gets, and what a file whose timestamp is
@@ -1400,9 +1709,11 @@ pub(crate) struct RowSlotInfo {
     /// Whether this row has real `ErStats` copy. False on the drive row unless a visible status
     /// message temporarily owns it, so stale parent-folder copy cannot survive row-clip reuse.
     pub(crate) er_stats: bool,
-    /// Whether this is the one drive-cycle row and its cells own the row. A visible status message
-    /// temporarily takes that field band instead, so the drive cells hide rather than overlap it.
-    pub(crate) drive_cells: bool,
+    /// Number of populated drive-strip cells on this row. Zero outside the drive row and while a
+    /// visible status message temporarily owns its field band.
+    pub(crate) drive_cell_count: usize,
+    /// Focus target whose geometry the row's native animated Cursor must follow.
+    pub(crate) drive_strip_focus: Option<er_save_picker::DriveStripFocus>,
 }
 
 /// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
@@ -1415,20 +1726,30 @@ pub(crate) fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
         return None;
     }
-    let (last_saved, er_stats, drive_cells) = {
+    let (last_saved, er_stats, drive_cell_count, drive_strip_focus) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let model = guard.as_ref()?;
         let has_auxiliary_lines = model.row_auxiliary_lines(row).is_some();
+        let drive_cell_count = if model.drive_row() == Some(row) && !has_auxiliary_lines {
+            model.drive_strip_cell_count()
+        } else {
+            0
+        };
+        let drive_strip_focus = (drive_cell_count > 0)
+            .then(|| model.drive_strip_focus())
+            .flatten();
         (
             model.row_last_saved(row),
             has_auxiliary_lines || model.row_file_characters(row).is_some(),
-            model.drive_row() == Some(row) && !has_auxiliary_lines,
+            drive_cell_count,
+            drive_strip_focus,
         )
     };
     Some(RowSlotInfo {
         location: last_saved.and_then(save_picker_last_saved_text),
         er_stats,
-        drive_cells,
+        drive_cell_count,
+        drive_strip_focus,
     })
 }
 
@@ -1639,6 +1960,10 @@ pub(crate) fn save_picker_reset(source: &str) {
         .is_some();
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
+    SAVE_PICKER_REBUILD_PENDING_DIALOG.store(0, Ordering::SeqCst);
+    SAVE_PICKER_SCROLLBAR_LAST_SYNC.store(usize::MAX, Ordering::SeqCst);
+    SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS.store(0, Ordering::SeqCst);
+    save_picker_reset_path_editor_state();
     SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
     SAVE_PICKER_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
     // The DEST-mode latch dies with the window, but the chosen destination and the commit latch

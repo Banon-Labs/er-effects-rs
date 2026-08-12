@@ -6,7 +6,7 @@
 [field.PlayerName]
 x = -538
 y = -17
-width = 1200
+width = 340
 clip_height = 40
 font_height = 22
 align = "left"
@@ -59,9 +59,9 @@ sample_save_picker = "2026-07-07"
 sample_drive_row = "2026-07-07"
 
 [field.ErStats]
-x = -175
+x = -190
 y = -16
-width = 587
+width = 670
 clip_height = 40
 font_height = 22
 align = "left"
@@ -81,43 +81,66 @@ sample_save_picker = ""
 sample_drive_row = ""
 
 [field.DriveCell_0]
-x = -375
-y = -16
-width = 64
-clip_height = 40
-font_height = 22
-align = "center"
+x = -420
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = "[C:]"
-sample_drive_row = "[C:]"
+sample_save_picker = "C:"
+sample_drive_row = "C:"
 
 [field.DriveCell_1]
-x = -325
-y = -16
-width = 64
-clip_height = 40
-font_height = 22
-align = "center"
+x = -388
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = "[S:]"
-sample_drive_row = "[S:]"
+sample_save_picker = "S:"
+sample_drive_row = "S:"
 
 [field.DriveCell_2]
-x = -275
-y = -16
-width = 64
-clip_height = 40
-font_height = 22
-align = "center"
+x = -356
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = ">Z:<"
-sample_drive_row = ">Z:<"
+sample_save_picker = "Z:"
+sample_drive_row = "Z:"
+
+[field.CurrentPath]
+x = -180
+y = -18
+width = 600
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "Z:\\home\\banon\\Elden Ring Saves"
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
+
+[path_editor]
+x = -77
+y = 80
+width = 700
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = ""
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
 
 [row_chrome.backing]
 x = -17.3
 y = 0
 scale_x = 20
 scale_y = 1
+opacity = 1
 editable = true
 source = "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art"
 
@@ -126,6 +149,7 @@ x = -17.3
 y = 0
 scale_x = 1
 scale_y = 1
+opacity = 1
 editable = true
 source = "outer highlighted-row cursor wrapper: row sprite 76 named Cursor / char 75; keep identity so CursorBody locks to Backing dimensions"
 
@@ -134,8 +158,27 @@ x = 0
 y = 0
 scale_x = 20
 scale_y = 1
+opacity = 1
 editable = true
 source = "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons"
+
+[row_chrome.drive_button]
+x = -2
+y = 0
+scale_x = 0.7352941176470589
+scale_y = 1
+opacity = 0.55
+editable = true
+source = "relative offset/scale/opacity shared by every DriveButton_* native frame; x/y nudge button chrome without moving drive-letter text"
+
+[row_chrome.path_button]
+x = -2
+y = 0
+scale_x = 1
+scale_y = 1
+opacity = 0.42
+editable = true
+source = "independent offset/scale/opacity for CurrentPathButton; lower opacity softens the oversized native outline"
 
 [list]
 row_pitch = 48
