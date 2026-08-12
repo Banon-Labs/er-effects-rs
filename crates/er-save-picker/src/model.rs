@@ -284,6 +284,13 @@ pub struct SavePickerModel {
     /// navigation or a fresh pick attempt so a stale error never follows the user into another
     /// folder/scroll window.
     status_message: Option<PickerStatusMessage>,
+    /// Text the user typed into the CurrentPath editor that failed validation, kept verbatim so
+    /// the control can show it back marked invalid instead of silently reverting to the old
+    /// folder and losing what was typed. `None` means the control renders the real
+    /// `current_dir`. Cleared by `refresh` and `clear_status_message`, i.e. the moment the
+    /// listing or status reflects reality again -- so a corrected entry drops the marking
+    /// without any caller having to remember to.
+    rejected_path_text: Option<String>,
     /// Menu-pump dwell counter for native edge scrolling. The native cursor cannot report an
     /// attempted move past the first/last row, so while it rests on an edge this counter turns a held
     /// edge into one-row window slides.
@@ -627,6 +634,7 @@ impl SavePickerModel {
             cursor: 0,
             drive_strip_offset: 0,
             status_message: None,
+            rejected_path_text: None,
             edge_scroll_ticks: 0,
             edge_scroll_repeats: 0,
             edge_scroll_direction: 0,
@@ -1243,12 +1251,26 @@ impl SavePickerModel {
 
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
+        self.rejected_path_text = None;
+    }
+
+    /// The rejected CurrentPath entry to display in place of `current_dir`, if one is outstanding.
+    pub fn rejected_path_text(&self) -> Option<&str> {
+        self.rejected_path_text.as_deref()
+    }
+
+    /// Keep an invalid entry on the control so the user can correct it rather than retype it.
+    pub fn set_rejected_path_text(&mut self, text: &str) {
+        self.rejected_path_text = Some(text.to_owned());
     }
 
     /// Re-enumerate `current_dir`. Unreadable directories yield an empty listing rather than an
     /// error: the picker stays navigable (the user can still go up or change drive) and the debug
     /// log records the failure.
     pub fn refresh(&mut self) {
+        // The listing is about to describe a real directory again, so any rejected entry the
+        // control was showing is stale by definition.
+        self.rejected_path_text = None;
         self.entries.clear();
         self.scroll_offset = 0;
         self.reset_edge_scroll_dwell();
