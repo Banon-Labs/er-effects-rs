@@ -774,15 +774,12 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     let real_tab = forced_tab
         .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
         .or(live_tab);
-    if let (Some(tab), true) = (
-        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
-        tab_view >= HEAP_LO,
-    ) {
-        unsafe {
-            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
-        }
-        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
-    }
+    // The forced tab is written only AFTER its backing pane is proven present, further down. Writing
+    // it here (as this did until 2026-08-12) wedges the menu whenever the pane is absent: the tab
+    // strip commits to Quit, the pane reapply below bails, and OptionSetting stays actively_shown
+    // with NO visible pane -- input captured, nothing drawn, no way out. Reproduced by opening the
+    // picker twice: the second close lands on a RECREATED OptionSetting window (composite address
+    // changes) whose cache slots 8/9 were never built, so slot 9 reads null.
     // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
     let mut cache_tab: Option<usize> = None;
     for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
@@ -817,10 +814,23 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     .unwrap_or(0);
     if selected < HEAP_LO {
+        // Leave the native tab selection ALONE. Forcing it here would point the tab strip at a tab
+        // with no pane, which reads to the player as a menu that owns input but draws nothing.
         append_autoload_debug(format_args!(
             "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
         ));
         return;
+    }
+    // The backing pane is now proven present, so committing the tab strip to it cannot strand the
+    // menu without a pane. This write is deliberately downstream of the check above.
+    if let (Some(tab), true) = (
+        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
+        tab_view >= HEAP_LO,
+    ) {
+        unsafe {
+            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
+        }
+        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
     }
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
