@@ -584,28 +584,6 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
             .load(std::sync::atomic::Ordering::SeqCst)
             == 0
 }
-/// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
-///
-/// The own_stepper "title-confirm" Load drive (fire_titletop_load_entry + the d180-locate walk) was
-/// built on a MISIDENTIFIED function: RTTI on the dearxan-deobfuscated image proved 0x14078e1c0 is
-/// `CommandSelectDialog::Update` (an in-game dialog), NOT the title menu's confirm router, so its
-/// offsets (cursor [+0xb0c], rows [+0x1290]) do NOT apply to the TitleTopDialog at owner+0xe0
-/// (RTTI vt 0x142b26468). See bd rtti-correction-0x14078e1c0-is-commandselectdialog-not-title-
-/// confirm-2026. We keep the code (it still has diagnostic value) but it must NEVER be the default
-/// path: a fresh session running plain own_stepper must not take this wrong route. The trigger name
-/// is intentionally obscure so it cannot be stumbled into -- enable ONLY to revisit the dead path.
-pub(crate) fn legacy_menu_drive_enabled() -> bool {
-    false
-}
-/// WORLD-RES STREAMING-DRIVER COLD-BUILD PROBE gate (env ER_EFFECTS_WORLDRES_COLDBUILD /
-/// er-effects-worldres-coldbuild.txt). OFF by default. When on, own_stepper runs a ONE-SHOT,
-/// SAVE-SAFE probe at the parked title that cold-builds the CSEmkResManImp streaming driver
-/// (0x143d7c088) + registers the stream worker (0x144842d40) via the CSResStep tick getter
-/// 0x140cd6c50 with a stub `this` -- NO SetState, NO world load, zero save-write risk. See bd
-/// emk-resman-streaming-driver-coldbuild-stub-lever-2026.
-pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
-    false
-}
 /// COLD CHAR-MOUNT experiment gate (env ER_EFFECTS_COLD_CHAR_MOUNT / er-effects-cold-char-mount.txt,
 /// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-
 /// decisive-untested-experiment-2026): with the stream worker REGISTERED, can the b80 save-IO read

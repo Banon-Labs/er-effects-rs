@@ -1111,8 +1111,10 @@ pub const DIALOG_SLOT_BOUND_B08_OFFSET: usize =
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
-/// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
+/// One-shot latch, claimed with `swap`. It named the zero-input title-confirm fire
+/// (`fire_titletop_load_entry`) until that route was deleted as disproven; the remaining claimants
+/// use it to make a once-per-run announcement at the parked open menu rather than to suppress a
+/// re-fire. Readers still treat "not `TITLE_NATIVE_JOB_NOT_CALLED`" as "the menu stage has run".
 pub static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 
 // ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_background.rs =====
