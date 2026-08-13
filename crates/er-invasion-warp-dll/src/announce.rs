@@ -94,6 +94,29 @@ pub const MSG_TEXT_POINTER_OFFSET: usize = 0x08;
 pub const MSG_TEXT_OFFSET: usize = 0x10;
 /// `announcePlayState`, written as a BYTE by the game (`movb $0x1`), not as the enum's full width.
 pub const PLAY_STATE_OFFSET: usize = 0x0b50;
+
+/// `FeSystemAnnounceView +0xb64` — the WIDTH the game measured for the text it just loaded.
+///
+/// # Why this is the oracle and the `SHOWN` counter is not
+///
+/// The `Load` case calls `FUN_14074a140` on the text widget and stores the result here; the
+/// `Scrolling` case then compares the scroll offset against it, which is what makes it a real
+/// extent rather than a status code. `FUN_14074a140` returns **0** outright when the underlying GFx
+/// object is not a live text field, and an empty string measures zero as well.
+///
+/// So a non-zero value means the engine measured glyphs from OUR pointer. That is a fact read back
+/// out of the game's RAM, and it is the check whose absence let an empty banner ship with
+/// `SHOWN = 1` and a log line quoting the exact text it had "placed".
+pub const TEXT_MEASURED_WIDTH_OFFSET: usize = 0x0b64;
+/// `+0xb5c` — whether the measured text is long enough to need scrolling. Diagnostic company for
+/// the width: a wide string that does not scroll is a different bug from one that measures zero.
+pub const TEXT_NEEDS_SCROLL_OFFSET: usize = 0x0b5c;
+
+/// Frames to wait before measuring. The `Load` case runs on the NEXT `Update` after the play state
+/// is armed, so a same-frame read would measure the PREVIOUS notice and call a broken one healthy.
+/// Three is slack for that one frame, and the value persists until the next `Load`, so reading late
+/// costs nothing while reading early would lie.
+pub const MEASURE_DELAY_FRAMES: usize = 3;
 /// The value Update writes when it has just loaded a message: `SystemAnnounceViewModelState::Load`.
 pub const PLAY_STATE_LOAD: u8 = 1;
 
@@ -111,6 +134,87 @@ static HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static SHOWN: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static REFUSALS: AtomicUsize = AtomicUsize::new(0);
+/// Frames left before the pending notice is measured; 0 means nothing is waiting.
+#[cfg(windows)]
+static MEASURE_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+/// Notices whose text measured a width of ZERO -- i.e. drew an empty banner.
+#[cfg(windows)]
+static MEASURED_EMPTY: AtomicUsize = AtomicUsize::new(0);
+/// Notices whose text measured a non-zero width.
+#[cfg(windows)]
+static MEASURED_DRAWN: AtomicUsize = AtomicUsize::new(0);
+
+/// How the last notices actually measured: `(drawn, empty)`.
+///
+/// `empty > 0` is the blank-banner bug, reported from the game's own measurement rather than from
+/// a user noticing. Both zero with `SHOWN > 0` means the measurement never ran.
+#[cfg(windows)]
+#[must_use]
+pub fn measurement_tally() -> (usize, usize) {
+    (
+        MEASURED_DRAWN.load(Ordering::SeqCst),
+        MEASURED_EMPTY.load(Ordering::SeqCst),
+    )
+}
+
+#[cfg(not(windows))]
+#[must_use]
+pub fn measurement_tally() -> (usize, usize) {
+    (0, 0)
+}
+
+/// Read back what the game measured for the notice we placed, a few frames after placing it.
+///
+/// Called every frame from the filter tick. Does nothing until a notice is pending, so the cost
+/// while idle is one relaxed load.
+///
+/// # Safety
+///
+/// Game thread. Reads two scalars out of the live view; both are fault-closed.
+#[cfg(windows)]
+pub fn poll_measurement() {
+    let remaining = MEASURE_COUNTDOWN.load(Ordering::SeqCst);
+    if remaining == 0 {
+        return;
+    }
+    if MEASURE_COUNTDOWN
+        .compare_exchange(remaining, remaining - 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+        || remaining > 1
+    {
+        return;
+    }
+    let view = LIVE_VIEW.load(Ordering::SeqCst);
+    if view == 0 {
+        return;
+    }
+    let width = unsafe { er_game_base::mem::safe_read_i32(view + TEXT_MEASURED_WIDTH_OFFSET) };
+    let scrolls = unsafe { er_game_base::mem::safe_read_u8(view + TEXT_NEEDS_SCROLL_OFFSET) };
+    match width {
+        Some(width) if width != 0 => {
+            let drawn = MEASURED_DRAWN.fetch_add(1, Ordering::SeqCst) + 1;
+            if drawn == 1 {
+                crate::standalone_log(format_args!(
+                    "announce: the game measured the notice at width={width} \
+                     (needs_scroll={scrolls:?}) -- it read glyphs out of our own buffer, which is \
+                     the proof a SHOWN counter could never give"
+                ));
+            }
+        }
+        other => {
+            MEASURED_EMPTY.fetch_add(1, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "announce: BLANK BANNER -- the notice was placed but the game measured its text at \
+                 width={other:?} (needs_scroll={scrolls:?}). The surface is drawing an empty line. \
+                 The text pointer at AnnounceMessage+{MSG_TEXT_POINTER_OFFSET:#x} is not reaching \
+                 the text widget; do NOT treat the SHOWN tally as success"
+            ));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn poll_measurement() {}
 
 /// Announcements displayed, and attempts refused before display.
 #[cfg(windows)]
@@ -229,6 +333,10 @@ pub unsafe fn show(text: &str) -> bool {
         ((view + PLAY_STATE_OFFSET) as *mut u8).write(PLAY_STATE_LOAD);
     }
 
+    // Arm the read-back. Placing a notice is not the same claim as displaying one, and this is what
+    // makes the difference observable without a person looking at the screen.
+    MEASURE_COUNTDOWN.store(MEASURE_DELAY_FRAMES, Ordering::SeqCst);
+
     let count = SHOWN.fetch_add(1, Ordering::SeqCst) + 1;
     if count == 1 {
         crate::standalone_log(format_args!(
@@ -279,6 +387,31 @@ mod tests {
             PLAY_STATE_OFFSET,
             MSG_OFFSET + 0x40,
             "announcePlayState immediately follows the 64-byte AnnounceMessage"
+        );
+    }
+
+    /// The measurement offsets, and the ORDER that makes them a state rather than two constants.
+    ///
+    /// Both are written by the same `Load` case, immediately after the text is handed to the
+    /// widget, and both live past `announcePlayState` in the view -- so a drifted `PLAY_STATE`
+    /// offset that overlapped either would corrupt the very evidence meant to catch it.
+    #[test]
+    fn the_measurement_offsets_sit_after_the_play_state_and_do_not_overlap() {
+        assert_eq!(TEXT_NEEDS_SCROLL_OFFSET, 0x0b5c);
+        assert_eq!(TEXT_MEASURED_WIDTH_OFFSET, 0x0b64);
+        assert!(
+            PLAY_STATE_OFFSET < TEXT_NEEDS_SCROLL_OFFSET,
+            "the play state is written before these are read"
+        );
+        assert!(
+            TEXT_NEEDS_SCROLL_OFFSET + 1 <= TEXT_MEASURED_WIDTH_OFFSET,
+            "the scroll flag must not overlap the width"
+        );
+        // Measuring on the same frame reads the PREVIOUS notice's width, which would report a
+        // broken banner as healthy -- the exact false-negative this oracle exists to prevent.
+        assert!(
+            MEASURE_DELAY_FRAMES >= 2,
+            "the Load case runs on a LATER frame than the one that arms it"
         );
     }
 

@@ -1782,6 +1782,10 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // which does not exist at attach, so it retries until it lands rather than failing silently
     // once. Costs one byte-check per tick until then.
     crate::announce::install();
+    // Read back what the game measured for the last notice. Deliberately OUTSIDE the Seamless
+    // early-return below: a notice can be on screen while the session is unresolvable, and the
+    // whole point of this check is that it does not depend on the path that placed the notice.
+    crate::announce::poll_measurement();
     // Read-only, and independent of the filter: it reports the one string that decides whether two
     // Seamless players can find each other at all.
     install_lobby_key_observer();

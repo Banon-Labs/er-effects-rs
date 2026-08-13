@@ -367,13 +367,18 @@ impl InvasionWarpDrive {
             // banners whose text was read back out of the game's own rawString/length after
             // writing; `refused` counts attempts dropped before display.
             let (banners_shown, banners_refused) = crate::announce::tally();
+            // `shown` counts placements; `drawn`/`empty` count what the GAME measured afterwards.
+            // The pair is the point: a blank banner shipped once with shown=1 and no way to see it
+            // in telemetry, so the number that can disagree with success is the one worth printing.
+            let (banners_drawn, banners_empty) = crate::announce::measurement_tally();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} f7_state={:#06x} \
                  f8_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
-                 banner[shown={banners_shown} refused={banners_refused}] \
+                 banner[shown={banners_shown} refused={banners_refused} \
+                 drawn={banners_drawn} empty={banners_empty}] \
                  hotkey_refused={} \
                  -- invasion locations are markers, not warp destinations: F7/F8/F9 and the map's \
                  own confirm are all declined, and the pins are drawn dimmed to show it",
