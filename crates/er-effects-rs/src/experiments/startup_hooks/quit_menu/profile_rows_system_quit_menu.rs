@@ -1752,9 +1752,6 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
-    if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
-        crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
-    }
     if filename == "02_990_TextInput_PathEditor" {
         let owner =
             unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
