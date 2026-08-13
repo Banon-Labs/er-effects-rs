@@ -101,7 +101,7 @@ them at `f54e4041` and re-cuts them into three slices (S4d/S4e/S4f) that are siz
 
 **38 files / 26,051 lines** -- down **1,796** from SS0.1, with **two files gone**: `submit.rs` (577,
 S4a) and `menu_diag/live_loadgame_node.rs` (200, S4b). Every other file in the subtree is unchanged
-to the line except the fifteen below.
+to the line except the fifteen below. (With S4d/S4e/S4f applied on top: **25,541**.)
 
 | file | SS0.1 | now | delta | slice |
 |---|---:|---:|---:|---|
@@ -148,16 +148,52 @@ gate is `lifecycle.rs:switch_harness_discovery_enabled`.
 
 ### Re-cut into three slices
 
-| # | PR title | Files | Est. net | Gate | Regime |
+| # | PR title | Files | Net | Predicted regime | **Measured** |
 |---|---|---|---:|---|---|
-| **S4d** | Delete the switch-harness discovery probe | 3 | ~-100 | CHK + FP | **B** -- `switch_harness_note_menu_filename` is called from a live detour behind an `if` |
-| **S4e** | Delete the disproven legacy menu-drive route | 3 | ~-280 | CHK + FP | **B** -- `fire_titletop_load_entry` and `cursor_offset_probe` sit in emitted functions |
-| **S4f** | Delete the last three hard-false S4 levers | 5 | ~-200 | CHK + FP | **B** -- `invoke_menu_item_functor` is address-taken |
+| **S4d** #237 | Delete the switch-harness discovery probe | 3 | **-99** | B | **A** -- every section byte-identical at CGU1 |
+| **S4e** #238 | Delete the disproven legacy menu-drive route | 5 | **-263** | B | **A-ish** -- ONE dead instruction left the image |
+| **S4f** #239 | Delete the last three hard-false S4 levers | 7 | **-148** | B | **A-ish** -- one `format_args` argument left the image |
 
-All three are regime B by the SS0.1 table, so **expect `MATERIAL` and do not reach for a runtime
-run**: the proof is the gate body plus the caller count, both re-measured above. S4d and S4e are
-independent (disjoint files apart from `product_core_own_stepper.rs`, which only S4e touches); S4f
-depends on neither. Stack them anyway so each PR's diff is readable against its parent.
+Stacked #237 <- #238 <- #239 off `f54e4041`. Directory after all three: **38 files / 25,541 lines**.
+
+### What executing them taught the regime model
+
+**The A/B prediction was wrong on all three, in the same direction: the plan over-predicted B.**
+That matters because regime B is the one whose proof is a prose argument; regime A's proof is a hash.
+Two rules come out of it:
+
+1. **Where the gate sits decides the regime, not whether a gate exists.** S4d's gate is the FIRST
+   statement of the entry point (`if !enabled() { return; }`) and its other call site is wrapped in
+   `if enabled()`, so rustc folded the whole probe and the code was never emitted -- pure regime A.
+   The SS0.1 row for B should be read narrowly: **address-taken** functions (S4f's
+   `invoke_menu_item_functor`) and code reachable through a runtime value the compiler cannot fold.
+2. **`MATERIAL` is not the end of the measurement, it is the start of one.** All three came back
+   `MATERIAL`, and in all three the actual machine-code delta was recoverable exactly:
+
+   | slice | how it was pinned down | delta |
+   |---|---|---|
+   | S4d | section hashes at CGU1 | **0 bytes of code.** 37 `.rdata` bytes = 25 `panic::Location` line numbers, each `-94`, matching the 94 lines deleted |
+   | S4e | `.pdata` entry-by-entry: 6,266 entries both sides, exactly one length change (own_stepper `0x70a90`, `-3`), then a disassembly diff of that one function | **one instruction**: a dead `mov rcx,[rax]` whose value the next instruction reloads into `rax` |
+   | S4f | same method: one length change (`0x75100`, `-48`) | **one `format_args` argument**: the `mov byte ptr [rbp+0xdf],0` materializing a constant `false`, its `lea`, its formatter slot; frame `0x168`->`0x148` |
+
+   **The method, now the standard for any regime-B claim:** compare `.pdata` entry counts (proves no
+   function was added or removed), find the entries whose `End-Begin` changed (that is the complete
+   set of functions whose bodies moved), then disassemble just those with `rip`/`rbp`/`rsp`
+   displacements and branch targets masked. Everything else in a `MATERIAL` verdict is relocation.
+   Cross-check it with a string count in the BEFORE DLL -- `count=0` proves the deleted code was
+   never shipped, which is a stronger statement than any hash comparison.
+
+Corrections to SS0.2's own table, found while executing:
+
+* `STEP3_INIT_REBUILD_FIRED`/`_COUNT` are **not** an "oracle cascade". Three references each: the
+  re-export, the deleted body, the `counters.rs` declaration. No oracle reads them.
+* `cursor_offset_probe`'s gate is `inject_nav_enabled`, which SS6 never named, and deleting the probe
+  orphans five `CURSOR_PROBE_*` constants in `constants/system_quit.rs` that SS6 did not account for.
+* Two deletions uncovered **orphaned doc blocks sitting above the wrong function** -- the same class
+  of finding as S1's stray `render_liveness_probe` doc. Both were re-homed onto the live, previously
+  undocumented function they actually describe (`functor_chain_hits_factory`,
+  `dump_titletop_menu_entries`) rather than deleted along with the code they sat above. **Check for
+  this on every deletion: a doc block above a deleted item may not belong to it.**
 
 ---
 
@@ -298,6 +334,14 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
   GROW `.pdata` by 24, `.data` by 16 and `.reloc` by 76 bytes. Intra-file deletions that leave the
   module graph intact (S1-S3) do **not** need this; all three came back byte-identical at the
   default profile. This is a measurement-only setting -- do not change the shipped profile.
+- **FP-DELTA** = what to do when FP-CGU1 still says `MATERIAL`. Do NOT conclude "runtime run" from the
+  hash; localise the change instead. (1) Compare `.pdata` **entry counts** -- equal counts prove no
+  function was added or removed. (2) Find the entries whose `End - Begin` changed; that is the
+  complete set of functions whose bodies moved. (3) Disassemble only those, masking `rip`/`rbp`/`rsp`
+  displacements and branch targets, and diff. Everything a `MATERIAL` verdict shows beyond that is
+  relocation. Cross-check with a string count in the **BEFORE** DLL: `count=0` for a deleted
+  function's distinctive log literal proves the code was never shipped, which no hash can say.
+  Measured on S4e (one dead instruction) and S4f (one `format_args` argument) -- see SS0.2.
 - **CHK** = `bash scripts/check.sh` green (includes `check-rust-build.sh`, so the DLL is linked).
 - **SZ** = `scripts/check-rust-file-sizes.py` -- warn > 900, **fail > 3200** (measured at
   `scripts/check-rust-file-sizes.py:13-14`).
@@ -331,9 +375,9 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S4a** | Delete submit.rs and its four hard-false levers | 6 | -608 | CHK + **FP-CGU1** | S1 | **LANDED #232** |
 | **S4b** | Delete the live-dialog / native-profile-capture path | 8 | -529 | CHK + **static gate proof** (regime B) | S4a | **LANDED #234** |
 | **S4c** | Delete the retired menu-task-update trace lever | 3 | -47 | CHK + static gate proof (regime B) | S4b | **LANDED #235** |
-| **S4d** | Delete the switch-harness discovery probe | 3 | ~-100 | CHK + static gate proof (regime B) | S4c | **re-cut in SS0.2** |
-| **S4e** | Delete the disproven legacy menu-drive route | 3 | ~-280 | CHK + static gate proof (regime B) | S4d | **re-cut in SS0.2** |
-| **S4f** | Delete the last three hard-false S4 levers | 5 | ~-200 | CHK + static gate proof (regime B) | S4e | **re-cut in SS0.2** |
+| **S4d** | Delete the switch-harness discovery probe | 3 | -99 | CHK + **FP-CGU1** (came back regime A) | S4c | **OPEN #237** |
+| **S4e** | Delete the disproven legacy menu-drive route | 5 | -263 | CHK + FP-CGU1 + `.pdata`/disasm delta | S4d | **OPEN #238** |
+| **S4f** | Delete the last three hard-false S4 levers | 7 | -148 | CHK + FP-CGU1 + `.pdata`/disasm delta | S4e | **OPEN #239** |
 | **S5** | **Move the code-patch primitives into er-hook** | 5 | ~-40 | CHK + FP | S1 |
 | **S6** | Move the boot profiler into er-boot-profiler | 5 | ~+30 | CHK | S1 |
 | **S7** | Move the PGD name offsets into er-game-base | 3 | ~+15 | CHK | -- |
