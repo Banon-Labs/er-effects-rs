@@ -622,6 +622,50 @@ def main() -> int:
             "PY",
             True,
         ),
+        # Editing a repo file whose TEXT names the EAC launcher is not a launch
+        # (2026-08-04 false positive: removing one sentence from a module
+        # docstring was denied because the raw marker fallback saw the name plus
+        # the word "python" from the interpreter's own invocation). This repo
+        # deliberately writes refusal logic and safety docs that NAME the
+        # forbidden binary, so that text has to stay editable.
+        PolicyCase(
+            "allow-python-heredoc-editing-docstring-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "p = Path('scripts/frida-dump-module.py')\n"
+            "s = p.read_text(encoding='utf-8')\n"
+            'old = """* Offline `eldenring.exe` ONLY. Refuses'
+            " `start_protected_game.exe` / EAC, like the sibling\n"
+            "  `frida-nudge.py`.\n"
+            '"""\n'
+            "assert old in s\n"
+            "p.write_text(s.replace(old, ''), encoding='utf-8')\n"
+            "PY",
+            True,
+            extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
+        ),
+        # ... but the exemption must not become a launch bypass. A pipe on the
+        # heredoc REDIRECTION LINE feeds the program's OUTPUT to a shell, so a
+        # path the program merely prints really executes.
+        PolicyCase(
+            "deny-python-heredoc-edit-piped-into-shell",
+            "python3 - <<'PY' | bash\n"
+            "print(\"'/opt/er/start_protected_game.exe'\")\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-python-heredoc-edit-plus-subprocess-launch",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "import subprocess\n"
+            "Path('scripts/frida-dump-module.py').write_text('# start_protected_game.exe')\n"
+            "subprocess.run(['wine', '/opt/er/start_protected_game.exe'])\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
         # ... but the /proc mention must never become a launch bypass.
         PolicyCase(
             "deny-proc-scan-heredoc-with-subprocess-launch",

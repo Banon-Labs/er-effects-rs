@@ -16,8 +16,11 @@ use er_gfx::title_05_000::fnv1a64;
 use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX,
     COMPACT_SCROLLBAR_TOP_Y_PX, COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX,
-    COMPACT_VISIBLE_ROW_COUNT, DRIVE_CELL_FIELD_NAMES, EDITED_FNV1A64, EDITED_LEN,
-    STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
+    COMPACT_VISIBLE_ROW_COUNT, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
+    DRIVE_BUTTON_FIELD_NAMES, DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX,
+    DRIVE_CELL_PITCH_PX, DRIVE_CELL_WIDTH_PX, DRIVE_CELL_Y_PX, EDITED_FNV1A64, EDITED_LEN,
+    ROW_HIT_AREA_NAME, STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN,
+    is_known_vanilla, stats_panel,
 };
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
@@ -221,10 +224,16 @@ fn injected_row_field_names_exist_in_our_movie_and_in_no_vanilla_summary_panel()
     };
     let out = stats_panel(&vanilla).expect("edits must apply cleanly");
     let edited = Movie::parse(&out).expect("edited movie parses");
-    let injected: Vec<&str> = [STATS_FIELD_NAME, CHAR_STATS_FIELD_NAME]
-        .into_iter()
-        .chain(DRIVE_CELL_FIELD_NAMES)
-        .collect();
+    let injected: Vec<&str> = [
+        STATS_FIELD_NAME,
+        CHAR_STATS_FIELD_NAME,
+        CURRENT_PATH_FIELD_NAME,
+        CURRENT_PATH_BUTTON_NAME,
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES)
+    .chain(DRIVE_BUTTON_FIELD_NAMES)
+    .collect();
 
     let ours = placed_instance_names(&edited);
     for name in &injected {
@@ -347,14 +356,17 @@ fn stats_panel_output_places_stats_field_and_hides_face_box() {
         .iter()
         .position(|t| matches!(t, Tag::ShowFrame { .. }))
         .expect("row template has a visible-frame ShowFrame");
-    for cell in DRIVE_CELL_FIELD_NAMES {
+    for child in DRIVE_CELL_FIELD_NAMES
+        .into_iter()
+        .chain(DRIVE_BUTTON_FIELD_NAMES)
+    {
         let pos = row
             .iter()
-            .position(|t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == cell))
-            .unwrap_or_else(|| panic!("drive cell field {cell} placement missing: {names:?}"));
+            .position(|t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == child))
+            .unwrap_or_else(|| panic!("drive child {child} placement missing: {names:?}"));
         assert!(
             pos < first_show_frame,
-            "drive cell field {cell} must be placed before ShowFrame to be visible: pos={pos}, show_frame={first_show_frame}"
+            "drive child {child} must be placed before ShowFrame to be visible: pos={pos}, show_frame={first_show_frame}"
         );
     }
     let stats_char = row
@@ -472,6 +484,17 @@ impl TextRect {
             bottom: self.bottom + margin,
         }
     }
+}
+
+fn sprite(movie: &Movie, wanted: u16) -> &[Tag] {
+    movie
+        .tags
+        .iter()
+        .find_map(|t| match t {
+            Tag::DefineSprite { id, tags, .. } if *id == wanted => Some(tags.as_slice()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("edited movie keeps sprite {wanted}"))
 }
 
 fn row_template(movie: &Movie) -> &[Tag] {
@@ -687,7 +710,14 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profile_05_010_layout.toml"),
     )
     .expect("checked-in ProfileSelect layout parses");
-    for name in [
+    // Every field the schema names, with nothing left off. `CurrentPath` used to be absent from
+    // this list, and it drifted unseen: the checked-in edit table emitted a 700px path box against
+    // a schema that said 600. A `width` edit only reaches the movie when
+    // `scripts/rebuild-profile-05-010-layout.sh` re-bakes `title_05_010_edits.rs`, and the live
+    // editor's save path runs that script's `--hot-reload` branch, which reloads the running game
+    // and does NOT re-emit the table -- so an un-listed field is a field whose authored width can
+    // silently never ship.
+    let names = [
         "PlayerName",
         "StaticText_110502",
         "Level",
@@ -695,10 +725,11 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
-        DRIVE_CELL_FIELD_NAMES[0],
-        DRIVE_CELL_FIELD_NAMES[1],
-        DRIVE_CELL_FIELD_NAMES[2],
-    ] {
+        CURRENT_PATH_FIELD_NAME,
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES);
+    for name in names {
         let field = row_text_field(&movie, name);
         let Tag::DefineEditText { bounds, .. } = field else {
             panic!("{name} is a DefineEditText");
@@ -709,7 +740,11 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
             bounds.x_min,
             bounds.x_max
         );
-        let expected = layout.field(name);
+        let expected = if DRIVE_CELL_FIELD_NAMES.contains(&name) {
+            layout.field(DRIVE_CELL_FIELD_NAMES[0])
+        } else {
+            layout.field(name)
+        };
         assert_eq!(
             bounds.x_max - bounds.x_min,
             expected.width * 20,
@@ -966,9 +1001,9 @@ fn stats_panel_output_keeps_unmerged_vanilla_character_row_text_from_overlapping
     assert_no_ink_overlaps("unmerged vanilla character", &rects, 4);
 }
 
-/// A picker-owned browse row -- `RowSlotFieldVisibility::browse_row`. It draws the file/folder name
-/// in `PlayerName`, our wide metadata line in `ErStats`, the three drive cells, and `Location` only
-/// when a timestamp is staged.
+/// Picker-owned rows -- `RowSlotFieldVisibility::browse_row`. Every one draws its label in
+/// `PlayerName`; file/folder rows may draw the wide `ErStats` metadata line and a staged `Location`
+/// timestamp, while the mutually-exclusive drive row draws its populated drive cells instead.
 ///
 /// The save-picker rendering had a CONTAINMENT gate (every field inside the row frame) but no
 /// overlap gate, so two picker fields could sit on top of each other and stay green. Containment
@@ -986,12 +1021,12 @@ fn stats_panel_output_keeps_save_picker_row_text_from_overlapping() {
     // A DRIVE row: the strip is populated and the name is the root label.
     let drive_row = [
         ("PlayerName", "Save Root", None),
-        (DRIVE_CELL_FIELD_NAMES[0], "[C:]", None),
-        (DRIVE_CELL_FIELD_NAMES[1], "[S:]", None),
-        (DRIVE_CELL_FIELD_NAMES[2], ">Z:<", None),
+        (DRIVE_CELL_FIELD_NAMES[0], "C:", None),
+        (DRIVE_CELL_FIELD_NAMES[1], "S:", None),
+        (DRIVE_CELL_FIELD_NAMES[2], "Z:", None),
     ];
-    // A FILE row: the metadata line is populated, the drive cells are blanked (no ink), and the
-    // timestamp is staged into Location.
+    // A FILE row: the metadata line is populated, the drive cells are hidden (and blanked as
+    // redundant content hygiene), and the timestamp is staged into Location.
     let file_row = [
         ("PlayerName", "er-effects-save-20260807.sl2", None),
         (
@@ -1113,9 +1148,9 @@ fn stats_panel_output_keeps_save_picker_rendered_text_inside_the_visible_row_con
         ("PlayerName", "DRIVES", None),
         ("PlayerName", "er-effects-save-", None),
         ("PlayerName", "ER0000.sl2", None),
-        ("DriveCell_0", "[C:]", None),
-        ("DriveCell_1", "[S:]", None),
-        ("DriveCell_2", ">Z:<", None),
+        ("DriveCell_0", "C:", None),
+        ("DriveCell_1", "S:", None),
+        ("DriveCell_2", "Z:", None),
         (STATS_FIELD_NAME, "PARENT FOLDER / Go to save-files", None),
         (
             STATS_FIELD_NAME,
@@ -1147,7 +1182,7 @@ fn stats_panel_output_keeps_inline_text_field_centers_inside_compact_row_slot() 
     let rects = row_text_rects(&movie);
     let slot_top = -(COMPACT_ROW_PITCH_PX * 20) / 2;
     let slot_bottom = (COMPACT_ROW_PITCH_PX * 20) / 2;
-    for name in [
+    let names = [
         "PlayerName",
         "Location",
         "Level",
@@ -1155,10 +1190,10 @@ fn stats_panel_output_keeps_inline_text_field_centers_inside_compact_row_slot() 
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
-        DRIVE_CELL_FIELD_NAMES[0],
-        DRIVE_CELL_FIELD_NAMES[1],
-        DRIVE_CELL_FIELD_NAMES[2],
-    ] {
+    ]
+    .into_iter()
+    .chain(DRIVE_CELL_FIELD_NAMES);
+    for name in names {
         let rect = rects
             .iter()
             .find(|r| r.name == name)
@@ -1225,11 +1260,9 @@ fn stats_panel_output_keeps_injected_stats_text_from_overlapping_native_text() {
                 "Level",
                 "StaticText_110502",
                 "PlayTime",
-                DRIVE_CELL_FIELD_NAMES[0],
-                DRIVE_CELL_FIELD_NAMES[1],
-                DRIVE_CELL_FIELD_NAMES[2],
             ]
             .contains(&r.name.as_str())
+            || DRIVE_CELL_FIELD_NAMES.contains(&r.name.as_str())
     });
     let (mut top, mut bottom) = (i32::MAX, i32::MIN);
     for r in guarded {
@@ -1266,10 +1299,15 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             _ => None,
         })
         .expect("edited movie keeps row backing shape 53 bounds");
+    // Depth 1 is the vanilla full-row backing. It is selected by DEPTH, not by "the first char-54
+    // placement": char 54 is reused by every `DriveButton_*`, by `CurrentPathButton`, and by the
+    // invisible `HitArea`, so a character-id search would resolve whichever one happens to be
+    // serialized first.
     let (backing, backing_name) = row
         .iter()
         .find_map(|t| match t {
             Tag::PlaceObject2 {
+                depth: 1,
                 character_id: Some(54),
                 matrix: Some(m),
                 name,
@@ -1277,7 +1315,7 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             } => Some((m, name.as_deref())),
             _ => None,
         })
-        .expect("row template places row backing char 54");
+        .expect("row template places row backing char 54 at depth 1");
     assert_eq!(
         backing_name,
         Some("Backing"),
@@ -1401,6 +1439,446 @@ fn stats_panel_output_scales_row_internal_chrome_to_compact_pitch() {
             "CursorBody should keep the shared 54px button art at the same height as Backing"
         );
     }
+}
+
+/// Axis-aligned scale+translate of a placement, in the units the AABB test uses.
+fn placement_transform(matrix: Option<&Matrix>) -> (f64, f64, f64, f64) {
+    let Some(m) = matrix else {
+        return (1.0, 1.0, 0.0, 0.0);
+    };
+    assert!(
+        !m.has_rotate || (m.rotate_skew0 == 0 && m.rotate_skew1 == 0),
+        "the row hit-box chain must stay axis-aligned or this comparison is meaningless: {m:?}"
+    );
+    let (sx, sy) = if m.has_scale {
+        (
+            f64::from(m.scale_x) / f64::from(SCALE_ONE),
+            f64::from(m.scale_y) / f64::from(SCALE_ONE),
+        )
+    } else {
+        (1.0, 1.0)
+    };
+    (sx, sy, f64::from(m.translate_x), f64::from(m.translate_y))
+}
+
+/// Bounds of character `id` in its OWN coordinate space, in twips -- what the engine's
+/// `GetBounds` (vtbl `+0x1f0`) hands the row hit test before the inverse world transform.
+/// Shapes contribute their `shape_bounds`, GFx external images (tag 1009) their target rect, and
+/// a sprite the union of its children under their placement matrices.
+fn character_bounds(movie: &Movie, id: u16) -> (f64, f64, f64, f64) {
+    for tag in &movie.tags {
+        match tag {
+            Tag::DefineShape {
+                shape_id,
+                shape_bounds,
+                ..
+            } if *shape_id == id => {
+                return (
+                    f64::from(shape_bounds.x_min),
+                    f64::from(shape_bounds.x_max),
+                    f64::from(shape_bounds.y_min),
+                    f64::from(shape_bounds.y_max),
+                );
+            }
+            Tag::DefineEditText {
+                character_id,
+                bounds,
+                ..
+            } if *character_id == id => {
+                return (
+                    f64::from(bounds.x_min),
+                    f64::from(bounds.x_max),
+                    f64::from(bounds.y_min),
+                    f64::from(bounds.y_max),
+                );
+            }
+            // GFX_DefineExternalImage2: u32 characterId, u16 format, u16 targetW, u16 targetH.
+            Tag::Unknown {
+                code: 1009, raw, ..
+            } if raw.len() >= 10
+                && u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]) == u32::from(id) =>
+            {
+                let w = f64::from(u16::from_le_bytes([raw[6], raw[7]])) * 20.0;
+                let h = f64::from(u16::from_le_bytes([raw[8], raw[9]])) * 20.0;
+                return (0.0, w, 0.0, h);
+            }
+            Tag::DefineSprite {
+                id: sprite, tags, ..
+            } if *sprite == id => {
+                let mut union: Option<(f64, f64, f64, f64)> = None;
+                for child in tags {
+                    let (child_id, matrix) = match child {
+                        Tag::PlaceObject2 {
+                            character_id: Some(c),
+                            matrix,
+                            ..
+                        }
+                        | Tag::PlaceObject3 {
+                            character_id: Some(c),
+                            matrix,
+                            ..
+                        } => (*c, matrix.as_ref()),
+                        _ => continue,
+                    };
+                    let b = character_bounds(movie, child_id);
+                    let (sx, sy, tx, ty) = placement_transform(matrix);
+                    let placed = (b.0 * sx + tx, b.1 * sx + tx, b.2 * sy + ty, b.3 * sy + ty);
+                    union = Some(match union {
+                        None => placed,
+                        Some(u) => (
+                            u.0.min(placed.0),
+                            u.1.max(placed.1),
+                            u.2.min(placed.2),
+                            u.3.max(placed.3),
+                        ),
+                    });
+                }
+                return union.unwrap_or_else(|| panic!("sprite {id} places no character"));
+            }
+            _ => {}
+        }
+    }
+    panic!("no definition for character {id}");
+}
+
+/// Row-space AABB of a named row child, resolved the way the native hit test resolves it.
+fn row_child_hit_box(movie: &Movie, name: &str) -> (f64, f64, f64, f64) {
+    let row = row_template(movie);
+    let (character_id, matrix) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(c),
+                matrix,
+                name: Some(n),
+                ..
+            } if n == name => Some((*c, matrix.as_ref())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("row template places {name}"));
+    let b = character_bounds(movie, character_id);
+    let (sx, sy, tx, ty) = placement_transform(matrix);
+    (b.0 * sx + tx, b.1 * sx + tx, b.2 * sy + ty, b.3 * sy + ty)
+}
+
+/// THE ROW'S MOUSE TARGET, AND THE PROOF IT DID NOT MOVE FOR ANYONE ELSE.
+///
+/// `GridControl::HandleMouse` -> `FUN_140736c90` asks `FUN_14074b0d0` for each row's hit object,
+/// and that resolver takes the child named `HitArea` first, `Cursor` second, and the cell itself
+/// last; `FUN_140d7ff40` then hit-tests THAT ONE object's bounds (`GetBounds` at vtbl `+0x1f0`,
+/// inverse world transform, AABB, then `PointTestLocal` at `+0x200` with mask 0 -- a bounds test,
+/// no visibility term, which is why an alpha-0 plate is still a valid target). Without a
+/// `HitArea`, the row's mouse target IS `Cursor` -- the sprite the drive-row runtime shrinks onto
+/// the focused sub-control, which is why the drive row was hoverable only where focus already was.
+///
+/// The catch is that sprite 76 is ONE template for every row, including the character-slot views.
+/// So the gate is not "a HitArea exists" but "the hit box is bit-identical to the full-row `Cursor`
+/// it takes over from" -- computed here through both character chains rather than asserted from
+/// the matrices, because `Backing`/char 54 and `CursorBody`/char 73 are different art.
+#[test]
+fn injected_row_hit_area_reproduces_the_full_row_cursor_hit_box_exactly() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let row = row_template(&movie);
+
+    let (hit_depth, hit_character, hit_matrix, hit_color) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                character_id,
+                matrix: Some(matrix),
+                name: Some(name),
+                color_transform,
+                ..
+            } if name == ROW_HIT_AREA_NAME => {
+                Some((*depth, *character_id, matrix, color_transform))
+            }
+            _ => None,
+        })
+        .expect("row template places the full-row HitArea");
+
+    // Never renders. This plate spans every row of a shared template, so a visible one would paint
+    // a solid bar across the whole list rather than merely looking wrong.
+    assert_eq!(
+        hit_color
+            .as_ref()
+            .and_then(|cx| cx.mult)
+            .map(|mult| mult[3]),
+        Some(0),
+        "HitArea alpha multiply must be 0: {hit_color:?}"
+    );
+    // Reuses the row's own backing art at the backing transform, so the hoverable band is the
+    // drawn row.
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    assert_eq!(hit_character, Some(54));
+    assert_eq!(
+        hit_matrix.translate_x,
+        schema_px(layout.row_chrome.hit_area.x)
+    );
+    assert_eq!(
+        hit_matrix.translate_y,
+        schema_px(layout.row_chrome.hit_area.y)
+    );
+    assert_eq!(
+        hit_matrix.scale_x,
+        schema_scale(layout.row_chrome.hit_area.scale_x)
+    );
+    assert_eq!(
+        hit_matrix.scale_y,
+        schema_scale(layout.row_chrome.hit_area.scale_y)
+    );
+
+    // On the visible frame, or the row has no such child at all.
+    let hit_pos = row
+        .iter()
+        .position(
+            |t| matches!(t, Tag::PlaceObject2 { name: Some(n), .. } if n == ROW_HIT_AREA_NAME),
+        )
+        .expect("HitArea placement present");
+    let first_show_frame = row
+        .iter()
+        .position(|t| matches!(t, Tag::ShowFrame { .. }))
+        .expect("row template has a visible-frame ShowFrame");
+    assert!(hit_pos < first_show_frame);
+
+    // Only the row backing sits below it.
+    let below: Vec<u16> = row
+        .iter()
+        .filter_map(|t| match t {
+            Tag::PlaceObject2 { depth, .. } | Tag::PlaceObject3 { depth, .. }
+                if *depth < hit_depth =>
+            {
+                Some(*depth)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        below,
+        vec![1],
+        "only the row backing (depth 1) may sit below the hit target: {below:?}"
+    );
+
+    // THE SHARED-ROW GATE: the hit box the engine will now use must be the one it used before.
+    let hit_box = row_child_hit_box(&movie, ROW_HIT_AREA_NAME);
+    let cursor_box = row_child_hit_box(&movie, "Cursor");
+    assert_eq!(
+        hit_box, cursor_box,
+        "HitArea must reproduce the full-row Cursor hit box exactly, or every character-slot row's \
+         mouse target moves: hit={hit_box:?} cursor={cursor_box:?}"
+    );
+    // And that box really is the full visible row, not some collapsed remnant that happens to match.
+    assert!(
+        hit_box.0 <= f64::from(PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX * 20)
+            && hit_box.1 >= f64::from(PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX * 20),
+        "row hit box must span the visible row content area: {hit_box:?}"
+    );
+}
+
+#[test]
+fn drive_cell_row_coordinates_are_the_mouse_stage_coordinates() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+
+    let root_profile_list = movie
+        .tags
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(87),
+                matrix: Some(matrix),
+                ..
+            } => Some(matrix),
+            _ => None,
+        })
+        .expect("root places ProfileList char 87");
+    assert_eq!(root_profile_list.translate_x, 960 * 20);
+    assert!(!root_profile_list.has_scale);
+
+    for (parent, child) in [(87, 86), (86, 78), (78, 77), (77, 76)] {
+        let matrix = sprite(&movie, parent)
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    character_id: Some(id),
+                    matrix: Some(matrix),
+                    ..
+                } if *id == child => Some(matrix),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("sprite {parent} places child {child}"));
+        assert_eq!(
+            matrix.translate_x, 0,
+            "sprite {parent}->{child} adds no x offset"
+        );
+        assert!(
+            !matrix.has_scale,
+            "sprite {parent}->{child} adds no x scale"
+        );
+    }
+}
+
+#[test]
+fn stats_panel_output_gives_each_drive_cell_its_own_button_chrome() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = stats_panel(&vanilla).expect("edits must apply cleanly");
+    let movie = Movie::parse(&out).expect("edited movie parses");
+    let row = row_template(&movie);
+    assert!(
+        !row.iter().any(|tag| matches!(
+            tag,
+            Tag::PlaceObject2 { name: Some(name), .. } if name.starts_with("DriveCursor_")
+        )),
+        "drive cells reuse the row's one native animated Cursor; synthetic always-present cursor copies reintroduce stale multi-row highlights"
+    );
+    assert_eq!(
+        row.iter()
+            .filter(|tag| matches!(
+                tag,
+                Tag::PlaceObject2 { name: Some(name), .. } if name == "Cursor"
+            ))
+            .count(),
+        1,
+        "native list selection must retain exactly one Cursor owner per row"
+    );
+    let layout = Profile05_010Layout::parse(include_str!("../profile_05_010_layout.toml"))
+        .expect("checked-in visual editor schema parses");
+    let drive_template = layout.field(DRIVE_CELL_FIELD_NAMES[0]);
+    assert_eq!(drive_template.x, DRIVE_CELL_FIRST_X_PX);
+    assert_eq!(drive_template.y, DRIVE_CELL_Y_PX);
+    assert_eq!(drive_template.width as f32, DRIVE_CELL_WIDTH_PX);
+    assert_eq!(
+        layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - drive_template.x,
+        DRIVE_CELL_PITCH_PX
+    );
+    let button_center_offset_twips =
+        ((drive_template.width as f32 * 0.5 - 2.0 + layout.row_chrome.drive_button.x) * 20.0)
+            .round() as i32;
+    let button_center_y_twips = (drive_template.y - 2.0
+        + drive_template.clip_height as f32 * 0.5
+        + layout.row_chrome.drive_button.y)
+        .mul_add(20.0, 0.0)
+        .round() as i32;
+
+    for index in 0..DRIVE_CELL_CAPACITY {
+        let button_name = DRIVE_BUTTON_FIELD_NAMES[index];
+        let text_name = DRIVE_CELL_FIELD_NAMES[index];
+        let (button_depth, button_character, button_matrix, button_color) = row
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    depth,
+                    character_id,
+                    matrix: Some(matrix),
+                    name: Some(name),
+                    color_transform,
+                    ..
+                } if name == button_name => Some((*depth, *character_id, matrix, color_transform)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row template places {button_name}"));
+        let (text_depth, text_matrix) = row
+            .iter()
+            .find_map(|tag| match tag {
+                Tag::PlaceObject2 {
+                    depth,
+                    matrix: Some(matrix),
+                    name: Some(name),
+                    ..
+                } if name == text_name => Some((*depth, matrix)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row template places {text_name}"));
+
+        assert_eq!(
+            button_character,
+            Some(54),
+            "{button_name} reuses the native normal-button frame art"
+        );
+        assert!(
+            button_depth < text_depth,
+            "{button_name} must render behind {text_name}"
+        );
+        assert_eq!(
+            button_color
+                .as_ref()
+                .and_then(|cx| cx.mult)
+                .map(|mult| mult[3]),
+            Some((layout.row_chrome.drive_button.opacity * 256.0).round() as i32),
+            "{button_name} outline opacity must be independently authored"
+        );
+        assert!(
+            button_matrix.has_scale && button_matrix.scale_x > 0 && button_matrix.scale_y > 0,
+            "{button_name} must have visible nonzero button geometry: {button_matrix:?}"
+        );
+        assert!(
+            (button_matrix.translate_x - (text_matrix.translate_x + button_center_offset_twips))
+                .abs()
+                <= 20,
+            "{button_name} must be optically aligned under {text_name}: button={button_matrix:?} text={text_matrix:?}"
+        );
+        assert_eq!(
+            button_matrix.translate_y, button_center_y_twips,
+            "{button_name} must use the user's authored vertical center"
+        );
+    }
+
+    let (path_button_depth, path_button_character, path_button_color) = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                character_id,
+                name: Some(name),
+                color_transform,
+                ..
+            } if name == CURRENT_PATH_BUTTON_NAME => Some((*depth, *character_id, color_transform)),
+            _ => None,
+        })
+        .expect("row template places the full-path button");
+    let path_text_depth = row
+        .iter()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                depth,
+                name: Some(name),
+                ..
+            } if name == CURRENT_PATH_FIELD_NAME => Some(*depth),
+            _ => None,
+        })
+        .expect("row template places the full-path text field");
+    assert_eq!(path_button_character, Some(54));
+    assert!(path_button_depth < path_text_depth);
+    assert_eq!(
+        path_button_color
+            .as_ref()
+            .and_then(|cx| cx.mult)
+            .map(|mult| mult[3]),
+        Some((layout.row_chrome.path_button.opacity * 256.0).round() as i32),
+        "the full-path outline has independent authored opacity"
+    );
+
+    let first = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[0]);
+    let last = row_placement_matrix(row, DRIVE_CELL_FIELD_NAMES[DRIVE_CELL_CAPACITY - 1]);
+    assert!(
+        first.translate_x - 2 * 20 >= PROFILE_ROW_VISIBLE_CONTENT_LEFT_PX * 20,
+        "first drive button must stay inside the row: {first:?}"
+    );
+    assert!(
+        last.translate_x + (drive_template.width - 2) * 20
+            <= PROFILE_ROW_VISIBLE_CONTENT_RIGHT_PX * 20,
+        "all 26 possible drive buttons must fit inside the row: {last:?}"
+    );
 }
 
 #[test]

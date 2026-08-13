@@ -199,6 +199,25 @@ def main() -> int:
         print(f"file offset == RVA, so VA = 0x{base:x} + offset")
         if holes:
             print(f"NOTE: {holes} bytes were in readable ranges but failed to read")
+            # WHY they failed. A systematic failure -- a removed Frida API, a detached session --
+            # looks exactly like "the module refused to be read" unless the reason is surfaced.
+            # This tool once wrote a 7.8 MB all-zero image and reported success, because every
+            # chunk threw and the fail-soft catch turned that into holes.
+            try:
+                diagnostics = api.read_diagnostics()
+            except Exception as exc:  # the agent may predate this export
+                diagnostics = {"failures": "unknown", "firstError": f"<unavailable: {exc}>"}
+            print(
+                f"NOTE: {diagnostics.get('failures')} chunk read(s) threw; first error: "
+                f"{diagnostics.get('firstError')}"
+            )
+        if covered == 0:
+            print(
+                "ERROR: NOTHING was readable. This is a broken dump, not a protected module -- "
+                "an all-zero image would silently poison every address derived from it.",
+                file=sys.stderr,
+            )
+            return 1
         if unreadable:
             print(
                 "NOTE: zero-filled bytes are pages the module never made readable. They are "

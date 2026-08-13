@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 pub const DEFAULT_PROFILE_05_010_LAYOUT_PATH: &str = "crates/er-gfx/profile_05_010_layout.toml";
-pub const FIELD_NAMES: [&str; 10] = [
+pub const FIELD_NAMES: [&str; 11] = [
     "PlayerName",
     "StaticText_110502",
     "Level",
@@ -16,6 +16,7 @@ pub const FIELD_NAMES: [&str; 10] = [
     "DriveCell_0",
     "DriveCell_1",
     "DriveCell_2",
+    "CurrentPath",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +74,9 @@ pub struct TransformLayout {
     pub y: f32,
     pub scale_x: f32,
     pub scale_y: f32,
+    /// Opacity multiplier for baked GFX artwork. Runtime transforms do not mutate it; rebuild and
+    /// reopen the movie to apply a changed value.
+    pub opacity: f32,
     pub editable: bool,
     pub source: String,
 }
@@ -80,8 +84,63 @@ pub struct TransformLayout {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowChromeLayout {
     pub backing: TransformLayout,
+    /// Full-row invisible mouse target. `GridControl::HandleMouse` resolves a row's hit object as
+    /// child `HitArea` FIRST, then `Cursor`, then the cell itself (`FUN_14074b0d0`, 1.16.2), and
+    /// hit-tests the resolved object's own bounds. Without a `HitArea` the row's hit box IS the
+    /// `Cursor` sprite -- which the drive-row runtime shrinks onto the focused sub-control, so the
+    /// row stops being hoverable anywhere else. This placement is baked alpha-0 and never renders;
+    /// it only restores a full-row hit box so `Cursor` can stay pure focus chrome.
+    pub hit_area: TransformLayout,
     pub cursor: TransformLayout,
     pub cursor_body: TransformLayout,
+    /// Relative transform applied to every `DriveButton_*` frame around its derived drive cell.
+    pub drive_button: TransformLayout,
+    /// Independent transform/opacity for the complete-path button frame.
+    pub path_button: TransformLayout,
+}
+
+impl RowChromeLayout {
+    /// Every chrome section, by the name the schema and the live-editor protocol both use.
+    ///
+    /// This exists because the same list used to be hand-written in several places. `hit_area` was
+    /// added to the schema (2026-08-12) without being added to the live protocol's own match, and
+    /// since ONE unknown key rejects the WHOLE control file, every live nudge after that failed
+    /// with `unknown key row_chrome.hit_area.editable` -- the editor showed "no ack" while the game
+    /// ran perfectly, which reads as a dead channel rather than a rejected key. Both directions of
+    /// the protocol now enumerate through here, so a new section cannot break the channel again.
+    pub const SECTION_NAMES: [&'static str; 6] = [
+        "backing",
+        "hit_area",
+        "cursor",
+        "cursor_body",
+        "drive_button",
+        "path_button",
+    ];
+
+    /// The sections in `SECTION_NAMES` order, for serialization.
+    pub fn sections(&self) -> [(&'static str, &TransformLayout); 6] {
+        [
+            ("backing", &self.backing),
+            ("hit_area", &self.hit_area),
+            ("cursor", &self.cursor),
+            ("cursor_body", &self.cursor_body),
+            ("drive_button", &self.drive_button),
+            ("path_button", &self.path_button),
+        ]
+    }
+
+    /// Resolve a section by name for mutation, or `None` when the name is not a chrome section.
+    pub fn section_mut(&mut self, name: &str) -> Option<&mut TransformLayout> {
+        match name {
+            "backing" => Some(&mut self.backing),
+            "hit_area" => Some(&mut self.hit_area),
+            "cursor" => Some(&mut self.cursor),
+            "cursor_body" => Some(&mut self.cursor_body),
+            "drive_button" => Some(&mut self.drive_button),
+            "path_button" => Some(&mut self.path_button),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -99,6 +158,10 @@ pub struct ListGeometryLayout {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Profile05_010Layout {
     pub fields: BTreeMap<String, FieldLayout>,
+    /// Geometry of the separate 02_990 native text-entry movie. This deliberately does not share
+    /// CurrentPath's coordinates: the read-only path label and active editor are different display
+    /// objects with different native parents.
+    pub path_editor: FieldLayout,
     pub row_chrome: RowChromeLayout,
     pub list: ListGeometryLayout,
 }
@@ -240,23 +303,57 @@ impl Profile05_010Layout {
                 "DriveCell_2",
                 field(-166, -16, 64, 24, TextAlign::Center, "", ">Z:<", ">Z:<"),
             ),
+            (
+                "CurrentPath",
+                field(
+                    -180,
+                    -18,
+                    700,
+                    39,
+                    TextAlign::Left,
+                    "",
+                    "Z:\\home\\banon\\Elden Ring Saves",
+                    "Z:\\home\\banon\\Elden Ring Saves",
+                ),
+            ),
         ] {
             fields.insert(name.to_owned(), field);
         }
         Self {
             fields,
+            path_editor: field(
+                -180,
+                -18,
+                700,
+                20,
+                TextAlign::Left,
+                "",
+                "",
+                "Z:\\home\\banon\\Elden Ring Saves",
+            ),
             row_chrome: RowChromeLayout {
                 backing: transform(
                     -20.0,
                     0.0,
                     20.0,
                     1.0,
+                    1.0,
                     true,
                     "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art",
+                ),
+                hit_area: transform(
+                    -20.0,
+                    0.0,
+                    20.0,
+                    1.0,
+                    0.0,
+                    false,
+                    "invisible full-row mouse target: row sprite 76 named HitArea / char 54; the native hit resolver prefers it over Cursor, so the row stays hoverable while Cursor shrinks to the focused sub-control",
                 ),
                 cursor: transform(
                     -20.0,
                     0.0,
+                    1.0,
                     1.0,
                     1.0,
                     true,
@@ -267,8 +364,27 @@ impl Profile05_010Layout {
                     0.0,
                     20.0,
                     1.0,
+                    1.0,
                     true,
                     "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons",
+                ),
+                drive_button: transform(
+                    -2.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    0.55,
+                    true,
+                    "relative offset/scale/opacity shared by every DriveButton_* native frame; x/y nudge the button chrome without moving its text",
+                ),
+                path_button: transform(
+                    -2.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    0.42,
+                    true,
+                    "independent offset/scale/opacity for CurrentPathButton; lower opacity softens the oversized native outline",
                 ),
             },
             list: ListGeometryLayout {
@@ -365,6 +481,7 @@ fn transform(
     y: f32,
     scale_x: f32,
     scale_y: f32,
+    opacity: f32,
     editable: bool,
     source: &str,
 ) -> TransformLayout {
@@ -373,6 +490,7 @@ fn transform(
         y,
         scale_x,
         scale_y,
+        opacity,
         editable,
         source: source.to_owned(),
     }
@@ -438,40 +556,37 @@ impl Profile05_010Layout {
             .ok_or_else(|| LayoutError::MissingField(name.to_owned()))
     }
 
+    /// Absolute transform for the complete-path button frame. The row text field, its clickable
+    /// artwork, and the focused native Cursor all derive from this one geometry calculation so a
+    /// width edit cannot resize only the invisible text document while leaving the outline behind.
+    pub fn current_path_button_transform(&self) -> TransformLayout {
+        use crate::title_05_010::{
+            DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+        };
+
+        let field = self.field("CurrentPath");
+        let relative = &self.row_chrome.path_button;
+        TransformLayout {
+            x: field.x - 2.0 + field.width as f32 * 0.5 + relative.x,
+            y: field.y - 2.0 + field.clip_height as f32 * 0.5 + relative.y,
+            scale_x: (field.width as f32 / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * relative.scale_x,
+            scale_y: (field.clip_height as f32 / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX)
+                * relative.scale_y,
+            opacity: relative.opacity,
+            editable: relative.editable,
+            source: relative.source.clone(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), LayoutError> {
         for name in FIELD_NAMES {
             let field = self
                 .fields
                 .get(name)
                 .ok_or_else(|| LayoutError::MissingField(name.to_owned()))?;
-            if field.width <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.width must be > 0"
-                )));
-            }
-            if field.clip_height <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.clip_height must be > 0"
-                )));
-            }
-            if field.font_height <= 0 {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.font_height must be > 0"
-                )));
-            }
-            let minimum = min_clip_height_px(field.font_height);
-            if field.clip_height < minimum {
-                return Err(LayoutError::InvalidValue(format!(
-                    "field.{name}.clip_height {} cannot render one line of its own font: \
-                     font_height {} needs a {:.3} px line box ({MENU_FONT_ASCENT} ascent + \
-                     {MENU_FONT_DESCENT} descent over {MENU_FONT_EM_SQUARE} em) plus the \
-                     {TEXT_DOC_INSET_PX_PER_EDGE} px/edge reflow inset, so clip_height must be >= {minimum}",
-                    field.clip_height,
-                    field.font_height,
-                    line_box_px(field.font_height),
-                )));
-            }
+            validate_field_layout(&format!("field.{name}"), field)?;
         }
+        validate_field_layout("path_editor", &self.path_editor)?;
         if self.list.visible_rows != 10 {
             return Err(LayoutError::InvalidValue(
                 "list.visible_rows must stay 10; increasing native grid item count breaks picker scrollbar/native rows".to_owned(),
@@ -485,14 +600,31 @@ impl Profile05_010Layout {
                 "list row_pitch/mask_height/scrollbar_track_height must be positive".to_owned(),
             ));
         }
+        // The row hit target must never draw. It is a full-row plate sitting over every row of a
+        // template shared with the character-slot views, so any nonzero alpha would paint a solid
+        // rectangle across the whole list rather than merely being ugly.
+        if self.row_chrome.hit_area.opacity != 0.0 {
+            return Err(LayoutError::InvalidValue(
+                "row_chrome.hit_area.opacity must stay 0: it is an invisible mouse target, not chrome"
+                    .to_owned(),
+            ));
+        }
         for (name, t) in [
             ("row_chrome.backing", &self.row_chrome.backing),
+            ("row_chrome.hit_area", &self.row_chrome.hit_area),
             ("row_chrome.cursor", &self.row_chrome.cursor),
             ("row_chrome.cursor_body", &self.row_chrome.cursor_body),
+            ("row_chrome.drive_button", &self.row_chrome.drive_button),
+            ("row_chrome.path_button", &self.row_chrome.path_button),
         ] {
             if t.scale_x == 0.0 || t.scale_y == 0.0 {
                 return Err(LayoutError::InvalidValue(format!(
                     "{name} scale_x/scale_y must be nonzero"
+                )));
+            }
+            if !(0.0..=1.0).contains(&t.opacity) {
+                return Err(LayoutError::InvalidValue(format!(
+                    "{name} opacity must be between 0 and 1"
                 )));
             }
         }
@@ -517,14 +649,24 @@ impl Profile05_010Layout {
             return Ok(());
         }
         match section {
+            "path_editor" => set_field_layout(&mut self.path_editor, section, key, raw_value)?,
             "row_chrome.backing" => {
                 set_transform(&mut self.row_chrome.backing, section, key, raw_value)?
+            }
+            "row_chrome.hit_area" => {
+                set_transform(&mut self.row_chrome.hit_area, section, key, raw_value)?
             }
             "row_chrome.cursor" => {
                 set_transform(&mut self.row_chrome.cursor, section, key, raw_value)?
             }
             "row_chrome.cursor_body" => {
                 set_transform(&mut self.row_chrome.cursor_body, section, key, raw_value)?
+            }
+            "row_chrome.drive_button" => {
+                set_transform(&mut self.row_chrome.drive_button, section, key, raw_value)?
+            }
+            "row_chrome.path_button" => {
+                set_transform(&mut self.row_chrome.path_button, section, key, raw_value)?
             }
             "list" => match key {
                 "row_pitch" => self.list.row_pitch = parse_i32(raw_value)?,
@@ -546,6 +688,55 @@ impl Profile05_010Layout {
     }
 }
 
+fn validate_field_layout(name: &str, field: &FieldLayout) -> Result<(), LayoutError> {
+    if field.width <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.width must be > 0"
+        )));
+    }
+    if field.clip_height <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.clip_height must be > 0"
+        )));
+    }
+    if field.font_height <= 0 {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.font_height must be > 0"
+        )));
+    }
+    let minimum = min_clip_height_px(field.font_height);
+    if field.clip_height < minimum {
+        return Err(LayoutError::InvalidValue(format!(
+            "{name}.clip_height {} cannot render one line of its own font: font_height {} needs a {:.3} px line box ({MENU_FONT_ASCENT} ascent + {MENU_FONT_DESCENT} descent over {MENU_FONT_EM_SQUARE} em) plus the {TEXT_DOC_INSET_PX_PER_EDGE} px/edge reflow inset, so clip_height must be >= {minimum}",
+            field.clip_height,
+            field.font_height,
+            line_box_px(field.font_height),
+        )));
+    }
+    Ok(())
+}
+
+fn set_field_layout(
+    field: &mut FieldLayout,
+    section: &str,
+    key: &str,
+    raw_value: &str,
+) -> Result<(), LayoutError> {
+    match key {
+        "x" => field.x = parse_f32(raw_value)?,
+        "y" => field.y = parse_f32(raw_value)?,
+        "width" => field.width = parse_i32(raw_value)?,
+        "clip_height" => field.clip_height = parse_i32(raw_value)?,
+        "font_height" => field.font_height = parse_i32(raw_value)?,
+        "align" => field.align = TextAlign::parse(raw_value)?,
+        "sample_load_character" => field.sample_load_character = parse_string(raw_value),
+        "sample_save_picker" => field.sample_save_picker = parse_string(raw_value),
+        "sample_drive_row" => field.sample_drive_row = parse_string(raw_value),
+        _ => return Err(LayoutError::UnknownKey(format!("[{section}].{key}"))),
+    }
+    Ok(())
+}
+
 fn set_transform(
     transform: &mut TransformLayout,
     section: &str,
@@ -557,6 +748,7 @@ fn set_transform(
         "y" => transform.y = parse_f32(raw_value)?,
         "scale_x" => transform.scale_x = parse_f32(raw_value)?,
         "scale_y" => transform.scale_y = parse_f32(raw_value)?,
+        "opacity" => transform.opacity = parse_f32(raw_value)?,
         "editable" => transform.editable = parse_bool(raw_value)?,
         "source" => transform.source = parse_string(raw_value),
         _ => return Err(LayoutError::UnknownKey(format!("[{section}].{key}"))),
@@ -572,7 +764,14 @@ fn validate_section(section: &str) -> Result<(), LayoutError> {
         return Err(LayoutError::UnknownSection(section.to_owned()));
     }
     match section {
-        "row_chrome.backing" | "row_chrome.cursor" | "row_chrome.cursor_body" | "list" => Ok(()),
+        "path_editor"
+        | "row_chrome.backing"
+        | "row_chrome.hit_area"
+        | "row_chrome.cursor"
+        | "row_chrome.cursor_body"
+        | "row_chrome.drive_button"
+        | "row_chrome.path_button"
+        | "list" => Ok(()),
         _ => Err(LayoutError::UnknownSection(section.to_owned())),
     }
 }
@@ -643,9 +842,55 @@ mod tests {
         }
         assert!(layout.row_chrome.backing.editable);
         assert!(layout.row_chrome.cursor.editable);
+        // The hit target is geometry, not chrome: it must cover exactly the drawn row and must
+        // never render. Anything else either shrinks the hoverable band or paints a plate over
+        // every row of a template the character-slot views also use.
+        assert_eq!(layout.row_chrome.hit_area.x, layout.row_chrome.backing.x);
+        assert_eq!(layout.row_chrome.hit_area.y, layout.row_chrome.backing.y);
+        assert_eq!(
+            layout.row_chrome.hit_area.scale_x,
+            layout.row_chrome.backing.scale_x
+        );
+        assert_eq!(
+            layout.row_chrome.hit_area.scale_y,
+            layout.row_chrome.backing.scale_y
+        );
+        assert_eq!(layout.row_chrome.hit_area.opacity, 0.0);
+        assert!(!layout.row_chrome.hit_area.editable);
         assert!(layout.row_chrome.cursor_body.editable);
+        assert!(layout.row_chrome.drive_button.editable);
+        assert!(layout.row_chrome.path_button.editable);
+        assert_eq!(layout.row_chrome.drive_button.opacity, 0.55);
+        assert_eq!(layout.row_chrome.path_button.opacity, 0.42);
         assert_eq!(layout.list.visible_rows, 10);
         assert_eq!(layout.list.row_pitch, 48);
+    }
+
+    #[test]
+    fn current_path_width_drives_button_geometry_from_the_same_bounds() {
+        use crate::title_05_010::{
+            DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+        };
+
+        let mut layout = Profile05_010Layout::default();
+        layout.field_mut("CurrentPath").unwrap().width = 500;
+        layout.field_mut("CurrentPath").unwrap().clip_height = 39;
+        layout.row_chrome.path_button.scale_x = 1.0;
+        layout.row_chrome.path_button.scale_y = 1.0;
+        let field = layout.field("CurrentPath");
+        let transform = layout.current_path_button_transform();
+        assert_eq!(
+            transform.x,
+            field.x - 2.0 + field.width as f32 * 0.5 + layout.row_chrome.path_button.x
+        );
+        assert_eq!(
+            transform.scale_x * DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+            field.width as f32
+        );
+        assert_eq!(
+            transform.scale_y * DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX,
+            field.clip_height as f32
+        );
     }
 
     #[test]
@@ -663,6 +908,22 @@ mod tests {
         let err = Profile05_010Layout::parse("[field.Nope]\nx = 1\n")
             .expect_err("unknown field section must fail");
         assert!(err.to_string().contains("unknown section"), "{err}");
+    }
+
+    /// A visible hit target is a full-row opaque plate over EVERY row, not a cosmetic slip: the
+    /// row template is shared with the character-slot views. The schema refuses to describe one.
+    #[test]
+    fn a_visible_row_hit_target_fails_closed() {
+        let err = Profile05_010Layout::parse("[row_chrome.hit_area]\nopacity = 1\n")
+            .expect_err("a rendering hit target must fail");
+        assert!(
+            err.to_string().contains("hit_area.opacity must stay 0"),
+            "{err}"
+        );
+        assert!(
+            Profile05_010Layout::parse("[row_chrome.hit_area]\nopacity = 0\n").is_ok(),
+            "an invisible hit target is the only accepted authoring"
+        );
     }
 
     #[test]

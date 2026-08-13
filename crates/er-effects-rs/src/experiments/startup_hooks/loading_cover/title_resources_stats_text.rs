@@ -1667,9 +1667,10 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
     want: RowSlotFieldVisibility,
 ) -> (usize, usize) {
     // EVERY field any row kind writes must appear here. The four native ones were stated and the
-    // five we added were not, so the unstated ones inherited the previous kind's text on a recycled
-    // clip: the attribute line bled onto browse rows, the drive letters bled onto character rows.
-    // Adding a field to the row without adding it here reintroduces exactly that.
+    // injected fields were not, so the unstated ones inherited the previous kind's content on a
+    // recycled clip: the attribute line bled onto browse rows, then the drive labels bled onto
+    // character rows. Each drive button frame is paired with its text bit here for the same reason:
+    // hiding only the label would leave an empty clickable-looking button behind.
     let fields = [
         (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
         (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
@@ -1677,9 +1678,9 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
         (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
         (PROFILE_ROW_ER_STATS_FIELD_NAME, want.er_stats),
         (PROFILE_ROW_CHAR_STATS_FIELD_NAME, want.char_stats),
-        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[0], want.drive_cells),
-        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[1], want.drive_cells),
-        (PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[2], want.drive_cells),
+        (PROFILE_ROW_BACKING_FIELD_NAME, want.backing),
+        (PROFILE_ROW_CURRENT_PATH_FIELD_NAME, want.current_path),
+        (PROFILE_ROW_CURRENT_PATH_BUTTON_NAME, want.current_path),
     ];
     let (mut hidden, mut shown) = (0usize, 0usize);
     for (name, visible) in fields {
@@ -1691,12 +1692,33 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
             }
         }
     }
+    for (index, visible) in want.drive_cells.into_iter().enumerate() {
+        for name in [
+            PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES[index],
+            PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[index],
+        ] {
+            if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
+                if visible {
+                    shown += 1;
+                } else {
+                    hidden += 1;
+                }
+            }
+        }
+    }
     if hidden > 0 {
         let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
         if rows <= 4 || rows.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} rows={rows})",
-                want.level, want.location, want.play_time
+                "save-picker: hid {hidden} row field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} er_stats={} char_stats={} backing={} current_path={} visible_drive_cells={} rows={rows})",
+                want.level,
+                want.location,
+                want.play_time,
+                want.er_stats,
+                want.char_stats,
+                want.backing,
+                want.current_path,
+                want.drive_cells.iter().filter(|visible| **visible).count()
             ));
         }
     }
@@ -1970,6 +1992,8 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
 /// Rows the PER-ROW path composed a merged header for. Local to the log throttle; the product
 /// oracle is the `hidden`/`shown` pair on the line itself, not this count.
 static PROFILE_ROW_MERGED_HEADER_ROWS: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_DRIVE_NATIVE_CURSOR_APPLIES: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_DRIVE_NATIVE_CURSOR_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     row_model: usize,
@@ -1992,6 +2016,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
+    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -2025,6 +2050,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // means "exactly what the game drew", and until a row was actually hidden the re-assert
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
+            drive_strip_focus = slot_info.as_ref().and_then(|info| info.drive_strip_focus);
             // MERGED ROW HEADER (user request 2026-08-06/07): the name, `RL <level>` and (once
             // sourced) `WL <max weapon level>` render as ONE string in `PlayerName` instead of
             // three separately-placed fields. Composed HERE, before the visibility statement,
@@ -2113,7 +2139,11 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let location_available = record_is_this_characters || repair_place_name.is_some();
             let (want_visibility, last_saved) = match slot_info {
                 Some(info) => (
-                    RowSlotFieldVisibility::browse_row(info.location.is_some()),
+                    RowSlotFieldVisibility::browse_row(
+                        info.location.is_some(),
+                        info.er_stats,
+                        info.drive_cell_count,
+                    ),
                     info.location,
                 ),
                 None if merged_header.is_some() => (
@@ -2172,9 +2202,10 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             }
             // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
             // title, `ErStats` carries file details/navigation copy, `Location` carries timestamps,
-            // and drive rows draw their actual cells through separate `DriveCell_*` row children.
-            // Blank every synthetic drive child on every picker-owned row first so recycled row clips
-            // cannot leak a previous drive strip into file/directory rows.
+            // and only the drive row exposes its actual cells through separate `DriveCell_*` row
+            // children. Blank every synthetic drive child on every picker-owned row as content
+            // hygiene in addition to the row-kind visibility decision above; either layer then stops
+            // a recycled drive strip leaking into file/directory rows.
             if let Some(row) = picker_row {
                 let blank = [0u16];
                 let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &blank) };
@@ -2197,6 +2228,15 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                         }
                     }
                 }
+                let path = save_picker_current_path_text(row).unwrap_or_else(|| vec![0]);
+                let _ = unsafe {
+                    push_stats_text_on_row(
+                        base,
+                        row_proxy,
+                        PROFILE_ROW_CURRENT_PATH_FIELD_NAME,
+                        &path,
+                    )
+                };
             }
             let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
@@ -2293,6 +2333,35 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             };
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
+    }
+    // The row proxy is setter-valid only while this hook owns the populate call. Applying after the
+    // original returned failed on every row because native teardown had already invalidated the
+    // setter path. Constrain the row's own animated Cursor now; native hover later changes only its
+    // visibility, preserving this cell-sized geometry.
+    if let Some(focus) = drive_strip_focus {
+        if let Ok(base) = game_module_base() {
+            if unsafe {
+                crate::experiments::startup_hooks::apply_drive_row_native_cursor(
+                    base, row_proxy, focus,
+                )
+            } {
+                let applies =
+                    PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
+                if applies <= 4 || applies.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
+                    ));
+                }
+            } else {
+                let failures =
+                    PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                if failures <= 4 || failures.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
+                    ));
+                }
+            }
+        }
     }
     let ret = unsafe { f(row_model, row_proxy, arg3, arg4) };
     // The populate has read the strings; give the row model its own pointers back so our borrows do

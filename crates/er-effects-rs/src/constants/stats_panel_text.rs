@@ -65,6 +65,26 @@ pub(crate) const GFX_TEXT_DOC_CONTENT_HEIGHT_OFFSET: usize = 0xc4;
 /// `GFx::TextField`/text document reflow routine. It recomputes layout bounds from the source bounds,
 /// refreshes wrapping/alignment, updates scroll range, and invalidates the backing render state.
 pub(crate) const GFX_TEXT_DOC_REFLOW_RVA: usize = 0x114bf10;
+/// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the ONLY
+/// thing that moves the caret in the 02_990 path editor. The native SoftwareKeyboard owns no caret at
+/// all: `EnterName_` (0xe70c00) writes a prompt string, max length and flags, and the set-initial path
+/// (0xe709f0 -> 0x142416ef0) is a pure `DLString` assign. The caret lives in Scaleform, and this is
+/// the function ActionScript's `Selection.setSelection` (impl 0x140f47060) ends up calling once it has
+/// resolved the focused character and checked [`GFX_TEXT_OBJECT_KIND_VTABLE_SLOT`] == 4.
+///
+/// It takes the same text object the native text helpers do (`*(value + 0x88)`), creates the field's
+/// editor kit if absent, CLAMPS both indices to the current text length, then invalidates for redraw.
+/// The clamp is why caret-to-end needs no string length: pass [`GFX_TEXT_FIELD_SELECTION_END`] for
+/// both and the field itself resolves it to the end -- exactly what AS does when `setSelection` is
+/// called without an end argument (it defaults end to `i64::MAX`).
+///
+/// Byte-verified against `eldenring-deobf.bin`: `48 89 5c 24 10 48 89 74 24 18 57 48 83 ec 20`
+/// (`MOV [RSP+0x10],RBX; MOV [RSP+0x18],RSI; PUSH RDI; SUB RSP,0x20`), matching the 1.16.2 dump at
+/// the same VA (shift 0). See bd `path-editor-caret-to-end-setselection-141198e50-2026-08-12`.
+pub(crate) const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
+/// Selection index meaning "end of the text". The native setter clamps to the live text length, so
+/// this is a request for the end rather than a guess at a position.
+pub(crate) const GFX_TEXT_FIELD_SELECTION_END: i64 = i64::MAX;
 /// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
 /// binder hook): skip the push block while set.
 pub(crate) use er_telemetry::counters::PROFILE_STATS_PUSH_IN_PROGRESS;
@@ -182,13 +202,27 @@ pub(crate) const PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME: &str = "StaticText_110502
 pub(crate) const PROFILE_ROW_LEVEL_VALUE_FIELD_NAME: &str = "Level\0";
 pub(crate) const PROFILE_ROW_LOCATION_FIELD_NAME: &str = "Location\0";
 pub(crate) const PROFILE_ROW_PLAYTIME_FIELD_NAME: &str = "PlayTime\0";
+/// Full-width row chrome. The drive row hides both because its independent button frames are the
+/// only truthful click targets; every other row explicitly restores them.
+pub(crate) const PROFILE_ROW_BACKING_FIELD_NAME: &str = "Backing\0";
 /// The fields WE added to the row. They need the same per-row-kind visibility statement the native
 /// ones get: the row clips are recycled across the character/browse/drive lists, so a field only one
 /// kind mentions keeps that kind's text when another kind reuses the clip.
 pub(crate) const PROFILE_ROW_ER_STATS_FIELD_NAME: &str = "ErStats\0";
 pub(crate) const PROFILE_ROW_CHAR_STATS_FIELD_NAME: &str = "ErCharStats\0";
-pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES: [&str; 3] =
-    ["DriveCell_0\0", "DriveCell_1\0", "DriveCell_2\0"];
+pub(crate) const PROFILE_ROW_DRIVE_CELL_FIELD_NAMES:
+    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
+    er_gfx::title_05_010::DRIVE_CELL_FIELD_NAMES_NUL;
+/// Native button-frame children paired one-to-one with `DriveCell_0..25`. Their visibility must
+/// match the corresponding text field exactly: a blank cell must leave no empty frame, and a
+/// recycled character row must inherit neither the label nor its button chrome.
+pub(crate) const PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES:
+    [&str; er_gfx::title_05_010::DRIVE_CELL_CAPACITY] =
+    er_gfx::title_05_010::DRIVE_BUTTON_FIELD_NAMES_NUL;
+pub(crate) const PROFILE_ROW_CURRENT_PATH_FIELD_NAME: &str =
+    er_gfx::title_05_010::CURRENT_PATH_FIELD_NAME_NUL;
+pub(crate) const PROFILE_ROW_CURRENT_PATH_BUTTON_NAME: &str =
+    er_gfx::title_05_010::CURRENT_PATH_BUTTON_NAME_NUL;
 /// Offset of the row model's `Location` `CS::MenuString` inside `CS::MenuSaveDataSummary`. Same
 /// inline accessor as PlayTime: raw pointer first, else the inline DLString buffer.
 pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;

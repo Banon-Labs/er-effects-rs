@@ -774,15 +774,12 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     let real_tab = forced_tab
         .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
         .or(live_tab);
-    if let (Some(tab), true) = (
-        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
-        tab_view >= HEAP_LO,
-    ) {
-        unsafe {
-            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
-        }
-        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
-    }
+    // The forced tab is written only AFTER its backing pane is proven present, further down. Writing
+    // it here (as this did until 2026-08-12) wedges the menu whenever the pane is absent: the tab
+    // strip commits to Quit, the pane reapply below bails, and OptionSetting stays actively_shown
+    // with NO visible pane -- input captured, nothing drawn, no way out. Reproduced by opening the
+    // picker twice: the second close lands on a RECREATED OptionSetting window (composite address
+    // changes) whose cache slots 8/9 were never built, so slot 9 reads null.
     // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
     let mut cache_tab: Option<usize> = None;
     for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
@@ -817,10 +814,23 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     .unwrap_or(0);
     if selected < HEAP_LO {
+        // Leave the native tab selection ALONE. Forcing it here would point the tab strip at a tab
+        // with no pane, which reads to the player as a menu that owns input but draws nothing.
         append_autoload_debug(format_args!(
             "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
         ));
         return;
+    }
+    // The backing pane is now proven present, so committing the tab strip to it cannot strand the
+    // menu without a pane. This write is deliberately downstream of the check above.
+    if let (Some(tab), true) = (
+        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
+        tab_view >= HEAP_LO,
+    ) {
+        unsafe {
+            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
+        }
+        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
     }
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
@@ -1676,6 +1686,34 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
+/// ProfileSelect window whose native `MenuWindowJob` finalizer has completed. The finalizer runs
+/// inside the original `MenuWindowJob::Run`; restoration waits for this post-original hook so no
+/// GFx/menu calls are made from inside native teardown.
+static SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
+    if window == 0 {
+        return;
+    }
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+        .compare_exchange(window, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
+        // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
+        // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
+        let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
+            window,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "system-quit-dup: native ProfileSelect finalizer completed window=0x{window:x}; queued post-Run restore and cleared matching stale rebuild"
+        ));
+    }
+}
+
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
 /// real-system-window HIDE, the in-world-load ABORT + return-title submit that actually complete a profile
 /// switch, and save-picker pump maintenance. Extracted from the hook body so the WINNING MenuWindowJob::Run
@@ -1684,10 +1722,51 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
+    let finalized_profile = SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.swap(0, Ordering::SeqCst);
+    if finalized_profile != 0
+        && let Ok(base) = game_module_base()
+    {
+        // A PICK owns its own close. Picking a save file closes this window on purpose and queues a
+        // reopen as the slot view (`SAVE_PICKER_OPEN_SLOTS_PENDING`, resubmitted further down this
+        // same function). Restoring the System windows here would be a second owner of the same
+        // close, and it wins simply by running first: `system_quit_restore_real_system_windows`
+        // resets the ProfileSelect state, which clears both the pending flag and the System dialog
+        // the resubmit needs, so the resubmit below then finds nothing pending and never fires. That
+        // is why picking an `.sl2` landed back on the Quit menu instead of the character list -- the
+        // live log shows the finalizer restore at `+161525ms` and NO resubmit line at all after it.
+        //
+        // So the restore runs only for a close nobody claimed: a real backout. Leaving the hide
+        // state up is also what the reopen wants -- the window is coming straight back.
+        if save_picker_resubmit_pending() {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: skipped finalizer restore for window=0x{finalized_profile:x}; a picker resubmit owns this close"
+            ));
+        } else {
+            unsafe {
+                system_quit_restore_real_system_windows(
+                    base,
+                    "restore-real-profile-native-finalizer",
+                )
+            };
+        }
+    }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
     if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
         crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    }
+    if filename == "02_990_TextInput_PathEditor" {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            if save_picker_note_path_editor_window_state(owner, state)
+                && let Ok(base) = game_module_base()
+            {
+                unsafe { apply_path_editor_window_position(base, owner) };
+            }
+        }
     }
     if matches!(
         filename.as_str(),
@@ -1838,6 +1917,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
     // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
     // navigation/pick close (same submit-context rule as the return-title chain below).
+    unsafe { save_picker_menu_pump_path_editor() };
     unsafe { save_picker_menu_pump_drive_strip_mouse() };
     unsafe { save_picker_menu_pump_native_scrollbar() };
     unsafe { save_picker_menu_pump_edge_scroll() };

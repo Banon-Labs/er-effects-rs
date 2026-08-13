@@ -30,12 +30,23 @@
 //!   native-backed ten-row picker prefix (`Item_0_0..Item_9_0`) plus top/bottom recycle cells. Row
 //!   population and activation still use native row indices; this moves the row clips, their internal
 //!   chrome, the scroll tween offsets, the viewport mask, and the scrollbar together.
+//! - ADD an invisible full-row `HitArea` child to the row template. The engine's row hit resolver
+//!   prefers a child of that name over `Cursor`, and the drive-row runtime shrinks `Cursor` onto
+//!   the focused sub-control -- which is what made the row hoverable only over whatever already had
+//!   focus. The plate restores a full-row mouse target and leaves `Cursor` as pure focus chrome.
 //! - MOVE and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
 //!   visible long-list affordance. The DLL feeds that native controller the real save-picker scroll
 //!   offset instead of drawing private fake thumbs or pips.
 
-use er_gfx::profile_05_010_layout::{DEFAULT_PROFILE_05_010_LAYOUT_PATH, Profile05_010Layout};
-use er_gfx::title_05_010::{CHAR_STATS_FIELD_NAME, STATS_FIELD_NAME};
+use er_gfx::profile_05_010_layout::{
+    DEFAULT_PROFILE_05_010_LAYOUT_PATH, FieldLayout, Profile05_010Layout,
+};
+use er_gfx::title_05_010::{
+    CHAR_STATS_FIELD_NAME, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
+    DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
+    DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX, DRIVE_CELL_PITCH_PX,
+    ROW_HIT_AREA_NAME, STATS_FIELD_NAME,
+};
 use er_gfx::{CxformWithAlpha, Matrix, Movie, Rect, Tag};
 
 /// Twips per px.
@@ -46,14 +57,26 @@ const VANILLA_ROW_PITCH_PX: i32 = 156;
 const VANILLA_LIST_HEIGHT_PX: i32 = 780;
 /// 16.16 fixed-point 1.0.
 const SCALE_ONE: i32 = 0x1_0000;
-const DRIVE_CELL_CHARACTER_IDS: [(u16, &str); 3] = [
-    (93, "DriveCell_0"),
-    (94, "DriveCell_1"),
-    (95, "DriveCell_2"),
-];
-
+const DRIVE_CELL_CHARACTER_ID_BASE: u16 = 93;
+const CURRENT_PATH_CHARACTER_ID: u16 = DRIVE_CELL_CHARACTER_ID_BASE + DRIVE_CELL_CAPACITY as u16;
+const DRIVE_BUTTON_DEPTH_BASE: u16 = 100;
+const DRIVE_CELL_DEPTH_BASE: u16 = DRIVE_BUTTON_DEPTH_BASE + DRIVE_CELL_CAPACITY as u16;
+const CURRENT_PATH_BUTTON_DEPTH: u16 = DRIVE_CELL_DEPTH_BASE + DRIVE_CELL_CAPACITY as u16;
+const CURRENT_PATH_TEXT_DEPTH: u16 = CURRENT_PATH_BUTTON_DEPTH + 1;
+/// Depth of the invisible row hit target. Vanilla sprite 76 uses depths 1, 4, 6, 8, 10, 12, 14 and
+/// 16..21, so 2 is free and sits under every child except the row backing itself.
+const ROW_HIT_AREA_DEPTH: u16 = 2;
 fn fixed_from_px(px: f32) -> i32 {
     (px * TW as f32).round() as i32
+}
+
+fn drive_cell_layout(profile_layout: &Profile05_010Layout, index: usize) -> FieldLayout {
+    let mut field = profile_layout.field(DRIVE_CELL_FIELD_NAMES[0]).clone();
+    let authored_pitch = profile_layout.field(DRIVE_CELL_FIELD_NAMES[1]).x - field.x;
+    assert!((field.x - DRIVE_CELL_FIRST_X_PX).abs() < f32::EPSILON);
+    assert!((authored_pitch - DRIVE_CELL_PITCH_PX).abs() < f32::EPSILON);
+    field.x = DRIVE_CELL_FIRST_X_PX + DRIVE_CELL_PITCH_PX * index as f32;
+    field
 }
 
 fn fixed_from_scale(scale: f32) -> i32 {
@@ -111,6 +134,20 @@ fn set_translate(tag: &mut Tag, x_px: f32, y_px: f32) {
 
 fn scale_from_ratio(numer: i32, denom: i32) -> i32 {
     (i64::from(SCALE_ONE) * i64::from(numer) / i64::from(denom)) as i32
+}
+
+fn opacity_transform(opacity: f32) -> Option<CxformWithAlpha> {
+    if opacity >= 1.0 {
+        return None;
+    }
+    let alpha = (opacity.clamp(0.0, 1.0) * 256.0).round() as i32;
+    Some(CxformWithAlpha {
+        has_add: false,
+        has_mult: true,
+        nbits: 10,
+        mult: Some([256, 256, 256, alpha]),
+        add: None,
+    })
 }
 
 fn make_alpha_zero(tag: &mut Tag) {
@@ -253,8 +290,9 @@ fn main() {
         .position(|t| matches!(t, Tag::DefineSprite { id: 76, .. }))
         .expect("vanilla movie defines sprite 76 (row template)");
     let mut drive_fields = Vec::new();
-    for (character_id, name) in DRIVE_CELL_CHARACTER_IDS {
-        let field_layout = profile_layout.field(name);
+    for index in 0..DRIVE_CELL_CAPACITY {
+        let character_id = DRIVE_CELL_CHARACTER_ID_BASE + index as u16;
+        let field_layout = drive_cell_layout(&profile_layout, index);
         let mut layout = stats_layout.clone();
         layout.align = field_layout.align.swf_code();
         drive_fields.push(Tag::DefineEditText {
@@ -279,9 +317,35 @@ fn main() {
             force_long,
         });
     }
+    let current_path_layout = profile_layout.field(CURRENT_PATH_FIELD_NAME);
+    let mut current_path_text_layout = stats_layout.clone();
+    current_path_text_layout.align = current_path_layout.align.swf_code();
+    let current_path_field = Tag::DefineEditText {
+        character_id: CURRENT_PATH_CHARACTER_ID,
+        bounds: Rect {
+            nbits: 16,
+            x_min: -2 * TW,
+            x_max: (-2 + current_path_layout.width) * TW,
+            y_min: -2 * TW,
+            y_max: (-2 + current_path_layout.clip_height) * TW,
+        },
+        flags1: 0x8c,
+        flags2,
+        font_id: None,
+        font_class: font_class.clone(),
+        font_height: Some((current_path_layout.font_height * TW) as u16),
+        text_color,
+        max_length: None,
+        layout: Some(current_path_text_layout),
+        variable_name: variable_name.clone(),
+        initial_text: Some(String::new()),
+        force_long,
+    };
     movie.tags.splice(
         row_template_index..row_template_index,
-        std::iter::once(char_stats_field).chain(drive_fields),
+        std::iter::once(char_stats_field)
+            .chain(drive_fields)
+            .chain(std::iter::once(current_path_field)),
     );
 
     // Root: replace the char-67 deco sprite definition with the stats field.
@@ -347,7 +411,11 @@ fn main() {
     // Place the save-picker stats field (char 67) ONCE on the same visual baseline as the native
     // header fields. Normal character stats use `ErCharStats` in the lower band.
     let stats_placement = |name: &str, depth: u16, character_id: u16| {
-        let field = profile_layout.field(name);
+        let field = DRIVE_CELL_FIELD_NAMES
+            .iter()
+            .position(|candidate| *candidate == name)
+            .map(|index| drive_cell_layout(&profile_layout, index))
+            .unwrap_or_else(|| profile_layout.field(name).clone());
         Tag::PlaceObject2 {
             flags: 0x26, // HasName|HasMatrix|HasCharacter
             depth,
@@ -403,10 +471,155 @@ fn main() {
 
     // Synthetic drive cells. Native ProfileSelect gives us one row highlight/click target only; these
     // are separate row children that the DLL blanks on every picker-owned row and fills only on the
-    // drive row, so `[C:]`, `[S:]`, `[Z:]` are no longer one fused PlayerName string.
-    row.insert(row_show_frame, stats_placement("DriveCell_2", 42, 95));
-    row.insert(row_show_frame, stats_placement("DriveCell_1", 41, 94));
-    row.insert(row_show_frame, stats_placement("DriveCell_0", 40, 93));
+    // drive row. The asset carries the complete Windows drive-letter capacity; runtime visibility
+    // exposes exactly the mounted-drive prefix rather than assuming a particular machine has three.
+    for (index, name) in DRIVE_CELL_FIELD_NAMES.iter().enumerate().rev() {
+        row.insert(
+            row_show_frame,
+            stats_placement(
+                name,
+                DRIVE_CELL_DEPTH_BASE + index as u16,
+                DRIVE_CELL_CHARACTER_ID_BASE + index as u16,
+            ),
+        );
+    }
+
+    // Give every drive cell its own REAL button frame, cloned from the game's normal row-button art
+    // (char 54) and placed immediately behind its text. The runtime routes each cell as an independent
+    // hit target and applies the same visibility bit to both halves, so absent drives leave no empty
+    // button chrome.
+    for (index, name) in DRIVE_BUTTON_FIELD_NAMES.iter().enumerate() {
+        let depth = DRIVE_BUTTON_DEPTH_BASE + index as u16;
+        assert!(
+            !row.iter().any(
+                |tag| matches!(tag, Tag::PlaceObject2 { depth: existing, .. } if *existing == depth)
+            ),
+            "drive button depth {depth} must be unused in the vanilla row template"
+        );
+        let field = drive_cell_layout(&profile_layout, index);
+        let width = field.width as f32;
+        let height = field.clip_height as f32;
+        let button = &profile_layout.row_chrome.drive_button;
+        let center_x = field.x - 2.0 + width * 0.5 + button.x;
+        let center_y = field.y - 2.0 + height * 0.5 + button.y;
+        row.insert(
+            row_show_frame,
+            Tag::PlaceObject2 {
+                flags: 0x26 | if button.opacity < 1.0 { 0x08 } else { 0 },
+                depth,
+                character_id: Some(54),
+                matrix: Some(Matrix {
+                    has_scale: true,
+                    scale_nbits: 23,
+                    scale_x: fixed_from_scale(
+                        (width / DRIVE_BUTTON_NATIVE_ART_WIDTH_PX) * button.scale_x,
+                    ),
+                    scale_y: fixed_from_scale(
+                        (height / DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX) * button.scale_y,
+                    ),
+                    has_rotate: false,
+                    rotate_nbits: 0,
+                    rotate_skew0: 0,
+                    rotate_skew1: 0,
+                    translate_nbits: 16,
+                    translate_x: fixed_from_px(center_x),
+                    translate_y: fixed_from_px(center_y),
+                }),
+                color_transform: opacity_transform(button.opacity),
+                ratio: None,
+                name: Some((*name).to_owned()),
+                clip_depth: None,
+                force_long: false,
+            },
+        );
+    }
+
+    // Full current-directory display/editor target. It uses the same native normal-button art as the
+    // drive cells but remains a distinct named child so runtime can show it only on the drive row and
+    // route clicks/Accept to the native SoftwareKeyboardJob transaction.
+    row.insert(
+        row_show_frame,
+        stats_placement(
+            CURRENT_PATH_FIELD_NAME,
+            CURRENT_PATH_TEXT_DEPTH,
+            CURRENT_PATH_CHARACTER_ID,
+        ),
+    );
+    let path_button = profile_layout.current_path_button_transform();
+    row.insert(
+        row_show_frame,
+        Tag::PlaceObject2 {
+            flags: 0x26 | if path_button.opacity < 1.0 { 0x08 } else { 0 },
+            depth: CURRENT_PATH_BUTTON_DEPTH,
+            character_id: Some(54),
+            matrix: Some(Matrix {
+                has_scale: true,
+                scale_nbits: 23,
+                scale_x: fixed_from_scale(path_button.scale_x),
+                scale_y: fixed_from_scale(path_button.scale_y),
+                has_rotate: false,
+                rotate_nbits: 0,
+                rotate_skew0: 0,
+                rotate_skew1: 0,
+                translate_nbits: 16,
+                translate_x: fixed_from_px(path_button.x),
+                translate_y: fixed_from_px(path_button.y),
+            }),
+            color_transform: opacity_transform(path_button.opacity),
+            ratio: None,
+            name: Some(CURRENT_PATH_BUTTON_NAME.to_owned()),
+            clip_depth: None,
+            force_long: false,
+        },
+    );
+
+    // FULL-ROW MOUSE TARGET. `GridControl::HandleMouse` -> `FUN_140736c90` asks
+    // `FUN_14074b0d0(cell)` for each row's hit object, and that resolver takes the child named
+    // `HitArea` FIRST, the child named `Cursor` second, and the cell component only as a last
+    // resort (1.16.2; "HitArea" is the movie-facing name at 0x142a8fa08 and the ONLY occurrence of
+    // that literal in the image, referenced by nothing but this resolver). It then hit-tests that
+    // ONE object's own bounds -- so with no `HitArea`, the row's mouse target IS the `Cursor`
+    // sprite, which `apply_drive_row_native_cursor` shrinks onto the focused sub-control. That is
+    // why the drive row was only hoverable over whatever already had focus, forcing the user into
+    // a drive cell + RIGHT to reach the path editor.
+    //
+    // The plate reuses the row's own backing art (char 54) at the `Backing` transform, so its
+    // bounds are the drawn row to the twip, and it is baked fully transparent: a hit test is not a
+    // render, and `PointTestLocal` is called with mask 0 (bounds test, no visibility term). Depth 2
+    // sits under every other child of the row template; alpha 0 makes occlusion moot regardless.
+    let hit_area = &profile_layout.row_chrome.hit_area;
+    row.insert(
+        row_show_frame,
+        Tag::PlaceObject2 {
+            flags: 0x26 | 0x08, // HasName|HasMatrix|HasCharacter|HasColorTransform
+            depth: ROW_HIT_AREA_DEPTH,
+            character_id: Some(54),
+            matrix: Some({
+                let mut matrix = Matrix {
+                    has_scale: false,
+                    scale_nbits: 0,
+                    scale_x: 0,
+                    scale_y: 0,
+                    has_rotate: false,
+                    rotate_nbits: 0,
+                    rotate_skew0: 0,
+                    rotate_skew1: 0,
+                    translate_nbits: 16,
+                    translate_x: 0,
+                    translate_y: 0,
+                };
+                set_matrix_transform(&mut matrix, hit_area);
+                matrix
+            }),
+            // The schema pins this to 0; `opacity_transform` only emits a transform below 1.0, so
+            // reading it here keeps the authored value and the baked bytes the same fact.
+            color_transform: opacity_transform(hit_area.opacity),
+            ratio: None,
+            name: Some(ROW_HIT_AREA_NAME.to_owned()),
+            clip_depth: None,
+            force_long: false,
+        },
+    );
 
     // One row means one baseline. If any native field renders, it must render inline with the filename
     // and timestamp rather than on the original lower subrow.
@@ -476,7 +689,10 @@ fn main() {
         else {
             continue;
         };
-        if *character_id == Some(54) {
+        if *character_id == Some(54) && name.is_none() {
+            // Only the vanilla full-row backing is unnamed. The DriveButton_* clones deliberately
+            // reuse char 54 but already carry their own names and per-cell matrices; rewriting every
+            // char-54 placement here turns them back into full-width `Backing` instances.
             *name = Some("Backing".to_owned());
             *flags |= 0x20;
             set_matrix_transform(m, &profile_layout.row_chrome.backing);

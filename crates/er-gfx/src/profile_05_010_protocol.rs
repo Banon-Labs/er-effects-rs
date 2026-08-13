@@ -1,4 +1,4 @@
-use crate::profile_05_010_layout::{Profile05_010Layout, TextAlign};
+use crate::profile_05_010_layout::{Profile05_010Layout, RowChromeLayout, TextAlign};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -54,6 +54,7 @@ impl RenderMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SelectedKind {
     Field,
+    PathEditor,
     Chrome,
     List,
 }
@@ -62,6 +63,7 @@ impl SelectedKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Field => "field",
+            Self::PathEditor => "path_editor",
             Self::Chrome => "chrome",
             Self::List => "list",
         }
@@ -70,6 +72,7 @@ impl SelectedKind {
     fn parse(value: &str) -> Result<Self, ProtocolError> {
         match value {
             "field" => Ok(Self::Field),
+            "path_editor" => Ok(Self::PathEditor),
             "chrome" => Ok(Self::Chrome),
             "list" => Ok(Self::List),
             other => Err(ProtocolError::InvalidValue(format!(
@@ -149,11 +152,22 @@ impl ProfileEditorCommand {
                 field.align.as_str(),
             );
         }
-        for (name, transform) in [
-            ("backing", &self.layout.row_chrome.backing),
-            ("cursor", &self.layout.row_chrome.cursor),
-            ("cursor_body", &self.layout.row_chrome.cursor_body),
-        ] {
+        let editor = &self.layout.path_editor;
+        push_kv(&mut out, "path_editor.x", &editor.x.to_string());
+        push_kv(&mut out, "path_editor.y", &editor.y.to_string());
+        push_kv(&mut out, "path_editor.width", &editor.width.to_string());
+        push_kv(
+            &mut out,
+            "path_editor.clip_height",
+            &editor.clip_height.to_string(),
+        );
+        push_kv(
+            &mut out,
+            "path_editor.font_height",
+            &editor.font_height.to_string(),
+        );
+        push_kv(&mut out, "path_editor.align", editor.align.as_str());
+        for (name, transform) in self.layout.row_chrome.sections() {
             push_kv(
                 &mut out,
                 &format!("row_chrome.{name}.x"),
@@ -173,6 +187,11 @@ impl ProfileEditorCommand {
                 &mut out,
                 &format!("row_chrome.{name}.scale_y"),
                 &fmt_f32(transform.scale_y),
+            );
+            push_kv(
+                &mut out,
+                &format!("row_chrome.{name}.opacity"),
+                &fmt_f32(transform.opacity),
             );
             push_kv(
                 &mut out,
@@ -246,21 +265,41 @@ impl ProfileEditorCommand {
                     }
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 }
+            } else if let Some(prop) = key.strip_prefix("path_editor.") {
+                let field = &mut layout.path_editor;
+                match prop {
+                    "x" => field.x = parse_f32(value, key)?,
+                    "y" => field.y = parse_f32(value, key)?,
+                    "width" => field.width = parse_i32(value, key)?,
+                    "clip_height" => field.clip_height = parse_i32(value, key)?,
+                    "font_height" => field.font_height = parse_i32(value, key)?,
+                    "align" => {
+                        field.align = match value.as_str() {
+                            "left" => TextAlign::Left,
+                            "right" => TextAlign::Right,
+                            "center" => TextAlign::Center,
+                            _ => {
+                                return Err(ProtocolError::InvalidValue(format!(
+                                    "invalid {key}={value:?}"
+                                )));
+                            }
+                        }
+                    }
+                    _ => return Err(ProtocolError::UnknownKey(key.clone())),
+                }
             } else if let Some(rest) = key.strip_prefix("row_chrome.") {
                 let (name, prop) = rest
                     .rsplit_once('.')
                     .ok_or_else(|| ProtocolError::UnknownKey(key.clone()))?;
-                let transform = match name {
-                    "backing" => &mut layout.row_chrome.backing,
-                    "cursor" => &mut layout.row_chrome.cursor,
-                    "cursor_body" => &mut layout.row_chrome.cursor_body,
-                    _ => return Err(ProtocolError::UnknownKey(key.clone())),
+                let Some(transform) = layout.row_chrome.section_mut(name) else {
+                    return Err(ProtocolError::UnknownKey(key.clone()));
                 };
                 match prop {
                     "x" => transform.x = parse_f32(value, key)?,
                     "y" => transform.y = parse_f32(value, key)?,
                     "scale_x" => transform.scale_x = parse_f32(value, key)?,
                     "scale_y" => transform.scale_y = parse_f32(value, key)?,
+                    "opacity" => transform.opacity = parse_f32(value, key)?,
                     "editable" => transform.editable = parse_bool(value, key)?,
                     _ => return Err(ProtocolError::UnknownKey(key.clone())),
                 }
@@ -507,6 +546,57 @@ mod tests {
         assert_eq!(parsed.selected_name, "cursor");
         assert_eq!(parsed.layout.field("PlayerName").x, -512.25);
         assert_eq!(parsed.layout.row_chrome.cursor.scale_y, 0.375);
+    }
+
+    #[test]
+    fn active_path_editor_is_not_aliased_to_the_read_only_current_path_field() {
+        let command = ProfileEditorCommand::from_layout(
+            8,
+            RenderMode::LiveRuntime,
+            SelectedKind::PathEditor,
+            "ActivePathEditor",
+            Profile05_010Layout::default(),
+        );
+        let parsed = ProfileEditorCommand::parse(&command.serialize()).expect("command parses");
+        assert_eq!(parsed.selected_kind, SelectedKind::PathEditor);
+        assert_eq!(parsed.selected_name, "ActivePathEditor");
+    }
+
+    /// EVERY chrome section the schema knows must survive a live-control round trip.
+    ///
+    /// The channel fails closed on one unknown key, so a section present in the schema but missing
+    /// from the protocol rejects the WHOLE control file. That happened when `hit_area` was added
+    /// (2026-08-12): the game ran fine, the editor showed no ack, and the only evidence was an
+    /// `unknown key row_chrome.hit_area.editable` line inside `status.txt`.
+    #[test]
+    fn every_schema_chrome_section_survives_a_live_control_round_trip() {
+        let mut layout = Profile05_010Layout::default();
+        // A distinct, non-default x per section proves the value lands in the right one rather
+        // than every name resolving onto a single shared transform.
+        for (index, name) in RowChromeLayout::SECTION_NAMES.iter().enumerate() {
+            layout
+                .row_chrome
+                .section_mut(name)
+                .unwrap_or_else(|| panic!("{name} must resolve"))
+                .x = -100.0 - index as f32;
+        }
+        let command = ProfileEditorCommand::from_layout(
+            9,
+            RenderMode::LiveRuntime,
+            SelectedKind::Chrome,
+            "hit_area",
+            layout,
+        );
+        let text = command.serialize();
+        let mut parsed = ProfileEditorCommand::parse(&text)
+            .unwrap_or_else(|e| panic!("every chrome section must parse: {e}\n{text}"));
+        for (index, name) in RowChromeLayout::SECTION_NAMES.iter().enumerate() {
+            assert_eq!(
+                parsed.layout.row_chrome.section_mut(name).unwrap().x,
+                -100.0 - index as f32,
+                "{name} did not round trip"
+            );
+        }
     }
 
     #[test]

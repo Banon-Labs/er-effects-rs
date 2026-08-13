@@ -24,11 +24,21 @@
 
 #![allow(non_snake_case)]
 
+pub mod announce;
 pub mod drive;
+pub mod lobby_publish;
+pub mod local_invasion_filter;
 #[cfg(windows)]
+pub mod map_confirm;
 pub mod map_gfx;
 pub mod map_hooks;
+#[cfg(windows)]
+mod map_live_pins;
 pub mod map_seams;
+pub mod place_name;
+pub mod restart_backoff;
+mod seamless_probe;
+pub mod stall_watchdog;
 
 use std::path::PathBuf;
 
@@ -134,6 +144,10 @@ fn spawn_catalog_task() {
             // is the only thing that touches it, and the task is single-threaded, so no lock is
             // needed and none is taken on the game thread.
             let mut warp_drive = crate::drive::InvasionWarpDrive::new();
+            // Same ownership rule as the warp driver: one instance for the process, touched only
+            // by this single-threaded task.
+            let mut mark_keys = crate::local_invasion_filter::MarkKeys::new();
+            crate::local_invasion_filter::ensure_config_file();
             let mut frame: u64 = 0;
             let handle = task.run_recurring(
                 move |_data: &FD4TaskData| {
@@ -146,6 +160,14 @@ fn spawn_catalog_task() {
                     // SAFETY: game task thread with the world up; every read inside is fault-closed
                     // and each map is read at most once per session.
                     unsafe { crate::map_hooks::harvest_resident_msb_points(frame) };
+                    // What destination a SEAMLESS invasion picked. Seamless does not use the
+                    // .aip/MSB InvasionPoint tables at all, and the code that chooses a target
+                    // is inside the part of ersc.dll Themida encrypted -- but the ANSWER lands
+                    // in CSGameMan where anything can read it. Passive: no hook on ersc's path,
+                    // so it cannot perturb the thing it is measuring.
+                    //
+                    // SAFETY: game task thread; every read is fault-closed.
+                    unsafe { crate::seamless_probe::sample_invade_destination() };
                     // SAFETY: this closure runs on the game task thread, after CSTaskImp
                     // resolved -- exactly the context the tick's contract requires. The read
                     // itself is fault-closed (er_invasion_warp::live_read).
@@ -167,6 +189,82 @@ fn spawn_catalog_task() {
                     // failed arm costs the red icon and never leaves a pin iconless.
                     if let Ok(base) = er_game_base::mem::game_module_base() {
                         unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
+                    }
+                    // The local invasion filter: installs its single game-side detour (idempotent),
+                    // polls the Insert/Delete mark keys, and restarts a search that a rejected
+                    // match cancelled. It hooks nothing in ersc.dll -- see that module's docs for
+                    // why the option actions' arguments turned out to be unnecessary.
+                    //
+                    // SAFETY: same game-task context, after CSTaskImp resolved; every read inside
+                    // is fault-closed and every native call is byte-checked first.
+                    unsafe {
+                        crate::local_invasion_filter::tick(
+                            &mut mark_keys,
+                            crate::drive::game_has_focus(),
+                        );
+                    }
+                    // Advertise this host's current map on its own Steam lobby, so an invader can
+                    // ASK for a location instead of sampling and rejecting. Gated internally on the
+                    // block having CHANGED, so a host standing still costs one string compare.
+                    //
+                    // Republishing is the whole point: Seamless writes its advertisement once at
+                    // CreateLobby and never again (measured -- 7 SetLobbyData calls at creation,
+                    // zero after), so a location key written only at creation would go stale the
+                    // moment the host walks away.
+                    //
+                    // No-ops harmlessly when this player is not hosting, when Steam is not ready, or
+                    // when the block cannot be read. Not being findable by location is a missing
+                    // convenience; a DLL that faulted here would be a broken game.
+                    crate::lobby_publish::publish_current_map();
+                    // Keep the advertised pool matching the configured one; Seamless never
+                    // rebuilds its advertisement, so a toggle has to be applied by us.
+                    crate::lobby_publish::reapply_pool_if_toggled();
+                    // Hunt mode's query-narrowing hook. Idempotent and self-gating: it needs the
+                    // Steam interface, which is not resolvable until Steam is up, so it retries
+                    // until it lands rather than being installed once at attach and failing
+                    // silently. It changes nothing unless `hunt = true` is in the config.
+                    // Learn which lobby Seamless advertises on, by watching it declare one.
+                    // Must be installed before publishing can do anything: publish now REFUSES
+                    // until this observer has seen the declaration, rather than guessing from a
+                    // struct offset that pointed at the wrong lobby in every run.
+                    crate::lobby_publish::install_advertisement_observer();
+                    crate::lobby_publish::install_hunt_hook();
+                    crate::lobby_publish::install_pool_filter_hook();
+                    // Lift both halves of location matchmaking out of the log and into the oracle
+                    // document, because their failures are the ones that look like success from
+                    // outside: a host that advertised nothing still runs fine, and a hunt hook that
+                    // never landed is indistinguishable from an empty world. Four atomic loads.
+                    {
+                        let (publishes, refusals) = crate::lobby_publish::tally();
+                        er_invasion_warp::oracles::publish_lobby_oracles(publishes, refusals);
+                        let (hooked, filters) = crate::lobby_publish::hunt_tally();
+                        er_invasion_warp::oracles::publish_hunt_oracles(hooked, filters);
+                        // Writing the counters is not the same as PUBLISHING them: the telemetry
+                        // document is otherwise only written by the catalog sampler, which stops
+                        // once the totals latch -- seconds into a run, and long before anyone
+                        // hunts. Without this the file freezes at zero while the counters climb.
+                        // Gated on a change, so a steady run costs four comparisons and no I/O.
+                        er_invasion_warp::oracles::republish_if_location_matchmaking_changed();
+                    }
+                    // Re-colour pins that already exist. Gated internally on the user's lists
+                    // actually having changed, so the steady-state cost is one atomic compare.
+                    //
+                    // SAFETY: same game-task context. Walks the ONE live ViewModel's span -- read
+                    // from the engine's own `CSPopupMenu+0x250` slot and required to match the one
+                    // the injection recorded -- and writes only to rows that still point into this
+                    // DLL's leaked param slab, so a span whose ViewModel was destroyed is refused.
+                    unsafe {
+                        crate::map_live_pins::restyle_live_pins();
+                    }
+                    // Make blocks harvested SINCE this world entry visible, by retargeting rows the
+                    // constructor already reserved. Refuses unless the engine's own slots agree it
+                    // is safe: the ViewModel read live from `CSPopupMenu+0x250`, no dialog attached,
+                    // and the row list still beginning where our span was recorded.
+                    //
+                    // SAFETY: same game-task context; appends nothing and allocates nothing, so the
+                    // row buffer cannot move and no raw row pointer can dangle.
+                    unsafe {
+                        crate::map_live_pins::top_up_live_pins();
                     }
                 },
                 CSTaskGroupIndex::FrameBegin,

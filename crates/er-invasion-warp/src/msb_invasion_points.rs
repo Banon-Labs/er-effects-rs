@@ -50,9 +50,19 @@ pub const MSB_POINT_TYPE_INVASION_POINT: u32 = 1;
 /// `CS::MsbResCap::GetPointDataSectionItemCount(MsbResCap*, MsbPointType)` -- `0x140cf6300`.
 ///
 /// Preferred over walking `MsbResCap+0x318 + type*0x10` by hand: the count is the sum of that
-/// static TOC entry AND a dynamic overflow vector at `MsbResCap+0xa70 + type*0x18`, so a
-/// pointer-walk that knows only about the TOC silently undercounts any map that populates the
-/// vector.
+/// static TOC entry AND a dynamic overflow vector, so a pointer-walk that knows only about the TOC
+/// silently undercounts any map that populates the vector.
+///
+/// The overflow vector's layout, corrected against the disassembly of `FUN_140cf6350` (which
+/// computes `RDX = (type << 5) + resCap`, then reads begin at `[RDX+0xa98]` and end at
+/// `[RDX+0xaa0]`): the container starts at `MsbResCap+0xa70`, but the per-type ELEMENT base is
+/// `+0xa90` with stride `0x20`, and within an element `begin` is at `+0x8` and `end` at `+0x10`.
+/// A previous version of this comment said `+0xa70 + type*0x18`, which lands in the wrong type slot
+/// -- and this comment exists specifically to stop the next agent hand-walking it.
+///
+/// IMPORTANT: this count has NO readiness gate. `CS::MsbResCap`'s constructor zeroes the header and
+/// the section tables, so a cap that has been constructed but not yet PARSED answers `0` while
+/// already carrying an in-image vtable. See [`EMPTY_READS_BEFORE_OBSERVED`].
 pub const GET_POINT_DATA_SECTION_ITEM_COUNT_RVA: usize = 0xcf_6300;
 /// `CS::CSMsbPoint::CSMsbPoint(out, MsbResCap*, 0, MsbPointType, index)` -- `0x140cf9300`.
 pub const CS_MSB_POINT_CTOR_RVA: usize = 0xcf_9300;
@@ -111,6 +121,32 @@ impl MsbInvasionPoint {
     }
 }
 
+/// One map's whole answer to "what invasion points do you have?".
+///
+/// Carries the count the ENGINE reported alongside the points that could actually be read, because
+/// those two numbers are not the same and the difference is invisible otherwise. A point whose
+/// region has no shape data has no position, so it is skipped -- correctly, the engine's own
+/// consumer skips it too -- but skipping it silently means a dungeon with 88 regions can contribute
+/// 40 pins and look exactly like a dungeon with 40 regions.
+///
+/// That indistinguishability is why "legacy dungeons aren't getting all of their icons" could not be
+/// diagnosed from a log: nothing recorded what the full set was supposed to be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPointRead {
+    /// What `GetPointDataSectionItemCount` said this map holds.
+    pub reported: i32,
+    /// The subset that had shape data and yielded a position.
+    pub points: Vec<MsbInvasionPoint>,
+}
+
+impl MapPointRead {
+    /// How many reported regions produced no usable point.
+    #[must_use]
+    pub fn dropped(&self) -> usize {
+        (self.reported.max(0) as usize).saturating_sub(self.points.len())
+    }
+}
+
 /// Points accumulated from every map that has been resident so far this session.
 ///
 /// Sorted and deduped by [`MsbInvasionPoint::key`], so repeated visits to the same map are free
@@ -123,7 +159,85 @@ pub struct MsbInvasionCatalog {
     /// no invasion points" from "this map has never been looked at" is the difference between a
     /// complete answer and an unknown one.
     observed_blocks: Vec<u32>,
+    /// Consecutive empty reads per block, for blocks not yet observed.
+    empty_reads: Vec<(u32, u32)>,
 }
+
+/// Below this separation, two points of the same map cannot render as two icons.
+///
+/// The world map's projection is 1:1 IN METRES and discards Y entirely:
+/// `ConvertMsbCoordsToMapCoords` (0x140876140) keeps only the converted X and Z, and the converter's
+/// scale is the literal `1.0`. `ConvertLegacyDungeonPositionToOverworldPositionForMap`'s tile rebase
+/// subtracts `i*256` on x/z which the projection's `+i*256` term cancels exactly, so relative XZ
+/// distances survive the whole pipeline unchanged -- which is what lets this clustering run in
+/// physics space without needing the ViewModel's converters.
+///
+/// The pin clip is counter-scaled to a constant SCREEN size, so its footprint in map units is
+/// `screenPixels / zoom`, and the maximum zoom in the table is 2.25 stage-px per map unit. A 40px
+/// icon therefore covers ~18 metres of map at the tightest zoom the game allows, and the declared
+/// 146x146 marker art covers ~65. 20 metres is the conservative end of that range: it keeps every
+/// pair a player could conceivably tell apart and merges only pairs that would draw on top of each
+/// other at every zoom level.
+///
+/// This matters most exactly where the feature does: a legacy dungeon is stacked VERTICALLY, and Y
+/// is the axis the map throws away. The Haligtree's 88 invasion points occupy 39 separable spots at
+/// this radius, Leyndell's 104 occupy 78, Volcano Manor's 115 occupy 21. Injecting one row per point
+/// there does not draw more markers -- it draws the same markers several times over, costs rows and
+/// clip-pool slots, and makes the pin count a claim about resolution the map cannot honour.
+pub const MARKER_MERGE_RADIUS_METRES: f32 = 20.0;
+
+/// Merge points of a single map that would draw on top of each other, keeping one per cluster.
+///
+/// Single-linkage on XZ: a point joins a cluster when it is within `radius` of ANY member, which is
+/// the right rule for "these overlap on screen" (overlap is transitive through a chain of touching
+/// icons). The FIRST point of each cluster is the representative, so the result is stable under the
+/// catalog's key ordering and a warp still targets a real authored spawn.
+///
+/// `radius <= 0` returns the input unchanged, so the merge can be disabled without a second path.
+#[must_use]
+pub fn merge_coincident_points(points: &[MsbInvasionPoint], radius: f32) -> Vec<MsbInvasionPoint> {
+    if radius <= 0.0 {
+        return points.to_vec();
+    }
+    let radius_squared = radius * radius;
+    // Members of each cluster, so a later point can be tested against every one of them.
+    let mut clusters: Vec<Vec<[f32; 3]>> = Vec::new();
+    let mut representatives: Vec<MsbInvasionPoint> = Vec::new();
+    for point in points {
+        let joined = clusters.iter_mut().position(|members| {
+            members.iter().any(|member| {
+                let dx = member[0] - point.position[0];
+                let dz = member[2] - point.position[2];
+                dx.mul_add(dx, dz * dz) <= radius_squared
+            })
+        });
+        match joined {
+            Some(at) => clusters[at].push(point.position),
+            None => {
+                clusters.push(vec![point.position]);
+                representatives.push(*point);
+            }
+        }
+    }
+    representatives
+}
+
+/// How many consecutive empty reads a block needs before "no invasion points" is believed.
+///
+/// ONE ZERO IS NOT AN ANSWER. `CS::MsbResCap`'s constructor zeroes its header and section tables,
+/// and `GetPointDataSectionItemCount` is a bare read of `pointDataToc[type].entryCount` with no
+/// readiness gate -- so a cap that has been CONSTRUCTED but whose MSB has not been PARSED answers
+/// `0` while already carrying an in-image vtable, which is exactly what the liveness test accepts.
+/// The harvest samples once a second and also synchronously from the `WorldMapViewModel` ctor,
+/// which runs during the loading screen; catching that window used to latch the block as
+/// "observed, empty" for the whole session, which both denied it its precise pins and RETRACTED the
+/// provisional whole-dungeon marker standing in for them. One badly-timed sample removed a
+/// dungeon's icon permanently.
+///
+/// The engine does not have this problem because it re-queries per invasion request rather than
+/// caching. We cache, so we need the confirmation. Genuinely point-free maps simply stay in the
+/// retry set for a few extra seconds at the cost of one native call each.
+pub const EMPTY_READS_BEFORE_OBSERVED: u32 = 3;
 
 impl MsbInvasionCatalog {
     /// An empty catalog: nothing observed, which is NOT the same as "nothing exists".
@@ -132,19 +246,21 @@ impl MsbInvasionCatalog {
         Self {
             points: Vec::new(),
             observed_blocks: Vec::new(),
+            empty_reads: Vec::new(),
         }
     }
 
     /// Fold in everything read from one map.
     ///
-    /// `block` is recorded as observed even when `points` is empty, so a map with genuinely no
-    /// invasion points stops being re-reported as unknown.
+    /// A read that yields points marks the block observed immediately. An EMPTY read does not --
+    /// it takes [`EMPTY_READS_BEFORE_OBSERVED`] consecutive empty reads, because a single zero is
+    /// indistinguishable from sampling a cap whose MSB has not been parsed yet, and latching that
+    /// zero costs the map both its pins and its standby marker for the rest of the session.
     pub fn absorb(&mut self, block: BlockKey, points: impl IntoIterator<Item = MsbInvasionPoint>) {
         let raw = block.raw();
-        if let Err(at) = self.observed_blocks.binary_search(&raw) {
-            self.observed_blocks.insert(at, raw);
-        }
+        let mut any = false;
         for point in points {
+            any = true;
             match self.points.binary_search_by_key(&point.key(), |p| p.key()) {
                 // Already known. The engine hands out the same geometry every visit, so a
                 // re-read is not new information and must not duplicate a pin.
@@ -152,6 +268,46 @@ impl MsbInvasionCatalog {
                 Err(at) => self.points.insert(at, point),
             }
         }
+        if any {
+            // A real answer. Latch it and forget any empty reads that preceded it -- those were
+            // exactly the mis-timed samples this guard exists for.
+            if let Ok(at) = self.empty_reads.binary_search_by_key(&raw, |(b, _)| *b) {
+                self.empty_reads.remove(at);
+            }
+            if let Err(at) = self.observed_blocks.binary_search(&raw) {
+                self.observed_blocks.insert(at, raw);
+            }
+            return;
+        }
+        if self.observed_blocks.binary_search(&raw).is_ok() {
+            return;
+        }
+        let strikes = match self.empty_reads.binary_search_by_key(&raw, |(b, _)| *b) {
+            Ok(at) => {
+                self.empty_reads[at].1 += 1;
+                self.empty_reads[at].1
+            }
+            Err(at) => {
+                self.empty_reads.insert(at, (raw, 1));
+                1
+            }
+        };
+        if strikes >= EMPTY_READS_BEFORE_OBSERVED
+            && let Err(at) = self.observed_blocks.binary_search(&raw)
+        {
+            self.observed_blocks.insert(at, raw);
+        }
+    }
+
+    /// How many consecutive empty reads a block has accumulated without being believed yet.
+    ///
+    /// Exposed so a run can tell "still confirming" apart from "confirmed empty" -- the two look
+    /// identical from coverage totals alone.
+    #[must_use]
+    pub fn pending_empty_reads(&self, block: BlockKey) -> u32 {
+        self.empty_reads
+            .binary_search_by_key(&block.raw(), |(b, _)| *b)
+            .map_or(0, |at| self.empty_reads[at].1)
     }
 
     /// Every point known so far, in stable key order.
@@ -235,7 +391,8 @@ mod native {
         CS_MSB_POINT_COMPUTE_POSITION_RVA, CS_MSB_POINT_CTOR_RVA, CS_MSB_POINT_DTOR_RVA,
         CS_MSB_POINT_GET_ANGLE_RVA, CS_MSB_POINT_HAS_NO_SHAPE_DATA_RVA, CS_MSB_POINT_SIZE,
         FIELD_AREA_WORLD_INFO_OWNER_OFFSET, GET_POINT_DATA_SECTION_ITEM_COUNT_RVA,
-        MSB_POINT_TYPE_INVASION_POINT, MsbInvasionPoint, WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET,
+        MSB_POINT_TYPE_INVASION_POINT, MapPointRead, MsbInvasionPoint,
+        WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET,
     };
     use crate::invasion_warp::BlockKey;
     use crate::warp::FloatVector4;
@@ -244,7 +401,8 @@ mod native {
     /// A single map's `InvasionPoint` count cannot plausibly exceed this. The largest map in the
     /// offline harvest of all 1347 shipped MSBs holds 111 (`m12_01_00_00`), so this is ~18x
     /// headroom while still bounding a corrupt or mis-typed read to a fixed amount of work on the
-    /// game thread. A count past it is not clamped silently -- the map is skipped and reported.
+    /// game thread. A count past it is not clamped silently: the map is refused (`None`, i.e. "no
+    /// answer yet") rather than reported as empty, so it keeps its standby marker and is retried.
     pub const MAX_POINTS_PER_MAP: i32 = 2048;
 
     /// The game image is well under this; a vtable pointer further than this from the module base
@@ -287,9 +445,12 @@ mod native {
 
     /// Read every `InvasionPoint` region out of one map's `MsbResCap`.
     ///
-    /// `None` means THE MAP WAS NOT LOADED -- its cap is null or does not carry an in-image vtable,
-    /// so nothing was looked at. `Some(points)` means the cap was live and this is the map's real
-    /// answer, empty vector included.
+    /// `None` means NO ANSWER -- either the map was not loaded (null cap, or no in-image vtable, so
+    /// nothing was looked at) or the count came back implausible. `Some(read)` means the cap was
+    /// live and this is the map's real answer, zero regions included.
+    ///
+    /// The caller must treat `None` as "look again later" and must NOT record the block as observed,
+    /// because observed-and-empty retracts the provisional whole-dungeon marker.
     ///
     /// THE DISTINCTION IS THE WHOLE POINT (2026-08-04). This used to return a bare `Vec` and the
     /// caller recorded the block as observed either way, on the reasoning that "read it, found
@@ -310,7 +471,7 @@ mod native {
         base: usize,
         block: BlockKey,
         msb_res_cap: usize,
-    ) -> Option<Vec<MsbInvasionPoint>> {
+    ) -> Option<MapPointRead> {
         if !unsafe { msb_res_cap_looks_live(base, msb_res_cap) } {
             // Not loaded. Say so, so the caller leaves this block unobserved and looks again once
             // the player actually goes there.
@@ -319,9 +480,21 @@ mod native {
         let get_count: GetPointCountFn =
             unsafe { core::mem::transmute(base + GET_POINT_DATA_SECTION_ITEM_COUNT_RVA) };
         let count = unsafe { get_count(msb_res_cap, MSB_POINT_TYPE_INVASION_POINT) };
-        if count <= 0 || count > MAX_POINTS_PER_MAP {
+        if count > MAX_POINTS_PER_MAP {
+            // NOT an answer. The doc above this constant says such a map "is skipped and reported",
+            // but this branch used to fall in with `count <= 0` and return an empty vector -- which
+            // marks the block OBSERVED. Observed-and-empty is the one state that both denies the map
+            // its precise pins AND retracts the provisional whole-dungeon marker that was standing in
+            // for them, so an implausible count made a dungeon's icon disappear the moment the player
+            // walked into it. Refuse instead: stay unobserved, keep the provisional marker, look again.
+            return None;
+        }
+        if count <= 0 {
             // The cap IS live, so this is a genuine answer: this map has no invasion points.
-            return Some(Vec::new());
+            return Some(MapPointRead {
+                reported: 0,
+                points: Vec::new(),
+            });
         }
 
         let ctor: MsbPointCtorFn = unsafe { core::mem::transmute(base + CS_MSB_POINT_CTOR_RVA) };
@@ -370,7 +543,10 @@ mod native {
             }
             unsafe { dtor(point) };
         }
-        Some(points)
+        Some(MapPointRead {
+            reported: count,
+            points,
+        })
     }
 
     /// Every resident block paired with its `MsbResCap`.
@@ -455,6 +631,97 @@ mod tests {
     }
 
     #[test]
+    fn points_closer_than_the_icon_footprint_merge_into_one_marker() {
+        let at = |index: u32, x: f32, z: f32| MsbInvasionPoint {
+            block: block(15, 0),
+            index,
+            position: [x, 0.0, z],
+            yaw: 0.0,
+        };
+        // Three within the radius of each other, plus one far away.
+        let points = [
+            at(0, 0.0, 0.0),
+            at(1, 5.0, 0.0),
+            at(2, 0.0, 5.0),
+            at(3, 500.0, 500.0),
+        ];
+        let merged = merge_coincident_points(&points, 20.0);
+        assert_eq!(merged.len(), 2);
+        // The representative is the FIRST of its cluster, so the result is stable.
+        assert_eq!(merged[0].index, 0);
+        assert_eq!(merged[1].index, 3);
+    }
+
+    #[test]
+    fn height_never_separates_two_markers_because_the_map_discards_it() {
+        // The whole reason a legacy dungeon collapses: the projection keeps X and Z only, so two
+        // points on different floors of the same tower are the same spot on the map.
+        let stacked = |index: u32, y: f32| MsbInvasionPoint {
+            block: block(11, 0),
+            index,
+            position: [10.0, y, 10.0],
+            yaw: 0.0,
+        };
+        let points = [stacked(0, 0.0), stacked(1, 200.0), stacked(2, -150.0)];
+        assert_eq!(merge_coincident_points(&points, 20.0).len(), 1);
+    }
+
+    #[test]
+    fn a_chain_of_touching_points_is_one_cluster_not_several() {
+        // Single linkage: overlap is transitive through a chain, so A-B-C all touching pairwise in
+        // sequence is one blob on screen even though A and C are 30m apart.
+        let at = |index: u32, x: f32| MsbInvasionPoint {
+            block: block(13, 0),
+            index,
+            position: [x, 0.0, 0.0],
+            yaw: 0.0,
+        };
+        let points = [at(0, 0.0), at(1, 15.0), at(2, 30.0)];
+        assert_eq!(merge_coincident_points(&points, 20.0).len(), 1);
+    }
+
+    #[test]
+    fn a_zero_radius_merges_nothing_so_the_behaviour_can_be_turned_off_in_one_place() {
+        let at = |index: u32| MsbInvasionPoint {
+            block: block(15, 0),
+            index,
+            position: [0.0, 0.0, 0.0],
+            yaw: 0.0,
+        };
+        let points = [at(0), at(1), at(2)];
+        assert_eq!(merge_coincident_points(&points, 0.0).len(), 3);
+    }
+
+    #[test]
+    fn a_read_that_lost_regions_to_missing_shape_data_says_how_many() {
+        let read = MapPointRead {
+            reported: 88,
+            points: (0..40).map(|index| point(15, 0, index)).collect(),
+        };
+        assert_eq!(read.dropped(), 48);
+    }
+
+    #[test]
+    fn a_complete_read_reports_nothing_dropped() {
+        let read = MapPointRead {
+            reported: 3,
+            points: (0..3).map(|index| point(15, 0, index)).collect(),
+        };
+        assert_eq!(read.dropped(), 0);
+    }
+
+    #[test]
+    fn dropped_never_underflows_when_more_points_arrive_than_were_reported() {
+        // Cannot happen from the engine, but `dropped` is a subtraction on a value read out of the
+        // game and an underflow here would print a nonsense number in the middle of a diagnosis.
+        let read = MapPointRead {
+            reported: -1,
+            points: vec![point(15, 0, 0)],
+        };
+        assert_eq!(read.dropped(), 0);
+    }
+
+    #[test]
     fn the_invasion_point_type_is_the_byte_verified_edx_value() {
         // `0x140a0c1f1` loads EDX = 1 for the InvasionPoint section. If this drifts, the reader
         // silently enumerates a DIFFERENT region subtype and every marker is wrong.
@@ -491,15 +758,43 @@ mod tests {
     }
 
     #[test]
-    fn a_map_with_no_points_is_still_recorded_as_read() {
-        // Otherwise "this dungeon has no invasion points" is indistinguishable from "we have not
-        // looked at this dungeon yet", and the surface can never report honest coverage.
+    fn a_map_with_no_points_is_recorded_as_read_only_after_repeated_empty_reads() {
+        // "This dungeon has no invasion points" must still become distinguishable from "we have not
+        // looked yet" -- but not on the FIRST zero. A cap can be constructed and answer zero before
+        // its MSB is parsed, and latching that costs the map its pins and its standby marker for
+        // the session.
         let mut catalog = MsbInvasionCatalog::new();
         assert!(!catalog.has_observed(block(25, 0)));
+        for strike in 1..EMPTY_READS_BEFORE_OBSERVED {
+            catalog.absorb(block(25, 0), []);
+            assert!(
+                !catalog.has_observed(block(25, 0)),
+                "believed an empty read after only {strike} of {EMPTY_READS_BEFORE_OBSERVED}"
+            );
+            assert_eq!(catalog.pending_empty_reads(block(25, 0)), strike);
+        }
         catalog.absorb(block(25, 0), []);
         assert!(catalog.has_observed(block(25, 0)));
         assert!(catalog.is_empty());
         assert_eq!(catalog.observed_block_count(), 1);
+    }
+
+    #[test]
+    fn a_late_arriving_point_cancels_the_empty_reads_that_preceded_it() {
+        // The exact sequence the guard exists for: the harvest samples a map during its load and
+        // gets zero, then the MSB finishes parsing and the same map answers properly.
+        let mut catalog = MsbInvasionCatalog::new();
+        catalog.absorb(block(15, 0), []);
+        catalog.absorb(block(15, 0), []);
+        assert!(!catalog.has_observed(block(15, 0)));
+        catalog.absorb(block(15, 0), [point(15, 0, 0)]);
+        assert!(catalog.has_observed(block(15, 0)));
+        assert_eq!(catalog.pending_empty_reads(block(15, 0)), 0);
+        assert_eq!(catalog.len(), 1);
+        // And a later empty read cannot un-observe it or resurrect the strike count.
+        catalog.absorb(block(15, 0), []);
+        assert!(catalog.has_observed(block(15, 0)));
+        assert_eq!(catalog.pending_empty_reads(block(15, 0)), 0);
     }
 
     #[test]
@@ -563,7 +858,9 @@ mod tests {
     #[test]
     fn a_map_read_with_no_points_contributes_no_representative() {
         let mut catalog = MsbInvasionCatalog::new();
-        catalog.absorb(block(25, 0), []);
+        for _ in 0..EMPTY_READS_BEFORE_OBSERVED {
+            catalog.absorb(block(25, 0), []);
+        }
         assert!(catalog.has_observed(block(25, 0)));
         assert!(catalog.block_representatives().is_empty());
     }
