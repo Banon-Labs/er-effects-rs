@@ -94,6 +94,13 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def calls_in_order(source: str, first: str, second: str) -> bool:
+    """Whether two exact call sites exist in this order in one runtime function body."""
+    first_at = source.find(first)
+    second_at = source.find(second)
+    return first_at >= 0 and second_at >= 0 and first_at < second_at
+
+
 READINESS_HELPERS = {
     "product_core_autoload_ready",
     "product_continue_action_ready",
@@ -301,6 +308,7 @@ def main() -> int:
 
     title_cover_gate = rust_fn_body(experiments, "title_native_menu_visual_suppression_enabled")
     title_cover_hook = rust_fn_body(experiments, "title_native_menu_visual_begin_title_hook")
+    dll_main = rust_fn_body(lib, "DllMain")
     require(
         "!save_override_telemetry_only()" in title_cover_gate
         and "autoload_disabled()" in title_cover_gate
@@ -312,7 +320,11 @@ def main() -> int:
     require(
         "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in runtime_source
         and "install_title_native_menu_visual_suppression_hook" in runtime_source
-        and runtime_source.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < runtime_source.find("START_MENU_WINDOW_LATCH.call_once"),
+        and calls_in_order(
+            dll_main,
+            "install_title_visual_startup_hooks();",
+            "install_boot_diagnostics_and_trace_hooks();",
+        ),
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )
