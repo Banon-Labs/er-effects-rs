@@ -166,32 +166,6 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, e
     }
 }
 
-pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
-    this: *mut c_void,
-) -> *mut c_void {
-    unsafe {
-        append_menu_semaphore_trace(
-            "menu_task_update_wrapper",
-            "ENTER",
-            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
-            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
-            this,
-        )
-    };
-    let result =
-        unsafe { call_wrapper_original(&MENU_TASK_UPDATE_WRAPPER_ORIG, this) }.unwrap_or(this);
-    unsafe {
-        append_menu_semaphore_trace(
-            "menu_task_update_wrapper",
-            "LEAVE",
-            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
-            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
-            result,
-        )
-    };
-    result
-}
-
 unsafe fn text_section_bounds(base: usize) -> Option<(usize, usize)> {
     let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
     let nt = base + e_lfanew;
