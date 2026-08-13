@@ -375,7 +375,7 @@ pub const MENU_ONLINE_MODE_DISABLE_RVA: usize = 0xe56310;
 
 pub const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
 
-pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+pub use er_game_base::rva::{MSGBOX_DIALOG_VTABLE_RVA, MsgBoxRva};
 
 /// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
 /// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
@@ -1768,23 +1768,6 @@ pub struct GameManAutoloadFlagCluster {
     pub probe_b73: u8,
     pub probe_b74: u8,
     pub probe_b75: u8,
-}
-
-/// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
-/// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
-/// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0
-/// (`cmp [rcx+0x25e8],2; setge al; ret`, rcx=dialog) and, for the MessageBoxDialog vtable only,
-/// write the result fields (button=OK, state=decided) and return "finished" -- exactly as if OK
-/// were pressed. Scoped by vtable + pre-in-world so in-game dialogs + the load flow are untouched.
-/// Verified self-disasm (online-disable RE 2026-06-17 + local disasm).
-#[repr(usize)]
-pub enum MsgBoxRva {
-    ForceStop = 0x78dfd0,
-    MultiChoiceGetter = 0x7b0cf0,
-    Builder = 0x9275b0,
-    OnDecide = 0x927ba0,
-    Update = 0x927d30,
-    DialogVtable = 0x2b03550,
 }
 
 #[repr(C)]
