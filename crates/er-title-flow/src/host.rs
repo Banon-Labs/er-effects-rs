@@ -73,8 +73,6 @@ pub struct TitleFlowHost {
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
     pub create_continue_trace_hook:
         unsafe fn(&mut Vec<MhHook>, &str, u32, *mut c_void, &'static AtomicUsize),
-    pub apply_xor_ret_stub: fn(usize, usize, &str),
-    pub patch_3byte_stub: fn(usize, usize, u8, [u8; 3], &str) -> bool,
     pub install_auto_accept_hook: fn(),
     // --- menu/dialog observation -----------------------------------------------------
     pub decode_thunk_hop: unsafe fn(usize) -> Option<usize>,
@@ -132,16 +130,6 @@ unsafe fn default_create_continue_trace_hook(
     _hook_impl: *mut c_void,
     _original: &'static AtomicUsize,
 ) {
-}
-fn default_apply_xor_ret_stub(_base: usize, _rva: usize, _label: &str) {}
-fn default_patch_3byte_stub(
-    _base: usize,
-    _rva: usize,
-    _expected_first: u8,
-    _stub: [u8; 3],
-    _label: &str,
-) -> bool {
-    false
 }
 fn default_unit() {}
 fn default_unit_str(_source: &str) {}
@@ -253,8 +241,6 @@ impl TitleFlowHost {
             missing_save_selection_pending: default_gate_off,
             save_override_telemetry_only: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
-            apply_xor_ret_stub: default_apply_xor_ret_stub,
-            patch_3byte_stub: default_patch_3byte_stub,
             install_auto_accept_hook: default_unit,
             decode_thunk_hop: default_decode_thunk_hop,
             scan_dialog_for_loadgame: default_scan_dialog_for_loadgame,
@@ -417,18 +403,6 @@ pub(crate) unsafe fn create_continue_trace_hook(
     original: &'static AtomicUsize,
 ) {
     unsafe { (host().create_continue_trace_hook)(_hooks, name, rva, hook_impl, original) }
-}
-pub(crate) fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
-    (host().apply_xor_ret_stub)(base, rva, label)
-}
-pub(crate) fn patch_3byte_stub(
-    base: usize,
-    rva: usize,
-    expected_first: u8,
-    stub: [u8; 3],
-    label: &str,
-) -> bool {
-    (host().patch_3byte_stub)(base, rva, expected_first, stub, label)
 }
 pub(crate) fn install_auto_accept_hook() {
     (host().install_auto_accept_hook)()

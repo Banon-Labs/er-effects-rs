@@ -824,17 +824,13 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     // STEP-3 WORLD-RES REBUILD (init-point fix): on a SUBSEQUENT load (the autoload->reload of the
     // same save), the per-block world-res load-state for the destination block is never created, so
     // STEP_WorldResWait (child step 3) stalls with blk_ls=0. The reactive rebuild at the stall AVs
-    // (ResetAreaResLists mid-stream). This runs the game's own ProcessMsbLoadLists HERE -- right after
-    // STEP_MoveMap_Init created the child, BEFORE the world streams -- exactly where _Common_Initialize
-    // legitimately calls it, so ResetAreaResLists is safe. Instruments unconditionally on a reload;
-    // fires the corrective call only under the diagnostic gate until proven.
+    // (ResetAreaResLists mid-stream), so the candidate fix was to run the game's own
+    // ProcessMsbLoadLists HERE -- right after STEP_MoveMap_Init created the child, BEFORE the world
+    // streams -- where _Common_Initialize legitimately calls it. That call was never runtime-validated
+    // and is gone; what remains instruments the arguments unconditionally on a reload.
     unsafe { step3_init_worldres_rebuild(this) };
     ret
 }
-
-pub(crate) use er_telemetry::counters::STEP3_INIT_REBUILD_COUNT;
-/// One-shot latch (per DLL load) + count for the init-point world-res rebuild (runtime semaphore).
-pub(crate) use er_telemetry::counters::STEP3_INIT_REBUILD_FIRED;
 
 pub(crate) use er_telemetry::counters::POPULATE_BLOCKS_LISTS_ORIG;
 
@@ -1455,16 +1451,6 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
     }
 }
 
-/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): this gated a corrective native
-/// world-res rebuild CALL that was never runtime-validated ("default off until proven"). Env/marker
-/// feature gates are forbidden, and force-enabling an unproven corrective native call on the reload
-/// path is behaviorally risky, so it is retired (off) rather than defaulted-on. The unconditional
-/// INSTRUMENTATION/logging is unaffected. NEEDS RUNTIME VALIDATION before being made the ungated
-/// product fix -- see the deprecate-env-marker report handoff.
-fn step3_init_rebuild_call_enabled() -> bool {
-    false
-}
-
 /// FD4FileCap resource-name (`std::wstring`, MSVC SSO) offsets. RE (deobf `eldenring-deobf.bin`):
 /// RequestDCX 0x142658a80 (called by AddDefaultFileLoadProcess 0x142658c60 at 0x142658d57 with
 /// rcx = the cap saved in r14) does `lea 0x18(%rcx),%rdx; cmpq $0x8,0x18(%rdx); jb .; mov (%rdx),%rdx`
@@ -1575,11 +1561,12 @@ fn read_ingamestep_vpath(this: usize) -> (usize, usize, String) {
     (base, size, s)
 }
 
-/// The init-point world-res rebuild. `this` = InGameStep (the STEP_MoveMap_Init executor's arg). Runs
+/// The init-point world-res probe. `this` = InGameStep (the STEP_MoveMap_Init executor's arg). Runs
 /// only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload's init is untouched).
-/// Replicates `_Common_Initialize`'s call verbatim: ProcessMsbLoadLists(&worldInfoOwner @ this+0x250,
-/// fcap @ *(this+0x238), dlc02 @ *(this+0x240)). Instruments first (flushed) so an AV or a stale-fcap
-/// is diagnosable from the log.
+/// READ-ONLY: it logs the exact arguments `_Common_Initialize` would pass to
+/// ProcessMsbLoadLists(&worldInfoOwner @ this+0x250, fcap @ *(this+0x238), dlc02 @ *(this+0x240)),
+/// so a stale fcap is diagnosable from the log, and makes no call itself. The corrective call this
+/// probe was built to gate was never runtime-validated and was deleted rather than defaulted on.
 unsafe fn step3_init_worldres_rebuild(this: usize) {
     if IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES {
         return; // first autoload -- never touch it
@@ -1611,32 +1598,9 @@ unsafe fn step3_init_worldres_rebuild(this: usize) {
     } else {
         u32::MAX
     };
-    let call_enabled = step3_init_rebuild_call_enabled();
     append_autoload_debug(format_args!(
-        "STEP3-INIT-REBUILD probe: InGameStep=0x{this:x} embed_worldio(+0x250)=0x{embed_worldio:x} chain_worldio=0x{chain_wio:x} fcap(+0x238)=0x{fcap:x} dlc02(+0x240)=0x{dlc02:x} vpath(+0x210)=0x{vbase:x} vsize={vsize} vpath='{vpath}' cur_block=0x{cur_block:x} area=0x{:x} call_enabled={call_enabled}",
+        "STEP3-INIT-REBUILD probe: InGameStep=0x{this:x} embed_worldio(+0x250)=0x{embed_worldio:x} chain_worldio=0x{chain_wio:x} fcap(+0x238)=0x{fcap:x} dlc02(+0x240)=0x{dlc02:x} vpath(+0x210)=0x{vbase:x} vsize={vsize} vpath='{vpath}' cur_block=0x{cur_block:x} area=0x{:x}",
         (cur_block >> 24) & 0xff
-    ));
-    if !call_enabled || fcap < 0x10000 {
-        return;
-    }
-    if STEP3_INIT_REBUILD_FIRED.swap(1, Ordering::SeqCst) != 0 {
-        return; // one-shot per DLL load (single reload per run during validation)
-    }
-    let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) else {
-        return;
-    };
-    let count = STEP3_INIT_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    // Pass dlc02 = 0 (NOT *(this+0x240)): the callee null-checks dlc02 and base-game areas have no DLC
-    // loadlist; passing the raw field AV'd (2026-07-17). Address is now the corrected deobf 0x66b1d0.
-    let _ = dlc02;
-    append_autoload_debug(format_args!(
-        "STEP3-INIT-REBUILD PRE-CALL #{count}: ProcessMsbLoadLists(0x{embed_worldio:x}, 0x{fcap:x}, dlc02=0) @ 0x{addr:x} -- init-time (pre-stream), replicating _Common_Initialize"
-    ));
-    let process_msb_loadlists: unsafe extern "system" fn(usize, usize, usize) =
-        unsafe { core::mem::transmute(addr) };
-    unsafe { process_msb_loadlists(embed_worldio, fcap, 0) };
-    append_autoload_debug(format_args!(
-        "STEP3-INIT-REBUILD POST-CALL #{count}: returned OK (no AV) -- world-res lists rebuilt for the destination at init time"
     ));
 }
 

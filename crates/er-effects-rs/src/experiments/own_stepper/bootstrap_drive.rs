@@ -89,47 +89,6 @@ pub(crate) fn own_stepper_s2_timed_out() -> bool {
 pub(crate) fn own_stepper_s2_elapsed_ms() -> u64 {
     phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS)
 }
-/// SAVE-SAFE one-shot cold-build probe of the world-resource streaming driver. Validates the lever
-/// emk-resman-streaming-driver-coldbuild-stub-lever-2026 live, WITHOUT SetState / world load.
-/// The CSResStep tick getter 0x140cd6c50's body is context-free (builds the EMK resman cluster via
-/// global RIP-relative stores + boot allocators; `this`/rsi is touched ONLY at prologue/tail). The
-/// tail registers the stream worker when [this+0x48] >= 6. So a zeroed stub with [+0x48]=6 builds
-/// the driver 0x143d7c088 + worker 0x144842d40, cold. Pure build -> read-back; no save write.
-pub(crate) unsafe fn worldres_coldbuild_probe(base: usize) {
-    const CSRES_GETTER_RVA: usize = STREAMING_DRIVER_BUILDER_RVA;
-    const EMK_RESMAN_DRIVER_RVA: usize = STREAMING_DRIVER_SINGLETON_RVA;
-    // NOTE: this global is upstream's `runtime_heap_allocator` (DLAllocator), always non-null --
-    // NOT a world-stream worker. The BEFORE/AFTER "worker" reads below are a FALSE-POSITIVE lever
-    // (allocator present regardless of the getter); kept for context via the fromsoftware-rs accessor.
-    const STUB_LEN: usize = 0x80;
-    const STUB_FILL: u8 = 0;
-    const STUB_STATE_OFFSET: usize = 0x48;
-    const STUB_STATE_VALUE: i32 = 6;
-    const PROBE_DONE: usize = 1;
-    pub(crate) use er_telemetry::counters::COLDBUILD_DONE;
-    if COLDBUILD_DONE.swap(PROBE_DONE, Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
-        return;
-    }
-    let driver_before = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
-    let worker_before = crate::runtime_heap_allocator_ptr_or_null();
-    // Persistent zeroed stub `this`: the getter only touches [+0x48] (state) / [+0x4c] / [+0x50].
-    let stub: &'static mut [u8; STUB_LEN] = Box::leak(Box::new([STUB_FILL; STUB_LEN]));
-    let stub_ptr = stub.as_mut_ptr() as usize;
-    unsafe { *((stub_ptr + STUB_STATE_OFFSET) as *mut i32) = STUB_STATE_VALUE };
-    append_autoload_debug(format_args!(
-        "worldres-coldbuild: BEFORE driver[0x{:x}]=0x{driver_before:x} allocator=0x{worker_before:x} -- calling CSResStep getter 0x{:x}(stub=0x{stub_ptr:x})",
-        base + EMK_RESMAN_DRIVER_RVA,
-        base + CSRES_GETTER_RVA
-    ));
-    let getter: unsafe extern "system" fn(usize) -> usize =
-        unsafe { std::mem::transmute(base + CSRES_GETTER_RVA) };
-    let ret = unsafe { getter(stub_ptr) };
-    let driver_after = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
-    let worker_after = crate::runtime_heap_allocator_ptr_or_null();
-    append_autoload_debug(format_args!(
-        "worldres-coldbuild: AFTER driver=0x{driver_after:x} worker=0x{worker_after:x} ret=0x{ret:x} (both non-null = lever VALIDATED, NO SetState/NO save write)"
-    ));
-}
 /// 2026-06-18 BREAKTHROUGH build: construct a CS::ProfileLoadDialog DIRECTLY at the open menu,
 /// bypassing the input-gated router_this/d180-on-confirm layer (runtime-PROVEN never to build
 /// headless -- loadgame-fingerprint-scan-confirms-router-this-not-built-headless-2026). The

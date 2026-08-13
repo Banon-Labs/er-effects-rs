@@ -507,14 +507,20 @@ pub fn apply_online_disable() {
     // Patch the IsOnlineMode getter (consumers read offline). NOTE: the login-readiness predicate
     // patch (0x140cab230) was REVERTED -- it did not prevent the modal (the offline fork shows it
     // too) AND it broke the OnDecide OK-dispatch (the modal stuck instead of proceeding).
-    apply_xor_ret_stub(base, ONLINE_DISABLE_RVA, "IsOnlineMode getter");
+    er_hook::apply_xor_ret_stub(
+        base,
+        ONLINE_DISABLE_RVA,
+        ONLINE_DISABLE_EXPECTED_FIRST,
+        ONLINE_DISABLE_STUB,
+        "IsOnlineMode getter",
+    );
     // The THIRD menu-open popup ("Starting in offline mode", GR_System_Message 401170) is gated by
     // TitleFlowContext->notReleaseFlag55 = !Menu_IsEnableOnlineMode(). Force that getter false so the
     // game's own ctx-init (0x14082d0d0) writes notReleaseFlag55=1 each time, the title-flow offline step
     // (0x14082fda0) takes the clean no-popup branch, and the Continue/Load/NewGame rows build with ZERO
     // MessageBoxDialog builds. Race-free + offline-gated (Seamless online unaffected). bd
     // menu-open-3rd-popup-offline-mode-notice-2026-06-23 / er-effects-rs-yvf.
-    let menu_online_off = patch_3byte_stub(
+    let menu_online_off = er_hook::patch_3byte_stub(
         base,
         MENU_ONLINE_MODE_DISABLE_RVA,
         MENU_ONLINE_MODE_EXPECTED_FIRST,
@@ -535,14 +541,14 @@ pub fn apply_online_disable() {
 /// -> b80 RESIDENT. Save-safe (in-memory code patch; no save write). Called once from the cold-mount
 /// attempt so normal play is unaffected unless a cold mount is requested.
 pub fn apply_signin_force(base: usize) {
-    let s = patch_3byte_stub(
+    let s = er_hook::patch_3byte_stub(
         base,
         SIGNIN_FORCE_RVA,
         SIGNIN_FORCE_EXPECTED_FIRST,
         SIGNIN_FORCE_STUB,
         "signin-force",
     );
-    let u = patch_3byte_stub(
+    let u = er_hook::patch_3byte_stub(
         base,
         USERINDEX_FORCE_RVA,
         USERINDEX_FORCE_EXPECTED_FIRST,

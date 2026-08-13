@@ -313,3 +313,159 @@ impl MhHook {
         unsafe { MH_QueueDisableHook(self.addr) }.ok_context("MH_QueueDisableHook")
     }
 }
+
+// ============================================================================
+// RAW CODE-PATCH PRIMITIVES (moved from `er-effects-rs/src/experiments/mem.rs`,
+// docs/plans/experiments-crate-targets.md S5). Behaviour-preserving move: the bodies are the
+// product's, and every log string is unchanged. They belong here because they are the same
+// "reach into the game image and rewrite bytes" capability MinHook itself provides, and both
+// consumers (the product DLL and er-title-flow) already depend on this crate -- so hosting them
+// here deletes the two `TitleFlowHost` fn-pointer seams that existed only to reach back into the
+// product for them.
+//
+// Kept as two functions rather than one because their log text differs and this is a MOVE, not a
+// redesign. `apply_xor_ret_stub` is `patch_3byte_stub` plus a success line and an
+// "online-disable"-prefixed abort line; deduping them changes what a diagnostic log says and is
+// deliberately left for a separate slice.
+//
+// The `windows` crate is NOT pulled in for this -- er-hook has zero `[dependencies]` and keeps it
+// that way, following the raw-extern pattern already used above for `GetModuleHandleExW` and the
+// `MH_*` family.
+// ============================================================================
+
+/// Init value for the `VirtualProtect` out-params; overwritten by the call.
+const PAGE_PROTECT_UNSET: u32 = 0;
+/// `PAGE_EXECUTE_READWRITE` (winnt.h), the protection a code patch needs.
+const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+/// Win32 `BOOL` false; `VirtualProtect` returns zero on failure.
+const WIN32_FALSE: i32 = 0;
+/// `-1` cast to a handle: the current-process pseudo-handle `FlushInstructionCache` accepts
+/// without an `OpenProcess` round-trip.
+const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+/// Both primitives write exactly the 3 bytes of a `[u8; 3]` stub.
+const STUB_LEN: usize = 3;
+const BYTE_STEP: usize = 1;
+const BYTE_START: usize = 0;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn VirtualProtect(
+        addr: *mut c_void,
+        size: usize,
+        new_protect: u32,
+        old_protect: *mut u32,
+    ) -> i32;
+    /// Flush the CPU instruction cache after patching executable code so other threads see the
+    /// new bytes (current-process pseudo-handle -1).
+    fn FlushInstructionCache(process: isize, base: *const c_void, size: usize) -> i32;
+}
+
+/// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
+/// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
+/// the gate-force patches (foreground / sign-in / user-index).
+#[cfg(windows)]
+pub fn patch_3byte_stub(
+    base: usize,
+    rva: usize,
+    expected_first: u8,
+    stub: [u8; STUB_LEN],
+    label: &str,
+) -> bool {
+    let target = (base + rva) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != expected_first {
+        hook_log(format_args!(
+            "{label}: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
+            base + rva
+        ));
+        return false;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            STUB_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == WIN32_FALSE {
+        hook_log(format_args!("{label}: VirtualProtect failed"));
+        return false;
+    }
+    let mut i = BYTE_START;
+    while i < STUB_LEN {
+        unsafe { *target.add(i) = stub[i] };
+        i += BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe { VirtualProtect(target as *mut c_void, STUB_LEN, old_protect, &mut restored) };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            STUB_LEN,
+        )
+    };
+    true
+}
+
+/// Patch a 0x48-prologue function body to `xor eax,eax; ret` (return 0) at `base+rva`. Validates
+/// the expected first byte, VirtualProtects RWX, writes the 3-byte stub, restores protection, and
+/// flushes the icache. Used to force-offline the IsOnlineMode getter + login-readiness predicate.
+///
+/// `expected_first` and `stub` were `ONLINE_DISABLE_EXPECTED_FIRST` / `ONLINE_DISABLE_STUB` read
+/// from product constants; they are parameters now because this crate cannot see the product's
+/// constant tree. Callers pass the same two values, so the rendered log text is unchanged.
+#[cfg(windows)]
+pub fn apply_xor_ret_stub(
+    base: usize,
+    rva: usize,
+    expected_first: u8,
+    stub: [u8; STUB_LEN],
+    label: &str,
+) {
+    let target = (base + rva) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != expected_first {
+        hook_log(format_args!(
+            "online-disable: ABORT {label} -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
+            base + rva
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            STUB_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == WIN32_FALSE {
+        hook_log(format_args!(
+            "online-disable: VirtualProtect failed for {label}"
+        ));
+        return;
+    }
+    let mut i = BYTE_START;
+    while i < STUB_LEN {
+        unsafe { *target.add(i) = stub[i] };
+        i += BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe { VirtualProtect(target as *mut c_void, STUB_LEN, old_protect, &mut restored) };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            STUB_LEN,
+        )
+    };
+    hook_log(format_args!(
+        "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
+        base + rva
+    ));
+}

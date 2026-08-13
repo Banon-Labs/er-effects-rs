@@ -323,6 +323,11 @@ pub const ONLINE_DISABLE_RVA: usize = 0x67a030;
 
 /// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
 /// bytes followed by the next function, so a 3-byte stub is self-contained).
+/// First byte of the IsOnlineMode getter's prologue (`0x48`, a REX.W prefix). Validated before the
+/// stub is written so a drifted image aborts the patch instead of corrupting an unrelated function.
+/// Moved here from the product's `constants/autoload_state.rs` with the code-patch primitives (S5):
+/// this crate now calls `er_hook::apply_xor_ret_stub` directly and must supply the byte itself.
+pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
@@ -1106,8 +1111,10 @@ pub const DIALOG_SLOT_BOUND_B08_OFFSET: usize =
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
-/// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
+/// One-shot latch, claimed with `swap`. It named the zero-input title-confirm fire
+/// (`fire_titletop_load_entry`) until that route was deleted as disproven; the remaining claimants
+/// use it to make a once-per-run announcement at the parked open menu rather than to suppress a
+/// re-fire. Readers still treat "not `TITLE_NATIVE_JOB_NOT_CALLED`" as "the menu stage has run".
 pub static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 
 // ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_background.rs =====
