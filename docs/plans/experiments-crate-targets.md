@@ -47,8 +47,27 @@ Ten files moved; only four materially:
   A fresh whole-file scan of `gating/` finds **45 hard-`false` gates** -- exactly the count SS7
   Decision 2 was costed against, so that decision's arithmetic is unchanged.
 
-**Nothing in this plan has been executed.** No S-slice has landed; `submit.rs` and
-`live_loadgame_node.rs` are still present at full size.
+### Execution status (2026-08-13)
+
+The deletion block is in flight as a stack of draft PRs off `877f1261`, each proven by fingerprint,
+none requiring a runtime run:
+
+| slice | PR | net | fingerprint verdict |
+|---|---|---:|---|
+| **S1** delete zero-caller code | #229 | -118 | `.text` + `.pdata` byte-identical; 24 `.rdata` bytes, all `panic::Location` line numbers shifted by exactly the lines deleted above them |
+| **S2** delete the effect-selector HUD | #230 | -454 | **whole DLL byte-identical** |
+| **S3** delete the dxgi factory-export hook | #231 | -67 | **whole DLL byte-identical** |
+| **S4a** delete `submit.rs` + its 4 hard-false levers | #232 | -608 | **whole DLL byte-identical at `codegen-units=1`** -- see FP-CGU1 in SS4 |
+
+Corrections these produced, folded into the sections below: the S1 headline `-218` never matched its
+own itemisation (116); S2's counter range is only safe because three live `EFFECT_SELECTOR_*`
+counters are declared outside it; S3's import narrows for one more reason than the plan gave
+(`MH_ApplyQueued` was already unused in that file); and **S4a falsified the plan's prediction that
+S2-S4 would all come back `.text`-identical at the default profile** -- it does not, and the fix is
+FP-CGU1, not a runtime run.
+
+Still unexecuted: **S4b-S4d** (`live_loadgame_node` + `menu_observation`, the trace pair, the switch
+harness) and everything from S5 onward.
 
 ---
 
@@ -169,6 +188,24 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 - **FP** = `python3 scripts/dll-code-fingerprint.py <before.dll> <after.dll>`. Its rule
   (`scripts/dll-code-fingerprint.py:5-9`): if `.text` is **byte-identical**, the change cannot have
   altered behavior and **needs no runtime run**. If `.text` moves, the slice needs a runtime proof.
+  **Build both sides in the SAME directory** -- a sibling worktree perturbs ~9% of `.text` on its
+  own, which makes the gate meaningless.
+- **FP-CGU1** = the same command, with **both** sides built under
+  `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1`. **Mandatory for any slice that adds or removes a
+  module**; without it the gate returns a false `MATERIAL` and sends you to a runtime run you do not
+  need. Measured on S4a (2026-08-13): deleting `submit.rs` at the default profile
+  (`codegen-units=16`) reported **every** section DIFF -- `.text`, `.pdata`, `.data`, `.rdata`,
+  `.reloc` -- with a common prefix of only `0x20` bytes, i.e. essentially all 2.1 MB of `.text`
+  moved. Rebuilt at `codegen-units=1`, the two DLLs are **byte-identical** (exit 0, `NOT MATERIAL`);
+  the only residual bytes are 36 in `.rdata` at the PE debug directory, an `RSDS` PDB GUID plus
+  build timestamp, which the script already masks.
+
+  **Mechanism:** removing a module re-partitions rustc's codegen units, relocating nearly every
+  function in the crate. That is layout churn, not semantics. It also breaks the "section size
+  moved" half of the SS5 rule table in a non-obvious direction -- a *pure deletion* was observed to
+  GROW `.pdata` by 24, `.data` by 16 and `.reloc` by 76 bytes. Intra-file deletions that leave the
+  module graph intact (S1-S3) do **not** need this; all three came back byte-identical at the
+  default profile. This is a measurement-only setting -- do not change the shipped profile.
 - **CHK** = `bash scripts/check.sh` green (includes `check-rust-build.sh`, so the DLL is linked).
 - **SZ** = `scripts/check-rust-file-sizes.py` -- warn > 900, **fail > 3200** (measured at
   `scripts/check-rust-file-sizes.py:13-14`).
@@ -191,12 +228,13 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 
 ### The slices
 
-| # | PR title | Files | Net | Gate | Depends on |
-|---|---|---|---|---|---|
-| **S1** | **Delete zero-caller code from experiments** | 6 | **-218** | CHK + **FP `.text`** | -- |
-| **S2** | Delete the unreachable effect-selector HUD from boot_progress | 2 | -454 | CHK + FP + SZ | S1 |
-| **S3** | Delete the dxgi factory-export hook from present_overlay | 2 | -67 | CHK + FP | S1 |
-| **S4** | Delete the four hard-false submit levers and the live-loadgame node | 6 | -800 | CHK + FP | S1 |
+| # | PR title | Files | Net | Gate | Depends on | Status |
+|---|---|---|---|---|---|---|
+| **S1** | **Delete zero-caller code from experiments** | 6 | **-118** *(not -218)* | CHK + **FP `.text`** | -- | **LANDED #229** |
+| **S2** | Delete the unreachable effect-selector HUD from boot_progress | 2 | -454 | CHK + FP + SZ | S1 | **LANDED #230** |
+| **S3** | Delete the dxgi factory-export hook from present_overlay | 2 | -67 | CHK + FP | S1 | **LANDED #231** |
+| **S4a** | Delete submit.rs and its four hard-false levers | 6 | -608 | CHK + **FP-CGU1** | S1 | **LANDED #232** |
+| **S4b-d** | live-loadgame node, the trace pair, the switch harness | 6 | ~-200 | CHK + FP-CGU1 | S4a | |
 | **S5** | **Move the code-patch primitives into er-hook** | 5 | ~-40 | CHK + FP | S1 |
 | **S6** | Move the boot profiler into er-boot-profiler | 5 | ~+30 | CHK | S1 |
 | **S7** | Move the PGD name offsets into er-game-base | 3 | ~+15 | CHK | -- |
