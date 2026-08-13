@@ -1,3 +1,18 @@
+/// A completed self-pump draw can lose the handoff race before it is presented, so successful
+/// draws must be compared with self-attributed full clears rather than submitted self-presents.
+fn boot_view_present_cover_failed(
+    pump_stop_reason: usize,
+    boot_view_stopped: usize,
+    draws: usize,
+    self_full_clears: usize,
+    present_full_clears: usize,
+) -> bool {
+    pump_stop_reason == 1
+        && boot_view_stopped == 0
+        && draws > self_full_clears
+        && present_full_clears == 0
+}
+
 fn write_game_module_oracles(body: &mut String) {
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). Current EMA fps + the
     // per-epoch WORST-frame fps (min), written each game-task frame by lifecycle from delta_time.
@@ -2074,16 +2089,33 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_winreconfig_early_apply_rect",
             WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
         );
+        let pump_stop_reason = BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst);
+        let boot_view_stopped = BOOT_VIEW_STOPPED.load(Ordering::SeqCst);
+        // A composite attributes its clear before incrementing DRAW_HITS. Read draws first so a
+        // concurrent composite can only make attribution newer than draws, never the reverse tuple
+        // that would latch a false failure while the Present-path clear is still in flight.
+        let draws = BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst);
         let self_presents = BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst);
+        let self_full_clears = BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         let present_full_clears = BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         push_json_usize(body, "oracle_boot_view_self_presents", self_presents);
-        push_json_usize(body, "oracle_boot_view_self_full_clear_hits", BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst));
-        push_json_usize(body, "oracle_boot_view_present_full_clear_hits", present_full_clears);
-        if BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1
-            && BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0
-            && BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) > self_presents
-            && present_full_clears == 0
-        {
+        push_json_usize(
+            body,
+            "oracle_boot_view_self_full_clear_hits",
+            self_full_clears,
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_present_full_clear_hits",
+            present_full_clears,
+        );
+        if boot_view_present_cover_failed(
+            pump_stop_reason,
+            boot_view_stopped,
+            draws,
+            self_full_clears,
+            present_full_clears,
+        ) {
             BOOT_VIEW_PRESENT_COVER_FAILURES.store(1, Ordering::SeqCst);
         }
         let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
