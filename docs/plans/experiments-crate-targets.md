@@ -60,7 +60,9 @@ none requiring a runtime run:
 | **S4a** delete `submit.rs` + its 4 hard-false levers | #232 | -608 | **whole DLL byte-identical at `codegen-units=1`** -- see FP-CGU1 in SS4 |
 | **S4b** delete the live-dialog / native-profile-capture path | #234 | -529 | **byte-identity impossible** -- this code WAS emitted; proof is static (three literal-`false` gates) |
 
-**S1-S4a merged 2026-08-13** (`acb31bd1`). S4b is open off that.
+| **S4c** delete the retired menu-task-update trace lever | #235 | -47 | **regime B** -- address-taken detour, emitted but never installed |
+
+**S1-S4b merged 2026-08-13** (`9253a126`). S4c is open off that.
 
 ### The three proof regimes -- which one a slice is in decides the gate
 
@@ -70,7 +72,7 @@ regime A and it is easy to assume every deletion does:
 | regime | what was deleted | fingerprint result | what proves it |
 |---|---|---|---|
 | **A -- never emitted** | zero-caller items; items behind a `false` gate that rustc folded away | **byte-identical** (`.text` at minimum; use FP-CGU1 if a module disappears) | the fingerprint itself. No runtime run |
-| **B -- emitted but unreachable** | code the compiler DID emit, reachable only through a literal-`false` gate | **cannot be identical** -- `.gfids` moves and every later function shifts | a STATIC gate-body reading. A runtime run is a regression smoke, not an equivalence proof |
+| **B -- emitted but unreachable** | code the compiler DID emit, reachable only through a literal-`false` gate. **Includes any address-taken fn** (`x as *mut c_void` for a hook installer) -- taking the address defeats DCE even when the branch taking it never runs, which is exactly why S4c is regime B | **cannot be identical** -- `.gfids` moves and every later function shifts | a STATIC gate-body reading. A runtime run is a regression smoke, not an equivalence proof |
 | **C -- reachable** | anything a product path can actually execute | irrelevant | a runtime run, per the repo's standing rules |
 
 Telling A from B is not a judgement call -- build it and look. The trap is treating a regime-B
@@ -84,7 +86,10 @@ counters are declared outside it; S3's import narrows for one more reason than t
 S2-S4 would all come back `.text`-identical at the default profile** -- it does not, and the fix is
 FP-CGU1, not a runtime run.
 
-Still unexecuted: **S4c-S4d** (the trace pair, the switch harness) and everything from S5 onward.
+Still unexecuted: **S4d** (the switch harness) plus the two S4 items split out along the way --
+`step3_init_rebuild_call_enabled` (gates an early return inside a live function; carries the
+`STEP3_INIT_REBUILD_FIRED`/`_COUNT` oracle cascade) and the `menu_observation` trio -- and everything
+from S5 onward.
 Note S4b took only the `live_loadgame_node` half of the plan's S4b sketch -- the `menu_observation`
 items (`fire_titletop_load_entry`, `functor_ptr_hits_factory`, `cursor_offset_probe`) are tangled
 into `product_core_own_stepper.rs`'s `legacy_menu_drive_enabled` branch and belong with S4c.
