@@ -1,44 +1,5 @@
 use super::*;
 
-/// Fire a captured MenuWindowJob's `+0xa8` action std::function in-context, mirroring the
-/// native leaf Update's functor-invoke at `0x1407ad2b9`:
-///   rcx = `[item+0xa8]` (the std::function obj); rax = `[rcx]` (`_Func_impl_no_alloc`
-///   vtable, no RTTI); rdx = `item+0x10` (the dialog ctx out-slot, the single arg);
-///   call `[rax+0x10]` (`_Do_call`: `add rcx,8; jmp <lambda>`).
-/// Returns the lambda result (e.g. the built dialog), which the native Update stores to
-/// `[item+0x130]`. Guarded EXACTLY like the native BUILD path: only fires when
-/// `[item+0xa8]!=0` AND `[item+0x10]==0`, so we never re-invoke an already-built item
-/// (which would leak/overwrite `item+0x130`). This is the game's OWN menu-action functor
-/// (NOT input synthesis) -- compliant with the zero-input standard. NOTE: this performs a
-/// native call, so it is only used once the live item/owner are validated; it is NOT a
-/// save-write by itself (the Load-entry/dialog functors build UI, not save state).
-pub(crate) unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
-    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
-    const ITEM_CTX_10: usize = 0x10;
-    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }?;
-    if functor == null {
-        return None;
-    }
-    // BUILD-path precondition: the native Update fires the functor only when item+0x10==0.
-    let ctx_slot = unsafe { safe_read_usize(item + ITEM_CTX_10) }?;
-    if ctx_slot != null {
-        return None;
-    }
-    let functor_vtable = unsafe { safe_read_usize(functor) }?;
-    if functor_vtable == null {
-        return None;
-    }
-    let do_call = unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }?;
-    if do_call == null {
-        return None;
-    }
-    let f: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(do_call) };
-    let ctx_out = item + ITEM_CTX_10;
-    Some(unsafe { f(functor, ctx_out) })
-}
 /// Drive the NATIVE MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
 /// BUILD the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
 /// WIRES the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via

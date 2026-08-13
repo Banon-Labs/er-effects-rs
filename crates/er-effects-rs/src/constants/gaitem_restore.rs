@@ -84,7 +84,6 @@ pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as u
 /// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
 pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
 pub(crate) use er_title_flow::STREAMING_DRIVER_SINGLETON_RVA;
-pub(crate) const STREAMING_DRIVER_BUILDER_RVA: usize = 0xcd6c50;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via

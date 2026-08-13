@@ -1474,7 +1474,6 @@ pub const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
 /// the exact race (fd4io non-IDLE inside the guard's active window) that produced the black-screen
 /// softlock. Published as `oracle_switch_b78_guard_standdowns`.
 pub static SWITCH_RELOAD_B78_GUARD_STANDDOWNS: AtomicUsize = AtomicUsize::new(0);
-pub static COLDBUILD_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
 pub static WARM_KICK_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PAD_POLL: AtomicUsize = AtomicUsize::new(0);
@@ -1496,8 +1495,6 @@ pub static LOADLIST_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_CHILD_CLEANUP_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_STEP_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_STEP_FINISH_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub static STEP3_INIT_REBUILD_FIRED: AtomicUsize = AtomicUsize::new(0);
-pub static STEP3_INIT_REBUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static POPULATE_BLOCKS_LISTS_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static POPULATE_BLOCKS_LISTS_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WORLDRES_ENTRY_CTOR_ORIG: AtomicUsize = AtomicUsize::new(0);

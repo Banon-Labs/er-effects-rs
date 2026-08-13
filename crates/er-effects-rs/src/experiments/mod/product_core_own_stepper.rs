@@ -644,14 +644,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             )
         }
     };
-    // SAVE-SAFE world-res streaming-driver cold-build probe (gated OFF by default; one-shot).
-    // Builds the CSEmkResManImp driver (0x143d7c088) + stream worker (0x144842d40) at the parked
-    // title via the CSResStep getter with a stub `this` -- NO SetState, NO world load, NO save
-    // write. Validates emk-resman-streaming-driver-coldbuild-stub-lever-2026 live. Additive: the
-    // normal phase logic continues (default = stay at the open menu, save-safe).
-    if worldres_coldbuild_probe_enabled() && unsafe { title_boot_ready(owner, base) } {
-        unsafe { worldres_coldbuild_probe(base) };
-    }
     // DECISIVE save-data experiment (gated OFF by default; SAVE-SAFE). Register the stream worker,
     // then drive the cold b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67b290
     // mounts the real char to memory -- NO SetState, NO save write. Bypasses the menu drive while
@@ -812,7 +804,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // Suppress unused warnings for consts/statics retained from the falsified cold
         // slot-int drive, synthetic-dispatcher, b78-route, and Continue-shim work.
         let _ = (
-            invoke_menu_item_functor as usize,
             CONTINUE_CONFIRM_RVA,
             B80_FULL_LOAD_INITIATOR_RVA,
             OWN_STEPPER_PHASE_MOUNT,
