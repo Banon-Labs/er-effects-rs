@@ -101,6 +101,16 @@ jobs:
           cupcake validate --log-level error
           python3 scripts/test-cupcake-policies.py
 
+      # Both halves of the refactor/move DLL byte-identity gate
+      # (.github/workflows/refactor-byte-identical.yml): the trigger that decides
+      # which PRs it applies to, and the comparator that decides what counts as a
+      # difference. Neither is exercised by that workflow's own runs on ordinary
+      # PRs, so they are tested here instead of rotting until the day one fires.
+      - name: Test the DLL byte-identity gate
+        run: |
+          bash scripts/test-pr-refactor-scope.sh
+          python3 scripts/test-dll-byte-identical.py
+
       - name: rustfmt
         run: cargo fmt --all -- --check
 

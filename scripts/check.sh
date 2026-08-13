@@ -61,6 +61,12 @@ python3 "$repo_root/scripts/check-rva-alias-drift.py"
 # gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-fresh-run-logs.py" --selftest
 python3 "$repo_root/scripts/check-fresh-run-logs.py"
+# The refactor/move DLL byte-identity gate (.github/workflows/refactor-byte-identical.yml) has two
+# halves that can each rot silently: the trigger (which PRs it applies to) and the comparator (what
+# counts as a difference). Both are tested here -- a gate whose scope and whose normalizer are
+# untested is decorative.
+bash "$repo_root/scripts/test-pr-refactor-scope.sh"
+python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
@@ -69,6 +75,9 @@ shellcheck "$repo_root/.githooks/pre-push"
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
+shellcheck "$repo_root/scripts/pr-refactor-scope.sh"
+shellcheck "$repo_root/scripts/test-pr-refactor-scope.sh"
+shellcheck "$repo_root/scripts/probe-dll-build-determinism.sh"
 shellcheck "$repo_root/scripts/hooks/pre-push"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
