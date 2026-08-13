@@ -215,8 +215,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
         save_override_telemetry_only: crate::experiments::save_override_telemetry_only,
         create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
-        apply_xor_ret_stub: crate::experiments::apply_xor_ret_stub,
-        patch_3byte_stub: crate::experiments::patch_3byte_stub,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,
         scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
