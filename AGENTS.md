@@ -34,7 +34,18 @@ For task startup in this repo, read relevant `bd` memories (`$HOME/.local/bin/bd
 
 ## Elden Ring Runtime Probe Hygiene
 
-When using Frida or the injected DLL to scrape runtime Elden Ring data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
+**Do NOT `frida.attach()` the running Elden Ring. It KILLS the game.** On this Wine/Proton target the
+attach injects a bootstrapper that segfaults *inside* `eldenring.exe` -- it reports `frida.NotSupportedError:
+bootstrapper crashed with signal 11` and the process dies instantly (the DLL debug log stops mid-line with no
+shutdown sequence; only `wineserver`/`winedevice.exe` survive). Measured 2026-08-12, destroying a live session
+that was being held open for inspection. For a **read-only** question about live memory ("what is this pointer
+now", "which field is the caret") use `scripts/er-live-fields.py`, which reads `/proc/<pid>/mem` -- no injection,
+no thread suspension, nothing runs in the target. To learn **which code writes** a field, use the
+`linux-x86-debug` toolkit's `tracebreakpoint` (winedbg --gdb attach) described below, never Frida. See bd
+`frida-attach-kills-wine-eldenring-use-proc-mem-2026-08-12`.
+
+When using Frida (only where it is already proven to work) or the injected DLL to scrape runtime Elden Ring
+data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
 
 When a runtime probe is explicitly meant to stay live for manual interaction / `read` follow-up, do **not** use a watcher path that owns process shutdown (`.auto/runtime_probe.sh`, `er-readiness-watch.py`, or helpers that wait on them) unless the user explicitly asks for an agent-owned bounded run. A user-inspection probe must be genuinely live: launch the approved offline/direct `eldenring.exe` path and leave it running for the user.
 
