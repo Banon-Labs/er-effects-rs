@@ -21,6 +21,14 @@ pub const INLINE_FNV1A64: u64 = 0xcea6_6846_d53b_edc5;
 
 const TEXT_INPUT_SPRITE_ID: u16 = 8;
 const TEXT_FIELD_CHARACTER_ID: u16 = 7;
+
+/// Instance name of the root placement of [`TEXT_INPUT_SPRITE_ID`], and of the editable field
+/// ([`TEXT_FIELD_CHARACTER_ID`]) inside it. Both are authored in the vanilla movie, so the runtime can
+/// reach the live field by name (`root -> TextInput -> Text_0`) instead of walking display lists.
+/// Read out of the corpus movie itself (`02_990_textinput.gfx`, 1141 bytes), whose only other strings
+/// are the font and the four chrome bitmaps.
+pub const TEXT_INPUT_SPRITE_NAME: &str = "TextInput";
+pub const TEXT_FIELD_INSTANCE_NAME: &str = "Text_0";
 const PROFILE_LIST_CENTER_X_PX: f32 = 960.0;
 const PROFILE_LIST_CENTER_Y_PX: f32 = 540.0;
 const FIRST_COMPACT_ROW_CENTER_Y_PX: f32 = -216.0;

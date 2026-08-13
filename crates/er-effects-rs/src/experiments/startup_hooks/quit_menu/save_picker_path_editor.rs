@@ -153,6 +153,9 @@ pub(crate) fn save_picker_note_path_editor_window_state(window: usize, state: i3
             Ordering::SeqCst,
         );
         if previous_window == 0 {
+            // A fresh editor: re-arm the end-caret. This transition is the only per-open signal --
+            // the window pointer itself gets recycled across opens.
+            reset_path_editor_caret_latch();
             let dialog = SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.load(Ordering::SeqCst);
             if dialog != 0
                 && SAVE_PICKER_REBUILD_PENDING_DIALOG
