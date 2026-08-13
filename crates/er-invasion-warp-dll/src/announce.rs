@@ -32,11 +32,42 @@
 //! and Update walks straight to the display step. The queue is bypassed rather than fought — which
 //! matters, because the queue's push function is not symbolised and was never found.
 //!
-//! The string is copied by the game's own `DLString::assign`, so the game allocates, owns and frees
-//! it. That is deliberate: the previous attempt wrote into a donor string it did not own and got
-//! silently clamped to its capacity, turning "Rejected m60_42_36_00 (elsewhere)" into "Reject".
-//! Handing the allocation to the game removes that failure mode entirely rather than working
-//! around it.
+//! # Where the text comes from, and why NOT the embedded `DLString`
+//!
+//! The display step's `Load` case picks the string like this (`0x1408c48c0`):
+//!
+//! ```text
+//!   text = msg->field8_0x8;                       // +0x08, a raw wchar_t*
+//!   if (text == NULL) {                           // only then, the embedded DLString
+//!       text = &msg->text.string;                 // SSO: inline buffer...
+//!       if (msg->text.capacity > 7) text = *text; // ...or the heap pointer
+//!   }
+//!   FUN_14074a000(&view->textWidget, text);
+//! ```
+//!
+//! [`MSG_TEXT_POINTER_OFFSET`] is checked FIRST and used verbatim when non-null, so pointing it at
+//! a buffer we own is the engine's own primary path — no allocator, no string type, no growth.
+//!
+//! The obvious-looking alternative, calling the game's `DLString::assign` on `msg->text`, is what
+//! shipped first and it produced A BANNER WITH NO TEXT ON IT (live, 2026-08-12). The cause is
+//! visible in a read of the live message: the view's EMBEDDED message is never populated by the
+//! game unless the game itself announces something, so its `DLString` is all zeroes — including
+//! `allocator`. `assign` memcpys in place only while `capacity >= length`; for anything longer it
+//! delegates to a grow that needs that null allocator. Nothing crashed and nothing was copied, so
+//! `capacity` stayed `0`, the null-check above fell through to the SSO branch, and the inline
+//! buffer it read was the zeroed one — an empty string, drawn as an empty banner, while our own
+//! `SHOWN` counter said the notice had been placed. A counter that proves the WRITE happened is
+//! not evidence the PIXELS changed.
+//!
+//! # Buffer lifetime
+//!
+//! The pointer is raw and the game never takes ownership of it: `AnnounceMessage`'s copy
+//! (`0x1408c4710`) propagates `field8_0x8` by value, and the `Dequeue` state only clears
+//! `is_active`. Nothing frees it, so the buffer must outlive the scroll and fade — and it is
+//! therefore leaked, the same choice and the same reason as the synthetic param rows. The leak is
+//! bounded in practice by the notice policy, which announces only a CHANGE of destination: a long
+//! session is tens of messages of under 200 bytes each. Leaking is also what makes this race-free
+//! without a lock — a buffer that is never freed cannot dangle under a view still reading it.
 
 #[cfg(windows)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,17 +75,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `CS::FeSystemAnnounceView::Update`. Hooked to learn the live view, which is otherwise reachable
 /// only by walking `CSMenuMan`'s window list.
 pub const UPDATE_RVA: usize = 0x8c_47c0;
-/// `DLTX::DLString::assign(DLString<wchar_t>*, wchar_t*, size_t)` — grows the string itself.
-pub const DLSTRING_ASSIGN_RVA: usize = 0x11_e360;
 
-/// Opening bytes, so a game update that moves these fails closed instead of jumping mid-instruction.
+/// Opening bytes, so a game update that moves this fails closed instead of jumping mid-instruction.
 pub const UPDATE_PROLOGUE: &[u8] = &[0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29];
-pub const DLSTRING_ASSIGN_PROLOGUE: &[u8] =
-    &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18];
 
 /// Offsets into `FeSystemAnnounceView`, from the 1.16.2 dump's own struct definition.
 pub const MSG_OFFSET: usize = 0x0b10;
+/// `AnnounceMessage +0x08` — a raw `wchar_t*` the display step prefers over the embedded string.
+///
+/// This is THE text field for our purposes. The dump types it as a bare `ulonglong`, but the
+/// `Load` case dereferences it as the string and only falls back to `+0x10` when it is null.
+pub const MSG_TEXT_POINTER_OFFSET: usize = 0x08;
 /// `AnnounceMessage::text`, a `DLString<wchar_t>` inside that message.
+///
+/// Retained as documentation of the layout and as the offset the FALLBACK path reads. Nothing here
+/// writes it: on the view's embedded message it is a zeroed string with a null allocator, which is
+/// exactly why writing it produced an empty banner.
 pub const MSG_TEXT_OFFSET: usize = 0x10;
 /// `announcePlayState`, written as a BYTE by the game (`movb $0x1`), not as the enum's full width.
 pub const PLAY_STATE_OFFSET: usize = 0x0b50;
@@ -64,9 +100,6 @@ pub const PLAY_STATE_LOAD: u8 = 1;
 /// The longest message we will send. Not a buffer limit — `assign` grows — but a display one: the
 /// surface scrolls, and an essay would scroll for the rest of the session.
 pub const MAX_CHARS: usize = 96;
-
-#[cfg(windows)]
-type DlStringAssignFn = unsafe extern "system" fn(usize, *const u16, usize) -> usize;
 
 #[cfg(windows)]
 static LIVE_VIEW: AtomicUsize = AtomicUsize::new(0);
@@ -171,28 +204,27 @@ pub unsafe fn show(text: &str) -> bool {
         REFUSALS.fetch_add(1, Ordering::SeqCst);
         return false;
     }
-    let Some(assign) = verified_fn(DLSTRING_ASSIGN_RVA, DLSTRING_ASSIGN_PROLOGUE) else {
-        REFUSALS.fetch_add(1, Ordering::SeqCst);
-        return false;
-    };
-    let assign: DlStringAssignFn = unsafe { core::mem::transmute(assign) };
-
     let mut units: Vec<u16> = text.encode_utf16().take(MAX_CHARS).collect();
     if units.is_empty() {
         REFUSALS.fetch_add(1, Ordering::SeqCst);
         return false;
     }
-    let length = units.len();
-    // NUL-terminated because the UI reads it as a C string as well as by length; `assign` copies
-    // `length` units, and the terminator keeps the two views of the string agreeing.
+    // NUL-terminated: the display step is handed a bare pointer with no length beside it, so the
+    // terminator is the ONLY thing that ends the string. Without it the widget reads whatever
+    // follows in the heap.
     units.push(0);
+    // Leaked deliberately -- see the module docs. The game stores this pointer and reads it for the
+    // life of the banner while owning none of it, so it has to outlive us; a permanent buffer also
+    // means a notice replaced mid-scroll can never leave the view reading freed memory.
+    let buffer: &'static [u16] = Box::leak(units.into_boxed_slice());
 
     let message = view + MSG_OFFSET;
     unsafe {
-        assign(message + MSG_TEXT_OFFSET, units.as_ptr(), length);
-        // is_active LAST of the two message fields: Update tests exactly this byte to decide
-        // whether to pop, so setting it before the text is in place would race a frame boundary
-        // and display whatever the string happened to hold.
+        // The pointer FIRST, then is_active. Update tests is_active to decide whether to pop a
+        // queued message over the top of ours, and the display step reads the pointer only once
+        // is_active is set -- so publishing the text before arming it is what keeps a frame
+        // boundary from finding an armed message with no string.
+        ((message + MSG_TEXT_POINTER_OFFSET) as *mut usize).write(buffer.as_ptr() as usize);
         (message as *mut u8).write(1);
         ((view + PLAY_STATE_OFFSET) as *mut u8).write(PLAY_STATE_LOAD);
     }
@@ -226,8 +258,16 @@ mod tests {
     #[test]
     fn the_offsets_match_the_dumps_struct() {
         assert_eq!(MSG_OFFSET, 0x0b10, "AnnounceMessage inside the view");
+        assert_eq!(MSG_TEXT_POINTER_OFFSET, 0x08, "the raw wchar_t* text field");
         assert_eq!(MSG_TEXT_OFFSET, 0x10, "DLString inside AnnounceMessage");
         assert_eq!(PLAY_STATE_OFFSET, 0x0b50, "announcePlayState");
+        // The two text fields must not overlap, and the pointer must come first -- that ORDER is
+        // the whole reason the pointer works: the display step reads `+0x08` and only consults the
+        // DLString at `+0x10` when it is null.
+        assert!(
+            MSG_TEXT_POINTER_OFFSET + 8 <= MSG_TEXT_OFFSET,
+            "the raw pointer must fit before the embedded string"
+        );
         // is_active sits at the message's own offset 0, which is why the write target is the
         // message base rather than the message plus something.
         //
@@ -247,7 +287,37 @@ mod tests {
     #[test]
     fn prologues_are_long_enough_to_discriminate() {
         assert!(UPDATE_PROLOGUE.len() >= 8);
-        assert!(DLSTRING_ASSIGN_PROLOGUE.len() >= 8);
+    }
+
+    /// THE BUG THIS MODULE SHIPPED ONCE: a banner with no text on it.
+    ///
+    /// `DLString::assign` cannot populate the view's EMBEDDED message, because that message is only
+    /// ever initialised when the GAME announces something -- until then its allocator is null and
+    /// its capacity is zero, so `assign` copies nothing, the display step's null-check falls
+    /// through to the zeroed inline buffer, and the surface draws an empty line while every counter
+    /// reports success. Writing the raw pointer needs none of that machinery.
+    #[test]
+    fn the_text_never_goes_through_the_string_assign_path_again() {
+        let source = include_str!("announce.rs");
+        let product = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the product half of the file");
+        let code: String = product
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for banned in ["DLSTRING_ASSIGN", "DlStringAssignFn", "assign("] {
+            assert!(
+                !code.contains(banned),
+                "{banned}: assigning the embedded DLString is what produced an empty banner"
+            );
+        }
+        assert!(
+            code.contains("MSG_TEXT_POINTER_OFFSET"),
+            "the text must be published through the raw pointer field"
+        );
     }
 
     /// THE POINT OF THE REWRITE. Nothing here may reach for the modal path: `showPopupMenu` is a
