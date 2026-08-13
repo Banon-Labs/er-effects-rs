@@ -415,6 +415,82 @@ def main() -> int:
             False,
             "manual pgrep is blocked",
         ),
+        # git records the commit MESSAGE, it never executes it. A commit whose
+        # prose describes removing a raw process-name probe is documentation
+        # (2026-08-12 false positive: `git commit -F - <<'EOF' ... EOF` was
+        # denied for the message body, and the agent escape-hatched around the
+        # guard by writing the message to a file). The live engine collapses
+        # heredoc newlines to spaces, so these must run end-to-end here, not
+        # only under `opa test`.
+        PolicyCase(
+            "allow-git-commit-heredoc-message-mentioning-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "preflight: stop probing the process table by name\n\n"
+            "The preflight called pgrep -x steam directly, which false-negatives\n"
+            "on this WSL2 + Windows-Steam box. It now sources\n"
+            "scripts/steam-running.sh and calls steam_running instead.\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-dash-m-message-mentioning-pgrep",
+            'git commit -m "preflight: drop the raw pgrep -x steam probe in'
+            ' favour of scripts/steam-running.sh"',
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-cat-heredoc-substitution-mentioning-pgrep",
+            "git add -A && git commit -m \"$(cat <<'EOF'\n"
+            "guard: stop calling pgrep -x steam in the runtime preflight\n\n"
+            "scripts/steam-running.sh is the sanctioned WSL-aware check.\n"
+            'EOF\n)"',
+            True,
+        ),
+        # ... and the message carve-out must never launder an executing probe.
+        PolicyCase(
+            "deny-git-commit-heredoc-then-chained-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            "pgrep -x steam",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-heredoc-unquoted-tag",
+            "git commit -F - <<EOF\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-bash-c-wrapped-git-commit-heredoc-pgrep",
+            "bash -c \"git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            '"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-message-command-substitution-pgrep",
+            'git commit -m "$(pgrep -x steam)"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-dash-m-then-chained-pgrep",
+            'git commit -m "guard: drop the raw process probe" && pgrep -x steam',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-unquoted-pgrep-token",
+            "git commit -am pgrep",
+            False,
+            "manual pgrep is blocked",
+        ),
         # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
         # command token and must not be denied.
         PolicyCase(
