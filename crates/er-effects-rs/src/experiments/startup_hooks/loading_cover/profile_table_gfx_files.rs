@@ -1,5 +1,11 @@
 use super::*;
 
+static PROFILE_05_010_EDITOR_GFX_CACHE: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+static TEXT_INPUT_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+static TEXT_INPUT_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+static TEXT_INPUT_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
+static TEXT_INPUT_02_990_CANONICAL_URL: &[u8] = b"data0:/menu/win/02_990_textinput.gfx\0";
+
 pub(crate) fn install_profile_select_table_diag_hook() {
     if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -302,49 +308,6 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     ret
 }
 
-pub(crate) unsafe fn construct_title_scaleform_memory_file(
-    base: usize,
-    url: usize,
-    bytes: &[u8],
-) -> Option<usize> {
-    if bytes.is_empty() || bytes.len() > u32::MAX as usize {
-        return None;
-    }
-    let memory_global = unsafe { safe_read_usize(base + SCALEFORM_MEMORY_GLOBAL_RVA) }?;
-    let memory_vtable = unsafe { safe_read_usize(memory_global) }?;
-    let alloc_fn = unsafe { safe_read_usize(memory_vtable + 0x50) }?;
-    if alloc_fn == 0 || alloc_fn == TITLE_OWNER_SCAN_START_ADDRESS {
-        return None;
-    }
-    let alloc: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(alloc_fn) };
-    let file = unsafe { alloc(memory_global, SCALEFORM_MEMORY_FILE_SIZE, 0) };
-    if file == 0 || file == TITLE_OWNER_SCAN_START_ADDRESS {
-        return None;
-    }
-    let dlstring_copy: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + SCALEFORM_DLSTRING_CHAR_COPY_RVA) };
-    unsafe {
-        core::ptr::write(file as *mut usize, base + SCALEFORM_MEMORY_FILE_VTABLE_RVA);
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET) as *mut u32,
-            1,
-        );
-        dlstring_copy(file + SCALEFORM_MEMORY_FILE_NAME_OFFSET, url);
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
-            bytes.as_ptr() as usize,
-        );
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
-            bytes.len() as u32,
-        );
-        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
-        core::ptr::write((file + SCALEFORM_MEMORY_FILE_VALID_OFFSET) as *mut u8, 1);
-    }
-    Some(file)
-}
-
 /// Product-default 05_000_title strip WITHOUT embedded bytes (er-effects-rs-h7x). `file` is what
 /// the native FileOpener just returned for `data0:/menu/05_000_title.gfx`; per the rescap static
 /// RE (`FUN_140ce8320`, bd `native-memoryfile-wrapper-expects-gfx-rescap-2026-06-28`) that is a
@@ -445,12 +408,60 @@ pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> 
     true
 }
 
+fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String> {
+    let Some(editor_dir) = std::env::var_os("ER_PROFILE_05_010_EDITOR_DIR") else {
+        return Ok(None);
+    };
+    let editor_dir = std::path::PathBuf::from(editor_dir);
+    let Some(pi_local_dir) = editor_dir.parent() else {
+        return Ok(None);
+    };
+    let path = pi_local_dir.join("profile-05-010-manual-layout.gfx");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    if !(64..=0x0100_0000).contains(&bytes.len())
+        || bytes.first() != Some(&b'G')
+        || bytes.get(1) != Some(&b'F')
+        || bytes.get(2) != Some(&b'X')
+    {
+        return Err(format!(
+            "{} is not a plausible GFX payload (len={})",
+            path.display(),
+            bytes.len()
+        ));
+    }
+    let fnv = er_gfx::title_05_000::fnv1a64(&bytes);
+    let cache = PROFILE_05_010_EDITOR_GFX_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "profile editor hot GFX cache poisoned".to_owned())?;
+    if let Some(existing) = cache.iter().find(|existing| {
+        existing.len() == bytes.len() && er_gfx::title_05_000::fnv1a64(existing) == fnv
+    }) {
+        return Ok(Some((existing.as_ptr() as usize, existing.len(), fnv)));
+    }
+    append_autoload_debug(format_args!(
+        "stats-panel: 05_010 editor hot GFX cached {} len={} fnv=0x{fnv:016x}",
+        path.display(),
+        bytes.len()
+    ));
+    cache.push(bytes);
+    let cached = cache
+        .last()
+        .expect("just-pushed 05_010 editor hot GFX cache entry");
+    Ok(Some((cached.as_ptr() as usize, cached.len(), fnv)))
+}
+
 /// Stats-panel 05_010_ProfileSelect runtime edit (mirrors `title_05_000_swap_to_stripped`): derive
 /// the stats-panel movie (face box removed, `ErStats` field added, left column reflowed -- see
 /// `er_gfx::title_05_010`) from the native MemoryFile's own vanilla payload, cache it for the
-/// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
-/// leaves the native file untouched and returns it as-is: fail-closed to the vanilla ProfileSelect
-/// rows (the row-populate hook's push then fails cleanly on the missing field), never a crash,
+/// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. In editor
+/// mode (`ER_PROFILE_05_010_EDITOR_DIR`), prefer the rebuilt `target/pi-local/profile-05-010-manual-layout.gfx`
+/// file and cache each version for the process lifetime, so rebuild-only controls hot-reload on the
+/// next ProfileSelect movie open without rebuilding/reloading the DLL. ANY failure leaves the native
+/// file untouched and returns it as-is: fail-closed to the vanilla/ProfileSelect rows, never a crash,
 /// never a half-edited movie.
 pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -470,6 +481,32 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
             "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
             base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
         ));
+    }
+    match profile_05_010_editor_hot_gfx() {
+        Ok(Some((ptr, len, fnv))) => {
+            unsafe {
+                core::ptr::write(
+                    (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+                    ptr,
+                );
+                core::ptr::write(
+                    (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+                    len as u32,
+                );
+                core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+            }
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.store(len, Ordering::SeqCst);
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED.store(3, Ordering::SeqCst);
+            PROFILE_05_010_RUNTIME_EDIT_SERVES.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "stats-panel: 05_010 editor hot GFX served len={len} fnv=0x{fnv:016x}"
+            ));
+            return true;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            return fail(format_args!("editor hot GFX unavailable: {err}"));
+        }
     }
     let edited = match PROFILE_05_010_RUNTIME_EDITED.get() {
         Some(cached) => cached,
@@ -531,6 +568,66 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
         core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
     }
     PROFILE_05_010_RUNTIME_EDIT_SERVES.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// Inline `02_990_textinput` over the save picker's CurrentPath field. Gated by the active native
+/// path-editor job at the file-open observer, so ordinary game text inputs retain vanilla geometry.
+pub(crate) unsafe fn text_input_02_990_swap_to_inline(base: usize, file: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        TEXT_INPUT_02_990_RUNTIME_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-path: 02_990 inline GFX edit FAIL-CLOSED: {reason}"
+        ));
+        false
+    };
+    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
+        return fail(format_args!("invalid MemoryFile 0x{file:x}"));
+    }
+    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
+    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+        return fail(format_args!("unexpected MemoryFile vtable 0x{vtable:x}"));
+    }
+    let edited = match TEXT_INPUT_02_990_RUNTIME_EDITED.get() {
+        Some(edited) => edited,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == null || !(64..=0x0010_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len as usize) };
+            match er_gfx::text_input_02_990::inline_current_path_editor(vanilla) {
+                Ok(edited) => {
+                    append_autoload_debug(format_args!(
+                        "save-picker-path: derived inline 02_990 GFX in={} out={} fnv=0x{:016x}",
+                        vanilla.len(),
+                        edited.len(),
+                        er_gfx::title_05_000::fnv1a64(&edited)
+                    ));
+                    TEXT_INPUT_02_990_RUNTIME_EDITED.get_or_init(|| edited)
+                }
+                Err(error) => return fail(format_args!("{error}")),
+            }
+        }
+    };
+    unsafe {
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            edited.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            edited.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    TEXT_INPUT_02_990_RUNTIME_SERVES.fetch_add(1, Ordering::SeqCst);
     true
 }
 
@@ -628,57 +725,41 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let is_title_05_000 = unsafe { bounded_ascii_contains(url, b"05_000_title") };
     let is_profile_05_010 = unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
     let is_options_02_040 = unsafe { bounded_ascii_contains(url, b"02_040_optionsetting") };
+    let is_path_editor_02_990 =
+        unsafe { bounded_ascii_contains(url, b"02_990_textinput_patheditor") }
+            || unsafe { bounded_ascii_contains(url, b"02_990_TextInput_PathEditor") };
 
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
-    let mut memory_label = "";
-    let memory_bytes = if is_title_logo {
-        memory_label = "05_001_title_logo";
-        TITLE_SCALEFORM_MEMORY_GFX.get().map(Vec::as_slice)
+    // Label only. Every synthetic/embedded MemoryFile substitution is gone: the title, ProfileSelect
+    // and OptionSetting movies are all derived IN PLACE from the game's own vanilla payload below, so
+    // the DLL never constructs a Scaleform MemoryFile of its own.
+    let memory_label = if is_title_logo {
+        "05_001_title_logo"
     } else if is_title_05_000 {
-        memory_label = "05_000_title";
-        TITLE_SCALEFORM_05_000_MEMORY_GFX.get().map(Vec::as_slice)
+        "05_000_title"
     } else if is_profile_05_010 {
-        // No embedded/env-loaded movie for 05_010: only the in-place runtime edit above.
-        memory_label = "05_010_profileselect";
-        None
+        "05_010_profileselect"
     } else if is_options_02_040 {
-        // No embedded/env-loaded movie for 02_040: the 4-button Quit layout is derived in place from
-        // the game's own MemoryFile so the DLL remains self-contained.
-        memory_label = "02_040_optionsetting";
-        None
+        "02_040_optionsetting"
+    } else if is_path_editor_02_990 {
+        "02_990_textinput_patheditor"
     } else {
-        None
+        ""
     };
     let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let ret = if base != null {
-        if let Some(bytes) = memory_bytes {
-            match unsafe { construct_title_scaleform_memory_file(base, url, bytes) } {
-                Some(file) => {
-                    memory_replacement = true;
-                    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
-                    if is_title_05_000 {
-                        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS
-                            .fetch_add(1, Ordering::SeqCst);
-                    }
-                    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
-                    file
-                }
-                None => {
-                    TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
-                    if orig != null && orig != HOOK_ORIGINAL_UNSET {
-                        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
-                            unsafe { std::mem::transmute(orig) };
-                        unsafe { f(loader, url, flags) }
-                    } else {
-                        null
-                    }
-                }
-            }
-        } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        if orig != null && orig != HOOK_ORIGINAL_UNSET {
             let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
                 unsafe { std::mem::transmute(orig) };
-            let native = unsafe { f(loader, url, flags) };
+            // A custom cache key forces a fresh Scaleform load. Redirect only that key's file-open
+            // to the canonical native movie; the game's shared 02_990 cache entry stays untouched.
+            let open_url = if is_path_editor_02_990 {
+                TEXT_INPUT_02_990_CANONICAL_URL.as_ptr() as usize
+            } else {
+                url
+            };
+            let native = unsafe { f(loader, open_url, flags) };
             // Product-default runtime strip (er-effects-rs-h7x): derive the stripped title
             // movie from the native file's own vanilla payload and swap it in place. On any
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
@@ -692,6 +773,9 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             // System->Quit four-button GFx edit: product-default, no external asset dependency.
             if is_options_02_040 {
                 memory_replacement = unsafe { options_02_040_quit4_swap_to_edited(base, native) };
+            }
+            if is_path_editor_02_990 {
+                memory_replacement = unsafe { text_input_02_990_swap_to_inline(base, native) };
             }
             native
         } else {
@@ -721,7 +805,12 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         unsafe { capture_menu_font_gfx(base, ret) };
     }
 
-    if is_title_logo || is_title_05_000 || is_profile_05_010 || is_options_02_040 {
+    if is_title_logo
+        || is_title_05_000
+        || is_profile_05_010
+        || is_options_02_040
+        || is_path_editor_02_990
+    {
         let logo_hit = if is_title_logo {
             TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1
         } else {
@@ -731,8 +820,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         let name_len = unsafe { copy_ascii_preview(url, &mut name) };
         let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
         append_autoload_debug(format_args!(
-            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement} total_memory_bytes={}",
-            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst)
+            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' redirected_to_canonical_02_990={is_path_editor_02_990} flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement}"
         ));
     } else if hit <= 24 {
         let mut name = [0u8; 96];

@@ -135,6 +135,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         ensure_profile_slot_stats_cached: crate::experiments::ensure_profile_slot_stats_cached,
         profile_slot_attributes: crate::experiments::profile_slot_attributes,
         profile_slot_vitals: crate::experiments::profile_slot_vitals,
+        profile_slot_weapon_level: crate::experiments::profile_slot_weapon_level,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
         read_utf16_name_units: crate::experiments::read_utf16_name_units,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
@@ -217,12 +218,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         apply_xor_ret_stub: crate::experiments::apply_xor_ret_stub,
         patch_3byte_stub: crate::experiments::patch_3byte_stub,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
-        disable_system_quit_gaitem_deserialize_hook:
-            crate::experiments::disable_system_quit_gaitem_deserialize_hook,
-        disable_system_quit_gaitem_finalize_hook:
-            crate::experiments::disable_system_quit_gaitem_finalize_hook,
-        disable_system_quit_gaitem_lookup_hook:
-            crate::experiments::disable_system_quit_gaitem_lookup_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,
         scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
         resolve_menu_system_save_load: crate::experiments::resolve_menu_system_save_load,

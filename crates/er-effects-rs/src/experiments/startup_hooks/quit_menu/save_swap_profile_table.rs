@@ -39,6 +39,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
         }
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     drop(st);
 
     let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
@@ -76,6 +77,10 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
+            // The place name is NOT in the character body -- the game writes it from the front-end
+            // manager at save time. It IS in the save's own stored summary table, so take it from
+            // there rather than deriving one from the map id.
+            let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
             let face_bytes = slot_body.face_data_buffer_bytes(pgd);
             let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
             if unsafe {
@@ -84,6 +89,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                     summary,
                     slot,
                     saved_map,
+                    place_name_id,
                     playtime_ticks,
                     fallback,
                     face_bytes,
@@ -107,6 +113,21 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             st.candidate_stats_utf16 = preview_stats;
             st.preview_applied = true;
         }
+        // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
+        // ProfileSummary above now holds the previewed save's records, but the name and the whole
+        // attribute line on each row come from `PROFILE_SLOT_*_CACHE`, which was a process-lifetime
+        // latch: without this the picker showed the new save's levels and locations under the old
+        // save's names and stats. `bytes` is the previewed save itself, so this is a parse, not a
+        // second ~26 MB read.
+        let decoded =
+            crate::experiments::startup_hooks::loading_cover::load_profile_slot_caches_from_bytes(
+                bytes,
+                "picker-previewed save",
+            );
+        let reloads = PROFILE_SLOT_CACHE_PREVIEW_RELOADS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: per-slot stats/name caches reloaded from the previewed save ({decoded}/10 slots, reloads={reloads})"
+        ));
         PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
@@ -142,6 +163,19 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
     }
 }
 
+/// Is a FOREIGN save's summary currently on screen (previewed, not yet committed)?
+///
+/// The row presentation needs this to answer one question correctly: whose name belongs on slot 0.
+/// The transient current-player row is built with slot index 0 (`FUN_1408753f0` ->
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)`), so slot 0 normally prefers the LIVE character's
+/// name. While a foreign save is previewed, slot 0 is that save's slot 0 instead, and preferring the
+/// live name puts the loaded character's name on another save's character -- observed 2026-08-07 as
+/// "Maddened Bean, RL 100" where RL 100, the attributes and the location were all angrE's.
+pub(crate) fn system_quit_foreign_preview_active() -> bool {
+    let st = system_quit_save_swap_lock();
+    st.preview_applied && !st.committed
+}
+
 pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
@@ -166,11 +200,17 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
             st.summary_snapshot.len()
         ));
     }
+    // Symmetric with the reload on preview: the summary is the ORIGINAL save's again, so the caches
+    // describing the previewed save must go. Dropped rather than reloaded because the bytes of the
+    // active save are not in hand here -- the next row populate reads them.
+    crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
     // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
-    // fingerprints no longer describe any slot.
+    // fingerprints no longer describe any slot, and neither does the preview's record of which slots
+    // it could not source a place name for.
     for slot in 0..TITLE_PROFILE_SLOT_COUNT {
         PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     let _ = system_quit_save_swap_restore_original_file(&st, reason);
     *st = SystemQuitSaveSwapState::default();
 }
@@ -558,10 +598,31 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target_slot) {
         return;
     }
-    // FAIL-FAST SEMAPHORE: only compare against the live loaded character once the target slot has
-    // actually become the loaded slot. During the switch pre-load window, rendering the selected
-    // incoming slot before ac0 flips is intentional, not a wrong-slot failure.
-    if portrait_loaded_slot_confirmed() == Some(target_slot) {
+    // FAIL-FAST SEMAPHORE: only compare against the live loaded character once a LOAD HAS ACTUALLY
+    // COMPLETED. The old gate was `portrait_loaded_slot_confirmed() == Some(target_slot)` -- i.e.
+    // it asked ac0 (`GameMan.save_slot`) whether the target slot was resident. That gate is
+    // defeated by our OWN write: `own_load/loaders.rs` calls the native `SetSaveSlot(picked)`
+    // (Ghidra 0x14067a810 -- a pure field store with no load semantics) before submitting, ~5s
+    // before the deserialize. Three milliseconds later ac0 already equalled the target, the gate
+    // opened, and the semaphore compared our incoming record against the character still resident
+    // from the PREVIOUS session. Gate on the deserialize instead:
+    //   * switch: the picked slot's fresh deserialize completed;
+    //   * boot:   c30 is a real saved map (not the m10 new-game default) AND the native slot
+    //             request register (`GameMan+0xb78`) is back at its no-request sentinel, i.e. no
+    //             load is still in flight.
+    let deserialize_completed = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
+    } else {
+        let gm = game_man_ptr_or_null();
+        gm != TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+                .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
+            && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
+                .is_some_and(|b78| b78 < 0)
+    };
+    if deserialize_completed {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }
     // ARMOR-RESOLUTION oracle (bd er-effects-rs-91l5 Layer 1). Every tick, read the LIVE stage-0
@@ -809,7 +870,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                if s == portrait_loaded_slot()
+                // NO SILENT slot-0 FALLBACK (bd er-effects-rs-91zb step 3). This used to read
+                // `portrait_loaded_slot()`, which collapses "no source names a slot" to 0 via
+                // `unwrap_or(0)` -- so with nothing confirmed, slot 0's head was published as
+                // though it were the loaded character. Publish NOTHING instead: a missing portrait
+                // is a visible, diagnosable absence; a confidently wrong one is not.
+                if portrait_loaded_slot_confirmed() == Some(s)
                     && nb
                     && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0

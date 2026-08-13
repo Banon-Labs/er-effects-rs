@@ -2,7 +2,14 @@ use super::*;
 
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
-    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
+    let current_row_installed =
+        PROFILE_CURRENT_ROW_POPULATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET;
+    let player_name_getter_installed =
+        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) != 0;
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0
+        && current_row_installed
+        && player_name_getter_installed
+    {
         return;
     }
     match unsafe { MH_Initialize() } {
@@ -14,42 +21,166 @@ pub(crate) fn install_profile_row_populate_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            profile_row_populate_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            PROFILE_ROW_POPULATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "stats-text: queue_enable row-populate failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
+    if PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve player-name getter rva 0x{PLAYER_GAME_DATA_NAME_GETTER_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                player_game_data_name_getter_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PLAYER_GAME_DATA_NAME_GETTER_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
                     append_autoload_debug(format_args!(
-                        "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                        "stats-text: queue_enable player-name getter failed: {status:?}"
                     ));
+                    return;
                 }
-                status => append_autoload_debug(format_args!(
-                    "stats-text: row-populate MH_ApplyQueued failed: {status:?}"
-                )),
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked main-player name getter FUN_14025f8e0 0x{addr:x}; raw PGD name overrides word-checked summary name"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: player-name getter MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
             }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new player-name getter failed: {status:?}"
+            )),
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "stats-text: MhHook::new row-populate failed: {status:?}"
-        )),
+    }
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_row_populate_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_ROW_POPULATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable row-populate failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: row-populate MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new row-populate failed: {status:?}"
+            )),
+        }
+    }
+    // The row-model BUILDER, hooked separately from the populate above because it is the only place
+    // a slot's ProfileSummary record is still a record: it reads `record[0x34]` and the filler turns
+    // that into the row's `Location` string. A save whose summary table was copied in from another
+    // file needs its place name corrected HERE or not at all.
+    if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve row-model-build rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_row_model_build_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_ROW_MODEL_BUILD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable row-model-build failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PROFILE_ROW_MODEL_BUILD_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked ProfileSelect row-model builder FUN_1408752c0 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: row-model-build MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new row-model-build failed: {status:?}"
+            )),
+        }
+    }
+    if !current_row_installed {
+        let Ok(addr) = game_rva(PROFILE_CURRENT_ROW_POPULATE_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve title-load row-populate rva 0x{PROFILE_CURRENT_ROW_POPULATE_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_current_row_populate_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_CURRENT_ROW_POPULATE_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable title-load row-populate failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked title-load current row-populate FUN_140951220 0x{addr:x}; pushes ErCharStats after native current-row populate"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: title-load row-populate MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new title-load row-populate failed: {status:?}"
+            )),
+        }
     }
 }
 
@@ -144,58 +275,6 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "title-cover-part-a: MhHook::new GFx visibility setter failed: {status:?}"
-        )),
-    }
-}
-
-pub(crate) fn install_title_custom_cover_run_hook() {
-    if TITLE_CUSTOM_COVER_RUN_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: MenuWindowJob::Run MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(run_addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "title-cover-part-b: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            run_addr as *mut c_void,
-            title_custom_cover_menu_window_run_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            TITLE_CUSTOM_COVER_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "title-cover-part-b: queue_enable MenuWindowJob::Run failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    TITLE_CUSTOM_COVER_RUN_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "title-cover-part-b: hooked MenuWindowJob::Run 0x{run_addr:x}; ProfileSelect cover will run alongside preserved native title job"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "title-cover-part-b: MenuWindowJob::Run MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "title-cover-part-b: MhHook::new MenuWindowJob::Run failed: {status:?}"
         )),
     }
 }
@@ -695,15 +774,12 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     let real_tab = forced_tab
         .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
         .or(live_tab);
-    if let (Some(tab), true) = (
-        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
-        tab_view >= HEAP_LO,
-    ) {
-        unsafe {
-            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
-        }
-        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
-    }
+    // The forced tab is written only AFTER its backing pane is proven present, further down. Writing
+    // it here (as this did until 2026-08-12) wedges the menu whenever the pane is absent: the tab
+    // strip commits to Quit, the pane reapply below bails, and OptionSetting stays actively_shown
+    // with NO visible pane -- input captured, nothing drawn, no way out. Reproduced by opening the
+    // picker twice: the second close lands on a RECREATED OptionSetting window (composite address
+    // changes) whose cache slots 8/9 were never built, so slot 9 reads null.
     // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
     let mut cache_tab: Option<usize> = None;
     for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
@@ -738,10 +814,23 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     .unwrap_or(0);
     if selected < HEAP_LO {
+        // Leave the native tab selection ALONE. Forcing it here would point the tab strip at a tab
+        // with no pane, which reads to the player as a menu that owns input but draws nothing.
         append_autoload_debug(format_args!(
             "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
         ));
         return;
+    }
+    // The backing pane is now proven present, so committing the tab strip to it cannot strand the
+    // menu without a pane. This write is deliberately downstream of the check above.
+    if let (Some(tab), true) = (
+        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
+        tab_view >= HEAP_LO,
+    ) {
+        unsafe {
+            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
+        }
+        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
     }
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
@@ -793,6 +882,10 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
     save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    // The 05_010 rows are going away, so the live-layout editor must stop believing it can still
+    // write to their text fields. Only the profile-row surface is dropped: the title-load current
+    // row is owned by the title screen and outlives this teardown.
+    super::forget_profile_editor_field_targets("profile-row-populate");
     // End the profile-load flow so the legit Quit-Game/Return-to-Desktop confirm MessageBox is no longer
     // suppressed once ProfileSelect is gone (the flag was set at the Load-Profile click).
     SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(0, Ordering::SeqCst);
@@ -1593,78 +1686,32 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
-pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
-    job: usize,
-    load_params: usize,
-    fd4_time: usize,
-    menu_man: usize,
-) -> usize {
-    let orig = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.load(Ordering::SeqCst);
-    if orig == HOOK_ORIGINAL_UNSET {
-        return load_params;
+/// ProfileSelect window whose native `MenuWindowJob` finalizer has completed. The finalizer runs
+/// inside the original `MenuWindowJob::Run`; restoration waits for this post-original hook so no
+/// GFx/menu calls are made from inside native teardown.
+static SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
+    if window == 0 {
+        return;
     }
-    let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
-    let filename = system_quit_read_wide_resource_name(filename_ptr);
-
-    // SEAMLESS ToS SKIP (2026-07-06): the online-service ToS (`06_000_TermOfService_BNE`) is a job in
-    // the title `CS::FixOrderJobSequence`, which steps to the next job ONLY when a job's Run returns a
-    // Success result. While the ToS window is up this job returns Continue (and the ctor-null makes it
-    // Failed), so the zero-input autoload stalls on it forever (observed +17s..+108s idle). The
-    // ToS/Privacy policy is an OFFICIAL-servers-only gate the DLL never needs -- ERSC uses its own
-    // private relay and does not respect the official policy, so skipping it is safe for co-op. Force
-    // this one job's MenuJobResult to Success BEFORE running the original (so the ToS never builds --
-    // no window, no MessageBox, zero input) and return; `FixOrderJobSequence::Run` then advances past
-    // it. Same proven pattern as `show_progress_job_run_hook` advancing the network/login jobs. The
-    // MenuJobResult is at `load_params+0` (Run returns `load_params`, read as `MenuJobResult*` by the
-    // sequence). Gated by `policy_tos_suppress_enabled()` (product autoload + Seamless, or the diag
-    // override), so vanilla-offline is untouched (the ToS never fires there anyway).
-    // Record which job's Run is executing so the nested MessageBox builder hook can attribute a
-    // (suppressed) ERSC popup to this job and latch it into MSGBOX_STALL_JOB for next-frame advance.
-    CURRENT_MENU_WINDOW_JOB_RUN_JOB.store(job, Ordering::SeqCst);
-
-    // Advance-skip a title job to Success so `FixOrderJobSequence::Run` steps past it (never showing
-    // its modal). Two Seamless cases: (1) the official-servers ToS job (`06_000_TermOfService_BNE`);
-    // (2) the ERSC post-PAB MessageBox job -- its dialog build was already nulled by
-    // `msgbox_builder_hook`, which latched THIS job into `MSGBOX_STALL_JOB`, so its next Run advances.
-    pub(crate) use er_telemetry::counters::SEAMLESS_TOS_SKIP_COUNT;
-    let is_tos = filename.contains("TermOfService");
-    let is_stalled_msgbox = job != 0 && MSGBOX_STALL_JOB.load(Ordering::SeqCst) == job;
-    if policy_tos_suppress_enabled() && (is_tos || is_stalled_msgbox) {
-        if is_stalled_msgbox {
-            MSGBOX_STALL_JOB.store(0, Ordering::SeqCst);
-        }
-        const MENU_JOB_STATE_SUCCESS: i32 = 2;
-        const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
-        if load_params != 0 {
-            unsafe {
-                *(load_params as *mut i32) = MENU_JOB_STATE_SUCCESS;
-                *((load_params + 4) as *mut i32) = 0;
-            }
-        }
-        if let Ok(base) = game_module_base() {
-            if fd4_time != 0 {
-                unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-            }
-        }
-        let skip_n = SEAMLESS_TOS_SKIP_COUNT.fetch_add(1, Ordering::SeqCst);
-        if skip_n < 12 {
-            let kind = if is_tos {
-                "official-ToS"
-            } else {
-                "ersc-post-pab-msgbox"
-            };
-            append_autoload_debug(format_args!(
-                "seamless-tos-skip #{skip_n} ({kind}): forced MenuWindowJob::Run('{filename}') -> MenuJobResult(Success) job=0x{job:x} -- FixOrderJobSequence advances past the never-shown modal"
-            ));
-        }
-        return load_params;
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+        .compare_exchange(window, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
+        // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
+        // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
+        let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
+            window,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "system-quit-dup: native ProfileSelect finalizer completed window=0x{window:x}; queued post-Run restore and cleared matching stale rebuild"
+        ));
     }
-
-    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(orig) };
-    let ret = unsafe { original(job, load_params, fd4_time, menu_man) };
-    unsafe { system_quit_menu_window_run_post(job, ret) };
-    ret
 }
 
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
@@ -1675,10 +1722,51 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
+    let finalized_profile = SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.swap(0, Ordering::SeqCst);
+    if finalized_profile != 0
+        && let Ok(base) = game_module_base()
+    {
+        // A PICK owns its own close. Picking a save file closes this window on purpose and queues a
+        // reopen as the slot view (`SAVE_PICKER_OPEN_SLOTS_PENDING`, resubmitted further down this
+        // same function). Restoring the System windows here would be a second owner of the same
+        // close, and it wins simply by running first: `system_quit_restore_real_system_windows`
+        // resets the ProfileSelect state, which clears both the pending flag and the System dialog
+        // the resubmit needs, so the resubmit below then finds nothing pending and never fires. That
+        // is why picking an `.sl2` landed back on the Quit menu instead of the character list -- the
+        // live log shows the finalizer restore at `+161525ms` and NO resubmit line at all after it.
+        //
+        // So the restore runs only for a close nobody claimed: a real backout. Leaving the hide
+        // state up is also what the reopen wants -- the window is coming straight back.
+        if save_picker_resubmit_pending() {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: skipped finalizer restore for window=0x{finalized_profile:x}; a picker resubmit owns this close"
+            ));
+        } else {
+            unsafe {
+                system_quit_restore_real_system_windows(
+                    base,
+                    "restore-real-profile-native-finalizer",
+                )
+            };
+        }
+    }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
     if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
         crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    }
+    if filename == "02_990_TextInput_PathEditor" {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            if save_picker_note_path_editor_window_state(owner, state)
+                && let Ok(base) = game_module_base()
+            {
+                unsafe { apply_path_editor_window_position(base, owner) };
+            }
+        }
     }
     if matches!(
         filename.as_str(),
@@ -1705,6 +1793,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
             }
             "05_010_ProfileSelect" => {
+                // ONE TICK PER RENDERED FRAME OF OUR VIEW. The live editor's safety gate reads this
+                // to answer "is the ProfileSelect view on screen right now", which decides whether a
+                // web-UI edit may be applied from the async FrameBegin path or has to wait for the
+                // in-band row populate. Stamped here because this hook IS the per-frame run of that
+                // window's MenuWindowJob; nothing else in the process is that direct about it.
+                er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                    .fetch_add(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
             }
             _ => 0,
@@ -1819,9 +1914,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
         }
     }
-    // MENU-PUMP-OWNED save-picker maintenance: in-place row rebuild after a navigation, and
-    // window resubmit after a navigation/pick close (same submit-context rule as the
-    // return-title chain below).
+    // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
+    // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
+    // navigation/pick close (same submit-context rule as the return-title chain below).
+    unsafe { save_picker_menu_pump_path_editor() };
+    unsafe { save_picker_menu_pump_drive_strip_mouse() };
+    unsafe { save_picker_menu_pump_native_scrollbar() };
+    unsafe { save_picker_menu_pump_edge_scroll() };
     unsafe { save_picker_menu_pump_rebuild() };
     if save_picker_resubmit_pending() {
         let _ = unsafe { save_picker_menu_pump_resubmit() };

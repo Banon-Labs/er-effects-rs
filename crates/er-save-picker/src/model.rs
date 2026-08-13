@@ -1,9 +1,9 @@
 //! Shared in-game save-file picker model.
 //!
-//! Pure filesystem/pagination state for the two in-game file-picker menus (the startup
+//! Pure filesystem/scroll-window state for the two in-game file-picker menus (the startup
 //! missing-save picker and the System>Quit "Load Character from File" picker). Both menus render
 //! through the native `05_010_ProfileSelect` 10-row window, so this model maps a browsable
-//! directory listing onto row pages. The UI layers own all native staging (ProfileSummary preview
+//! directory listing onto a sliding native row window. The UI layers own all native staging (ProfileSummary preview
 //! records, window submit/close); this module owns what the rows MEAN.
 //!
 //! Extension filtering follows the active runtime flavor: vanilla offers `.sl2`; Seamless offers
@@ -20,22 +20,23 @@
 //!
 //! The visible rows are a contiguous prefix of the window's 10 slots, in this order:
 //!
-//! 1. `[ new ]`       -- destination intent only, and FIRST;
-//! 2. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
-//! 3. `[ C: > Z: ]`   -- the drive cycler, only when more than one drive is mounted;
-//! 4. the current page's directory / save-file entries;
-//! 5. `[ page N/M ]`  -- only when the listing overflows one page.
+//! 1. `DRIVES [C:]`   -- ALWAYS FIRST when more than one drive is mounted;
+//! 2. `[ new ]`       -- destination intent only, directly below the drive row when it exists;
+//! 3. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
+//! 4. the current scroll window's directory / save-file entries.
 //!
-//! `[ new ]` SITS ABOVE THE NAVIGATION ROWS, which is the one place the two intents' layouts
-//! differ, and it is deliberate. Since the Save Game row press opens this browser with no question
-//! in front of it (2026-07-31), the destination list is the first thing the user sees after
-//! pressing Save Game -- so the row that means "write a fresh file, destroy nothing" is row 0, the
-//! index a freshly built native list highlights, and the index the model's own cursor starts on
-//! ([`SavePickerModel::first_selectable_row`]). Row 0 in a LOAD browse still means what it always
-//! did; only the destination browser has a `[ new ]` at all.
+//! Overflow is represented by the native `05_010` scrollbar affordance plus edge-hover restaging,
+//! not by consuming two row slots with `[ SCROLL ^ ]` / `[ SCROLL v ]` pseudo-entries.
 //!
-//! Nothing sits at a fixed index: [`SavePickerModel::entry_row_base`] is the single place the
-//! layout is decided, and every row query derives from it. That matters for two reasons.
+//! `[ new ]` SITS ABOVE THE PARENT ROW, which is the one place the two intents' layouts differ,
+//! and it is deliberate. Since the Save Game row press opens this browser with no question in front
+//! of it (2026-07-31), [`SavePickerModel::first_selectable_row`] explicitly starts destination
+//! browsing on `[ new ]` even when the always-first drive row occupies row 0. The safe default is
+//! therefore preserved without making the location switcher jump below the current folder.
+//!
+//! Only the drive row has a fixed index (0 when it exists). [`SavePickerModel::entry_row_base`] is
+//! the single place the fixed-row count is decided, and every entry query derives from it. That
+//! matters for two reasons.
 //!
 //! First, ROW ALIGNMENT. A row's label and its per-row character text must never describe
 //! different entries; a hard-coded `row - 1` was only correct in load-source intent and made every
@@ -64,6 +65,12 @@ use crate::host::append_autoload_debug;
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
 pub const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
+/// One independent cell for every Windows drive letter. Normal machines use only a populated
+/// prefix; the defensive paging code remains for synthetic/non-Windows roots beyond this capacity.
+/// Simultaneously visible drive controls. The asset still owns all 26 possible letter fields; a
+/// seven-cell window reserves the drive row's right side for the complete-path editor and pages
+/// through additional mounted drives with the existing `[<]`/`[>]` cells.
+pub const DRIVE_STRIP_MAX_CELLS: usize = 7;
 /// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
 pub const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
 /// Marker prefixed to the stats line of the row that IS the save currently loaded.
@@ -122,7 +129,7 @@ impl PickerEntry {
     }
 }
 
-/// What a row on the CURRENT page means. Produced by [`SavePickerModel::row_meaning`]; the UI
+/// What a row in the CURRENT native scroll window means. Produced by [`SavePickerModel::row_meaning`]; the UI
 /// layer stages row text from this and routes slot activation through it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerRow {
@@ -140,7 +147,11 @@ pub enum PickerRow {
     File(PathBuf),
     /// Destination intent only: save into the browsed folder under the loaded save's own filename.
     NewFile(PathBuf),
-    /// Advance to the next page (wraps to the first page after the last).
+    /// Scroll the native row window toward earlier directory entries.
+    ScrollUp,
+    /// Scroll the native row window toward later directory entries.
+    ScrollDown,
+    /// Deprecated compatibility variant: pagination was removed in favor of a scroll window.
     NextPage,
     /// Row beyond the visible rows; it is staged UNOCCUPIED so the native builder omits it, and
     /// activation is a no-op.
@@ -162,6 +173,8 @@ pub fn picker_row_has_last_saved_time(row: &PickerRow) -> bool {
         | PickerRow::AtRoot
         | PickerRow::Dir(_)
         | PickerRow::NewFile(_)
+        | PickerRow::ScrollUp
+        | PickerRow::ScrollDown
         | PickerRow::NextPage
         | PickerRow::Empty => false,
     }
@@ -233,7 +246,42 @@ pub fn format_last_saved(secs: i64, utc_offset_seconds: i64) -> Option<String> {
 }
 
 /// Outcome of activating a row. `Repopulate` means the listing changed (new directory, new drive or
-/// new page) and the UI must re-stage row records and re-present the window.
+/// new scroll window) and the UI must re-stage row records and re-present the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriveStripFocus {
+    Cell(usize),
+    CurrentPath,
+}
+
+/// What an UP/DOWN press taken at a window edge should do to the native list, from
+/// [`SavePickerModel::scroll_window_from_edge_press`]. Both variants carry the row the caller must
+/// write into the native list cursor, because the list has already moved its own cursor by the time
+/// the menu pump sees the press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgePressOutcome {
+    /// The window advanced one row; hold the selection on the edge row it scrolled from so the next
+    /// press is still an edge press.
+    Scrolled { pin_row: usize },
+    /// The listing has no more rows that way. Hold the selection where it was: the native list
+    /// wraps to the opposite end here, and a selection that teleports from the last row to the
+    /// drives row reads as the list losing the player's place.
+    HeldAtLimit { pin_row: usize },
+}
+
+impl EdgePressOutcome {
+    /// Row to write into the native list cursor.
+    pub fn pin_row(self) -> usize {
+        match self {
+            Self::Scrolled { pin_row } | Self::HeldAtLimit { pin_row } => pin_row,
+        }
+    }
+
+    /// True when the listing window moved and the row records must be re-staged.
+    pub fn scrolled(self) -> bool {
+        matches!(self, Self::Scrolled { .. })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerActivation {
     PickedFile(PathBuf),
@@ -253,14 +301,25 @@ pub struct SavePickerModel {
     extensions: Vec<String>,
     /// Dirs first (name order), then files (most recently modified first).
     entries: Vec<PickerEntry>,
-    page: usize,
+    scroll_offset: usize,
     /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
     /// selectable (non-Empty) row on every listing change.
     cursor: usize,
+    /// Leftmost real drive index visible in the one-row drive strip.
+    drive_strip_offset: usize,
+    /// The complete-path editor is the focus target immediately to the right of the final drive.
+    drive_strip_path_focused: bool,
     /// Last rejection/status line the picker should render on the current surface. Cleared by
     /// navigation or a fresh pick attempt so a stale error never follows the user into another
-    /// folder/page.
+    /// folder/scroll window.
     status_message: Option<PickerStatusMessage>,
+    /// Text the user typed into the CurrentPath editor that failed validation, kept verbatim so
+    /// the control can show it back marked invalid instead of silently reverting to the old
+    /// folder and losing what was typed. `None` means the control renders the real
+    /// `current_dir`. Cleared by `refresh` and `clear_status_message`, i.e. the moment the
+    /// listing or status reflects reality again -- so a corrected entry drops the marking
+    /// without any caller having to remember to.
+    rejected_path_text: Option<String>,
     /// Mounted drives that browse as folders (cached at open). Two or more of them add the drive
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
@@ -288,8 +347,25 @@ fn windows_like_path_text(path: &Path) -> Option<&str> {
     let text = path.to_str()?;
     (text.len() >= 3
         && text.as_bytes().get(1) == Some(&b':')
-        && text.as_bytes().get(2) == Some(&b'\\'))
+        && matches!(text.as_bytes().get(2), Some(b'\\') | Some(b'/')))
     .then_some(text)
+}
+
+fn complete_directory_text_is_absolute(text: &str, candidate: &Path) -> bool {
+    candidate.is_absolute() || windows_like_path_text(candidate).is_some() || text.starts_with('/')
+}
+
+fn entered_directory_candidate(text: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        // The picker exposes the Wine Z: filesystem. Accept the Linux-form absolute paths users
+        // naturally paste/type in WSL and translate only the root/separators; case and spaces remain
+        // byte-for-byte unchanged. Drive-prefixed and UNC paths pass through untouched.
+        if text.starts_with('/') {
+            return PathBuf::from(format!("Z:{}", text.replace('/', "\\")));
+        }
+    }
+    PathBuf::from(text)
 }
 
 fn path_parent(path: &Path) -> Option<PathBuf> {
@@ -352,6 +428,34 @@ pub enum PickRejection {
     PathNotUtf8 = 6,
     /// (Destination intent) the folder the file would live in does not exist.
     ParentMissing = 7,
+}
+
+/// Why an accepted native text-entry value cannot become the picker's current directory.
+/// Validation completes before any model field changes, so every error preserves the old listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectoryChangeError {
+    Empty,
+    NotAbsolute,
+    NotDirectory,
+}
+
+impl DirectoryChangeError {
+    pub fn status_message(self) -> PickerStatusMessage {
+        match self {
+            Self::Empty => PickerStatusMessage::new(
+                "PATH IS EMPTY",
+                "Enter an absolute folder path, or press Back to cancel.",
+            ),
+            Self::NotAbsolute => PickerStatusMessage::new(
+                "ABSOLUTE PATH REQUIRED",
+                "Enter a complete path beginning with a drive letter.",
+            ),
+            Self::NotDirectory => PickerStatusMessage::new(
+                "FOLDER NOT FOUND",
+                "The path does not name an existing directory.",
+            ),
+        }
+    }
 }
 
 /// User-facing picker status text. Product telemetry/log wording stays at the caller; the picker
@@ -537,12 +641,15 @@ impl SavePickerModel {
             extension: filters.join("/"),
             extensions: filters,
             entries: Vec::new(),
-            page: 0,
+            scroll_offset: 0,
             cursor: 0,
+            drive_strip_offset: 0,
             status_message: None,
+            rejected_path_text: None,
             drives: enumerate_drives(),
             last_dir_per_drive: HashMap::new(),
             intent,
+            drive_strip_path_focused: false,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
@@ -564,83 +671,112 @@ impl SavePickerModel {
         path_parent(&self.current_dir).is_some()
     }
 
-    /// True when a drive cycler row is worth showing. With one drive (or none enumerated) there is
-    /// nowhere to cycle to, so the row would be a dead end and is omitted.
+    /// True when the stable location row can name a mounted drive. With one drive it still owns the
+    /// complete-path display/editor; with multiple drives it additionally exposes the drive strip.
     fn has_drive_row(&self) -> bool {
-        self.drives.len() >= 2
+        !self.drives.is_empty()
     }
 
     /// Rows above the entries that are pure NAVIGATION -- never an entry, never a pick target:
-    /// the up row and the drive cycler. The initial cursor skips these so a fresh listing lands on
-    /// something actionable.
+    /// the always-first drive row and the later parent row. The initial cursor skips these when a
+    /// real entry exists so a fresh listing lands on something actionable.
     fn nav_row_count(&self) -> usize {
         usize::from(self.has_parent_row()) + usize::from(self.has_drive_row())
     }
 
-    /// Rows the PINNED `[ new ]` row occupies above everything else: 1 in destination intent, 0 in
-    /// a load browse. Every other row index in the layout is offset by exactly this.
+    /// Rows the destination-only `[ new ]` control occupies above the parent row and entries: 1 in
+    /// destination intent, 0 in a load browse. The always-first drive row is the sole exception.
     fn pinned_row_count(&self) -> usize {
         usize::from(self.is_destination())
     }
 
     /// Row index of the first directory/file entry.
-    fn entry_row_base(&self) -> usize {
+    /// First row of the listing proper, i.e. the row below any header rows the view puts above the
+    /// entries. Public because the menu pump needs the same "first content row" the edge-press rule
+    /// uses when it has to clamp a cursor step of its own.
+    pub fn entry_row_base(&self) -> usize {
         self.pinned_row_count() + self.nav_row_count()
     }
 
-    /// Row index of the pinned `[ new ]` row (destination intent only). ALWAYS 0 when it exists --
-    /// see the module docs: it is the first thing the Save Game row press shows.
+    /// Row index of the pinned `[ new ]` row (destination intent only). It sits directly below the
+    /// always-first drive row when one exists, otherwise it remains row 0.
     pub fn new_file_row(&self) -> Option<usize> {
-        self.is_destination().then_some(0)
+        self.is_destination()
+            .then(|| usize::from(self.has_drive_row()))
     }
 
-    /// Row index of the "up one directory" row, when the current directory has a parent. It is
-    /// first in a load browse and second in a destination browse (`[ new ]` is pinned above it);
-    /// at a drive root there is no up row at all.
+    /// Row index of the "up one directory" row, when the current directory has a parent. The drive
+    /// row and destination-only `[ new ]` row, when present, both sit above it.
     pub fn parent_row(&self) -> Option<usize> {
-        self.has_parent_row().then(|| self.pinned_row_count())
+        self.has_parent_row()
+            .then(|| usize::from(self.has_drive_row()) + self.pinned_row_count())
     }
 
-    /// Row index of the drive cycler, when it exists.
+    /// Row index of the drive cycler, when it exists. The drive switcher is the stable top-level
+    /// location control, so it always owns row 0 in both picker intents and every subdirectory.
     pub fn drive_row(&self) -> Option<usize> {
-        self.has_drive_row()
-            .then(|| self.pinned_row_count() + usize::from(self.has_parent_row()))
+        self.has_drive_row().then_some(0)
     }
 
-    /// Row index of the page cycler, when the listing overflows one page. It sits immediately
-    /// after the CURRENT page's last entry, so a short final page has no gap above it -- and the
-    /// native cursor re-clamp lands the highlight back on the cycler after paging.
+    /// Row index of the old page cycler. Pagination is removed; overflow is represented by the
+    /// movie's native scrollbar affordance plus native-window restaging instead.
     pub fn next_page_row(&self) -> Option<usize> {
-        (self.page_count() > 1).then(|| self.entry_row_base() + self.page_entries().len())
+        None
+    }
+
+    /// Compatibility accessor for the old visible scroll-up pseudo-row. Scroll controls no longer
+    /// consume row slots; held native cursor edges restage the entry window instead.
+    pub fn scroll_up_row(&self) -> Option<usize> {
+        None
+    }
+
+    /// Compatibility accessor for the old visible scroll-down pseudo-row. Scroll controls no longer
+    /// consume row slots; held native cursor edges restage the entry window instead.
+    pub fn scroll_down_row(&self) -> Option<usize> {
+        None
+    }
+
+    fn entry_window_row_base(&self) -> usize {
+        self.entry_row_base()
     }
 
     /// Rows the window actually shows. Slots at or beyond this are staged UNOCCUPIED so the native
     /// list builder omits them (no name, no level, no playtime).
     pub fn visible_row_count(&self) -> usize {
-        let rows = self.entry_row_base()
-            + self.page_entries().len()
-            + usize::from(self.next_page_row().is_some());
+        let rows = self.entry_window_row_base() + self.window_entries().len();
         // Never zero: an empty single-drive root has nothing above and nothing to list, and a
         // zero-row native list would leave the window with no selectable item at all. Row 0
         // becomes the `[ root ]` dead-end marker instead.
         rows.max(1)
     }
 
-    /// Entries that fit when NO page cycler is needed (every row after the fixed rows is an entry).
-    fn max_entries_single_page(&self) -> usize {
-        PICKER_ROW_COUNT.saturating_sub(self.entry_row_base())
+    /// Directory/save entries that fit in the native ten-row transport after fixed rows. Overflow
+    /// does not consume row slots; the compact movie's ScrollBarV and edge-hover restaging own that
+    /// affordance.
+    fn entry_window_capacity(&self) -> usize {
+        PICKER_ROW_COUNT
+            .saturating_sub(self.entry_row_base())
+            .max(1)
     }
 
-    /// Entries per page. A listing that fits uses every remaining row; one that overflows spends
-    /// one row on the page cycler. Non-circular: the branch reads the ENTRY count, never the page
-    /// count, so `page_count` can derive from it without recursion.
+    fn max_scroll_offset(&self) -> usize {
+        self.entries
+            .len()
+            .saturating_sub(self.entry_window_capacity())
+    }
+
+    fn clamp_scroll_offset(&mut self) {
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+    }
+
+    /// Compatibility name for callers/tests that care how many entries fit without scrolling.
+    fn max_entries_single_page(&self) -> usize {
+        self.entry_window_capacity()
+    }
+
+    /// Compatibility name for callers/tests that care how many entries fit in one native window.
     pub fn entries_per_page(&self) -> usize {
-        let single = self.max_entries_single_page();
-        if self.entries.len() <= single {
-            single.max(1)
-        } else {
-            single.saturating_sub(1).max(1)
-        }
+        self.entry_window_capacity()
     }
 
     /// Destination target for the `[ new ]` row: the loaded save's own filename in the browsed
@@ -742,6 +878,176 @@ impl SavePickerModel {
         self.drives.len()
     }
 
+    fn drive_strip_real_capacity(&self) -> usize {
+        let left = usize::from(self.drive_strip_offset > 0);
+        let right = usize::from(
+            self.drive_strip_offset + DRIVE_STRIP_MAX_CELLS.saturating_sub(left)
+                < self.drives.len(),
+        );
+        DRIVE_STRIP_MAX_CELLS.saturating_sub(left + right).max(1)
+    }
+
+    fn clamp_drive_strip_offset(&mut self) {
+        // Every nonzero page spends one cell on `[<]`; the last page therefore shows at most
+        // MAX-1 real drives. Clamping against `len-MAX` made the final drive unreachable whenever
+        // one extra page was needed (8 drives in a 7-cell strip snapped offset 2 back to 1).
+        let last_page_real_capacity = DRIVE_STRIP_MAX_CELLS.saturating_sub(1).max(1);
+        let max_offset = self.drives.len().saturating_sub(last_page_real_capacity);
+        self.drive_strip_offset = self.drive_strip_offset.min(max_offset);
+    }
+
+    fn ensure_current_drive_cell_visible(&mut self) {
+        let idx = self.drive_index();
+        if idx < self.drive_strip_offset {
+            self.drive_strip_offset = idx;
+        }
+        let cap = self.drive_strip_real_capacity();
+        if idx >= self.drive_strip_offset + cap {
+            self.drive_strip_offset = idx.saturating_sub(cap.saturating_sub(1));
+        }
+        self.clamp_drive_strip_offset();
+    }
+
+    pub fn drive_strip_cell_count(&self) -> usize {
+        if !self.has_drive_row() {
+            return 0;
+        }
+        let mut cells = self.drive_strip_real_capacity().min(self.drives.len());
+        cells += usize::from(self.drive_strip_offset > 0);
+        cells += usize::from(
+            self.drive_strip_offset + self.drive_strip_real_capacity() < self.drives.len(),
+        );
+        cells.min(DRIVE_STRIP_MAX_CELLS)
+    }
+
+    /// Visual cell containing the current drive. Row focus is deliberately separate: callers hide
+    /// the cell cursor when the native list cursor leaves the drive row without forgetting which
+    /// drive becomes active when focus returns.
+    pub fn drive_strip_active_cell(&self) -> Option<usize> {
+        if !self.has_drive_row() {
+            return None;
+        }
+        let drive_index = self.drive_index();
+        let capacity = self.drive_strip_real_capacity();
+        if drive_index < self.drive_strip_offset
+            || drive_index >= self.drive_strip_offset + capacity
+        {
+            return None;
+        }
+        Some(usize::from(self.drive_strip_offset > 0) + drive_index - self.drive_strip_offset)
+    }
+
+    pub fn drive_strip_focus(&self) -> Option<DriveStripFocus> {
+        if self.drive_strip_path_focused && self.has_drive_row() {
+            Some(DriveStripFocus::CurrentPath)
+        } else {
+            self.drive_strip_active_cell().map(DriveStripFocus::Cell)
+        }
+    }
+
+    fn drive_strip_cell_label(&self, drive_index: usize) -> String {
+        let current = self.current_drive_root();
+        let drive = self.drives.get(drive_index).unwrap_or(&current);
+        let short = Self::drive_short(drive);
+        if drive == &current {
+            format!(">{short}<")
+        } else {
+            format!("[{short}]")
+        }
+    }
+
+    fn drive_strip_cells(&self) -> Vec<String> {
+        if !self.has_drive_row() {
+            return Vec::new();
+        }
+        let mut labels = Vec::new();
+        if self.drive_strip_offset > 0 {
+            labels.push("[<]".to_owned());
+        }
+        let cap = self.drive_strip_real_capacity();
+        for idx in self.drive_strip_offset..(self.drive_strip_offset + cap).min(self.drives.len()) {
+            labels.push(self.drive_strip_cell_label(idx));
+        }
+        if self.drive_strip_offset + cap < self.drives.len() {
+            labels.push("[>]".to_owned());
+        }
+        labels
+    }
+
+    fn drive_strip_label(&self) -> String {
+        self.drive_strip_cells().join("  ")
+    }
+
+    /// Text for one visual drive-strip cell on the drive row. The runtime maps these cells onto
+    /// distinct ProfileSelect child text fields (`DriveCell_0..25`) instead of one concatenated row label.
+    pub fn drive_row_cell_label(&self, row: usize, cell: usize) -> Option<String> {
+        (self.drive_row() == Some(row))
+            .then(|| self.drive_strip_cells().get(cell).cloned())
+            .flatten()
+    }
+
+    pub fn activate_drive_strip_cell(&mut self, cell: usize) -> bool {
+        if !self.has_drive_row() || cell >= self.drive_strip_cell_count() {
+            return false;
+        }
+        self.drive_strip_path_focused = false;
+        let mut cell = cell;
+        if self.drive_strip_offset > 0 {
+            if cell == 0 {
+                self.drive_strip_offset = self.drive_strip_offset.saturating_sub(1);
+                return true;
+            }
+            cell -= 1;
+        }
+        let cap = self.drive_strip_real_capacity();
+        if cell >= cap {
+            if self.drive_strip_offset + cap < self.drives.len() {
+                self.drive_strip_offset += 1;
+                self.clamp_drive_strip_offset();
+                return true;
+            }
+            return false;
+        }
+        let Some(root) = self.drives.get(self.drive_strip_offset + cell).cloned() else {
+            return false;
+        };
+        let changed = self.switch_to_drive_root(root);
+        if changed {
+            if let Some(row) = self.drive_row() {
+                self.cursor = row;
+            }
+        }
+        changed
+    }
+
+    fn switch_to_drive_root(&mut self, root: PathBuf) -> bool {
+        self.clear_status_message();
+        let cur = self.current_drive_root();
+        if cur == root {
+            self.ensure_current_drive_cell_visible();
+            return true;
+        }
+        self.last_dir_per_drive
+            .insert(cur.clone(), self.current_dir.clone());
+        let resumed = self
+            .last_dir_per_drive
+            .get(&root)
+            .filter(|dir| dir.is_dir())
+            .cloned();
+        let restored = resumed.is_some();
+        self.current_dir = resumed.unwrap_or_else(|| root.clone());
+        self.refresh();
+        self.ensure_current_drive_cell_visible();
+        self.cursor = self.first_selectable_row();
+        append_autoload_debug(format_args!(
+            "save-picker: drive select {} -> {} (resumed_last_folder={restored} dir='{}')",
+            cur.display(),
+            root.display(),
+            self.current_dir.display()
+        ));
+        true
+    }
+
     /// Switch to the previous/next mounted drive (wrapping), RESUMING the folder last browsed on
     /// that drive. No-op with fewer than two drives.
     ///
@@ -754,25 +1060,61 @@ impl SavePickerModel {
         let Some(root) = self.neighbour_drive(forward) else {
             return;
         };
-        self.clear_status_message();
-        let cur = self.current_drive_root();
-        self.last_dir_per_drive
-            .insert(cur.clone(), self.current_dir.clone());
-        let resumed = self
-            .last_dir_per_drive
-            .get(&root)
-            .filter(|dir| dir.is_dir())
-            .cloned();
-        let restored = resumed.is_some();
-        self.current_dir = resumed.unwrap_or_else(|| root.clone());
-        self.refresh();
-        self.cursor = self.first_selectable_row();
-        append_autoload_debug(format_args!(
-            "save-picker: drive cycle {} -> {} (resumed_last_folder={restored} dir='{}')",
-            cur.display(),
-            root.display(),
-            self.current_dir.display()
-        ));
+        let _ = self.switch_to_drive_root(root);
+    }
+
+    pub fn focus_active_drive_from_drive_strip(&mut self) -> bool {
+        let changed = self.drive_strip_path_focused;
+        self.drive_strip_path_focused = false;
+        if let Some(row) = self.drive_row() {
+            self.cursor = row;
+        }
+        changed
+    }
+
+    pub fn focus_current_path_from_drive_strip(&mut self) -> bool {
+        if !self.has_drive_row() {
+            return false;
+        }
+        let changed = !self.drive_strip_path_focused;
+        self.drive_strip_path_focused = true;
+        if let Some(row) = self.drive_row() {
+            self.cursor = row;
+        }
+        changed
+    }
+
+    pub fn cycle_drive_from_drive_strip(&mut self, forward: bool) -> bool {
+        if self.drive_strip_path_focused {
+            if forward {
+                return false;
+            }
+            self.drive_strip_path_focused = false;
+            let Some(root) = self.drives.last().cloned() else {
+                return false;
+            };
+            let _ = self.switch_to_drive_root(root);
+            if let Some(row) = self.drive_row() {
+                self.cursor = row;
+            }
+            return true;
+        }
+
+        let current_index = self.drive_index();
+        if forward && current_index + 1 >= self.drives.len() {
+            return self.focus_current_path_from_drive_strip();
+        }
+
+        let before = self.current_drive_root();
+        self.cycle_drive(forward);
+        self.drive_strip_path_focused = false;
+        let changed = self.current_drive_root() != before;
+        if changed {
+            if let Some(row) = self.drive_row() {
+                self.cursor = row;
+            }
+        }
+        changed
     }
 
     /// True when the highlighted row is the drive cycler (so the overlay's left/right cycle drives
@@ -785,16 +1127,120 @@ impl SavePickerModel {
         &self.current_dir
     }
 
+    /// Validate and commit a complete directory path entered through the native text editor.
+    ///
+    /// Case and spaces are preserved exactly. On Windows/Wine, a Linux-form `/home/...` absolute
+    /// path is translated to the equivalent `Z:\\home\\...`; drive-prefixed paths are unchanged.
+    /// Existence and absoluteness are checked against a temporary `PathBuf` before `self` changes, so
+    /// invalid Accept and native Back/cancel both leave the directory/listing untouched.
+    pub fn set_current_dir_from_text(&mut self, text: &str) -> Result<bool, DirectoryChangeError> {
+        if text.is_empty() {
+            return Err(DirectoryChangeError::Empty);
+        }
+        let candidate = entered_directory_candidate(text);
+        if !complete_directory_text_is_absolute(text, &candidate) {
+            return Err(DirectoryChangeError::NotAbsolute);
+        }
+        if !candidate.is_dir() {
+            return Err(DirectoryChangeError::NotDirectory);
+        }
+        self.clear_status_message();
+        if candidate == self.current_dir {
+            return Ok(false);
+        }
+
+        let old_root = self.current_drive_root();
+        self.last_dir_per_drive
+            .insert(old_root, self.current_dir.clone());
+        self.current_dir = candidate;
+        self.refresh();
+        self.ensure_current_drive_cell_visible();
+        self.cursor = self
+            .drive_row()
+            .unwrap_or_else(|| self.first_selectable_row());
+        Ok(true)
+    }
+
     pub fn extension(&self) -> &str {
         &self.extension
     }
 
     pub fn page(&self) -> usize {
-        self.page
+        0
     }
 
     pub fn page_count(&self) -> usize {
-        self.entries.len().div_ceil(self.entries_per_page()).max(1)
+        1
+    }
+
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    pub fn scroll_max(&self) -> usize {
+        self.max_scroll_offset()
+    }
+
+    pub fn scroll_window_one(&mut self, down: bool) -> bool {
+        let old = self.scroll_offset;
+        if down {
+            self.scroll_offset = (self.scroll_offset + 1).min(self.max_scroll_offset());
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        }
+        let changed = self.scroll_offset != old;
+        if changed {
+            self.clear_status_message();
+        }
+        changed
+    }
+
+    /// Scroll the ten-row native window by one row for an explicit UP/DOWN press taken at an edge.
+    ///
+    /// `cursor` is the row the selection occupied BEFORE the press. The native list moves (and
+    /// wraps) its own cursor as soon as the key is read, so the value sampled after the press is
+    /// already somewhere else -- at the bottom row a DOWN press lands the selection back on the
+    /// drives row, which is what the player sees as "it wrapped instead of scrolling".
+    ///
+    /// Scrolls if and only if the window can actually move that way, which is exactly the condition
+    /// the scrollbar draws: more rows below for DOWN, more above for UP. When the list is already at
+    /// that hard limit the press still reports a row to pin, so the caller can hold the selection
+    /// where it was instead of letting the native list wrap around to the far end. Returns `None`
+    /// only for a press that is not at an edge at all, where ordinary row movement is correct.
+    ///
+    /// Replaced a dwell timer (2026-08-12) that slid the window whenever the cursor merely SAT on
+    /// an edge row, moving the list under a player who was only resting there.
+    pub fn scroll_window_from_edge_press(
+        &mut self,
+        cursor: usize,
+        down: bool,
+    ) -> Option<EdgePressOutcome> {
+        let first_content_row = self
+            .entry_row_base()
+            .min(PICKER_ROW_COUNT.saturating_sub(1));
+        let last_visible_row = self
+            .visible_row_count()
+            .saturating_sub(1)
+            .min(PICKER_ROW_COUNT.saturating_sub(1));
+        let (at_edge, edge_row) = if down {
+            (cursor >= last_visible_row, last_visible_row)
+        } else {
+            (cursor <= first_content_row, first_content_row)
+        };
+        if !at_edge {
+            return None;
+        }
+        // `scroll_window_one` is the single source of "can the window move that way", so it decides
+        // scroll-versus-hold on exactly the condition the scrollbar draws.
+        if self.scroll_window_one(down) {
+            return Some(EdgePressOutcome::Scrolled { pin_row: edge_row });
+        }
+        // No window left to move. DOWN off the last row and UP off row 0 are where the native list
+        // wraps to the opposite end of the listing, which reads as the selection teleporting; hold
+        // the press row instead. An UP press that merely runs out of ENTRIES is not at the top of
+        // the list -- the drive and parent rows sit above it -- so leave that to normal movement.
+        let hard_limit = if down { true } else { cursor == 0 };
+        hard_limit.then_some(EdgePressOutcome::HeldAtLimit { pin_row: cursor })
     }
 
     pub fn entry_count(&self) -> usize {
@@ -809,16 +1255,36 @@ impl SavePickerModel {
         self.status_message = Some(message);
     }
 
+    /// Entering the complete-path editor starts a fresh correction attempt. Hide any rejection from
+    /// the previous Accept before the user types so stale warning copy never sits behind the editor.
+    pub fn begin_path_edit(&mut self) -> bool {
+        self.status_message.take().is_some()
+    }
+
     pub fn clear_status_message(&mut self) {
         self.status_message = None;
+        self.rejected_path_text = None;
+    }
+
+    /// The rejected CurrentPath entry to display in place of `current_dir`, if one is outstanding.
+    pub fn rejected_path_text(&self) -> Option<&str> {
+        self.rejected_path_text.as_deref()
+    }
+
+    /// Keep an invalid entry on the control so the user can correct it rather than retype it.
+    pub fn set_rejected_path_text(&mut self, text: &str) {
+        self.rejected_path_text = Some(text.to_owned());
     }
 
     /// Re-enumerate `current_dir`. Unreadable directories yield an empty listing rather than an
     /// error: the picker stays navigable (the user can still go up or change drive) and the debug
     /// log records the failure.
     pub fn refresh(&mut self) {
+        // The listing is about to describe a real directory again, so any rejected entry the
+        // control was showing is stale by definition.
+        self.rejected_path_text = None;
         self.entries.clear();
-        self.page = 0;
+        self.scroll_offset = 0;
         // Owned copies so the per-entry predicate borrows nothing from `self` while the listing is
         // being built. `save_picker_accepts` is the SAME function the OS dialog's post-return check
         // calls, which is what keeps the two surfaces from disagreeing about what a save is.
@@ -909,14 +1375,13 @@ impl SavePickerModel {
         self.entries.append(&mut files);
     }
 
-    fn page_entries(&self) -> &[PickerEntry] {
-        let per_page = self.entries_per_page();
-        let start = self.page * per_page;
-        let end = (start + per_page).min(self.entries.len());
+    fn window_entries(&self) -> &[PickerEntry] {
+        let start = self.scroll_offset.min(self.entries.len());
+        let end = (start + self.entry_window_capacity()).min(self.entries.len());
         self.entries.get(start..end).unwrap_or(&[])
     }
 
-    /// Meaning of `row` (0..PICKER_ROW_COUNT) on the current page.
+    /// Meaning of `row` (0..PICKER_ROW_COUNT) in the current scroll window.
     pub fn row_meaning(&self, row: usize) -> PickerRow {
         if row >= PICKER_ROW_COUNT {
             return PickerRow::Empty;
@@ -936,8 +1401,8 @@ impl SavePickerModel {
             return PickerRow::NextPage;
         }
         match row
-            .checked_sub(self.entry_row_base())
-            .and_then(|idx| self.page_entries().get(idx))
+            .checked_sub(self.entry_window_row_base())
+            .and_then(|idx| self.window_entries().get(idx))
         {
             Some(PickerEntry::Dir { path, .. }) => PickerRow::Dir(path.clone()),
             Some(PickerEntry::File { path, .. }) => PickerRow::File(path.clone()),
@@ -949,12 +1414,12 @@ impl SavePickerModel {
         }
     }
 
-    /// The cached character summaries behind `row` when it is a save-file row on the current page
-    /// (the file's active loadable characters, parsed once at listing build). `None` for every
-    /// non-file row (up, drive cycler, `[ new ]`, directory, page cycler, placeholder).
+    /// The cached character summaries behind `row` when it is a save-file row in the current scroll
+    /// window (the file's active loadable characters, parsed once at listing build). `None` for every
+    /// non-file row (up, drive cycler, `[ new ]`, directory, placeholder).
     ///
     /// Derived from the SAME `row_meaning` the label comes from, then cross-checked: the entry read
-    /// at the page index must be the very file the label named. One decision point plus a proof,
+    /// at the scroll-window index must be the very file the label named. One decision point plus a proof,
     /// so the stats text and the row label cannot describe different entries -- and if they ever
     /// disagree the row renders BLANK rather than a neighbour's character.
     pub fn row_file_characters(&self, row: usize) -> Option<&[crate::slots::SaveSlotInfo]> {
@@ -962,7 +1427,7 @@ impl SavePickerModel {
             return None;
         };
         match self
-            .page_entries()
+            .window_entries()
             .get(row.checked_sub(self.entry_row_base())?)
         {
             Some(PickerEntry::File { path, chars, .. }) if *path == labelled => Some(chars),
@@ -975,7 +1440,7 @@ impl SavePickerModel {
     /// listing build could not read.
     ///
     /// Cross-checked exactly like [`row_file_characters`](Self::row_file_characters), and for the
-    /// same reason: the entry read at the page index must be the very file the label named, or the
+    /// same reason: the entry read at the scroll-window index must be the very file the label named, or the
     /// row would date itself from a neighbour. Reads only what the listing build already collected
     /// (`PickerEntry::File::modified`, the dirent metadata the sort order is derived from), so no
     /// row query ever touches the filesystem.
@@ -984,7 +1449,7 @@ impl SavePickerModel {
             return None;
         };
         match self
-            .page_entries()
+            .window_entries()
             .get(row.checked_sub(self.entry_row_base())?)
         {
             Some(PickerEntry::File { path, modified, .. }) if *path == labelled => *modified,
@@ -1007,13 +1472,10 @@ impl SavePickerModel {
                 }
                 PickerActivation::Ignored
             }
-            // The native window gives us row ACTIVATION and nothing else, so the drive switch is a
-            // row: one activation advances one drive, wrapping, and the row's own label names the
-            // drive it is about to move to.
-            PickerRow::DriveCycle => {
-                self.cycle_drive(true);
-                PickerActivation::Repopulate
-            }
+            // The row itself is a strip container. Selecting a drive is a cell-level action routed
+            // through `activate_drive_strip_cell`; pressing the row background must not cycle through
+            // drives one-by-one.
+            PickerRow::DriveCycle => PickerActivation::Ignored,
             PickerRow::Dir(path) => {
                 self.current_dir = path;
                 self.refresh();
@@ -1021,10 +1483,15 @@ impl SavePickerModel {
             }
             PickerRow::File(path) => PickerActivation::PickedFile(path),
             PickerRow::NewFile(path) => PickerActivation::PickedNewFile(path),
-            PickerRow::NextPage => {
-                self.page = (self.page + 1) % self.page_count();
+            PickerRow::ScrollUp => {
+                self.cycle_page(false);
                 PickerActivation::Repopulate
             }
+            PickerRow::ScrollDown => {
+                self.cycle_page(true);
+                PickerActivation::Repopulate
+            }
+            PickerRow::NextPage => PickerActivation::Ignored,
             PickerRow::AtRoot | PickerRow::Empty => PickerActivation::Ignored,
         }
     }
@@ -1049,19 +1516,10 @@ impl SavePickerModel {
             .to_owned()
     }
 
-    /// `[ C: > Z: ]` -- the drive being browsed and the one activation moves to. Naming the next
-    /// drive is what keeps the row from being a blind cycler when three or more drives are mounted,
-    /// and naming the current one is what makes "which drive am I on" answerable from any folder.
-    /// Two 2-character drive names plus the frame is 11 UTF-16 units, inside the name budget, and
-    /// contains no comma.
+    /// Name field for the drive strip row. It is only the row title; the actual clickable drive cells
+    /// render through separate DLL-owned row children so the UI no longer lies with one merged label.
     fn drive_row_label(&self) -> String {
-        let cur = self.current_drive_root();
-        let next = self.neighbour_drive(true).unwrap_or_else(|| cur.clone());
-        format!(
-            "[ {} > {} ]",
-            Self::drive_short(&cur),
-            Self::drive_short(&next)
-        )
+        "DRIVES".to_owned()
     }
 
     /// Display label for `row`, truncated to the ProfileSummary name budget (16 UTF-16 units).
@@ -1084,9 +1542,9 @@ impl SavePickerModel {
                 .unwrap_or("?")
                 .to_owned(),
             PickerRow::NewFile(_) => PICKER_NEW_FILE_LABEL.to_owned(),
-            PickerRow::NextPage => {
-                format!("[ page {}/{} ]", self.page + 1, self.page_count())
-            }
+            PickerRow::ScrollUp => "[ SCROLL ^ ]".to_owned(),
+            PickerRow::ScrollDown => "[ SCROLL v ]".to_owned(),
+            PickerRow::NextPage => String::new(),
             PickerRow::Empty => String::new(),
         };
         truncate_utf16(&label, PICKER_ROW_NAME_UTF16_MAX)
@@ -1101,6 +1559,60 @@ impl SavePickerModel {
         }
     }
 
+    /// Two auxiliary display fragments for a non-file row, rendered through the injected native
+    /// `05_010` `ErStats` field while the in-game picker owns the ProfileSelect rows.
+    ///
+    /// Row names stay inside the 16-UTF-16 `ProfileSummary` budget; explanatory text lives here
+    /// instead. File rows return `None` because their two stats lines are real character summaries,
+    /// and empty rows return `None` because the native list builder omits them. A visible status
+    /// message owns row 0 first, matching the runtime stats-line hook.
+    pub fn row_auxiliary_lines(&self, row: usize) -> Option<(String, String)> {
+        if let Some(message) = &self.status_message
+            && row == 0
+        {
+            return Some((message.headline().to_owned(), message.detail().to_owned()));
+        }
+        match self.row_meaning(row) {
+            PickerRow::ParentDir => Some((
+                "PARENT FOLDER".to_owned(),
+                self.parent_dir_name()
+                    .map(|name| format!("Go to {name}"))
+                    .unwrap_or_else(|| "Go up one folder".to_owned()),
+            )),
+            PickerRow::DriveCycle => None,
+            PickerRow::AtRoot => Some((
+                "DRIVE ROOT".to_owned(),
+                self.current_drive_root().display().to_string(),
+            )),
+            PickerRow::Dir(path) => Some((
+                "FOLDER".to_owned(),
+                format!("Open {}", self.dir_display_name(&path)),
+            )),
+            PickerRow::NewFile(path) => Some((
+                "NEW SAVE FILE".to_owned(),
+                format!(
+                    "Create {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("the loaded save")
+                ),
+            )),
+            PickerRow::ScrollUp => Some((
+                "MORE ABOVE".to_owned(),
+                format!("Show rows before {}", self.scroll_offset + 1),
+            )),
+            PickerRow::ScrollDown => Some((
+                "MORE BELOW".to_owned(),
+                format!(
+                    "Show rows after {}",
+                    self.scroll_offset + self.window_entries().len()
+                ),
+            )),
+            PickerRow::NextPage => None,
+            PickerRow::File(_) | PickerRow::Empty => None,
+        }
+    }
+
     /// ASCII display label for `row` (uppercased for the 5x7 overlay font; dir rows keep a `/`
     /// suffix, control rows are bracketed). Empty string for an out-of-range row. The overlay has
     /// far more width than the native name field, so these spell the action out.
@@ -1110,11 +1622,8 @@ impl SavePickerModel {
                 Some(name) => format!("[..] UP    {name}"),
                 None => "[..] UP".to_owned(),
             },
-            // The overlay drives this row with left/right as well as select, so say both.
-            PickerRow::DriveCycle => format!(
-                "DRIVE < {} >   (SELECT: NEXT)",
-                self.current_drive_root().display()
-            ),
+            // The overlay drives this row with left/right as well as select; mouse users click a cell.
+            PickerRow::DriveCycle => format!("DRIVES {}", self.drive_strip_label()),
             PickerRow::AtRoot => format!("[ROOT] {}", self.current_drive_root().display()),
             PickerRow::Dir(path) => self.dir_display_name(&path),
             PickerRow::File(path) => path
@@ -1128,7 +1637,9 @@ impl SavePickerModel {
                     .and_then(|name| name.to_str())
                     .unwrap_or("?")
             ),
-            PickerRow::NextPage => format!("[PAGE {}/{}]", self.page + 1, self.page_count()),
+            PickerRow::ScrollUp => "[ SCROLL UP ]".to_owned(),
+            PickerRow::ScrollDown => "[ SCROLL DOWN ]".to_owned(),
+            PickerRow::NextPage => String::new(),
             PickerRow::Empty => String::new(),
         };
         label.to_ascii_uppercase()
@@ -1164,6 +1675,14 @@ impl SavePickerModel {
         self.cursor
     }
 
+    /// Move the highlight directly to a visible/selectable row. Used by mouse hit-testing surfaces
+    /// that resolve a click to the row under the pointer before activating it.
+    pub fn set_cursor(&mut self, row: usize) {
+        if row < PICKER_ROW_COUNT && self.row_selectable(row) {
+            self.cursor = row;
+        }
+    }
+
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
@@ -1186,7 +1705,7 @@ impl SavePickerModel {
         self.cursor = selectable[next];
     }
 
-    /// Activate the highlighted row. On a listing change (dir/drive/page) the cursor resets to the
+    /// Activate the highlighted row. On a listing change (dir/drive/scroll) the cursor resets to the
     /// first selectable row so the highlight never lands on a stale index.
     pub fn activate_cursor(&mut self) -> PickerActivation {
         let result = self.activate(self.cursor);
@@ -1196,17 +1715,17 @@ impl SavePickerModel {
         result
     }
 
-    /// Move to the previous/next page (wrapping), resetting the cursor. No-op when single-page.
+    /// Compatibility wrapper for old overlay callers: move the scroll window by one native page.
     pub fn cycle_page(&mut self, forward: bool) {
-        let count = self.page_count();
-        if count < 2 {
+        let cap = self.entry_window_capacity();
+        if self.max_scroll_offset() == 0 {
             return;
         }
         self.clear_status_message();
-        self.page = if forward {
-            (self.page + 1) % count
+        self.scroll_offset = if forward {
+            (self.scroll_offset + cap).min(self.max_scroll_offset())
         } else {
-            (self.page + count - 1) % count
+            self.scroll_offset.saturating_sub(cap)
         };
         self.cursor = self.first_selectable_row();
     }
@@ -1224,13 +1743,14 @@ impl SavePickerModel {
         }
     }
 
-    /// Long-form status line for the auxiliary text fields (full current dir + page info).
+    /// Long-form status line for the auxiliary text fields (full current dir + scroll info).
     pub fn status_line(&self) -> String {
         format!(
-            "{}  (page {}/{}, *.{})",
+            "{}  (rows {}-{}/{}, *.{})",
             self.current_dir.display(),
-            self.page + 1,
-            self.page_count(),
+            self.scroll_offset + 1,
+            (self.scroll_offset + self.window_entries().len()).max(1),
+            self.entries.len().max(1),
             self.extension
         )
     }
@@ -1242,1176 +1762,7 @@ pub fn truncate_utf16(text: &str, max: usize) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::*;
-
-    /// Build a model with a fixed listing, bypassing the filesystem enumeration `open` does.
-    ///
-    /// Each file carries ONE character whose name encodes the file's own index (`char{idx}`), and a
-    /// modification time of epoch + `idx` minutes, so a test can assert that the character info AND
-    /// the timestamp a row renders belong to that row's OWN file rather than a neighbour's -- the
-    /// exact confusion `row_file_characters` had.
-    ///
-    /// `drives` is left EMPTY, so these models have no drive cycler row: the drive-row tests opt
-    /// in explicitly via `with_drives`, and every other test keeps the no-drive-row layout.
-    fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel {
-        SavePickerModel {
-            current_dir: PathBuf::from(dir),
-            extension: "sl2".to_owned(),
-            extensions: vec!["sl2".to_owned()],
-            entries: (0..files)
-                .map(|idx| PickerEntry::File {
-                    name: format!("save{idx}.sl2"),
-                    path: PathBuf::from(dir).join(format!("save{idx}.sl2")),
-                    modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(idx as u64 * 60)),
-                    chars: vec![crate::slots::SaveSlotInfo {
-                        slot: 0,
-                        name: format!("char{idx}"),
-                        level: 10 + idx as i32,
-                    }],
-                })
-                .collect(),
-            page: 0,
-            cursor: 0,
-            status_message: None,
-            drives: Vec::new(),
-            last_dir_per_drive: HashMap::new(),
-            intent,
-        }
-    }
-
-    /// Attach mounted drives so the drive cycler row exists (two or more) or deliberately does not.
-    fn with_drives(mut model: SavePickerModel, drives: &[&str]) -> SavePickerModel {
-        model.drives = drives.iter().map(PathBuf::from).collect();
-        model
-    }
-
-    /// The character name a row's stats text would render, or `None` for a non-file row.
-    fn row_char_name(model: &SavePickerModel, row: usize) -> Option<String> {
-        model
-            .row_file_characters(row)
-            .and_then(|chars| chars.first())
-            .map(|info| info.name.clone())
-    }
-
-    /// The file stem a row's LABEL would render, or `None` for a non-file row.
-    fn row_label_file(model: &SavePickerModel, row: usize) -> Option<String> {
-        match model.row_meaning(row) {
-            PickerRow::File(path) => Some(
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-                    .to_owned(),
-            ),
-            _ => None,
-        }
-    }
-
-    fn label_of(model: &SavePickerModel, row: usize) -> String {
-        String::from_utf16(&model.row_label_utf16(row)).expect("row label is valid UTF-16")
-    }
-
-    fn destination(dir: &str, files: usize) -> SavePickerModel {
-        destination_loading(dir, files, "Z:\\elsewhere\\ER0000.sl2")
-    }
-
-    /// A destination browse whose LOADED save is `loaded`, so the `[CURRENT]` marker has something
-    /// to point at. The default `destination` deliberately loads a save that is not in the listing.
-    fn destination_loading(dir: &str, files: usize, loaded: &str) -> SavePickerModel {
-        model_with(
-            PickerIntent::SaveDestination {
-                loaded_file_name: "ER0000.sl2".to_owned(),
-                loaded_path: PathBuf::from(loaded),
-            },
-            dir,
-            files,
-        )
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // SYNTHETIC SAVE CONTAINERS. Deterministic generators, never captured game bytes (repo rule:
-    // no game-derived binaries in tree, test fixtures included). They reproduce only the fields
-    // the readers under test actually parse: the BND4 header/entry index, `USER_DATA010`'s
-    // active-slot bytes, and a PlayerGameData block placed where the FACE-anchored locator scans.
-    // -----------------------------------------------------------------------------------------
-
-    /// PlayerGameData field offsets the plausibility core reads (`loading_cover_save_slot.rs`).
-    const PGD_HEALTH: usize = 0x08;
-    const PGD_MAX_HEALTH: usize = 0x0c;
-    const PGD_BASE_MAX_HEALTH: usize = 0x10;
-    const PGD_STAT_BASE: usize = 0x34;
-    const PGD_STAT_COUNT: usize = 8;
-    const PGD_LEVEL: usize = 0x60;
-    const PGD_NAME: usize = 0x94;
-    const PGD_GENDER: usize = 0xb6;
-    const PGD_MAX_CRIMSON: usize = 0xf9;
-    const PGD_MAX_CERULEAN: usize = 0xfa;
-    /// The locator finds `FACE` and scans back over `[face-0xa600, face-0xa000]`; putting the
-    /// block at exactly `face - 0xa000` makes the accepted offset the only plausible one, because
-    /// every other candidate reads zeros and fails the name/level checks.
-    const PGD_AT: usize = 0x100;
-    const FACE_AT: usize = PGD_AT + 0xa000;
-    const SLOT_BODY_BYTES: usize = FACE_AT + 0x10;
-    /// `USER_DATA010` body: a zero-length `CSMenuSystemSaveLoad` blob at `0x150`, so the 10
-    /// active-slot bytes sit at `0x154`.
-    const SYSTEM_BODY_BYTES: usize = 0x200;
-    const SYSTEM_MENU_SAVE_LOAD_LEN: usize = 0x150;
-    const SYSTEM_ACTIVE_SLOTS: usize = 0x154;
-
-    /// One character slot's plaintext body carrying a locatable, plausible character.
-    fn synthetic_slot_body(name: &str, level: u32) -> Vec<u8> {
-        let mut body = vec![0_u8; SLOT_BODY_BYTES];
-        body[FACE_AT..FACE_AT + 4].copy_from_slice(b"FACE");
-        let put32 = |body: &mut Vec<u8>, at: usize, v: u32| {
-            body[PGD_AT + at..PGD_AT + at + 4].copy_from_slice(&v.to_le_bytes());
-        };
-        put32(&mut body, PGD_HEALTH, 1000);
-        put32(&mut body, PGD_MAX_HEALTH, 1000);
-        put32(&mut body, PGD_BASE_MAX_HEALTH, 1000);
-        for index in 0..PGD_STAT_COUNT {
-            put32(&mut body, PGD_STAT_BASE + index * 4, 10);
-        }
-        put32(&mut body, PGD_LEVEL, level);
-        body[PGD_AT + PGD_GENDER] = 0;
-        body[PGD_AT + PGD_MAX_CRIMSON] = 4;
-        body[PGD_AT + PGD_MAX_CERULEAN] = 3;
-        for (index, unit) in name.encode_utf16().take(15).enumerate() {
-            let at = PGD_AT + PGD_NAME + index * 2;
-            body[at..at + 2].copy_from_slice(&unit.to_le_bytes());
-        }
-        body
-    }
-
-    /// A structurally complete BND4 save container. `slots[i]` is `Some((name, level))` for an
-    /// ACTIVE character slot and `None` for an inactive one; a `USER_DATA010` entry always carries
-    /// the resulting active-slot bytes.
-    fn synthetic_save_container(slots: &[Option<(&str, u32)>]) -> Vec<u8> {
-        const HEADER_LEN: usize = 0x40;
-        const ENTRY_STRIDE: usize = 0x20;
-        const MD5_LEN: usize = 0x10;
-        let mut bodies: Vec<(String, Vec<u8>)> = slots
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, present)| {
-                present.map(|(name, level)| {
-                    (
-                        format!("USER_DATA{slot:03}"),
-                        synthetic_slot_body(name, level),
-                    )
-                })
-            })
-            .collect();
-        let mut system = vec![0_u8; SYSTEM_BODY_BYTES];
-        system[SYSTEM_MENU_SAVE_LOAD_LEN..SYSTEM_MENU_SAVE_LOAD_LEN + 4]
-            .copy_from_slice(&0_u32.to_le_bytes());
-        for (slot, present) in slots.iter().enumerate().take(PICKER_ROW_COUNT) {
-            system[SYSTEM_ACTIVE_SLOTS + slot] = u8::from(present.is_some());
-        }
-        bodies.push(("USER_DATA010".to_owned(), system));
-
-        let names_at = HEADER_LEN + bodies.len() * ENTRY_STRIDE;
-        let name_blobs: Vec<Vec<u8>> = bodies
-            .iter()
-            .map(|(name, _)| {
-                let mut out: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
-                out.extend_from_slice(&[0, 0]);
-                out
-            })
-            .collect();
-        let data_at = names_at + name_blobs.iter().map(Vec::len).sum::<usize>();
-        let total = data_at
-            + bodies
-                .iter()
-                .map(|(_, body)| MD5_LEN + body.len())
-                .sum::<usize>();
-        let mut out = vec![0_u8; total];
-        out[..4].copy_from_slice(b"BND4");
-        out[0x0c..0x10].copy_from_slice(&(bodies.len() as i32).to_le_bytes());
-        out[0x10..0x18].copy_from_slice(&(HEADER_LEN as i64).to_le_bytes());
-        out[0x20..0x28].copy_from_slice(&(ENTRY_STRIDE as i64).to_le_bytes());
-        let mut name_cursor = names_at;
-        let mut data_cursor = data_at;
-        for (index, ((_, body), name_blob)) in bodies.iter().zip(&name_blobs).enumerate() {
-            let entry = HEADER_LEN + index * ENTRY_STRIDE;
-            let entry_size = MD5_LEN + body.len();
-            out[entry + 0x08..entry + 0x10].copy_from_slice(&(entry_size as i64).to_le_bytes());
-            out[entry + 0x10..entry + 0x14].copy_from_slice(&(data_cursor as i32).to_le_bytes());
-            out[entry + 0x14..entry + 0x18].copy_from_slice(&(name_cursor as i32).to_le_bytes());
-            out[name_cursor..name_cursor + name_blob.len()].copy_from_slice(name_blob);
-            name_cursor += name_blob.len();
-            let body_at = data_cursor + MD5_LEN;
-            out[body_at..body_at + body.len()].copy_from_slice(body);
-            data_cursor += entry_size;
-        }
-        out
-    }
-
-    /// An empty temp directory of our own, so a listing test sees exactly the files it wrote.
-    fn scratch_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("er-save-picker-accepts-{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
-        dir
-    }
-
-    fn write_file(dir: &Path, leaf: &str, bytes: &[u8]) -> PathBuf {
-        let path = dir.join(leaf);
-        std::fs::write(&path, bytes).expect("temp file must be writable");
-        path
-    }
-
-    const SL2: &[&str] = &["sl2"];
-
-    fn load(path: &Path) -> Result<Vec<crate::slots::SaveSlotInfo>, PickRejection> {
-        save_picker_accepts(path, &PickerIntent::LoadSource, SL2)
-    }
-
-    fn dest(path: &Path) -> Result<Vec<crate::slots::SaveSlotInfo>, PickRejection> {
-        save_picker_accepts(path, &dest_intent("Z:\\elsewhere\\ER0000.sl2"), SL2)
-    }
-
-    /// A destination intent loading `loaded`. The leaf is always `ER0000.sl2` because that is what
-    /// `[ new ]` writes; only the folder differs between these tests.
-    fn dest_intent(loaded: &str) -> PickerIntent {
-        PickerIntent::SaveDestination {
-            loaded_file_name: "ER0000.sl2".to_owned(),
-            loaded_path: PathBuf::from(loaded),
-        }
-    }
-
-    /// The generator has to actually produce a container the shipping reader accepts, or every
-    /// assertion built on it is vacuous.
-    #[test]
-    fn the_synthetic_container_parses_as_a_real_loadable_save() {
-        let bytes = synthetic_save_container(&[Some(("Tarnished", 42)), None, Some(("Second", 7))]);
-        assert!(er_save_loader::bnd4::parse_entries(&bytes).is_ok());
-        let chars = crate::slots::parse_save_character_slots(&bytes);
-        assert_eq!(
-            chars
-                .iter()
-                .map(|info| (info.slot, info.name.as_str(), info.level))
-                .collect::<Vec<_>>(),
-            vec![(0, "Tarnished", 42), (2, "Second", 7)]
-        );
-    }
-
-    #[test]
-    fn the_load_intent_rejects_everything_that_is_not_a_loadable_container() {
-        let dir = scratch_dir("load-rejects");
-        assert_eq!(load(&dir), Err(PickRejection::NotAFile));
-        assert_eq!(
-            load(&write_file(&dir, "notes.txt", b"not a save")),
-            Err(PickRejection::WrongExtension)
-        );
-        assert_eq!(
-            load(&write_file(&dir, "ER0000.bak", b"right name, wrong flavor")),
-            Err(PickRejection::WrongExtension)
-        );
-        assert_eq!(
-            load(&dir.join("absent.sl2")),
-            Err(PickRejection::NotAFile),
-            "a path that does not exist is not a load source"
-        );
-        let mut truncated = synthetic_save_container(&[Some(("Tarnished", 42))]);
-        truncated.truncate(0x20);
-        assert_eq!(
-            load(&write_file(&dir, "truncated.sl2", &truncated)),
-            Err(PickRejection::NotBnd4)
-        );
-        let slotless = synthetic_save_container(&[None, None]);
-        assert_eq!(
-            load(&write_file(&dir, "slotless.sl2", &slotless)),
-            Err(PickRejection::NoLoadableCharacter)
-        );
-        let level_zero = synthetic_save_container(&[Some(("Deleted", 0))]);
-        assert_eq!(
-            load(&write_file(&dir, "level0.sl2", &level_zero)),
-            Err(PickRejection::NoLoadableCharacter),
-            "a level-0 leftover fails the autoload's own real-character fingerprint"
-        );
-        let real = synthetic_save_container(&[Some(("Tarnished", 42))]);
-        let chars =
-            load(&write_file(&dir, "real.sl2", &real)).expect("a real save is a load source");
-        assert_eq!(chars.len(), 1);
-        assert_eq!(chars[0].name, "Tarnished");
-    }
-
-    /// THE INTENT ASYMMETRY, pinned. A destination is an overwrite target: it needs no loadable
-    /// character (hiding a slotless file would let `[ new ]` clobber it silently) and it need not
-    /// exist at all (`[ new ]` and Save-As both name a file that does not). Its FOLDER must exist.
-    #[test]
-    fn the_destination_intent_accepts_what_the_load_intent_refuses() {
-        let dir = scratch_dir("dest-accepts");
-        let slotless = write_file(
-            &dir,
-            "slotless.sl2",
-            &synthetic_save_container(&[None, None]),
-        );
-        assert_eq!(load(&slotless), Err(PickRejection::NoLoadableCharacter));
-        assert_eq!(
-            dest(&slotless),
-            Ok(Vec::new()),
-            "a slotless existing container is a legal overwrite target"
-        );
-        assert_eq!(
-            dest(&dir.join("brand-new.sl2")),
-            Ok(Vec::new()),
-            "a leaf that does not exist yet in an existing folder is a legal destination"
-        );
-        assert_eq!(
-            dest(&dir.join("gone").join("brand-new.sl2")),
-            Err(PickRejection::ParentMissing)
-        );
-        assert_eq!(
-            dest(&dir.join("wrong.co2")),
-            Err(PickRejection::WrongExtension),
-            "the flavor filter still applies to a destination"
-        );
-        assert_eq!(dest(&dir), Err(PickRejection::NotAFile));
-    }
-
-    /// CONTRACT 7: there is not a second notion of "valid save". Whatever the in-game listing shows
-    /// is exactly what the predicate accepts, in both intents -- so the OS dialog, which calls the
-    /// same predicate, cannot load a container the browser would have hidden.
-    #[test]
-    fn the_listing_and_the_predicate_agree_file_for_file() {
-        let dir = scratch_dir("listing-agreement");
-        let candidates = [
-            write_file(
-                &dir,
-                "real.sl2",
-                &synthetic_save_container(&[Some(("Ranni", 5))]),
-            ),
-            write_file(&dir, "slotless.sl2", &synthetic_save_container(&[None])),
-            write_file(&dir, "garbage.sl2", b"not bnd4 at all"),
-            write_file(&dir, "notes.txt", b"ignored"),
-        ];
-        for (intent, model) in [
-            (
-                PickerIntent::LoadSource,
-                SavePickerModel::open_with_extensions(&dir, SL2),
-            ),
-            (
-                dest_intent("Z:\\elsewhere\\ER0000.sl2"),
-                SavePickerModel::open_destination(
-                    &dir,
-                    SL2,
-                    "ER0000.sl2",
-                    Path::new("Z:\\elsewhere\\ER0000.sl2"),
-                ),
-            ),
-        ] {
-            let mut listed: Vec<PathBuf> = model
-                .entries
-                .iter()
-                .filter(|entry| matches!(entry, PickerEntry::File { .. }))
-                .map(|entry| entry.path().to_path_buf())
-                .collect();
-            let mut accepted: Vec<PathBuf> = candidates
-                .iter()
-                .filter(|path| save_picker_accepts(path, &intent, SL2).is_ok())
-                .cloned()
-                .collect();
-            listed.sort();
-            accepted.sort();
-            assert_eq!(
-                listed, accepted,
-                "the {intent:?} listing and the predicate disagree about which files are saves"
-            );
-        }
-    }
-
-    /// A directory that genuinely exists, so the drive-resume tests exercise the real existence
-    /// filter instead of an invented path. Returns `(created_dir, its drive root)`.
-    fn real_dir_and_root(tag: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("er-save-picker-{tag}"));
-        std::fs::create_dir_all(&dir).expect("temp dir must be creatable");
-        let mut root = dir.as_path();
-        while let Some(parent) = root.parent() {
-            if parent.as_os_str().is_empty() {
-                break;
-            }
-            root = parent;
-        }
-        (dir.clone(), root.to_path_buf())
-    }
-
-    /// `[ new ]` IS PINNED ABOVE THE NAVIGATION ROWS, not below them (moved 2026-07-31, when the
-    /// Save Game row press started opening this list with no confirm in front of it). Row 0 is the
-    /// index a freshly built native list highlights, and the row that belongs there is the one that
-    /// creates a file rather than one that replaces one.
-    #[test]
-    fn destination_pins_new_file_above_the_nav_rows_and_shifts_them_down() {
-        let model = destination("Z:\\saves", 3);
-        // No drive row here, and `Z:\saves` has a parent: `[ new ]` at 0, up at 1, entries from 2.
-        assert_eq!(model.new_file_row(), Some(0));
-        assert_eq!(model.parent_row(), Some(1));
-        assert_eq!(model.drive_row(), None);
-        assert_eq!(
-            model.row_meaning(0),
-            PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
-        );
-        assert_eq!(model.row_meaning(1), PickerRow::ParentDir);
-        for (offset, expected) in (0..3).enumerate() {
-            assert_eq!(
-                model.row_meaning(2 + offset),
-                PickerRow::File(PathBuf::from("Z:\\saves").join(format!("save{expected}.sl2")))
-            );
-        }
-        assert_eq!(model.row_meaning(5), PickerRow::Empty);
-        assert_eq!(model.visible_row_count(), 5);
-        // At a DRIVE ROOT there is no up row at all, so `[ new ]` is still 0 and entries follow it
-        // directly -- the pin is not "one above the up row", it is first, full stop.
-        let root = destination("Z:\\", 2);
-        assert_eq!(root.new_file_row(), Some(0));
-        assert_eq!(root.parent_row(), None);
-        assert_eq!(
-            root.row_meaning(1),
-            PickerRow::File(PathBuf::from("Z:\\").join("save0.sl2"))
-        );
-    }
-
-    /// REGRESSION: the per-row character info was read at `row - 1` while the row LABEL came from
-    /// `entry_row_base()`, so in destination intent every row showed the character info of the file
-    /// one entry further down and the pinned `[ new ]` row showed the first file's info. Pin the
-    /// invariant that matters -- the text a row renders describes that row's OWN file -- across
-    /// BOTH intents AND with the drive row present, which is the layout shift most likely to
-    /// reintroduce it.
-    #[test]
-    fn row_character_info_belongs_to_that_rows_own_file() {
-        for model in [
-            destination("Z:\\saves", 3),
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
-            with_drives(destination("Z:\\saves", 3), &["C:\\", "Z:\\"]),
-            with_drives(
-                model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
-                &["C:\\", "Z:\\"],
-            ),
-            // At a drive root there is no up row, so the entry base shifts down by one.
-            with_drives(
-                model_with(PickerIntent::LoadSource, "Z:\\", 3),
-                &["C:\\", "Z:\\"],
-            ),
-        ] {
-            let mut file_rows = 0;
-            for row in 0..PICKER_ROW_COUNT {
-                match row_label_file(&model, row) {
-                    Some(file) => {
-                        // "save2.sl2" must render "char2", never a neighbour's character.
-                        let idx = file
-                            .trim_start_matches("save")
-                            .trim_end_matches(".sl2")
-                            .to_owned();
-                        assert_eq!(
-                            row_char_name(&model, row),
-                            Some(format!("char{idx}")),
-                            "row {row} labelled {file} rendered another file's character"
-                        );
-                        file_rows += 1;
-                    }
-                    // Every non-file row (up, drive, [ new ], page cycler, placeholder) must render
-                    // no character info at all, or it shows junk borrowed from a real file.
-                    None => assert_eq!(
-                        row_char_name(&model, row),
-                        None,
-                        "non-file row {row} rendered character info"
-                    ),
-                }
-            }
-            assert_eq!(file_rows, 3, "expected all three files to occupy rows");
-        }
-    }
-
-    /// Only a save-FILE row is backed by a file, so only a File row has a last-saved time to show.
-    /// Enumerated per kind so the decision is pinned independently of any layout.
-    #[test]
-    fn only_file_rows_have_a_last_saved_time() {
-        let path = PathBuf::from("Z:\\saves\\save0.sl2");
-        assert!(picker_row_has_last_saved_time(&PickerRow::File(
-            path.clone()
-        )));
-        for row in [
-            PickerRow::ParentDir,
-            PickerRow::DriveCycle,
-            PickerRow::AtRoot,
-            PickerRow::Dir(PathBuf::from("Z:\\saves\\sub")),
-            PickerRow::NewFile(path),
-            PickerRow::NextPage,
-            PickerRow::Empty,
-        ] {
-            assert!(
-                !picker_row_has_last_saved_time(&row),
-                "{row:?} is backed by no file, so it has no last-saved time"
-            );
-        }
-    }
-
-    /// On a real layout the timestamp decision must agree with the row's own label and character
-    /// info, across both intents and with the drive row present: exactly the file rows carry one,
-    /// and each carries ITS OWN file's stamp rather than a neighbour's.
-    #[test]
-    fn last_saved_time_agrees_with_the_rows_own_file() {
-        for model in [
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
-            destination("Z:\\saves", 3),
-            with_drives(
-                model_with(PickerIntent::LoadSource, "Z:\\saves", 3),
-                &["C:\\", "Z:\\"],
-            ),
-            with_drives(destination("Z:\\", 3), &["C:\\", "Z:\\"]),
-            // Long enough to need the page cycler, which carries no timestamp either.
-            model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4),
-        ] {
-            let mut dated = 0;
-            for row in 0..PICKER_ROW_COUNT {
-                let is_file = row_label_file(&model, row).is_some();
-                assert_eq!(
-                    picker_row_has_last_saved_time(&model.row_meaning(row)),
-                    is_file,
-                    "row {row} ({:?}) disagrees with its label about being a save file",
-                    model.row_meaning(row)
-                );
-                assert_eq!(
-                    is_file,
-                    model.row_file_characters(row).is_some(),
-                    "row {row} ({:?}) disagrees with its character info",
-                    model.row_meaning(row)
-                );
-                // `model_with` stamps file `idx` at epoch + idx minutes, so the stamp a row renders
-                // proves WHICH file it read -- the same own-file property the character info has.
-                match (row_label_file(&model, row), model.row_last_saved(row)) {
-                    (Some(file), Some(stamp)) => {
-                        let idx: u64 = file
-                            .trim_start_matches("save")
-                            .trim_end_matches(".sl2")
-                            .parse()
-                            .expect("test file names carry their index");
-                        assert_eq!(
-                            stamp,
-                            SystemTime::UNIX_EPOCH + Duration::from_secs(idx * 60),
-                            "row {row} labelled {file} rendered another file's timestamp"
-                        );
-                        dated += 1;
-                    }
-                    (Some(file), None) => panic!("file row {row} ({file}) lost its timestamp"),
-                    (None, Some(_)) => panic!("non-file row {row} produced a timestamp"),
-                    (None, None) => {}
-                }
-            }
-            assert!(dated > 0, "at least one file row must carry a timestamp");
-        }
-    }
-
-    /// A file whose metadata the listing build could not read renders NOTHING -- never a fabricated
-    /// or epoch-zero date.
-    #[test]
-    fn a_file_without_metadata_has_no_last_saved_time() {
-        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
-        for entry in &mut model.entries {
-            if let PickerEntry::File { modified, .. } = entry {
-                *modified = None;
-            }
-        }
-        let base = model.entry_row_base();
-        assert!(matches!(model.row_meaning(base), PickerRow::File(_)));
-        assert_eq!(model.row_last_saved(base), None);
-    }
-
-    /// Known epochs, including the leap-year cases an off-by-one in the era algorithm breaks first.
-    #[test]
-    fn civil_time_matches_known_epochs() {
-        let cases: [(i64, (i64, u32, u32, u32, u32)); 8] = [
-            (0, (1970, 1, 1, 0, 0)),
-            (86_399, (1970, 1, 1, 23, 59)),
-            (86_400, (1970, 1, 2, 0, 0)),
-            // 2000-02-29 12:00: leap year by the 400-rule.
-            (951_825_600, (2000, 2, 29, 12, 0)),
-            // 2100-02-28 then 2100-03-01, one day apart: 2100 is NOT a leap year (100-rule), so a
-            // date the 4-rule alone would place on 2100-02-29 must not exist.
-            (4_107_456_000, (2100, 2, 28, 0, 0)),
-            (4_107_542_400, (2100, 3, 1, 0, 0)),
-            (1_785_312_180, (2026, 7, 29, 8, 3)),
-            // Just under the signed-32-bit epoch limit, which this i64 arithmetic must not care
-            // about.
-            (2_147_483_640, (2038, 1, 19, 3, 14)),
-        ];
-        for (secs, (year, month, day, hour, minute)) in cases {
-            assert_eq!(
-                civil_from_unix_seconds(secs),
-                Some(CivilDateTime {
-                    year,
-                    month,
-                    day,
-                    hour,
-                    minute
-                }),
-                "epoch {secs}"
-            );
-        }
-        assert_eq!(civil_from_unix_seconds(-1), None, "pre-epoch is not a date");
-    }
-
-    /// The rendered text, and the DST boundary the offset has to carry: US Pacific springs forward
-    /// at 2026-03-08 10:00 UTC, so one minute of real time crosses from -08:00 to -07:00 and the
-    /// local clock jumps 01:59 -> 03:00. Passing the two offsets that boundary switches between is
-    /// exactly how the OS-supplied offset behaves, so this pins the arithmetic without a machine
-    /// timezone.
-    #[test]
-    fn last_saved_renders_local_time_across_a_dst_boundary() {
-        const PST: i64 = -8 * 3_600;
-        const PDT: i64 = -7 * 3_600;
-        // 2026-03-08 09:59:00 UTC, still PST.
-        assert_eq!(
-            format_last_saved(1_772_963_940, PST).as_deref(),
-            Some("2026-03-08 01:59")
-        );
-        // 2026-03-08 10:00:00 UTC, one minute later, now PDT: the wall clock skips 02:00.
-        assert_eq!(
-            format_last_saved(1_772_964_000, PDT).as_deref(),
-            Some("2026-03-08 03:00")
-        );
-        // The same instant in UTC and east of Greenwich, to pin the sign of the offset.
-        assert_eq!(
-            format_last_saved(1_772_964_000, 0).as_deref(),
-            Some("2026-03-08 10:00")
-        );
-        assert_eq!(
-            format_last_saved(1_772_964_000, 2 * 3_600).as_deref(),
-            Some("2026-03-08 12:00")
-        );
-        // An offset that would push the instant before the epoch renders nothing.
-        assert_eq!(format_last_saved(60, -3_600), None);
-    }
-
-    /// The drive cycler must be excluded from entry indexing in BOTH intents: it shifts the entry
-    /// base by exactly one and never resolves to an entry itself.
-    #[test]
-    fn drive_row_is_excluded_from_entry_indexing_in_both_intents() {
-        let load = with_drives(
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 2),
-            &["C:\\", "Z:\\"],
-        );
-        assert_eq!(load.drive_row(), Some(1));
-        assert_eq!(load.row_meaning(1), PickerRow::DriveCycle);
-        assert_eq!(load.row_file_characters(1), None);
-        assert_eq!(
-            load.row_meaning(2),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2")),
-            "the first entry must sit directly under the drive row"
-        );
-
-        // Destination layout: `[ new ]` is PINNED at row 0, so the up row and the cycler each
-        // shift down by one and the entries start at 3.
-        let dest = with_drives(destination("Z:\\saves", 2), &["C:\\", "Z:\\"]);
-        assert_eq!(dest.new_file_row(), Some(0));
-        assert_eq!(dest.parent_row(), Some(1));
-        assert_eq!(dest.drive_row(), Some(2));
-        assert_eq!(
-            dest.row_meaning(0),
-            PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2"))
-        );
-        assert_eq!(dest.row_meaning(1), PickerRow::ParentDir);
-        assert_eq!(dest.row_meaning(2), PickerRow::DriveCycle);
-        assert_eq!(dest.row_file_characters(0), None);
-        assert_eq!(dest.row_file_characters(2), None);
-        assert_eq!(
-            dest.row_meaning(3),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2"))
-        );
-        // Adding the drive row costs exactly one entry row per page, in each intent, once the
-        // listing is long enough for the per-page capacity to bind.
-        let long = PICKER_ROW_COUNT * 2;
-        assert_eq!(
-            model_with(PickerIntent::LoadSource, "Z:\\saves", long).entries_per_page(),
-            8
-        );
-        assert_eq!(
-            with_drives(
-                model_with(PickerIntent::LoadSource, "Z:\\saves", long),
-                &["C:\\", "Z:\\"]
-            )
-            .entries_per_page(),
-            7
-        );
-        assert_eq!(destination("Z:\\saves", long).entries_per_page(), 7);
-        assert_eq!(
-            with_drives(destination("Z:\\saves", long), &["C:\\", "Z:\\"]).entries_per_page(),
-            6
-        );
-    }
-
-    /// Activating the drive row must reach EVERY enumerated drive and wrap back to the start, since
-    /// the native window gives us no backward direction.
-    #[test]
-    fn activating_the_drive_row_reaches_every_drive_and_wraps() {
-        let roots = ["C:\\", "S:\\", "Z:\\"];
-        let mut model = with_drives(model_with(PickerIntent::LoadSource, "C:\\", 0), &roots);
-        let drive_row = model
-            .drive_row()
-            .expect("three drives must add a drive row");
-        assert_eq!(drive_row, 0, "a drive root has no up row above the cycler");
-        let mut seen = vec![model.current_dir().to_path_buf()];
-        for _ in 0..roots.len() {
-            assert_eq!(model.row_meaning(drive_row), PickerRow::DriveCycle);
-            assert_eq!(model.activate(drive_row), PickerActivation::Repopulate);
-            seen.push(model.current_dir().to_path_buf());
-        }
-        let expected: Vec<PathBuf> = ["C:\\", "S:\\", "Z:\\", "C:\\"]
-            .iter()
-            .map(PathBuf::from)
-            .collect();
-        assert_eq!(seen, expected, "one activation per drive, wrapping");
-    }
-
-    /// The drive row's label names the current drive AND the one activation moves to, and fits the
-    /// ProfileSummary name budget with no comma in it.
-    #[test]
-    fn drive_row_label_names_both_drives_and_fits_the_name_budget() {
-        let model = with_drives(
-            model_with(PickerIntent::LoadSource, "C:\\users", 0),
-            &["C:\\", "S:\\", "Z:\\"],
-        );
-        let row = model.drive_row().expect("drive row");
-        let label = label_of(&model, row);
-        assert_eq!(label, "[ C: > S: ]");
-        assert!(model.row_label_utf16(row).len() <= PICKER_ROW_NAME_UTF16_MAX);
-        assert!(!label.contains(','), "row labels must be comma-safe");
-    }
-
-    /// Cycling drives must RESUME the folder last browsed on the drive being returned to, instead
-    /// of dumping the user at the drive root every time -- that resume is what makes the row useful
-    /// for moving a save between two directories on different drives.
-    #[test]
-    fn cycling_drives_resumes_each_drives_remembered_folder() {
-        let (real_dir, real_root) = real_dir_and_root("resume");
-        // Second drive is a letter that cannot be mounted here, so "never visited" is guaranteed.
-        let other_root = PathBuf::from("Q:\\");
-        let mut model = with_drives(
-            model_with(PickerIntent::LoadSource, "unused", 0),
-            &[
-                real_root.to_string_lossy().as_ref(),
-                other_root.to_string_lossy().as_ref(),
-            ],
-        );
-        model.current_dir = real_dir.clone();
-
-        // Leaving the real drive records where we were; the unvisited drive opens at its root.
-        model.cycle_drive(true);
-        assert_eq!(model.current_dir(), other_root.as_path());
-        assert_eq!(
-            model.last_dir_per_drive.get(&real_root),
-            Some(&real_dir),
-            "the folder being left must be remembered against its own drive"
-        );
-
-        // Coming back RESUMES that folder instead of the drive root -- the whole point.
-        model.cycle_drive(true);
-        assert_eq!(model.current_dir(), real_dir.as_path());
-    }
-
-    /// A remembered folder that has since vanished must fall back to the drive root rather than
-    /// browsing a dead path.
-    #[test]
-    fn cycling_drives_falls_back_to_the_root_when_the_remembered_folder_is_gone() {
-        let (real_dir, real_root) = real_dir_and_root("vanished");
-        let other_root = PathBuf::from("Q:\\");
-        let mut model = with_drives(
-            model_with(PickerIntent::LoadSource, "unused", 0),
-            &[
-                real_root.to_string_lossy().as_ref(),
-                other_root.to_string_lossy().as_ref(),
-            ],
-        );
-        model.current_dir = real_dir.clone();
-        model.cycle_drive(true);
-        assert_eq!(model.current_dir(), other_root.as_path());
-
-        // The folder is remembered, but it is gone by the time we cycle back.
-        std::fs::remove_dir_all(&real_dir).expect("temp dir must be removable");
-        model.cycle_drive(true);
-        assert_eq!(
-            model.current_dir(),
-            real_root.as_path(),
-            "a remembered folder that no longer exists must fall back to the drive root"
-        );
-        // The memory is still recorded, so the fallback is about resolvability, not forgetting.
-        assert_eq!(model.last_dir_per_drive.get(&real_root), Some(&real_dir));
-    }
-
-    /// With fewer than two drives there is no cycler row at all, and the cycle call is inert.
-    #[test]
-    fn a_single_drive_adds_no_cycler_row() {
-        let mut model = with_drives(
-            model_with(PickerIntent::LoadSource, "Z:\\home\\banon", 0),
-            &["Z:\\"],
-        );
-        assert_eq!(model.drive_row(), None);
-        assert_eq!(model.drive_count(), 1);
-        model.cycle_drive(true);
-        assert_eq!(model.current_dir(), Path::new("Z:\\home\\banon"));
-        // Only the up row is fixed, so all nine remaining rows stay available to entries.
-        assert_eq!(model.max_entries_single_page(), PICKER_ROW_COUNT - 1);
-    }
-
-    /// The `[..]` row names the folder it goes TO, not just the direction, and truncates rather
-    /// than overflowing the record's name field.
-    #[test]
-    fn up_row_label_names_the_parent_folder() {
-        let model = model_with(
-            PickerIntent::LoadSource,
-            "Z:\\home\\banon\\Roaming\\deep",
-            0,
-        );
-        let up = model.parent_row().expect("a nested folder has an up row");
-        assert_eq!(up, 0, "a load browse pins nothing above the up row");
-        assert_eq!(label_of(&model, up), "[..] Roaming");
-        let long = model_with(
-            PickerIntent::LoadSource,
-            "Z:\\a-very-long-folder-name-indeed\\child",
-            0,
-        );
-        let long_up = long.parent_row().expect("a nested folder has an up row");
-        assert!(long.row_label_utf16(long_up).len() <= PICKER_ROW_NAME_UTF16_MAX);
-        // Same row, one index lower, in a destination browse: the label is derived from
-        // `parent_row()` rather than a constant, so pinning `[ new ]` above it moved nothing else.
-        let dest = destination("Z:\\home\\banon\\Roaming\\deep", 0);
-        assert_eq!(dest.parent_row(), Some(1));
-        assert_eq!(label_of(&dest, 1), "[..] Roaming");
-    }
-
-    /// Rows beyond the listing must be reported as NOT visible, so the staging layer marks their
-    /// native slots unoccupied and the builder omits them -- that is what stops a short listing
-    /// rendering placeholder rows with a name, `Level 0` and `0:00:00`.
-    #[test]
-    fn rows_beyond_the_listing_are_outside_the_visible_count() {
-        // Load source, two files, up row, no drive row: up + 2 entries = 3 visible rows.
-        let load = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
-        assert_eq!(load.visible_row_count(), 3);
-        for row in load.visible_row_count()..PICKER_ROW_COUNT {
-            assert_eq!(load.row_meaning(row), PickerRow::Empty);
-            assert!(load.row_label_utf16(row).is_empty());
-        }
-        // Destination, drive row, one file: [ new ] + up + drive + 1 entry = 4 visible rows.
-        let dest = with_drives(destination("Z:\\saves", 1), &["C:\\", "Z:\\"]);
-        assert_eq!(dest.visible_row_count(), 4);
-        for row in dest.visible_row_count()..PICKER_ROW_COUNT {
-            assert_eq!(dest.row_meaning(row), PickerRow::Empty);
-            assert!(dest.row_label_utf16(row).is_empty());
-        }
-        // A page cycler is INSIDE the visible count -- it must never be dropped as a placeholder.
-        let paged = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4);
-        let pager = paged.next_page_row().expect("overflowing listing pages");
-        assert!(pager < paged.visible_row_count());
-        assert_eq!(paged.row_meaning(pager), PickerRow::NextPage);
-        assert_eq!(paged.visible_row_count(), PICKER_ROW_COUNT);
-    }
-
-    /// Every visible row must carry a non-empty label: the native staging marks visible slots
-    /// occupied, and an occupied slot with an empty name would fail the empty-slot activation
-    /// guard. Checked across the layouts that move the row boundaries.
-    #[test]
-    fn every_visible_row_has_a_non_empty_label() {
-        for model in [
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 0),
-            model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 4),
-            with_drives(destination("Z:\\", 0), &["C:\\", "Z:\\"]),
-            with_drives(destination("Z:\\saves", 9), &["C:\\", "S:\\", "Z:\\"]),
-            model_with(PickerIntent::LoadSource, "Z:\\", 0),
-        ] {
-            for row in 0..model.visible_row_count() {
-                assert!(
-                    !model.row_label_utf16(row).is_empty(),
-                    "visible row {row} has an empty label in {:?} (visible={})",
-                    model.current_dir(),
-                    model.visible_row_count()
-                );
-                assert!(model.row_label_utf16(row).len() <= PICKER_ROW_NAME_UTF16_MAX);
-            }
-        }
-    }
-
-    /// A listing that fits uses every remaining row; one entry more spends a row on the cycler.
-    #[test]
-    fn the_page_cycler_appears_only_when_the_listing_overflows() {
-        let fits = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT - 1);
-        assert_eq!(fits.page_count(), 1);
-        assert_eq!(fits.next_page_row(), None);
-        assert_eq!(fits.entries_per_page(), PICKER_ROW_COUNT - 1);
-
-        let overflows = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
-        assert_eq!(overflows.entries_per_page(), PICKER_ROW_COUNT - 2);
-        assert_eq!(overflows.page_count(), 2);
-        assert_eq!(overflows.next_page_row(), Some(PICKER_ROW_COUNT - 1));
-        // Second page holds the remainder, and the cycler moves up to sit under the last entry.
-        let mut overflows = overflows;
-        overflows.cycle_page(true);
-        assert_eq!(
-            overflows.row_meaning(1),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save8.sl2"))
-        );
-        assert_eq!(overflows.next_page_row(), Some(3));
-        assert_eq!(overflows.row_meaning(3), PickerRow::NextPage);
-        assert_eq!(overflows.visible_row_count(), 4);
-    }
-
-    #[test]
-    fn load_source_layout_is_unaffected_by_the_destination_intent() {
-        let model = model_with(PickerIntent::LoadSource, "Z:\\saves", 8);
-        assert_eq!(model.new_file_row(), None);
-        assert_eq!(model.page_count(), 1);
-        assert_eq!(
-            model.row_meaning(1),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save0.sl2"))
-        );
-        assert_eq!(
-            model.row_meaning(8),
-            PickerRow::File(PathBuf::from("Z:\\saves").join("save7.sl2"))
-        );
-        assert_eq!(model.row_meaning(9), PickerRow::Empty);
-    }
-
-    /// THE DESTINATION CURSOR STARTS ON `[ new ]`, IN EVERY LAYOUT. Since the Save Game row press
-    /// opens this browser with no question in front of it, the row the cursor rests on is the
-    /// answer a user gets for pressing confirm twice without reading -- so it must be the row that
-    /// creates rather than the row that replaces. Checked with entries present and absent, with and
-    /// without a drive row, and at a drive root where there is no up row at all.
-    #[test]
-    fn a_destination_browse_always_starts_the_cursor_on_new_file() {
-        for model in [
-            destination("Z:\\saves", 0),
-            destination("Z:\\saves", 3),
-            with_drives(destination("Z:\\saves", 0), &["C:\\", "Z:\\"]),
-            with_drives(destination("Z:\\saves", 5), &["C:\\", "S:\\", "Z:\\"]),
-            with_drives(destination("Z:\\", 2), &["C:\\", "Z:\\"]),
-            destination("Z:\\", 0),
-        ] {
-            let mut model = model;
-            model.cursor = model.first_selectable_row();
-            assert_eq!(
-                model.new_file_row(),
-                Some(0),
-                "`[ new ]` is pinned first in {:?}",
-                model.current_dir()
-            );
-            assert_eq!(
-                model.cursor,
-                0,
-                "the destination cursor must start on `[ new ]` in {:?}",
-                model.current_dir()
-            );
-            let expected = model.current_dir().join("ER0000.sl2");
-            assert_eq!(
-                model.activate_cursor(),
-                PickerActivation::PickedNewFile(expected)
-            );
-        }
-    }
-
-    /// On an EMPTY drive the initial cursor must still land on a real, selectable row.
-    #[test]
-    fn first_selectable_row_is_sane_on_an_empty_drive() {
-        // Empty drive root WITH somewhere else to go: the cycler is the only row, and the cursor
-        // must land on it so the user is not stranded.
-        let multi = with_drives(
-            model_with(PickerIntent::LoadSource, "Z:\\", 0),
-            &["C:\\", "Z:\\"],
-        );
-        assert_eq!(multi.visible_row_count(), 1);
-        assert_eq!(multi.first_selectable_row(), 0);
-        assert_eq!(multi.row_meaning(0), PickerRow::DriveCycle);
-
-        // Empty drive root with nowhere to go: one `[ root ]` row rather than a zero-row native
-        // list, and the cursor lands on it.
-        let alone = with_drives(model_with(PickerIntent::LoadSource, "Z:\\", 0), &["Z:\\"]);
-        assert_eq!(alone.visible_row_count(), 1);
-        assert_eq!(alone.first_selectable_row(), 0);
-        assert_eq!(alone.row_meaning(0), PickerRow::AtRoot);
-        assert_eq!(label_of(&alone, 0), "[ root ]");
-
-        // Empty SUBdirectory: nothing actionable below the nav rows, so fall back to the up row.
-        let empty_dir = with_drives(
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 0),
-            &["C:\\", "Z:\\"],
-        );
-        assert_eq!(empty_dir.visible_row_count(), 2);
-        assert_eq!(empty_dir.first_selectable_row(), 0);
-        assert_eq!(empty_dir.row_meaning(0), PickerRow::ParentDir);
-    }
-
-    #[test]
-    fn new_file_row_label_fits_the_profile_summary_name_budget() {
-        let model = destination("Z:\\saves", 0);
-        let row = model
-            .new_file_row()
-            .expect("destination pins a [ new ] row");
-        let label = model.row_label_utf16(row);
-        assert!(!label.is_empty() && label.len() <= PICKER_ROW_NAME_UTF16_MAX);
-        assert_eq!(String::from_utf16(&label).unwrap(), PICKER_NEW_FILE_LABEL);
-    }
-
-    /// EXACTLY ONE ROW IS `[CURRENT]`, and it is the row whose file the user is playing. With the
-    /// up-front "Overwrite your loaded save?" box gone, finding that row IS the overwrite-my-own-
-    /// save flow, so a marker on the wrong row (or on none) sends the user to the wrong file.
-    #[test]
-    fn only_the_loaded_saves_row_is_marked_current() {
-        let dir = "Z:\\saves";
-        let model = destination_loading(dir, 4, "Z:\\saves\\save2.sl2");
-        let marked: Vec<usize> = (0..PICKER_ROW_COUNT)
-            .filter(|&row| model.row_is_loaded_save(row))
-            .collect();
-        let base = model.entry_row_base();
-        assert_eq!(
-            marked,
-            vec![base + 2],
-            "only save2.sl2's row may be marked (entries start at row {base})"
-        );
-        assert_eq!(
-            row_label_file(&model, base + 2).as_deref(),
-            Some("save2.sl2"),
-            "the marked row must be the one whose LABEL names the loaded file"
-        );
-    }
-
-    /// The marker is a Windows path compare, so it must survive case differences -- `ER0000.SL2`
-    /// and `er0000.sl2` are one file there, and a case-sensitive compare would leave a user's own
-    /// save unmarked in the list they are being asked to find it in.
-    #[test]
-    fn the_current_marker_ignores_path_case() {
-        let model = destination_loading("Z:\\saves", 2, "z:\\SAVES\\SAVE1.SL2");
-        let row = model.entry_row_base() + 1;
-        assert_eq!(row_label_file(&model, row).as_deref(), Some("save1.sl2"));
-        assert!(model.row_is_loaded_save(row));
-    }
-
-    /// NOTHING is marked when the loaded save is not in the browsed folder, and NOTHING is ever
-    /// marked in a load browse -- there is no "current" there, and a marker would be a claim the
-    /// model cannot support.
-    #[test]
-    fn no_row_is_marked_current_without_a_matching_loaded_save() {
-        for model in [
-            destination("Z:\\saves", 4),
-            model_with(PickerIntent::LoadSource, "Z:\\saves", 4),
-        ] {
-            for row in 0..PICKER_ROW_COUNT {
-                assert!(
-                    !model.row_is_loaded_save(row),
-                    "row {row} was marked current in {:?}",
-                    model.intent
-                );
-            }
-        }
-    }
-
-    /// The marker never lands on a non-file row: `[ new ]` resolves to the loaded save's own leaf,
-    /// and in the loaded save's own folder that path IS the loaded save -- but `[ new ]` is an
-    /// ACTION row, not the file's row, and marking it would put `[CURRENT]` on two rows at once.
-    #[test]
-    fn the_new_file_row_is_never_marked_current_even_when_it_targets_the_loaded_save() {
-        let model = destination_loading("Z:\\saves", 2, "Z:\\saves\\ER0000.sl2");
-        let new_row = model.new_file_row().expect("destination pins [ new ]");
-        assert_eq!(
-            model.row_meaning(new_row),
-            PickerRow::NewFile(PathBuf::from("Z:\\saves").join("ER0000.sl2")),
-            "the row targets exactly the loaded save's path"
-        );
-        assert!(
-            !model.row_is_loaded_save(new_row),
-            "`[ new ]` is an action row; only a File row may be marked"
-        );
-    }
-
-    #[test]
-    fn rejection_reasons_have_distinct_visible_copy() {
-        assert_eq!(
-            PickRejection::NotBnd4.status_message("SL2").headline(),
-            "NOT AN ELDEN RING SAVE"
-        );
-        assert_eq!(
-            PickRejection::NoLoadableCharacter
-                .status_message("SL2")
-                .headline(),
-            "NO LOADABLE CHARACTER"
-        );
-        let wrong_type = PickRejection::WrongExtension.status_message("CO2/.SL2");
-        assert_eq!(wrong_type.headline(), "WRONG FILE TYPE");
-        assert!(
-            wrong_type.detail().contains(".CO2/.SL2"),
-            "the visible reason must name the accepted extension set"
-        );
-    }
-
-    #[test]
-    fn picker_status_survives_rejection_and_clears_on_navigation() {
-        let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 2);
-        model.set_status_message(PickerStatusMessage::new(
-            "WRONG SAVE SIZE",
-            "Expected a full container.",
-        ));
-        assert_eq!(
-            model.status_message().map(PickerStatusMessage::headline),
-            Some("WRONG SAVE SIZE")
-        );
-
-        assert_eq!(model.activate(0), PickerActivation::Repopulate);
-        assert!(
-            model.status_message().is_none(),
-            "moving to another folder must not carry a stale rejection"
-        );
-    }
-
-    #[test]
-    fn picker_status_clears_on_direct_page_drive_and_up_navigation() {
-        let mut paged = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT);
-        paged.set_status_message(PickerStatusMessage::new(
-            "NO LOADABLE CHARACTER",
-            "Pick another save.",
-        ));
-        paged.cycle_page(true);
-        assert!(
-            paged.status_message().is_none(),
-            "direct page cycling must not carry a stale rejection"
-        );
-
-        let (real_dir, real_root) = real_dir_and_root("status-clear-drive");
-        let other_root = PathBuf::from("Q:\\");
-        let mut drive = with_drives(
-            model_with(PickerIntent::LoadSource, "unused", 0),
-            &[
-                real_root.to_string_lossy().as_ref(),
-                other_root.to_string_lossy().as_ref(),
-            ],
-        );
-        drive.current_dir = real_dir.clone();
-        drive.set_status_message(PickerStatusMessage::new(
-            "WRONG FILE TYPE",
-            "Pick another file.",
-        ));
-        drive.cycle_drive(true);
-        assert!(
-            drive.status_message().is_none(),
-            "direct drive cycling must not carry a stale rejection"
-        );
-
-        let child = real_dir.join("child");
-        std::fs::create_dir_all(&child).expect("temp child dir must be creatable");
-        let mut up = model_with(
-            PickerIntent::LoadSource,
-            child.to_string_lossy().as_ref(),
-            0,
-        );
-        up.set_status_message(PickerStatusMessage::new(
-            "UNREADABLE SAVE",
-            "Pick another file.",
-        ));
-        up.go_up();
-        assert!(
-            up.status_message().is_none(),
-            "direct up navigation must not carry a stale rejection"
-        );
-    }
-}
+mod tests;
 
 /// The active picker instance, shared between the open path (menu action) and the activation
 /// hook. `None` when no in-game picker is open. Sites: System>Quit picker and the startup

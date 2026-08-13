@@ -635,6 +635,36 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_SLOT_INFO_NON_DISPLAY.load(Ordering::SeqCst),
         PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.load(Ordering::SeqCst) as isize
     ));
+    // WHOSE MENU EACH SUMMARY POPULATE BELONGED TO. `CS::MenuSaveDataSummary`'s populate is shared by
+    // every character-summary surface, the game's own System>Quit `GameEnd` panel included, so
+    // `_foreign` > 0 with `_missing_field` > 0 is this mod correctly declining to draw on a movie it
+    // never edited. `_own` is the ProfileSelect rows it does own. `_own` at zero while the profile
+    // list is on screen would mean the probe field stopped resolving, i.e. the GFX edit is not live.
+    body.push_str(&format!(
+        "  \"oracle_profile_own_summary_rows\": {},\n  \"oracle_profile_foreign_summary_rows\": {},\n  \"oracle_profile_stats_push_missing_field\": {},\n",
+        PROFILE_OWN_SUMMARY_ROWS.load(Ordering::SeqCst),
+        PROFILE_FOREIGN_SUMMARY_ROWS.load(Ordering::SeqCst),
+        PROFILE_STATS_PUSH_MISSING_FIELD.load(Ordering::SeqCst)
+    ));
+    // LIVE-EDITOR SAFETY GATE. `_window_run_ticks` rises once per rendered frame of the
+    // ProfileSelect view; `_deferred_applies` counts web-UI edits the frame thread refused to write
+    // while that view was on screen, leaving them for the in-band row populate. Deferrals are the
+    // guard working: each one is a crash that did not happen.
+    body.push_str(&format!(
+        "  \"oracle_profile_select_window_run_ticks\": {},\n  \"oracle_profile_editor_deferred_applies\": {},\n",
+        er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
+        er_telemetry::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
+    ));
+    // DO THE ROWS DESCRIBE THE SAVE ON SCREEN? The per-slot name/attribute caches were a
+    // process-lifetime latch, so a session's first save described every row forever. `_reloads`
+    // counts refills from the picker's own bytes when a save is previewed; `_invalidations` counts
+    // drops when that preview is withdrawn. Both at zero after a save swap means the rows are
+    // describing a save the user is no longer looking at.
+    body.push_str(&format!(
+        "  \"oracle_profile_slot_cache_preview_reloads\": {},\n  \"oracle_profile_slot_cache_invalidations\": {},\n",
+        er_telemetry::counters::PROFILE_SLOT_CACHE_PREVIEW_RELOADS.load(Ordering::SeqCst),
+        er_telemetry::counters::PROFILE_SLOT_CACHE_INVALIDATIONS.load(Ordering::SeqCst)
+    ));
     // Save-file rows showing when the file was last written in place of the native playtime.
     // `_rows` > 0 proves the row model carried our text into the native populate; `_stage_failures`
     // > 0 means the model field was unreadable and the row kept the game's own playtime string.
@@ -718,6 +748,25 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         FULLREAD_REQ_DISARM_COUNT.load(Ordering::SeqCst),
         FULLREAD_REQ_DISARM_LAST_PREV_SLOT.load(Ordering::SeqCst) as u32 as i32
     ));
+    // LoadGame builder slot override. `overrides` > 0 means the save container's stored last-used
+    // slot disagreed with the user's pick and we redirected the job to the pick -- i.e. the wrong
+    // character WOULD have loaded. `last_native_slot` is the slot we replaced (u32-packed i32).
+    // Read with `game_save_slot` / `oracle_char_name`: a correct run has the picked character in
+    // world, and `overrides` tells you whether the container tried to send you elsewhere.
+    body.push_str(&format!(
+        "  \"oracle_loadgame_builder_slot_overrides\": {},\n  \"oracle_loadgame_builder_last_native_slot\": {},\n",
+        LOADGAME_BUILDER_SLOT_OVERRIDES.load(Ordering::SeqCst),
+        LOADGAME_BUILDER_LAST_NATIVE_SLOT.load(Ordering::SeqCst) as u32 as i32
+    ));
+    // Per-window portrait target latch. `retargets_suppressed` > 0 means the precedence ordering
+    // tried to change the on-screen character mid-loading-screen and was refused -- each one is a
+    // face change the user did NOT see. It was exactly 1 in the 2026-08-02 21:05 repro (0 -> 9).
+    // `window_target_slot` is the committed slot +1, or 0 between windows.
+    body.push_str(&format!(
+        "  \"oracle_portrait_window_target_slot\": {},\n  \"oracle_portrait_window_retargets_suppressed\": {},\n",
+        PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst),
+        PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.load(Ordering::SeqCst)
+    ));
     // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
     // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
     // with the save present. On a fast/early pick this stays 0 (nothing to suppress).
@@ -726,10 +775,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
-        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
+        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
         SQ_REPRO_STATE.load(Ordering::SeqCst),
         SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst),
-        SQ_REPRO_PAUSED_AT_PROFILE_SELECT.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_OPENED.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_DONE.load(Ordering::SeqCst),
         SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.load(Ordering::SeqCst),

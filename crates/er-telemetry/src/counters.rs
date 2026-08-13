@@ -132,6 +132,22 @@ pub static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
+/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the one
+/// the user picked, and we redirected it to the pick. Nonzero means the save container's stored
+/// last-used slot (`CSMenuSystemSaveLoad+0x1200`) disagreed with the click and the click won --
+/// i.e. the wrong character would have loaded. Was 1 in the 2026-08-03 repro (stored 2 vs pick 0).
+pub static LOADGAME_BUILDER_SLOT_OVERRIDES: AtomicUsize = AtomicUsize::new(0);
+/// The native slot the last override replaced, u32-packed. Together with the pick this identifies
+/// exactly which character the game was about to load instead.
+pub static LOADGAME_BUILDER_LAST_NATIVE_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The slot THIS loading-screen window committed its portrait to, +1 (0 == not yet committed).
+/// Latched at the window's first slot resolution and held until the window closes, so the face on
+/// screen cannot change character mid-load. See `er_loading_portrait::portrait_window_target_slot`.
+pub static PORTRAIT_WINDOW_TARGET_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// Times the freshly-resolved target DISAGREED with what this window already committed to, i.e.
+/// retargets that were suppressed. Each one is a mid-load face change the user did not see.
+/// Nonzero proves the latch is load-bearing; it was 1 in the 2026-08-02 21:05 repro (slot 0 -> 9).
+pub static PORTRAIT_WINDOW_RETARGETS_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
@@ -255,6 +271,22 @@ pub static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
 /// UTF-16 units (0 = unknown). Written next to the bridge on every publish; cleared with the bridge.
 pub static LS_PORTRAIT_PUBLISHED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_PUBLISHED_NAME_HASH: AtomicUsize = AtomicUsize::new(0);
+/// PUBLISHED-vs-LOADED semaphore (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb). The
+/// pre-existing identity semaphore compared our TARGET slot against the currently-resident
+/// character, which is silent about the failure that actually reached the screen: on 2026-08-02
+/// slot 9's face was published and displayed for 29.7s while slot 5 loaded, and every oracle said
+/// ok. These compare what was PUBLISHED against the slot whose load actually COMPLETED, asserted
+/// at every loading-window close (`PORTRAIT-LOADWIN VERDICT`). Both must stay 0.
+pub static PORTRAIT_PUBLISHED_SLOT_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+/// Number of loading windows whose published-vs-loaded identity was actually CHECKED. A run with
+/// 0 mismatches and 0 checks proved nothing -- read this before believing the two counters above.
+pub static PORTRAIT_PUBLISHED_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The slot whose fresh deserialize COMPLETED, as slot+1 (0 = none this process yet). Written at
+/// each `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE = 1` site, all of which know their slot.
+/// This is the "which character actually loaded" ground truth the publish check compares against;
+/// `GameMan.save_slot` is not (both the game and our own code write it for other reasons).
+pub static SYSTEM_QUIT_FRESH_DESER_DONE_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// Name-hash of the slot the portrait pipeline currently TARGETS, stamped on the game thread at the
 /// per-slot build kick (the consume worker may not read game memory, so it copies this atomic into
 /// `LS_PORTRAIT_PUBLISHED_NAME_HASH` at publish). 0 = unknown/never kicked this window.
@@ -412,6 +444,10 @@ pub static PROFILE_STATS_PUSH_IN_PROGRESS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_ROW_POPULATES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PUSH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_PLAYER_NAME_PUSH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_PLAYER_NAME_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_PLAYER_NAME_PUSH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_SLOT_NAMES_DECODED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PUSH_STALE_SKIPS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PUSH_STALE_LAST_COMP: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PUSH_STALE_LAST_VT: AtomicUsize = AtomicUsize::new(0);
@@ -432,10 +468,8 @@ pub static TITLE_SCALEFORM_FILE_OPEN_INSTALLED: AtomicUsize = AtomicUsize::new(0
 pub static TITLE_SCALEFORM_FILE_OPEN_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_SCALEFORM_MEMORY_GFX_BYTES: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_SCALEFORM_MEMORY_GFX_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_05_000_RUNTIME_STRIP_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_CORE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -473,8 +507,6 @@ pub static TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN: AtomicUsize = AtomicUsize::new(0
 pub static TITLE_TEXT_GFX_VALUE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PROFILE_FACE_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
 pub static ER_TPF_COVER_REGISTER_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
@@ -503,7 +535,6 @@ pub static LOADED_PEAK_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADED_PEAK_LEVEL: AtomicUsize = AtomicUsize::new(0);
 pub static LOADED_PEAK_C30: AtomicI32 = AtomicI32::new(0);
 pub static LOADED_PEAK_NAME_LEN: AtomicUsize = AtomicUsize::new(0);
-pub static CURRENT_MENU_WINDOW_JOB_RUN_JOB: AtomicUsize = AtomicUsize::new(0);
 pub static MSGBOX_STALL_JOB: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_ACCEPT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -840,11 +871,8 @@ pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED: AtomicUsize = AtomicUsize
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_GAITEM_LOOKUP_ADDR: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_GAITEM_FINALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// ProfileLoadDialog activations, BOTH kinds summed: save-file browse/pick steps plus character-slot
 /// arms. Do NOT read this as a load count -- it is per browse step and per slot arm, so
 /// `activations / 2` matches the load count only in a session that never navigated a directory. The
@@ -942,7 +970,6 @@ pub static SQ_REPRO_TAB_RETURN_MAX_TAB: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_TAB_RETURN_DWELL_START: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_OPEN_KEY_VK: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PAUSED_AT_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_PROFILE_BACK_OPENED: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_PROFILE_BACK_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE: AtomicUsize = AtomicUsize::new(0);
@@ -1339,6 +1366,13 @@ pub static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_NO_STEAMID_HITS: AtomicU64 = AtomicU64::new(0);
+/// Containers this staging pass wrote from the configured source (every name, every case dir).
+pub static SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN: AtomicU64 = AtomicU64::new(0);
+/// Leftover save artifacts from an EARLIER run that staging deleted so they cannot be served.
+pub static SAVE_DIRECT_STAGE_STALE_REMOVED: AtomicU64 = AtomicU64::new(0);
+/// THE stale-serve semaphore. Nonzero means a leftover container survived the staging sweep and
+/// the game may open it INSTEAD of the configured source -- the silent soft lock of 2026-08-11.
+pub static SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_REDIRECT_SHGFP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -1387,7 +1421,6 @@ pub static SQ_REPRO_ER_HWND: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_HELD_VK: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_BEST_HWND: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_BEST_AREA: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_FOREGROUND_FORCES: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_IS_FOREGROUND: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_INITIAL_FOREGROUND_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
@@ -1840,6 +1873,33 @@ pub static PROFILE_ROW_SLOT_INFO_SHOWN_ROWS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Per-field visibility calls whose resolved GFx value was not a display object (setter no-ops).
 pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates left ALONE because the row proxy belongs to a movie this mod never edited --
+/// the game's own System>Quit `GameEnd` panel is the one that matters. `CS::MenuSaveDataSummary`'s
+/// populate is a SHARED template, so every surface that shows a character summary arrives at the
+/// same hook; this counts the ones handed straight back to the game untouched.
+pub static PROFILE_FOREIGN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates recognised as OUR edited `05_010_ProfileSelect` row template (the probe field
+/// resolved to a real GFx value). Pair with `PROFILE_FOREIGN_SUMMARY_ROWS`: the split is the whole
+/// decoupling claim, and a zero here with a live ProfileSelect list means the probe is wrong.
+pub static PROFILE_OWN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Text pushes REFUSED because the named child does not exist on that movie (the resolve came back
+/// undefined). Before this existed those pushes were counted as successes -- SetText was called on a
+/// self-linked empty proxy and reported 109k "successful" writes to a field the movie did not have.
+pub static PROFILE_STATS_PUSH_MISSING_FIELD: AtomicUsize = AtomicUsize::new(0);
+/// `MenuWindowJob::Run` passes observed for `05_010_ProfileSelect`. It ticks once per FRAME while
+/// that window exists, so a rise between two samples means the view is on screen RIGHT NOW -- which
+/// is the only question the live editor's safety gate needs answered.
+pub static PROFILE_SELECT_WINDOW_RUN_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Live-editor commands NOT applied from the asynchronous `FrameBegin` path because the ProfileSelect
+/// view was rendering. They are left un-acked so the in-band row-populate path applies them instead.
+/// Non-zero is the guard working, not an error.
+pub static PROFILE_EDITOR_DEFERRED_APPLIES: AtomicUsize = AtomicUsize::new(0);
+/// Times the per-slot stats/name caches were dropped because the save they described stopped being
+/// the save on screen. They used to be a process-lifetime latch with no invalidation at all, so a
+/// session's first save described every ProfileSelect row forever; non-zero means a swap was noticed.
+pub static PROFILE_SLOT_CACHE_INVALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Times those caches were refilled straight from bytes the picker already held (no second read).
+pub static PROFILE_SLOT_CACHE_PREVIEW_RELOADS: AtomicUsize = AtomicUsize::new(0);
 /// Last GFx value type seen by the row-field visibility path.
 pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.

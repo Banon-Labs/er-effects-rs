@@ -703,6 +703,16 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     r8: usize,
     r9: usize,
 ) {
+    // Preserve the exact active ProfileSelect identity before native finalization clears job+0x130.
+    // This is lifecycle evidence, not a pointer retained for later dereference.
+    let finalized_profile_window = if job != 0 {
+        let window =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        (window != 0 && window == SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst))
+            .then_some(window)
+    } else {
+        None
+    };
     if job != 0
         && let Some(base) = game_module_base().ok().filter(|&b| b != 0)
     {
@@ -733,6 +743,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_finalize_hook(
     let f: unsafe extern "system" fn(usize, usize, usize, usize) =
         unsafe { std::mem::transmute(orig) };
     unsafe { f(job, rdx, r8, r9) };
+    if let Some(window) = finalized_profile_window {
+        system_quit_note_profile_select_finalized(window);
+    }
 }
 
 /// Install the finalize guard. Idempotent. 0x7ada40 carries no other detour (MinHook allows one per
@@ -824,90 +837,6 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
         status => append_autoload_debug(format_args!(
             "menu-window-job-guard: MH_ApplyQueued failed: {status:?}"
         )),
-    }
-}
-
-pub(crate) fn install_system_quit_menu_window_job_run_hook() {
-    // Atomic ONCE-CLAIM: only the FIRST caller proceeds; concurrent/reentrant callers bail immediately. The
-    // old `load != NOT ? return` guard did NOT block a reentrant call while the first was mid-install (INSTALLED
-    // was only set on full success), so the install ran twice -> double MhHook::new (ALREADY_CREATED) + double
-    // MH_EnableHook, leaving our handler non-deterministically not firing (intermittent ghosting / stalled
-    // switch; 2026-07-15, MH_ERROR_ENABLED). Rolled back to NOT_INSTALLED only on a REAL failure so a later
-    // call can retry; MH_ERROR_ENABLED is treated as SUCCESS (the hook is already on).
-    if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
-        .compare_exchange(
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        )
-        .is_err()
-    {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize for MenuWindowJob::Run hook failed: {status:?}"
-            ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
-                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
-                Ordering::SeqCst,
-            );
-            return;
-        }
-    }
-    let Ok(addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
-        ));
-        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
-            Ordering::SeqCst,
-        );
-        return;
-    };
-    let created = match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_menu_window_job_run_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
-                .store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-            true
-        }
-        // Adopt a hook a prior rolled-back attempt already created (ORIG was stored then); just enable it.
-        Err(MH_STATUS::MH_ERROR_ALREADY_CREATED) => false,
-        Err(status) => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
-            ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
-                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
-                Ordering::SeqCst,
-            );
-            return;
-        }
-    };
-    match unsafe { crate::mh::MH_EnableHook(addr as *mut c_void) } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: hooked MenuWindowJob::Run 0x{addr:x} (immediate enable, created={created}); System-menu hide + resource map + return-title will run"
-            ));
-        }
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_EnableHook MenuWindowJob::Run hook failed: {status:?}"
-            ));
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
-                SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
-                Ordering::SeqCst,
-            );
-        }
     }
 }
 

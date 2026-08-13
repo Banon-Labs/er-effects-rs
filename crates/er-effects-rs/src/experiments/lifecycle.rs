@@ -176,6 +176,19 @@ enum DestBrowseAction {
     EnterOverwriteConfirm,
 }
 
+/// What backing out of the destination browser does after stage 3 has established that no target
+/// was chosen. This is deliberately independent of the picker surface: Back dismisses the child
+/// browser and returns to the System>Quit rows the Save Game press came from. It is not the in-world
+/// Escape action, so it must not close the whole menu stack.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DestBrowseAbandonedAction {
+    ReturnToSourceMenu,
+}
+
+fn dest_browse_abandoned_action(_os_surface: bool) -> DestBrowseAbandonedAction {
+    DestBrowseAbandonedAction::ReturnToSourceMenu
+}
+
 /// Stage 3's decision, as a pure function of the latches it reads.
 ///
 /// `os_dialog_open` is the term the OS surface adds, and it is not cosmetic. In OS mode, once the
@@ -439,36 +452,39 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
             unsafe { save_flow_close_menus_from_tick("dest_picker_open_timeout", false) };
         }
         DestBrowseAction::Abandoned => {
-            // No browser, no pending open, no commit, no confirm: the user backed out. In OS mode
-            // this is exactly what dropping the dialog latch with nothing chosen looks like -- and
-            // reaching it at all took the menu pump learning to stop re-arming the open request it
-            // had already spent (bd `er-effects-rs-rsxi`).
+            // No browser, no pending open, no commit, no confirm: the user backed out. Back belongs
+            // to the child destination browser, not to the in-world Escape action. Both picker
+            // surfaces therefore end the Save Game flow at the System>Quit rows the user came from;
+            // closing OptionSetting/IngameTop here would move one menu level too far.
             SAVE_DEST_CANCEL_COUNT.fetch_add(1, Ordering::SeqCst);
             save_dest_clear_target("destination browser abandoned");
-            if os_native_picker_active() {
-                // OS SURFACE: the destination browser was comdlg32, so NOTHING of ours was ever
-                // opened over the menus -- the System>Quit stack is bit-for-bit the stack the user
-                // pressed Save Game on, and there is nothing to unwind. Closing the menus here
-                // would take them out to the world, one level FURTHER than the Back they pressed.
-                // End the flow instead: control returns to the System>Quit rows, and returning to
-                // IDLE is what re-opens the row-press guard so Save Game can be pressed again.
-                // This is the same place the OS LOAD surface's cancel already leaves the user.
-                SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
-                save_flow_box_clear();
-                save_dest_reset("os destination picker dismissed");
-                append_autoload_debug(format_args!(
-                    "save-flow: OS save-as dismissed after {ticks} ticks -- ending the flow at the System>Quit menu with NOTHING written, staged or loaded"
-                ));
-                save_flow_enter_stage(
-                    SAVE_FLOW_STAGE_IDLE,
-                    "os destination picker dismissed; back at System>Quit",
-                );
-                return;
+            let os_surface = os_native_picker_active();
+            match dest_browse_abandoned_action(os_surface) {
+                DestBrowseAbandonedAction::ReturnToSourceMenu => {
+                    SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_flow_box_clear();
+                    save_dest_reset("destination picker dismissed");
+                    if !os_surface
+                        && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0
+                        && let Ok(base) = game_module_base()
+                    {
+                        unsafe {
+                            system_quit_restore_real_system_windows(
+                                base,
+                                "dest-picker-dismissed-return-to-source-menu",
+                            )
+                        };
+                    }
+                    append_autoload_debug(format_args!(
+                        "save-flow: destination browser dismissed after {ticks} ticks (surface={}) -- ending the flow at the System>Quit menu with NOTHING written, staged or loaded",
+                        if os_surface { "os" } else { "in-game" }
+                    ));
+                    save_flow_enter_stage(
+                        SAVE_FLOW_STAGE_IDLE,
+                        "destination picker dismissed; back at System>Quit",
+                    );
+                }
             }
-            append_autoload_debug(format_args!(
-                "save-flow: destination browser closed without choosing after {ticks} ticks -- returning to the world with nothing written"
-            ));
-            unsafe { save_flow_close_menus_from_tick("dest_abandoned", false) };
         }
     }
 }
@@ -1832,6 +1848,11 @@ pub(crate) fn install_title_visual_startup_hooks() {
     if stats_panel_enabled() {
         START_PROFILE_STATS_TEXT.call_once(|| {
             PROFILE_05_010_RUNTIME_EDIT_ARMED.store(1, Ordering::SeqCst);
+            // Install the shared PlayerGameData name getter synchronously. The title-load current row
+            // can be built before a spawned helper thread gets scheduled; when that happens the first
+            // native `PlayerName` write has already cached the shortened `pgd+0x8e8` display string.
+            // This hook must be live before the first 05_010/System summary populate call.
+            install_profile_row_populate_hook();
             let _ = std::thread::Builder::new()
                 .name("er-effects-profile-stats-text".to_owned())
                 .spawn(|| {
@@ -2250,6 +2271,23 @@ mod save_flow_deadline_tests {
             trapped > 50,
             "the shipped behaviour re-asked the cancelled request every pump; this model got out \
              after only {trapped} dialogs, so it no longer reproduces the reported trap"
+        );
+    }
+
+    /// Backing out of Save Game's destination browser dismisses only that child browser. The user
+    /// should land on the System>Quit rows they came from on both surfaces, never on the wider
+    /// Escape/close-all path that unwinds OptionSetting/IngameTop back to the world.
+    #[test]
+    fn a_dismissed_destination_browser_returns_to_the_source_menu_on_both_surfaces() {
+        assert_eq!(
+            dest_browse_abandoned_action(false),
+            DestBrowseAbandonedAction::ReturnToSourceMenu,
+            "the in-game 05_010 destination browser must return to System>Quit, not close all menus"
+        );
+        assert_eq!(
+            dest_browse_abandoned_action(true),
+            DestBrowseAbandonedAction::ReturnToSourceMenu,
+            "the OS destination dialog must keep the same source-menu behavior"
         );
     }
 

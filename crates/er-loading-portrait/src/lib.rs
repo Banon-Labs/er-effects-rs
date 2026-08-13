@@ -52,6 +52,12 @@ pub mod portrait_semaphores;
 #[cfg(windows)]
 pub use portrait_semaphores::*;
 
+// Pure identity-decision logic for the portrait semaphores. Deliberately NOT windows-gated: the
+// rules that decide "is the portrait showing the right character" are the ones a wrong-face bug
+// hides in, so they must be reachable by a host `cargo test` rather than only by a game launch.
+pub mod portrait_identity;
+pub use portrait_identity::*;
+
 #[cfg(windows)]
 pub mod resource_readback;
 #[cfg(windows)]
@@ -107,6 +113,8 @@ pub mod portrait_equip;
 
 pub mod title_stats_text;
 pub use title_stats_text::*;
+
+pub mod profile_row_label;
 
 #[cfg(windows)]
 pub mod stats_loading_text;

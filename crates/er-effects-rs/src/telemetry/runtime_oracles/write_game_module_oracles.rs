@@ -843,14 +843,14 @@ fn write_game_module_oracles(body: &mut String) {
             TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.load(Ordering::SeqCst);
         let title_scaleform_file_open_last_caller_rva =
             TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA.load(Ordering::SeqCst);
-        let title_scaleform_memory_gfx_bytes =
-            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst);
+        // PINNED: the env-driven memory-GFX loader that fed these two is deleted (it had been an
+        // inert no-op since 2026-07-19), so both have always emitted 0.
+        let title_scaleform_memory_gfx_bytes = 0usize;
         let title_scaleform_memory_gfx_replacements =
             TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
         let title_scaleform_05_000_memory_gfx_replacements =
             TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
-        let title_scaleform_memory_gfx_failures =
-            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_failures = 0usize;
         let title_scaleform_memory_gfx_last_file =
             TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
         let title_scaleform_resource_ctor_installed =
@@ -934,10 +934,15 @@ fn write_game_module_oracles(body: &mut String) {
         }
         .is_some();
         let title_profile_face_bind_hits = TITLE_PROFILE_FACE_BIND_HITS.load(Ordering::SeqCst);
-        let title_profile_face_transform_applied =
-            TITLE_PROFILE_FACE_TRANSFORM_APPLIED.load(Ordering::SeqCst) != 0;
-        let title_profile_face_other_hidden =
-            TITLE_PROFILE_FACE_OTHER_HIDDEN.load(Ordering::SeqCst);
+        // PINNED TO THEIR SHIPPED VALUES (bd er-effects-rs-57fw). The only writer of
+        // TITLE_PROFILE_FACE_TRANSFORM_APPLIED / TITLE_PROFILE_FACE_OTHER_HIDDEN was
+        // title_custom_cover_menu_window_run_hook, whose only address-taker
+        // (install_title_custom_cover_run_hook) had no callers -- so rustc never codegen'd either and
+        // both counters read 0 in every build that has ever shipped. Emitting the same literals keeps
+        // this JSON byte-identical while the counters go away. Consequence, tracked separately:
+        // `title_loaded_character_portrait_rendered` below is STRUCTURALLY false, not merely unobserved.
+        let title_profile_face_transform_applied = false;
+        let title_profile_face_other_hidden = 0usize;
         let title_profile_face_last_proxy = TITLE_PROFILE_FACE_LAST_PROXY.load(Ordering::SeqCst);
         let title_profile_face_last_value = TITLE_PROFILE_FACE_LAST_VALUE.load(Ordering::SeqCst);
         let title_loaded_character_portrait_rendered = title_profile_face_bind_hits != 0
@@ -1042,14 +1047,13 @@ fn write_game_module_oracles(body: &mut String) {
         let title_custom_cover_black_last_caller_rva =
             TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let title_custom_cover_run_calls = TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_native_job =
-            TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_cover_job =
-            TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_cover_window =
-            TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_ret =
-            TITLE_CUSTOM_COVER_RUN_LAST_RET.load(Ordering::SeqCst);
+        // PINNED, same reason as the face counters above: their sole writer
+        // (title_custom_cover_menu_window_run_hook) was never codegen'd, so these have always
+        // emitted 0.
+        let title_custom_cover_run_last_native_job = 0usize;
+        let title_custom_cover_run_last_cover_job = 0usize;
+        let title_custom_cover_run_last_cover_window = 0usize;
+        let title_custom_cover_run_last_ret = 0usize;
         let title_pab_information_visual_builds =
             TITLE_PAB_INFORMATION_VISUAL_BUILDS.load(Ordering::SeqCst);
         let title_pab_information_visual_last_job =
@@ -1631,6 +1635,21 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_stats_text_push_failures",
             PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_attempts",
+            PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_settext_subs",
+            PROFILE_PLAYER_NAME_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_failures",
+            PROFILE_PLAYER_NAME_PUSH_FAILURES.load(Ordering::SeqCst),
+        );
         // 7e7 fail-closed guard: pushes skipped because the resolved component was stale (crash
         // avoided), plus the last stale component/vtable pointers for root-causing the bad link.
         push_json_usize(
@@ -1660,6 +1679,11 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_stats_text_slot_decoded",
             PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_slot_decoded",
+            PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
         );
         // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
         push_json_usize(
@@ -2887,6 +2911,27 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_portrait_face_identity_mismatches",
             PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
+        );
+        // PUBLISHED-vs-LOADED identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
+        // Asserted at every loading-window close. The face-identity pair above catches a record
+        // whose FACE was rewritten under a slot; these catch the portrait being built for the
+        // WRONG SLOT entirely -- the class that put slot 9's head on screen for 29.7s while slot 5
+        // loaded with every other oracle reporting ok. Read `_checks` first: 0 mismatches with 0
+        // checks is an unexercised path, not a pass.
+        push_json_usize(
+            body,
+            "oracle_portrait_published_identity_checks",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_IDENTITY_CHECKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_slot_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_SLOT_MISMATCHES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_name_hash_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

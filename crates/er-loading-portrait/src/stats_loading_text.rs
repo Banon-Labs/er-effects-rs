@@ -101,21 +101,17 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     } else {
         return None;
     };
-    // ProfileSummary record: name / level / playtime (populated before the load).
+    // ProfileSummary record: name / level (populated before the load). The record also carries a
+    // playtime at PROFILE_SUMMARY_PLAYTIME_OFFSET, which this panel no longer shows (user
+    // 2026-08-07: line 2 is RL + WL); that offset is still live for the save-slot writer.
     let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
     let mut name = String::new();
     let mut level = 0i32;
-    let mut record_play_ms = 0u32;
     if valid(summary) {
         let rec = summary + PROFILE_SUMMARY_RECORD_BASE + slot_u * PROFILE_SUMMARY_RECORD_STRIDE;
         let (units, len) = unsafe { read_utf16_name_units(rec) };
         name = String::from_utf16_lossy(&units[..len]);
         level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
-        // The summary record stores playtime in SECONDS (runtime-observed 2026-07-06: record 390000
-        // == 108:20:00 vs live GDM 108:22:13 ms counter), so scale to the struct's ms unit.
-        record_play_ms = (unsafe { safe_read_i32(rec + PROFILE_SUMMARY_PLAYTIME_OFFSET) }
-            .unwrap_or(0) as u32)
-            .saturating_mul(1000);
     }
     // Live PlayerGameData ONLY if it provably holds the LOADING slot's character. Before the save
     // deserializes, PGD is the game's default level-9 template (name empty, stats
@@ -129,44 +125,46 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         let pgd_level = unsafe { safe_read_i32(pgd + PGD_LEVEL_68_OFFSET) }.unwrap_or(0);
         ll > 0 && pgd_level > 0 && pgd_level == level && String::from_utf16_lossy(&ln[..ll]) == name
     });
-    let (attributes, max_hp, max_fp, max_stamina, attr_source_live) = if let Some(pgd) =
-        pgd_validated
-    {
-        let mut a = [0i32; 8];
-        for (i, v) in a.iter_mut().enumerate() {
-            *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
-        }
-        (
-            a,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0) as u32,
-            true,
-        )
-    } else {
-        let base = game_module_base().unwrap_or(null);
-        if valid(base) {
-            let _ = ensure_profile_slot_stats_cached(base);
-        }
-        let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
-        // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
-        // from the save slot's serialized PlayerGameData (STORED MaxHealth/MaxFP/MaxSP ==
-        // runtime current_max_*; located by the same rune-level-invariant scan as the
-        // attributes) so the boot loading screen renders the SAME five-line panel as
-        // subsequent live loads. [0,0,0] (rendered as `--`) only when the save is unreadable.
-        let [hp, fp, stam] = profile_slot_vitals(slot).unwrap_or([0; 3]);
-        (attrs, hp, fp, stam, false)
-    };
-    // Playtime is slot-scoped from the record; the global GDM counter only reflects the loaded
-    // character after deserialize, so it is trusted only alongside a validated PGD.
-    let play_time_ms = if attr_source_live {
-        unsafe { safe_read_i32(gdm + GDM_PLAY_TIME_A0_OFFSET) }
-            .map(|v| v as u32)
-            .filter(|&v| v != 0)
-            .unwrap_or(record_play_ms)
-    } else {
-        record_play_ms
-    };
+    let (attributes, max_hp, max_fp, max_stamina, weapon_level, attr_source_live) =
+        if let Some(pgd) = pgd_validated {
+            let mut a = [0i32; 8];
+            for (i, v) in a.iter_mut().enumerate() {
+                *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
+            }
+            (
+                a,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0)
+                    as u32,
+                // Weapon level off the SAME validated PGD as the attributes and vitals: the pointer has
+                // already been proved to own the loading slot's character (name + level match the
+                // slot-scoped ProfileSummary record), so this cannot pair one character's stats with
+                // another's `WL`. An implausible byte reads as unknown rather than being rendered.
+                unsafe { safe_read_u8(pgd + PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET) }
+                    .filter(|&v| v <= PGD_MATCHING_WEAPON_LEVEL_MAX),
+                true,
+            )
+        } else {
+            let base = game_module_base().unwrap_or(null);
+            if valid(base) {
+                let _ = ensure_profile_slot_stats_cached(base);
+            }
+            let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
+            // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
+            // from the save slot's serialized PlayerGameData (STORED MaxHealth/MaxFP/MaxSP ==
+            // runtime current_max_*; located by the same rune-level-invariant scan as the
+            // attributes) so the boot loading screen renders the SAME five-line panel as
+            // subsequent live loads. [0,0,0] (rendered as `--`) only when the save is unreadable.
+            let [hp, fp, stam] = profile_slot_vitals(slot).unwrap_or([0; 3]);
+            // Same `.sl2` slot cache the attributes and vitals come from, so the whole panel describes
+            // one decode of one slot. `er_save_loader::stats` already rejects an implausible byte, so
+            // `None` here genuinely means "not decodable" and renders as `--`. There is no live
+            // fallback: pre-deserialize PlayerGameData is the game's default template, whose weapon
+            // level belongs to no character on screen.
+            let wl = profile_slot_weapon_level(slot);
+            (attrs, hp, fp, stam, wl, false)
+        };
     Some(LoadingScreenStats {
         name,
         level,
@@ -174,18 +172,14 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         max_hp,
         max_fp,
         max_stamina,
-        play_time_ms,
+        weapon_level,
         attr_source_live,
     })
 }
 
-/// `eldenring::cs::GameDataMan::play_time` (+0xa0, milliseconds) -- bound to the upstream struct so a
-/// layout drift fails the build rather than reading garbage.
-const GDM_PLAY_TIME_A0_OFFSET: usize = core::mem::offset_of!(eldenring::cs::GameDataMan, play_time);
-
 /// The rendered loading-screen stats text, keyed by the exact display `lines` it renders. The game
-/// thread rebuilds it whenever the loading slot's lines differ (character switch, record->live upgrade,
-/// playtime tick); the render thread composites it. ONE mutex guards bitmap + key together so a window
+/// thread rebuilds it whenever the loading slot's lines differ (character switch, record->live
+/// upgrade); the render thread composites it. ONE mutex guards bitmap + key together so a window
 /// reset racing a build can never strand a key without its bitmap (which would suppress rebuilds and
 /// blank the text for the whole window).
 pub struct StatsTextCache {
@@ -214,8 +208,8 @@ pub use er_telemetry::counters::STATS_TEXT_SCREEN_VERSION;
 
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
 pub use er_telemetry::counters::STATS_TEXT_BUILT;
-/// `(name, level, live)` of the last logged build -- gates the debug log so per-second playtime rebuilds
-/// don't spam it, while identity changes (new character, record->live upgrade) still log.
+/// `(name, level, live)` of the last logged build -- gates the debug log so repeat builds of the same
+/// identity don't spam it, while identity changes (new character, record->live upgrade) still log.
 static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
     std::sync::Mutex::new(None);
 

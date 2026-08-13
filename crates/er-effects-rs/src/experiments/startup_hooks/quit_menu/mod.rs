@@ -161,6 +161,9 @@ use windows::{
     core::{BOOL, PCSTR, PCWSTR},
 };
 
+pub(crate) mod profile_05_010_editor_runtime;
+pub(crate) use profile_05_010_editor_runtime::*;
+
 pub(crate) mod profile_rows_system_quit_menu;
 pub(crate) use profile_rows_system_quit_menu::*;
 
@@ -181,6 +184,9 @@ pub(crate) use save_dest_commit::*;
 
 pub(crate) mod save_picker_menu;
 pub(crate) use save_picker_menu::*;
+
+pub(crate) mod save_picker_path_editor;
+pub(crate) use save_picker_path_editor::*;
 
 pub(crate) mod save_picker_dim_overlay;
 pub(crate) use save_picker_dim_overlay::*;

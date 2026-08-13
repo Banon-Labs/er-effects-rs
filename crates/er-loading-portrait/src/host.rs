@@ -76,6 +76,11 @@ pub struct PortraitHost {
     /// or `None` when the slot is empty/unreadable. Same `.sl2` cache as the
     /// attributes; values are read, never derived (bd er-effects-rs-qic7).
     pub profile_slot_vitals: fn(i32) -> Option<[u32; 3]>,
+    /// The highest weapon upgrade level (`matchmakingWeaponLevel`) of the character in
+    /// save `slot`, or `None` when the slot is empty/unreadable or the byte is
+    /// implausible. Same `.sl2` cache as the attributes and vitals. `Some(0)` is a real
+    /// answer (nothing upgraded) and is distinct from `None` ("we do not know").
+    pub profile_slot_weapon_level: fn(i32) -> Option<u8>,
     /// The `CS::GameDataMan` singleton pointer, or 0.
     pub game_data_man_ptr_or_null: fn() -> usize,
     /// Guarded UTF-16 name read at `addr` (units, length).
@@ -133,6 +138,9 @@ fn default_profile_slot_attributes(_slot: i32) -> Option<[i32; STATS_ATTR_COUNT]
 fn default_profile_slot_vitals(_slot: i32) -> Option<[u32; 3]> {
     None
 }
+fn default_profile_slot_weapon_level(_slot: i32) -> Option<u8> {
+    None
+}
 fn default_game_data_man_ptr_or_null() -> usize {
     0
 }
@@ -175,6 +183,7 @@ impl PortraitHost {
             ensure_profile_slot_stats_cached: default_ensure_profile_slot_stats_cached,
             profile_slot_attributes: default_profile_slot_attributes,
             profile_slot_vitals: default_profile_slot_vitals,
+            profile_slot_weapon_level: default_profile_slot_weapon_level,
             game_data_man_ptr_or_null: default_game_data_man_ptr_or_null,
             #[cfg(windows)]
             read_utf16_name_units: default_read_utf16_name_units,
@@ -266,6 +275,9 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
 }
 pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
     (host().profile_slot_vitals)(slot)
+}
+pub(crate) fn profile_slot_weapon_level(slot: i32) -> Option<u8> {
+    (host().profile_slot_weapon_level)(slot)
 }
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
