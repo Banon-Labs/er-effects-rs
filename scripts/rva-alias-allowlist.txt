@@ -12,7 +12,6 @@
 
 0x100001    exempt:not-an-address     # CONTEXT_CONTROL_AMD64 || Windows CONTEXT_FLAGS bitmask, not a game RVA.
 0x280000    exempt:not-an-address     # C30_WRITER_FULL_SAVE_SIZE, SLOT_BODY_LEN  || A LENGTH, not an RVA: the engine's fixed per-character-save-slot
-0x679180    exempt:role-alias         # B80_POLL_RVA, NATIVE_LOAD_SAVE_DATA_POLL_RVA  || FUN_140679180(bool cl, undefined4 dl) -- the SaveLoad2 IO-reques
 0x67b200    exempt:role-alias         # B80_LOAD_SAVE_DATA_INITIATOR_RVA, NATIVE_LOAD_SAVE_DATA_RVA, SYSTEM_QU  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
 0x67b290    exempt:role-alias         # DESERIALIZE_SLOT_RVA, SYSTEM_QUIT_INWORLD_LOAD_RVA  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
 0x67b750    exempt:role-alias         # SAVE_DISPATCH_CHAR_RVA, SAVE_WRITE_TO_SLOT_RVA  || FUN_14067b750(uint slot /*-1 = GameMan->saveSlot*/, char flush,
