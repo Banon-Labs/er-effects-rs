@@ -5,6 +5,8 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 python3 "$repo_root/scripts/check-no-timeouts.py"
+python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
+python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
