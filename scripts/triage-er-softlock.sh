@@ -115,7 +115,6 @@ keys=[
  'oracle_own_stepper_s2_invoke_last_ctx10','oracle_own_stepper_s2_invoke_last_pre130',
  'oracle_own_stepper_s2_invoke_last_update_ret','oracle_own_stepper_s2_invoke_last_candidate',
  'oracle_own_stepper_s2_invoke_last_blocker',
- 'oracle_native_load_game_fired','oracle_native_load_game_last_member_dialog',
  'oracle_loading_bar_enabled','oracle_loading_bar_hook_installed','oracle_loading_bar_update_hits',
  'oracle_loading_bar_current_frame','oracle_loading_bar_max_frame',
  'oracle_loading_bar_progress_permille','oracle_loading_bar_current_terminal',

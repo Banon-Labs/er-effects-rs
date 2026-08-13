@@ -141,7 +141,6 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         return False, ["telemetry_missing"], {}
     checks = {
         "native_profile_capture_enabled": t.get("oracle_native_profile_capture_enabled") is True,
-        "native_load_game_fired": t.get("oracle_native_load_game_fired") is True,
         "product_autoload_not_armed": t.get("product_autoload_armed") is False,
         "no_custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built") is False,
         "no_custom_cover_run": t.get("oracle_title_custom_cover_run_any") is False,
@@ -160,11 +159,6 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         "custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built"),
         "custom_cover_run": t.get("oracle_title_custom_cover_run_any"),
         "title_visual_suppressed_builds": t.get("oracle_title_native_menu_visual_suppressed_builds"),
-        "native_load_game_last_node": t.get("oracle_native_load_game_last_node"),
-        "native_load_game_last_node_vtable": t.get("oracle_native_load_game_last_node_vtable"),
-        "native_load_game_last_member_dialog": t.get("oracle_native_load_game_last_member_dialog"),
-        "native_load_game_last_member_fn": t.get("oracle_native_load_game_last_member_fn"),
-        "native_load_game_last_member_adjust": t.get("oracle_native_load_game_last_member_adjust"),
         "renderer": t.get("oracle_title_custom_cover_profile_source_renderer"),
         "renderer_vtable": t.get("oracle_title_custom_cover_profile_source_renderer_vtable"),
         "offscreen_rend": t.get("oracle_title_custom_cover_profile_source_offscreen_rend"),
