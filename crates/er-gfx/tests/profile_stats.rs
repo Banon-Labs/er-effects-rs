@@ -710,6 +710,13 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profile_05_010_layout.toml"),
     )
     .expect("checked-in ProfileSelect layout parses");
+    // Every field the schema names, with nothing left off. `CurrentPath` used to be absent from
+    // this list, and it drifted unseen: the checked-in edit table emitted a 700px path box against
+    // a schema that said 600. A `width` edit only reaches the movie when
+    // `scripts/rebuild-profile-05-010-layout.sh` re-bakes `title_05_010_edits.rs`, and the live
+    // editor's save path runs that script's `--hot-reload` branch, which reloads the running game
+    // and does NOT re-emit the table -- so an un-listed field is a field whose authored width can
+    // silently never ship.
     let names = [
         "PlayerName",
         "StaticText_110502",
@@ -718,6 +725,7 @@ fn stats_panel_output_keeps_row_text_fields_positive_width() {
         "PlayTime",
         STATS_FIELD_NAME,
         CHAR_STATS_FIELD_NAME,
+        CURRENT_PATH_FIELD_NAME,
     ]
     .into_iter()
     .chain(DRIVE_CELL_FIELD_NAMES);

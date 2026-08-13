@@ -6,7 +6,7 @@
 [field.PlayerName]
 x = -538
 y = -17
-width = 340
+width = 371
 clip_height = 40
 font_height = 22
 align = "left"
@@ -59,7 +59,7 @@ sample_save_picker = "2026-07-07"
 sample_drive_row = "2026-07-07"
 
 [field.ErStats]
-x = -190
+x = -100
 y = -16
 width = 670
 clip_height = 40
@@ -70,7 +70,7 @@ sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -175
+x = -200
 y = -13.5
 width = 484
 clip_height = 42
