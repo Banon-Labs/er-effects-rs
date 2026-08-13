@@ -253,13 +253,6 @@ pub(crate) fn selectbot_probe_enabled() -> bool {
 pub(crate) fn title_accept_byte_gate_enabled() -> bool {
     false
 }
-/// Operator gate for lever-3 (narrow registrar advance): set the menu-transition singleton flag
-/// 0x143d5dea8->+0=1 before the validated open-menu self-fire, replicating the native title
-/// press-accept handler so the menu opens in place without the ToS over-trigger. Default OFF;
-/// used together with own_stepper + self-fire.
-pub(crate) fn title_registrar_advance_gate_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_proceed_gate_enabled() -> bool {
     false
