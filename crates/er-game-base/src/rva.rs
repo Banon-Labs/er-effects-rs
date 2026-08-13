@@ -92,3 +92,20 @@ pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 /// CORRECTED HISTORY worth keeping: 0x762e30 is `GetTextEmbedImageName`, NOT this. Hooking that one
 /// is why a corrupted-save oracle once stayed at zero forever.
 pub const GR_SYSTEM_MESSAGE_RVA: usize = 0x762d50;
+
+/// Shared `CS::MessageBoxDialog` function/vtable RVAs.
+///
+/// These are cross-cutting game identities consumed by title flow, telemetry, and the product's
+/// startup/quit paths. Keep the values here so a version correction cannot drift between crates.
+#[repr(usize)]
+pub enum MsgBoxRva {
+    ForceStop = 0x78dfd0,
+    OkHandler = 0x78e030,
+    MultiChoiceGetter = 0x7b0cf0,
+    Builder = 0x9275b0,
+    OnDecide = 0x927ba0,
+    Update = 0x927d30,
+    DialogVtable = 0x2b03550,
+}
+
+pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;

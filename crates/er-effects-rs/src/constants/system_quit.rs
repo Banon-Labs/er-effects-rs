@@ -266,7 +266,7 @@ pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;
 /// captured MessageBoxDialog skips ALL of them generically (connection-error, starting-offline, ...)
 /// with no input -- it is exactly what a real OK-press runs. Verified entry: `rex push rbx; ... mov
 /// rbx,rcx` at 0x78e030; only rcx used.
-pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = 0x78e030;
+pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = MsgBoxRva::OkHandler as usize;
 /// CONFIRM latch [dialog+0x1bc0] u8 -- the field a real OK-press sets. The dialog's own per-frame
 /// UPDATE 0x140927d30 reads it -> commit 0x14078ef20 builds the result functor into [dialog+0x10]
 /// -> next UPDATE emits stop via EmitResult (sets the +0x3b0 closing latch) -> the dialog TEARS
