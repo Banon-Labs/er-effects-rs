@@ -120,7 +120,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         );
         // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
         // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
-        if profiler_enabled() {
+        if er_boot_profiler::profiler_enabled() {
             append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
         }
 
@@ -134,7 +134,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // across a dialog that blocked for half a minute.
                 er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
-                if profiler_enabled()
+                if er_boot_profiler::profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == 0

@@ -3,6 +3,7 @@ members = [
   "crates/er-effects-rs",
   "crates/er-hook",
   "crates/er-game-base",
+  "crates/er-boot-profiler",
   "crates/er-telemetry",
   "crates/er-title-flow",
   "crates/er-telemetry-dll",
