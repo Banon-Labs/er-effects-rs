@@ -199,6 +199,7 @@ pub unsafe fn restyle_live_pins() -> (usize, usize) {
         let desired = er_invasion_warp::param_row::invasion_pin_icon_id_for(
             crate::local_invasion_filter::pin_appearance_for(block),
             installed,
+            er_invasion_warp::warp::invasion_attempt_in_flight(),
         );
         let current = unsafe { read_row_icon(row) };
         if current == Some(u32::from(desired)) {
@@ -505,7 +506,11 @@ pub unsafe fn top_up_live_pins() -> usize {
         let entity_id = er_invasion_warp::map_surface::INVASION_ENTITY_ID_BASE
             + (registry.len() + claimed) as i32;
         let appearance = crate::local_invasion_filter::pin_appearance_for(Some(target.block.raw()));
-        let icon = er_invasion_warp::param_row::invasion_pin_icon_id_for(appearance, installed);
+        let icon = er_invasion_warp::param_row::invasion_pin_icon_id_for(
+            appearance,
+            installed,
+            er_invasion_warp::warp::invasion_attempt_in_flight(),
+        );
 
         // SAFETY: the slab is ours, leaked, never freed, and sized to include this index.
         let param = slab.0 + param_index * SYNTHETIC_PARAM_ROW_LEN;

@@ -979,12 +979,18 @@ pub fn pin_appearance_for(block: Option<u32>) -> PinAppearance {
     }
 }
 
-/// A hash of everything that can change a pin's tier, for the injection cache's key.
+/// A hash of everything that can change a pin's ICON, for the injection cache's key.
 ///
 /// The map's param rows are built once and shared across views, keyed on the spawn catalog. That
 /// key is right for the spawn set and WRONG for the icons, because the icon now depends on the
 /// user's lists too -- so without this the rows survive a mark and the map never changes. Mixing
 /// this in makes a mark invalidate exactly what a mark affects.
+///
+/// The invasion-attempt state is mixed in for the identical reason one step removed: it selects the
+/// bright-or-dimmed half of each tier's frame pair, so a search starting or ending while the map is
+/// ALREADY OPEN has to invalidate the same cache a mark does. Without it the dim would only ever
+/// appear on the next map open, which is exactly the case a player is least likely to hit -- you
+/// notice the pins are unclickable by trying them, with the map already in front of you.
 #[must_use]
 pub fn pin_choice_signature() -> usize {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
@@ -992,6 +998,9 @@ pub fn pin_choice_signature() -> usize {
         hash ^= value;
         hash = hash.wrapping_mul(0x100_0000_01b3);
     };
+    mix(u64::from(
+        er_invasion_warp::warp::invasion_attempt_in_flight(),
+    ));
     let Some(config) = current_config() else {
         return hash as usize;
     };
@@ -1440,6 +1449,30 @@ fn watch_for_stall(session: SeamlessSession) {
     }
 }
 
+/// Publish whether an invasion attempt is in flight, for the warp gate and the map's icon choice.
+///
+/// # Why "not idle" and not "== SEARCHING"
+///
+/// `0x0d` is only the FIRST state of an attempt. The sequence runs through `0x0e`, `0x11`, the
+/// `0x12` offer, `0x13`, `0x14`, and a cancel unwinds via `0x22`/`0x23` -- and the player is just
+/// as committed at every one of them as at `0x0d`. Gating on `SEARCHING` alone would unblock the
+/// warp the instant a host was found, which is the worst possible moment for it: the destination
+/// has been decided and the player is about to be moved there by Seamless.
+///
+/// Anything that is not [`ersc::SESSION_STATE_IDLE`] therefore counts, including the states no
+/// instruction in ersc's plaintext `.text` writes (its middle is virtualised). That is the safe
+/// direction for an unknown state: an unrecognised value means SOMETHING is happening, and the
+/// honest response to "I do not know what this state is" is to leave the pins alone.
+///
+/// A state that cannot be read at all is treated as no attempt, matching the no-session case: a
+/// read that fails is not evidence of an invasion.
+#[cfg(windows)]
+fn publish_invasion_attempt_state(session: usize) {
+    let in_flight =
+        read_session_state(session).is_some_and(|state| state != ersc::SESSION_STATE_IDLE);
+    er_invasion_warp::warp::set_invasion_attempt_in_flight(in_flight);
+}
+
 /// True once the session has settled back to idle after a cancel.
 #[must_use]
 pub fn session_is_idle() -> bool {
@@ -1760,8 +1793,13 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // Everything below is Seamless-side and purely observational until a rejected match has
     // actually armed a re-search, so a run without Seamless loaded costs one failed module lookup.
     let Ok(session) = resolve_session() else {
+        // No session means no attempt, which is a DEFINITE answer rather than a failure to read
+        // one: with Seamless absent or not yet up there is nothing to be mid-invasion of. Publish
+        // it, so a session that goes away cannot strand the map dimmed and the warp refused.
+        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
         return;
     };
+    publish_invasion_attempt_state(session.session);
     trace_session_state(session.session);
     // Watch WHICH session fields the Themida VM writes, and when. This is the only way left to
     // learn the invasion state machine: its middle is virtualized, and a live dump proved there is
@@ -2412,6 +2450,33 @@ mod tests {
         assert!(
             reinvade.contains("note_state_after_our_action"),
             "an unclaimed restart is indistinguishable from the user pressing Invade world"
+        );
+    }
+
+    #[test]
+    fn starting_or_ending_an_invasion_attempt_invalidates_the_pin_cache() {
+        // The coupling that makes the dim appear on a map that is ALREADY OPEN. `restyle_live_pins`
+        // early-returns when this signature is unchanged, so without the attempt state mixed in the
+        // pins would keep their idle frames for the whole search and only dim on the next map open
+        // -- i.e. never, for the player who noticed by trying to click one.
+        //
+        // Restores the latch afterwards: it is process-global and every other test in this binary
+        // reads it through the same accessor.
+        let restore = er_invasion_warp::warp::invasion_attempt_in_flight();
+        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
+        let idle = pin_choice_signature();
+        er_invasion_warp::warp::set_invasion_attempt_in_flight(true);
+        let searching = pin_choice_signature();
+        er_invasion_warp::warp::set_invasion_attempt_in_flight(false);
+        let idle_again = pin_choice_signature();
+        er_invasion_warp::warp::set_invasion_attempt_in_flight(restore);
+        assert_ne!(
+            idle, searching,
+            "an attempt starting must invalidate the pin cache or the live map never dims"
+        );
+        assert_eq!(
+            idle, idle_again,
+            "and it must go back, or the map would never un-dim"
         );
     }
 

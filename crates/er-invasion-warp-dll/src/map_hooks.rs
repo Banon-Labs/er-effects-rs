@@ -1058,20 +1058,25 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         }
         seen.sort_unstable();
         let red_installed = crate::map_gfx::red_pin_frame_installed();
+        let dimmed = er_invasion_warp::warp::invasion_attempt_in_flight();
         crate::standalone_log(format_args!(
             "map-inject: shipped rows use icon frames {seen:?}; invasion pins will use frames \
-             chosen={} untouched={} excluded={} (markers installed: {red_installed})",
+             chosen={} untouched={} excluded={} (markers installed: {red_installed}, invasion \
+             attempt in flight: {dimmed} -- pins are drawn DIMMED and refuse to warp while it is)",
             er_invasion_warp::param_row::invasion_pin_icon_id_for(
                 er_invasion_warp::param_row::PinAppearance::Chosen,
-                red_installed
+                red_installed,
+                dimmed
             ),
             er_invasion_warp::param_row::invasion_pin_icon_id_for(
                 er_invasion_warp::param_row::PinAppearance::Eligible,
-                red_installed
+                red_installed,
+                dimmed
             ),
             er_invasion_warp::param_row::invasion_pin_icon_id_for(
                 er_invasion_warp::param_row::PinAppearance::Rejected,
-                red_installed
+                red_installed,
+                dimmed
             ),
         ));
     }
@@ -1372,6 +1377,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
                         appearance,
                         crate::map_gfx::red_pin_frame_installed(),
+                        er_invasion_warp::warp::invasion_attempt_in_flight(),
                     ),
                     // NOT the donor's bits, and NOT all three. These are per-map-layer
                     // visibility bits over a row that holds ONE coordinate, so all-three drew
@@ -1431,6 +1437,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     icon_id: er_invasion_warp::param_row::invasion_pin_icon_id_for(
                         er_invasion_warp::param_row::PinAppearance::Eligible,
                         crate::map_gfx::red_pin_frame_installed(),
+                        er_invasion_warp::warp::invasion_attempt_in_flight(),
                     ),
                     category_bits: 0,
                     place_name_text_id: -1,
@@ -1498,8 +1505,11 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     er_invasion_warp::param_row::PinAppearance::Eligible => untouched += 1,
                     er_invasion_warp::param_row::PinAppearance::Rejected => excluded += 1,
                 }
-                let desired =
-                    er_invasion_warp::param_row::invasion_pin_icon_id_for(appearance, installed);
+                let desired = er_invasion_warp::param_row::invasion_pin_icon_id_for(
+                    appearance,
+                    installed,
+                    er_invasion_warp::warp::invasion_attempt_in_flight(),
+                );
                 // ALL FOUR icon slots, via the one stamper. Writing only `+0x1c` here -- which is
                 // what this line used to do -- left the other three holding the icon from the FIRST
                 // build, and the engine reads whichever descriptor its own event-flag predicate

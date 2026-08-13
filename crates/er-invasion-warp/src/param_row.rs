@@ -126,10 +126,32 @@ pub enum PinAppearance {
 /// Distinguishing the tiers requires the spare frames to have been populated; without them the
 /// alternative ids point at empty frames and those pins would silently disappear, which is a worse
 /// outcome than every pin looking the same.
+///
+/// # The `dimmed` axis
+///
+/// Orthogonal to the tier. `dimmed` means "an invasion attempt is in flight, so this pin is not
+/// clickable right now" ([`crate::warp::invasion_attempt_in_flight`]); the tier means "here is what
+/// the filter would do with an invasion landing here". Both have to be visible at once, which is
+/// why there are two frames per tier rather than one dim frame shared by all three.
+///
+/// A colour transform is baked into a GFx frame, so it CANNOT be toggled on one icon id -- the
+/// engine's only input is the frame number. Switching the id is the whole mechanism, and it is the
+/// same one the tiers already use.
 #[must_use]
-pub const fn invasion_pin_icon_id_for(appearance: PinAppearance, markers_installed: bool) -> u16 {
+pub const fn invasion_pin_icon_id_for(
+    appearance: PinAppearance,
+    markers_installed: bool,
+    dimmed: bool,
+) -> u16 {
     if !markers_installed {
         return FALLBACK_INVASION_PIN_ICON_ID;
+    }
+    if dimmed {
+        return match appearance {
+            PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME_DIMMED,
+            PinAppearance::Eligible => RED_INVASION_PIN_FRAME_DIMMED,
+            PinAppearance::Rejected => REJECTED_INVASION_PIN_FRAME_DIMMED,
+        };
     }
     match appearance {
         PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME,
@@ -161,6 +183,30 @@ pub const REJECTED_INVASION_PIN_FRAME: u16 = 302;
 /// `234/99/48` against the grace's `170/144/81`) and at 146x146 declared / 73x73 packed is the
 /// same scale as the 156x156 / 78x78 grace icon it replaces.
 pub const RED_INVASION_PIN_FRAME: u16 = 300;
+
+/// The DIMMED counterpart of each tier's frame: same bitmap, same size, same placement scale, plus
+/// a `CXFORMWITHALPHA` that drops it to ~40% opacity.
+///
+/// # Why a second set of frames rather than a flag
+///
+/// The offset is a flat `+10` so the pairing reads at a glance in a log line
+/// (`untouched=300`/`310`). All six sit inside the same unpopulated stretch: a census of vanilla
+/// sprite 171 finds 348 declared frames, 138 populated, and a single empty run of 85 frames from
+/// 263 to 347. None of the six collides with a shipped icon, and each is checked for emptiness
+/// individually before anything is written.
+///
+/// The BRIGHT set is deliberately the original three, carrying their original placement bytes with
+/// no colour transform at all. That makes the idle map -- the state a player is in almost all the
+/// time -- byte-identical to the one already proven to render, and confines every new frame to the
+/// dimmed set, where a failure is bounded to the duration of an invasion attempt and is obvious.
+pub const DIMMED_FRAME_OFFSET: u16 = 10;
+/// Dimmed `MENU_MAP_Enemy_02` -- the default tier while an attempt is in flight.
+pub const RED_INVASION_PIN_FRAME_DIMMED: u16 = RED_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
+/// Dimmed `MENU_MAP_Enemy_03` -- a location the user chose.
+pub const CHOSEN_INVASION_PIN_FRAME_DIMMED: u16 = CHOSEN_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
+/// Dimmed `MENU_MAP_Enemy_00` -- a location the filter would reject.
+pub const REJECTED_INVASION_PIN_FRAME_DIMMED: u16 =
+    REJECTED_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
 
 /// Used when the red frame is not installed: a populated, non-grace frame so the pins are still
 /// visually distinct rather than invisible.
@@ -479,40 +525,87 @@ mod tests {
             PinAppearance::Eligible,
             PinAppearance::Rejected,
         ];
-        let installed: BTreeSet<u16> = tiers
+        // Distinct WITHIN each brightness, and the two brightnesses must not overlap either -- all
+        // six ids are handed to the same `gotoAndStop`, so any collision renders two states or two
+        // tiers identically.
+        for dimmed in [false, true] {
+            let installed: BTreeSet<u16> = tiers
+                .iter()
+                .map(|a| invasion_pin_icon_id_for(*a, true, dimmed))
+                .collect();
+            assert_eq!(
+                installed.len(),
+                tiers.len(),
+                "two tiers sharing a frame would render identically (dimmed={dimmed})"
+            );
+        }
+        let all: BTreeSet<u16> = tiers
             .iter()
-            .map(|a| invasion_pin_icon_id_for(*a, true))
+            .flat_map(|a| {
+                [
+                    invasion_pin_icon_id_for(*a, true, false),
+                    invasion_pin_icon_id_for(*a, true, true),
+                ]
+            })
             .collect();
         assert_eq!(
-            installed.len(),
-            tiers.len(),
-            "two tiers sharing a frame would render identically"
+            all.len(),
+            6,
+            "bright and dimmed must occupy separate frames"
         );
         // Without the spare frames populated, every alternative id points at an EMPTY frame and
         // draws nothing. Falling back to one vanilla frame loses the distinction but keeps the
-        // pins visible, which is the right way round.
+        // pins visible, which is the right way round -- and that has to hold in BOTH states, or an
+        // invasion would blank a map that has no markers installed.
         for tier in tiers {
-            assert_eq!(
-                invasion_pin_icon_id_for(tier, false),
-                FALLBACK_INVASION_PIN_ICON_ID,
-                "{tier:?} must not point at an unpopulated frame"
-            );
+            for dimmed in [false, true] {
+                assert_eq!(
+                    invasion_pin_icon_id_for(tier, false, dimmed),
+                    FALLBACK_INVASION_PIN_ICON_ID,
+                    "{tier:?} must not point at an unpopulated frame (dimmed={dimmed})"
+                );
+            }
         }
         // The DEFAULT tier must be the frame the single-appearance helper already used. This is the
         // no-regression guarantee: an untouched config makes every pin `Eligible`, so the map has
         // to render exactly as it did before tiers existed. Pointing this tier at a NEW frame is
         // what blanked a live map -- 510 of 512 pins moved onto frames that had never been seen to
         // draw, all at once, by doing nothing at all.
+        //
+        // Note this pins the UNDIMMED id specifically. Idle is the state a player is in almost all
+        // the time, so it is the one that must be historically exact; the dimmed twin is reached
+        // only while an invasion attempt is running.
         assert_eq!(
-            invasion_pin_icon_id_for(PinAppearance::Eligible, true),
+            invasion_pin_icon_id_for(PinAppearance::Eligible, true, false),
             invasion_pin_icon_id(true),
-            "the default tier must keep the historical frame"
+            "the default tier must keep the historical frame while idle"
         );
         // The deviations are the only tiers allowed onto new frames.
         for tier in [PinAppearance::Chosen, PinAppearance::Rejected] {
             assert_ne!(
-                invasion_pin_icon_id_for(tier, true),
+                invasion_pin_icon_id_for(tier, true, false),
                 invasion_pin_icon_id(true)
+            );
+        }
+    }
+
+    #[test]
+    fn dimming_changes_the_frame_without_changing_the_tier() {
+        // The two axes are orthogonal, and the bug this guards is collapsing them: a dimmed map
+        // that shows every pin the same way would still "dim correctly" while destroying the tier
+        // information the filter exists to convey.
+        for tier in [
+            PinAppearance::Chosen,
+            PinAppearance::Eligible,
+            PinAppearance::Rejected,
+        ] {
+            let bright = invasion_pin_icon_id_for(tier, true, false);
+            let dim = invasion_pin_icon_id_for(tier, true, true);
+            assert_ne!(bright, dim, "{tier:?} must have a distinct dimmed frame");
+            assert_eq!(
+                dim,
+                bright + DIMMED_FRAME_OFFSET,
+                "{tier:?}'s pair must stay at the documented offset"
             );
         }
     }

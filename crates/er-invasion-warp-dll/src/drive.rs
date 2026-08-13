@@ -420,9 +420,8 @@ impl InvasionWarpDrive {
         {
             self.warps_refused_by_policy = self.warps_refused_by_policy.saturating_add(1);
             log(format_args!(
-                "invasion-warp: hotkey ignored -- {}. The pins mark where invasions can be \
-                 TARGETED, which is what the location filter acts on; they are not fast-travel \
-                 points, and the map draws them dimmed to say so",
+                "invasion-warp: hotkey ignored -- {}. Cancel the search, or let it finish, and the \
+                 key works again; the map's pins un-dim at the same moment",
                 er_invasion_warp::warp::WarpError::NotAWarpDestination
             ));
             return;

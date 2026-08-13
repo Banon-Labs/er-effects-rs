@@ -166,22 +166,27 @@ fn every_marker_frame_of_the_real_movie_carries_a_drawable_placement() {
             found.len()
         );
     }
-    // And the three must reference three DIFFERENT characters, or the tiers are indistinguishable
-    // even when every structural check passes.
-    let characters: std::collections::BTreeSet<u16> = PIN_MARKERS
-        .iter()
-        .filter_map(|marker| {
-            placements
-                .iter()
-                .find(|(frame, _)| *frame == marker.frame)
-                .map(|(_, character)| *character)
-        })
-        .collect();
-    assert_eq!(
-        characters.len(),
-        PIN_MARKERS.len(),
-        "the marker frames must reference distinct bitmaps, got {characters:?}"
-    );
+    // Within one brightness the three must reference three DIFFERENT characters, or the tiers are
+    // indistinguishable even when every structural check passes. ACROSS brightness they reuse the
+    // same three on purpose: dimming a tier must not change which tier it looks like.
+    for dimmed in [false, true] {
+        let characters: std::collections::BTreeSet<u16> = PIN_MARKERS
+            .iter()
+            .filter(|marker| marker.dimmed == dimmed)
+            .filter_map(|marker| {
+                placements
+                    .iter()
+                    .find(|(frame, _)| *frame == marker.frame)
+                    .map(|(_, character)| *character)
+            })
+            .collect();
+        assert_eq!(
+            characters.len(),
+            3,
+            "the {} marker frames must reference distinct bitmaps, got {characters:?}",
+            if dimmed { "dimmed" } else { "bright" }
+        );
+    }
 }
 
 /// The colour transform of the placement on `frame`, or `None` if that frame places nothing.
@@ -216,12 +221,24 @@ fn the_dim_survives_serialisation_into_the_real_movie() {
     for marker in PIN_MARKERS {
         let placed = cxform_on_frame(tags, marker.frame)
             .unwrap_or_else(|| panic!("{} placed nothing on frame {}", marker.name, marker.frame));
-        let cxform =
-            placed.unwrap_or_else(|| panic!("{} came back with no colour transform", marker.name));
-        assert_eq!(cxform, expected, "{}", marker.name);
+        if marker.dimmed {
+            let cxform = placed.unwrap_or_else(|| {
+                panic!("dimmed {} came back with no colour transform", marker.name)
+            });
+            assert_eq!(cxform, expected, "{}", marker.name);
+        } else {
+            // The bright half must come back with NOTHING. This is the half that renders while the
+            // player is idle, and a transform leaking onto it would dim the map permanently --
+            // which is the exact behaviour this pairing exists to undo.
+            assert_eq!(
+                placed, None,
+                "bright {} must carry no colour transform",
+                marker.name
+            );
+        }
     }
 
-    // And no SHIPPED icon frame gained one. The dim is meant to be contained to the three dead
+    // And no SHIPPED icon frame gained one. The dim is meant to be contained to our own dead
     // frames; sprite 171 carries no colour transform at all in vanilla, so any non-`None` on a
     // frame that is not ours means the splice landed in the wrong span.
     let ours = |frame: u16| PIN_MARKERS.iter().any(|marker| marker.frame == frame);

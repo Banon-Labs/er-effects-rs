@@ -29,13 +29,23 @@
 //! It is already a character in this same movie, so nothing new is defined and no texture is
 //! shipped: the edit is one `RemoveObject2` and one `PlaceObject3` on a dead frame.
 //!
-//! # Why every marker is drawn dimmed
+//! # Why each marker is installed TWICE, bright and dimmed
 //!
-//! Invasion locations are NOT warp destinations -- `er_invasion_warp::warp`'s policy gate refuses
-//! every warp to one, from the map and from the hotkeys alike. A pin that looks exactly as solid as
-//! a Site of Grace but does nothing when you confirm it is a worse UI than no pin at all, so the
-//! marker itself carries the answer: all three tiers are placed through a `CXFORMWITHALPHA` that
-//! drops them to [`DIMMED_ALPHA_MULT`] of full opacity.
+//! While a Seamless invasion attempt is in flight the pins are not clickable -- `er_invasion_warp`'s
+//! policy gate refuses every warp for its duration, from the map and the hotkeys alike -- and a pin
+//! that still looks as solid as a Site of Grace while doing nothing when confirmed is a worse UI
+//! than no pin. So the marker says so itself: the dimmed variant is placed through a
+//! `CXFORMWITHALPHA` that drops it to [`DIMMED_ALPHA_MULT`] of full opacity.
+//!
+//! It has to be a second FRAME, not a flag. A colour transform is baked into the frame, and the
+//! only input the engine gives a pin is `Icon_0.gotoAndStop(id)` -- so one id cannot be bright at
+//! one moment and dim the next. Two ids can, and switching the id per pin is the mechanism the
+//! tiers already use. Hence six frames: three tiers times bright and dimmed.
+//!
+//! The BRIGHT three keep their original placement bytes and carry NO colour transform, so the idle
+//! map is byte-identical to the one already proven to render. Dimming unconditionally was the first
+//! attempt and it was wrong for a reason worth keeping written down: a pin that is ALWAYS dim
+//! cannot say "not clickable right now", because nothing brighter exists to read it against.
 //!
 //! The dim is ALPHA-ONLY, and that is measured rather than stylistic. A scan of the vanilla movie
 //! finds 193 distinct colour transforms; exactly ONE moves an RGB multiplier off
@@ -112,11 +122,30 @@ pub struct PinMarker {
     ///
     /// The centring translate is derived from this, so the two can never disagree.
     pub scale_fixed: i32,
+    /// Whether this placement carries the [`dimmed_marker_cxform`].
+    ///
+    /// The bright variants leave it `false` and emit no colour transform at all, so their tags are
+    /// byte-for-byte what shipped before conditional dimming existed.
+    pub dimmed: bool,
     /// Atlas name, for error messages.
     pub name: &'static str,
 }
 
 impl PinMarker {
+    /// The same marker on its dimmed twin frame.
+    ///
+    /// Derived rather than written out a second time: a hand-copied pair drifts the moment one side
+    /// is retuned, and a bright/dim pair that differ in SIZE or SCALE would read as two different
+    /// markers rather than one marker in two states.
+    #[must_use]
+    pub const fn dimmed_at(&self, frame: u16) -> Self {
+        Self {
+            frame,
+            dimmed: true,
+            ..*self
+        }
+    }
+
     /// Twips to translate on each axis so the bitmap is centred on the pin's anchor.
     ///
     /// The shipped frames translate back by half the DRAWN size, and the drawn size is the declared
@@ -177,6 +206,7 @@ pub const MARKER_CHOSEN: PinMarker = PinMarker {
     width: 188,
     height: 190,
     scale_fixed: percent_of_half_scale(66),
+    dimmed: false,
     name: "MENU_MAP_Enemy_03",
 };
 
@@ -196,6 +226,7 @@ pub const MARKER_UNTOUCHED: PinMarker = PinMarker {
     width: 146,
     height: 146,
     scale_fixed: HALF_SCALE_FIXED,
+    dimmed: false,
     name: "MENU_MAP_Enemy_02",
 };
 
@@ -206,11 +237,37 @@ pub const MARKER_EXCLUDED: PinMarker = PinMarker {
     width: 68,
     height: 72,
     scale_fixed: HALF_SCALE_FIXED,
+    dimmed: false,
     name: "MENU_MAP_Enemy_00",
 };
 
 /// Every marker this module installs.
-pub const PIN_MARKERS: [PinMarker; 3] = [MARKER_CHOSEN, MARKER_UNTOUCHED, MARKER_EXCLUDED];
+pub const DIMMED_FRAME_OFFSET: u16 = 10;
+
+/// The dimmed twin of each tier, on its own frame.
+///
+/// The `+10` offset is arbitrary but readable -- `300`/`310` pairs at a glance in a log line -- and
+/// every one of the six lands inside the single 85-frame unpopulated run (263..=347) the vanilla
+/// icon clip leaves free. Derived from the bright markers with [`PinMarker::dimmed_at`] so the pair
+/// cannot drift apart in size, bitmap or scale.
+pub const MARKER_CHOSEN_DIMMED: PinMarker =
+    MARKER_CHOSEN.dimmed_at(MARKER_CHOSEN.frame + DIMMED_FRAME_OFFSET);
+/// Dimmed default tier.
+pub const MARKER_UNTOUCHED_DIMMED: PinMarker =
+    MARKER_UNTOUCHED.dimmed_at(MARKER_UNTOUCHED.frame + DIMMED_FRAME_OFFSET);
+/// Dimmed excluded tier.
+pub const MARKER_EXCLUDED_DIMMED: PinMarker =
+    MARKER_EXCLUDED.dimmed_at(MARKER_EXCLUDED.frame + DIMMED_FRAME_OFFSET);
+
+/// Every marker this module installs: three tiers, each bright and dimmed.
+pub const PIN_MARKERS: [PinMarker; 6] = [
+    MARKER_CHOSEN,
+    MARKER_UNTOUCHED,
+    MARKER_EXCLUDED,
+    MARKER_CHOSEN_DIMMED,
+    MARKER_UNTOUCHED_DIMMED,
+    MARKER_EXCLUDED_DIMMED,
+];
 
 /// Depth the icon clip places its bitmap at. Every populated frame uses depth 1.
 pub const ICON_DEPTH: u16 = 1;
@@ -330,10 +387,19 @@ impl core::fmt::Display for RedPinError {
 
 impl std::error::Error for RedPinError {}
 
-/// The `PlaceObject3` that draws one marker, centred and dimmed, at the icon depth.
+/// The `PlaceObject3` that draws one marker, centred, at the icon depth -- dimmed iff the marker
+/// says so.
+///
+/// The flags byte and the transform are derived from the SAME field, so they cannot disagree: the
+/// writer emits a `CXFORMWITHALPHA` iff `0x08` is set and panics on a transform supplied without
+/// the bit, and a transform WITHOUT the bit would be silently dropped and leave the pin opaque.
 fn marker_placement(marker: PinMarker) -> Tag {
     Tag::PlaceObject3 {
-        flags1: PLACE_FLAGS1_CHARACTER_MATRIX_AND_CXFORM,
+        flags1: if marker.dimmed {
+            PLACE_FLAGS1_CHARACTER_MATRIX_AND_CXFORM
+        } else {
+            PLACE_FLAGS1_CHARACTER_AND_MATRIX
+        },
         flags2: PLACE_FLAGS2_HAS_IMAGE,
         depth: ICON_DEPTH,
         class_name: None,
@@ -351,7 +417,7 @@ fn marker_placement(marker: PinMarker) -> Tag {
             translate_x: marker.translate_x_twips(),
             translate_y: marker.translate_y_twips(),
         }),
-        color_transform: Some(dimmed_marker_cxform()),
+        color_transform: marker.dimmed.then(dimmed_marker_cxform),
         ratio: None,
         name: None,
         clip_depth: None,
@@ -588,13 +654,46 @@ mod tests {
             };
             assert_eq!(character, marker.character, "{}", marker.name);
         }
-        // Distinct frames AND distinct bitmaps, or the three tiers would be indistinguishable on
-        // screen while every structural assertion above still passed.
+        // Every frame distinct -- all six are handed to the same `gotoAndStop`, so a collision
+        // renders two different things identically.
         let frames: std::collections::BTreeSet<_> = PIN_MARKERS.iter().map(|m| m.frame).collect();
-        let characters: std::collections::BTreeSet<_> =
-            PIN_MARKERS.iter().map(|m| m.character).collect();
         assert_eq!(frames.len(), PIN_MARKERS.len(), "frames must not collide");
-        assert_eq!(characters.len(), PIN_MARKERS.len(), "bitmaps must differ");
+        // Bitmaps must differ WITHIN a brightness, not across it: the dimmed set deliberately
+        // reuses the same three bitmaps, because a tier has to stay recognisable as the same tier
+        // when it dims. Asserting global distinctness would forbid exactly that.
+        for dimmed in [false, true] {
+            let characters: std::collections::BTreeSet<_> = PIN_MARKERS
+                .iter()
+                .filter(|m| m.dimmed == dimmed)
+                .map(|m| m.character)
+                .collect();
+            assert_eq!(characters.len(), 3, "tiers must differ (dimmed={dimmed})");
+        }
+    }
+
+    #[test]
+    fn each_tier_is_installed_bright_and_dimmed_as_the_same_marker() {
+        // The pairing invariant. A bright/dim pair that differed in bitmap, size or scale would
+        // read as two different markers rather than one marker in two states -- the pin would
+        // appear to CHANGE WHAT IT IS when an invasion starts, instead of greying out.
+        for bright in PIN_MARKERS.iter().filter(|m| !m.dimmed) {
+            let twin = PIN_MARKERS
+                .iter()
+                .find(|m| m.dimmed && m.character == bright.character)
+                .unwrap_or_else(|| panic!("{} has no dimmed twin", bright.name));
+            assert_eq!(
+                twin.frame,
+                bright.frame + DIMMED_FRAME_OFFSET,
+                "{}",
+                bright.name
+            );
+            assert_eq!(twin.width, bright.width, "{}", bright.name);
+            assert_eq!(twin.height, bright.height, "{}", bright.name);
+            assert_eq!(twin.scale_fixed, bright.scale_fixed, "{}", bright.name);
+            assert_eq!(twin.name, bright.name, "{}", bright.name);
+        }
+        assert_eq!(PIN_MARKERS.iter().filter(|m| !m.dimmed).count(), 3);
+        assert_eq!(PIN_MARKERS.iter().filter(|m| m.dimmed).count(), 3);
     }
 
     #[test]
@@ -699,11 +798,15 @@ mod tests {
     }
 
     #[test]
-    fn every_marker_is_placed_dimmed_and_the_flag_bit_agrees() {
+    fn only_the_dimmed_markers_carry_a_transform_and_the_flag_bit_always_agrees() {
         // Two independent ways to lose the dim: forget the transform, or set it without the flags
         // bit. The second is the dangerous one -- the writer emits the CXFORM iff `0x08` is set, so
         // a transform with the bit clear is silently dropped and the pins come back fully opaque
         // with every other assertion still green.
+        //
+        // The bright half matters just as much in the other direction: a stray transform there
+        // would dim the IDLE map, which is the state the player is in almost all the time, and the
+        // whole point of the conditional dim is that idle looks untouched.
         let mut movie = movie_with(sprite_with_frames(
             ICON_SPRITE_ID,
             ICON_SPRITE_FRAME_COUNT,
@@ -723,14 +826,23 @@ mod tests {
             else {
                 panic!("{} did not place a character", marker.name);
             };
+            let bit_set = flags1 & PLACE_FLAGS_HAS_COLOR_TRANSFORM != 0;
             assert_eq!(
-                flags1 & PLACE_FLAGS_HAS_COLOR_TRANSFORM,
-                PLACE_FLAGS_HAS_COLOR_TRANSFORM,
-                "{} must set HasColorTransform or the writer drops the dim",
-                marker.name
+                bit_set, marker.dimmed,
+                "{} (dimmed={}) has HasColorTransform={bit_set}; the flag and the transform must \
+                 agree or the writer either drops the dim or panics",
+                marker.name, marker.dimmed
             );
-            let cxform = color_transform.unwrap_or_else(|| panic!("{} has no dim", marker.name));
-            assert_eq!(cxform, dimmed_marker_cxform(), "{}", marker.name);
+            match (marker.dimmed, color_transform) {
+                (true, Some(cxform)) => {
+                    assert_eq!(cxform, dimmed_marker_cxform(), "{}", marker.name)
+                }
+                (false, None) => {}
+                (true, None) => panic!("{} is dimmed but carries no transform", marker.name),
+                (false, Some(cxform)) => {
+                    panic!("{} is bright but carries {cxform:?}", marker.name)
+                }
+            }
         }
     }
 

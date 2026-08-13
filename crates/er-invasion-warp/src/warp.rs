@@ -240,44 +240,70 @@ pub const fn spawn_orientation(yaw: f32) -> FloatVector4 {
     FloatVector4::new(0.0, yaw, 0.0, 0.0)
 }
 
-/// Whether an invasion location may be used as a warp destination.
+/// Whether an invasion location may be used as a warp destination RIGHT NOW.
 ///
 /// # Why this is a type and not two edits at the call sites
 ///
 /// There are two ways to ask for one of these warps -- confirming a pin on the world map, and the
-/// F7/F8/F9 hotkeys -- and a gate placed at each is a gate a third caller silently skips. The
-/// requirement is "the player cannot warp to ANY invasion location", which is a statement about the
-/// PRIMITIVE, so the check lives inside [`native::request_invasion_warp`] where nothing can route
-/// around it. The two callers were left alone deliberately: both already handle
-/// [`WarpError`] and neither treats a refusal as a reason to fall through to anything else.
+/// F7/F8/F9 hotkeys -- and a gate placed at each is a gate a third caller silently skips. The rule
+/// is a statement about the PRIMITIVE, so the check lives inside [`native::request_invasion_warp`]
+/// where nothing can route around it. The two callers were left alone deliberately: both already
+/// handle [`WarpError`] and neither treats a refusal as a reason to fall through to anything else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WarpPolicy {
-    /// Invasion locations are informational map markers only. Every warp request is refused
-    /// before anything is written.
+    /// An invasion attempt is in flight. The pins are informational markers for its duration and
+    /// every warp request is refused before anything is written.
     MarkersOnly,
-    /// Selecting an invasion location relocates the player. The mechanism below is what does it.
+    /// No attempt in flight, so selecting an invasion location relocates the player as usual.
     Warpable,
 }
 
-/// The policy in force.
+/// Whether a Seamless invasion attempt is currently in flight.
 ///
-/// `MarkersOnly` by user requirement (2026-08-12): the pins exist to show WHERE invasions can be
-/// targeted -- which is what the location filter acts on -- not to be fast-travel points.
+/// Published every frame by the DLL's session tracer, which is the only thing that can see the
+/// ersc session; this crate holds the latch so the policy gate below -- and the map's icon choice
+/// -- read ONE value and cannot disagree about what the session is doing.
 ///
-/// This is a function rather than a `const` on purpose. A `const false` would make everything after
-/// the check in `request_invasion_warp` provably unreachable, and the warp sequence is still the
-/// proven mechanism worth keeping legible and reviewable rather than something to delete and
-/// re-derive if the requirement moves.
+/// Defaults to `false`, which is the honest answer before anything has looked: with no session
+/// resolvable there is no attempt, so nothing should be blocked. That also means a publisher that
+/// never runs leaves warps ENABLED rather than silently disabling them, which is the failure a
+/// player can diagnose ("it never blocks") instead of the one they cannot ("it blocks forever and
+/// I do not know why").
+static INVASION_ATTEMPT_IN_FLIGHT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Record whether an invasion attempt is in flight. Called once per frame from the session tracer.
+pub fn set_invasion_attempt_in_flight(in_flight: bool) {
+    INVASION_ATTEMPT_IN_FLIGHT.store(in_flight, core::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether an invasion attempt is in flight, as last published.
+#[must_use]
+pub fn invasion_attempt_in_flight() -> bool {
+    INVASION_ATTEMPT_IN_FLIGHT.load(core::sync::atomic::Ordering::SeqCst)
+}
+
+/// The policy in force this instant.
+///
+/// Scoped to an active attempt by user requirement (2026-08-12). The point of blocking the warp is
+/// that moving mid-attempt is incoherent -- the destination Seamless is negotiating is where you
+/// are supposed to end up -- and the point of the dim is to SAY SO on the pin. Neither works
+/// unconditionally: a pin that is always dim cannot communicate "not clickable right now", because
+/// there is no brighter state to read it against.
 #[must_use]
 pub fn invasion_warp_policy() -> WarpPolicy {
-    WarpPolicy::MarkersOnly
+    if invasion_attempt_in_flight() {
+        WarpPolicy::MarkersOnly
+    } else {
+        WarpPolicy::Warpable
+    }
 }
 
 /// Why a warp request could not be issued. Every variant means "nothing was written".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WarpError {
-    /// The destination is an invasion location, and [`invasion_warp_policy`] says those are
-    /// markers rather than warp destinations. Refused before any engine state is touched.
+    /// An invasion attempt is in flight, so invasion locations are markers rather than warp
+    /// destinations for its duration. Refused before any engine state is touched.
     NotAWarpDestination,
     /// `GetModuleHandleA(NULL)` failed.
     ModuleBase(String),
@@ -298,8 +324,9 @@ impl core::fmt::Display for WarpError {
         match self {
             Self::NotAWarpDestination => write!(
                 f,
-                "invasion locations are map markers, not warp destinations; nothing was written \
-                 and the player did not move"
+                "an invasion attempt is in flight, so invasion locations are map markers rather \
+                 than warp destinations until it ends; nothing was written and the player did not \
+                 move"
             ),
             Self::ModuleBase(detail) => write!(f, "game module base unavailable: {detail}"),
             Self::BlockIdIsNone => write!(f, "target block id is the NONE sentinel (0xFFFFFFFF)"),
@@ -396,10 +423,10 @@ mod native {
 
     /// Issue a local warp to `target`.
     ///
-    /// Refuses outright while [`super::invasion_warp_policy`] is
-    /// [`WarpPolicy::MarkersOnly`], which it is. This is the single choke point every warp to an
-    /// invasion location passes through -- the world-map confirm hook and the hotkeys both end up
-    /// here -- so the refusal cannot be routed around by adding a caller.
+    /// Refuses while [`super::invasion_warp_policy`] reads [`WarpPolicy::MarkersOnly`], i.e. for
+    /// as long as an invasion attempt is in flight. This is the single choke point every warp to
+    /// an invasion location passes through -- the world-map confirm hook and the hotkeys both end
+    /// up here -- so the refusal cannot be routed around by adding a caller.
     ///
     /// # Safety
     ///
@@ -992,12 +1019,44 @@ mod tests {
     }
 
     #[test]
-    fn invasion_locations_are_markers_and_not_warp_destinations() {
+    fn the_policy_follows_the_attempt_and_defaults_to_allowing_warps() {
         // The product requirement, asserted directly rather than inferred from the absence of a
         // warp in a log. `request_invasion_warp` is `#[cfg(windows)]`, so this is the only place
         // the rule can be checked on the host -- which is exactly why the rule was made a value
         // the gate reads instead of an `if` buried in Windows-only code.
-        assert_eq!(invasion_warp_policy(), WarpPolicy::MarkersOnly);
+        //
+        // Serialised against the other test that moves this latch: it is process-global, and two
+        // tests toggling it in parallel would flake in a way that looks like a policy bug.
+        let _guard = POLICY_LATCH.lock().unwrap_or_else(|e| e.into_inner());
+        set_invasion_attempt_in_flight(false);
+        assert_eq!(
+            invasion_warp_policy(),
+            WarpPolicy::Warpable,
+            "with no attempt in flight the pins behave normally"
+        );
+        set_invasion_attempt_in_flight(true);
+        assert_eq!(
+            invasion_warp_policy(),
+            WarpPolicy::MarkersOnly,
+            "while an attempt is in flight every warp is refused"
+        );
+        set_invasion_attempt_in_flight(false);
+    }
+
+    /// Serialises the two tests that move the process-global attempt latch.
+    static POLICY_LATCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn nothing_published_means_no_attempt_which_means_warps_are_allowed() {
+        // The fail-safe DIRECTION, which is the part worth pinning. If the publisher never runs --
+        // Seamless absent, session unresolvable, tracer not reached -- the latch stays at its
+        // initial value, and that value decides which failure a player gets. Defaulting to
+        // "in flight" would refuse every warp forever with no invasion to explain it, and nothing
+        // on screen would say why. Defaulting to "idle" degrades to the pre-feature behaviour.
+        let _guard = POLICY_LATCH.lock().unwrap_or_else(|e| e.into_inner());
+        set_invasion_attempt_in_flight(false);
+        assert!(!invasion_attempt_in_flight());
+        assert_eq!(invasion_warp_policy(), WarpPolicy::Warpable);
     }
 
     #[test]
@@ -1006,7 +1065,14 @@ mod tests {
         // reads like a failure they will report a bug; it has to read like a decision.
         let rendered = WarpError::NotAWarpDestination.to_string();
         assert!(rendered.contains("markers"), "{rendered}");
-        assert!(rendered.contains("not warp destinations"), "{rendered}");
+        assert!(
+            rendered.contains("invasion attempt is in flight"),
+            "the refusal must name the CONDITION, or it reads as a permanent ban: {rendered}"
+        );
+        assert!(
+            rendered.contains("until it ends"),
+            "and it must say the condition passes: {rendered}"
+        );
         assert!(
             rendered.contains("nothing was written"),
             "a refusal must say the engine was left alone: {rendered}"
