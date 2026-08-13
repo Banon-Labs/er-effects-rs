@@ -1,4 +1,7 @@
-/target
+# Cargo build output. UNANCHORED on purpose: `/target` matches only the workspace root,
+# which left every nested cargo project (scripts/oodle-dcx-probe/) committing its whole
+# build. Enforced by scripts/check-no-committed-build-artifacts.py.
+target/
 *.log
 __pycache__/
 
