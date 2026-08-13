@@ -34,13 +34,6 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
         return;
     }
 
-    if force_play_game_enabled() {
-        if let Some(slot) = state.autoload.slot() {
-            unsafe { call_force_play_game_once(game_module_base, slot, state.game_task_ticks) };
-        }
-        return;
-    }
-
     if native_title_job_enabled()
         && !unsafe { call_native_title_job_once(game_module_base, state.game_task_ticks) }
     {

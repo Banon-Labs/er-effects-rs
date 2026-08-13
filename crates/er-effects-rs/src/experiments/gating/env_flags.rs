@@ -240,10 +240,6 @@ pub(crate) fn trace_menu_task_update_enabled() -> bool {
 pub(crate) fn native_title_job_enabled() -> bool {
     false
 }
-// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn force_play_game_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_SELECTBOT_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn selectbot_probe_enabled() -> bool {
     false
@@ -255,10 +251,6 @@ pub(crate) fn title_accept_byte_gate_enabled() -> bool {
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_proceed_gate_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_PUMP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn ingamestep_pump_enabled() -> bool {
     false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_AUTOLOAD is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.

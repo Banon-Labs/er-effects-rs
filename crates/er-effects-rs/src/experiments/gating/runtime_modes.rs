@@ -100,14 +100,6 @@ pub(crate) fn title_menu_resource_observer_enabled() -> bool {
 pub(crate) fn auto_confirm_enabled() -> bool {
     false
 }
-// ENV-GATE RATIONALE: ER_EFFECTS_SUBMIT_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn submit_play_game_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_INGAMEINIT_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn ingameinit_drive_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_CONTINUE_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_drive_enabled() -> bool {
     false
