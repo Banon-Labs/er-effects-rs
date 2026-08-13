@@ -1,13 +1,64 @@
 # `startup_hooks/` crate targets -- plan of record
 
-**Baseline: `f15cce1a` (main, 2026-08-02).** Every line number was measured against the current
-source, not inherited from an earlier plan. Produced by two parallel sweeps (5 clusters + a 2-group
-gap-fill), each cluster adversarially re-verified against the source: **76 claims refuted, 456
-confirmed.** Where a verifier refuted a mapper, the verifier's correction is what appears below.
+**Analysis baseline: `f15cce1a` (main, 2026-08-02).** Every line number was measured against the
+source at that commit, not inherited from an earlier plan. Produced by two parallel sweeps
+(5 clusters + a 2-group gap-fill), each cluster adversarially re-verified against the source:
+**76 claims refuted, 456 confirmed.** Where a verifier refuted a mapper, the verifier's correction
+is what appears below.
 
-**Scope:** all 32 files / 20,834 lines under
-`crates/er-effects-rs/src/experiments/startup_hooks/`. The rest of `experiments/` is covered by
+**Re-measured against `877f1261` (main, 2026-08-13) -- see SS0.1. The directory grew 22% in eleven
+days and the analysis was NOT re-run.** Destination assignments below are still the plan of record;
+intra-file line offsets are only trustworthy for files SS0.1 marks unchanged.
+
+**Scope:** at baseline, 32 files / 20,834 lines under
+`crates/er-effects-rs/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
+in-directory, plus `startup_hooks.rs` (197) = **25,516**. The rest of `experiments/` is covered by
 `docs/plans/experiments-crate-targets.md`.
+
+---
+
+## 0.1 Drift since the analysis baseline (measured `877f1261`, 2026-08-13)
+
+**+4,682 lines, +2 files, and none of it is classified.** Eleven days of save-picker / ProfileSelect
+product work (PRs #197-series through #228) landed inside the directory this plan partitions. The
+destination *assignments* survive -- that work is more quit-menu and more title code, not a new
+concern -- but the **line accounting in SS2 and SS3 is baselined at `f15cce1a` and 4,682 lines are
+unassigned**. Do not quote the SS2 totals as current.
+
+**Two files exist that this plan never saw:**
+
+| file | lines | note |
+|---|---:|---|
+| `quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | ProfileSelect 05_010 live editor runtime. Unclassified |
+| `quit_menu/save_picker_path_editor.rs` | 758 | Load Game path editor (#226). Unclassified |
+
+**Files that MOVED -- every intra-file line number in SS3/SS5 for these is stale:**
+
+| file | plan | now | delta | consequence |
+|---|---:|---:|---:|---|
+| `quit_menu/save_picker_menu.rs` | 1,096 | 2,895 | **+1,799** | 4-way split offsets void; file now 2.6x plan size |
+| `loading_cover/title_resources_stats_text.rs` | 1,088 | 2,402 | **+1,314** | the `er-scaleform-hooks` 648-line row is void |
+| `quit_menu/system_quit_repro_guards.rs` | 2,067 | 1,181 | **-886** | **the 903-line DELETE row largely LANDED** -- re-verify before re-deleting |
+| `quit_menu/system_quit_hooks.rs` | 1,046 | 673 | **-373** | part of its 439-line DELETE row landed |
+| `loading_cover/loading_cover_save_slot.rs` | 1,444 | 1,587 | +143 | SS7 dedupe line refs stale; the finding itself is unaffected |
+| `quit_menu/profile_rows_system_quit_menu.rs` | 1,858 | 1,957 | +99 | **the line-511 cut in SS6.4 must be re-derived** |
+| `quit_menu/save_swap_profile_table.rs` | 1,097 | 1,163 | +66 | 3-way split offsets stale |
+| `loading_cover/profile_table_gfx_files.rs` | 810 | 898 | +88 | 4-way split offsets stale |
+| `loading_cover/startup_modals_menu_cover.rs` | 1,150 | 1,075 | -75 | 5-way split offsets stale |
+| `quit_menu/system_quit_ownership_repro.rs` | 1,478 | 1,407 | -71 | 5-way split offsets stale |
+| `loading_cover/title_scaleform_msgbox.rs` | 935 | 868 | -67 | 3-way split offsets stale |
+| `diagnostics/layout_global_hooks.rs` | 439 | 383 | -56 | 4-way split offsets stale |
+| `quit_menu/system_quit_dialog_handlers.rs` | 1,452 | 1,459 | +7 | 96%-one-destination claim unaffected |
+| `quit_menu/mod.rs` | 198 | 204 | +6 | -- |
+
+**The other 18 files are byte-stable in line count**, so their rows -- including every whole-file
+move in SS6.3 (`scaleform_descriptor_guard.rs`, `window_reconfig_observer.rs`,
+`portrait_equip_oracle.rs`, `save_picker_boot.rs`, `save_dest_commit.rs`, `save_flow_boxes.rs`,
+`system_quit_row_identity.rs`) -- carry forward unchanged.
+
+**Consequence for sequencing: SS6's "deletions first" is partly done.** `system_quit_repro_guards.rs`
+and `system_quit_hooks.rs` already shed 1,259 of the planned 2,141 dead lines. Re-run the caller
+proofs before opening a deletion slice here; do not assume the SS5 table is still live.
 
 ---
 
@@ -73,6 +124,10 @@ Four facts shape every slice:
 
 ## 2. Totals by destination
 
+**These totals are frozen at `f15cce1a` and do not sum to the directory's current size.** At
+`877f1261` there are 4,682 more lines here than this table accounts for (SS0.1). Use it for
+*relative* weight -- which destination dominates -- not as a current line budget.
+
 | destination | lines | new crate? |
 |---|---:|---|
 | `er-quit-menu` | 7,529 | no |
@@ -90,44 +145,48 @@ Four facts shape every slice:
 
 ---
 
-## 3. Per-file assignment -- all 32 files
+## 3. Per-file assignment -- all 32 analysed files (+ 2 unanalysed)
 
-Paths relative to `crates/er-effects-rs/src/experiments/startup_hooks/`.
+Paths relative to `crates/er-effects-rs/src/experiments/startup_hooks/`. **`plan` is the line count
+the destination split was measured against (`f15cce1a`); `now` is `877f1261`.** Where they differ,
+the destinations still hold but the line *quantities* -- and any offset derived from them -- do not.
 
-| File | Lines | Destination(s) | Splits |
-|---|---:|---|---:|
-| `quit_menu/system_quit_repro_guards.rs` | 2067 | DELETE 903 / STAY 452 / er-quit-menu 396 / er-title-flow 221 / er-loading-portrait 67 | 5 |
-| `quit_menu/profile_rows_system_quit_menu.rs` | 1858 | STAY 902 / er-quit-menu 875 / DELETE 51 | 3 |
-| `quit_menu/system_quit_ownership_repro.rs` | 1478 | er-quit-menu 988 / er-telemetry 347 / DELETE 83 / er-loading-portrait 32 / STAY 7 | 5 |
-| `quit_menu/system_quit_dialog_handlers.rs` | 1452 | er-quit-menu 1395 / er-save-picker 66 | 2 |
-| `loading_cover/loading_cover_save_slot.rs` | 1444 | er-save-loader 557 / er-loading-portrait 458 / er-quit-menu 208 / STAY 173 / er-telemetry 10 / DELETE 1 | 6 |
-| `quit_menu/save_dest_commit.rs` | 1243 | er-quit-menu 1026 / DELETE 206 | 2 |
-| `loading_cover/startup_modals_menu_cover.rs` | 1150 | er-title-flow 879 / STAY 185 / DELETE 52 / er-telemetry 9 | 5 |
-| `quit_menu/save_swap_profile_table.rs` | 1097 | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 | 3 |
-| `quit_menu/save_picker_menu.rs` | 1096 | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 | 4 |
-| `loading_cover/title_resources_stats_text.rs` | 1088 | NEW:er-scaleform-hooks 648 / er-title-flow 320 / STAY 100 / DELETE 1 | 3 |
-| `quit_menu/system_quit_hooks.rs` | 1046 | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 | 5 |
-| `loading_cover/title_scaleform_msgbox.rs` | 935 | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 | 3 |
-| `loading_cover/profile_table_gfx_files.rs` | 810 | NEW:er-scaleform-hooks 653 / er-quit-menu 51 / er-loading-portrait 51 / DELETE 43 | 4 |
-| `quit_menu/save_flow_boxes.rs` | 655 | er-quit-menu 628 / DELETE 7 | 2 |
-| `loading_cover/window_reconfig_observer.rs` | 471 | NEW:er-boot-window 461 | 1 |
-| `save_picker/save_picker_boot.rs` | 469 | er-save-picker 387 / DELETE 64 / STAY 1 | 3 |
-| `diagnostics/layout_global_hooks.rs` | 439 | er-title-flow 160 / er-quit-menu 112 / STAY 105 / DELETE 55 | 4 |
-| `quit_menu/system_quit_row_identity.rs` | 289 | er-quit-menu 263 / DELETE 19 | 2 |
-| `loading_cover/portrait_equip_oracle.rs` | 277 | er-loading-portrait 220 / DELETE 51 | 2 |
-| `quit_menu/mod.rs` | 198 | STAY 196 | 1 |
-| `loading_cover/mod.rs` | 189 | STAY 188 | 1 |
-| `diagnostics/mod.rs` | 174 | STAY 172 | 1 |
-| `save_picker/mod.rs` | 171 | STAY 169 | 1 |
-| `diagnostics/dlc_roots_trace.rs` | 169 | STAY 162 | 1 |
-| `diagnostics/msb_parse_trace.rs` | 139 | STAY 136 | 1 |
-| `diagnostics/loadlist_wait_trace.rs` | 139 | STAY 135 | 1 |
-| `save_picker/save_picker_surface.rs` | 122 | er-quit-menu 53 / STAY 32 / er-save-picker 23 / DELETE 10 | 4 |
-| `loading_cover/scaleform_descriptor_guard.rs` | 95 | NEW:er-scaleform-hooks 94 | 1 |
-| `save_picker/save_picker_os_dialog.rs` | 27 | DELETE 25 | 1 |
-| `quit_menu/save_dest_identity.rs` | 7 | DELETE 5 | 1 |
-| `quit_menu/save_picker_dim_overlay.rs` | 6 | DELETE 5 | 1 |
-| `loading_cover/dlc_roots_self_heal.rs` | 2 | DELETE 2 | 1 |
+| File | plan | now | Destination(s) | Splits |
+|---|---:|---:|---|---:|
+| `quit_menu/save_picker_menu.rs` | 1096 | **2895** | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 | 4 |
+| `loading_cover/title_resources_stats_text.rs` | 1088 | **2402** | NEW:er-scaleform-hooks 648 / er-title-flow 320 / STAY 100 / DELETE 1 | 3 |
+| `quit_menu/profile_rows_system_quit_menu.rs` | 1858 | **1957** | STAY 902 / er-quit-menu 875 / DELETE 51 | 3 |
+| `quit_menu/profile_05_010_editor_runtime.rs` | -- | **1765** | **UNANALYSED** -- new since baseline | ? |
+| `loading_cover/loading_cover_save_slot.rs` | 1444 | **1587** | er-save-loader 557 / er-loading-portrait 458 / er-quit-menu 208 / STAY 173 / er-telemetry 10 / DELETE 1 | 6 |
+| `quit_menu/system_quit_dialog_handlers.rs` | 1452 | **1459** | er-quit-menu 1395 / er-save-picker 66 | 2 |
+| `quit_menu/system_quit_ownership_repro.rs` | 1478 | **1407** | er-quit-menu 988 / er-telemetry 347 / DELETE 83 / er-loading-portrait 32 / STAY 7 | 5 |
+| `quit_menu/save_dest_commit.rs` | 1243 | 1243 | er-quit-menu 1026 / DELETE 206 | 2 |
+| `quit_menu/system_quit_repro_guards.rs` | 2067 | **1181** | DELETE 903 / STAY 452 / er-quit-menu 396 / er-title-flow 221 / er-loading-portrait 67 -- **DELETE row largely already landed** | 5 |
+| `quit_menu/save_swap_profile_table.rs` | 1097 | **1163** | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 | 3 |
+| `loading_cover/startup_modals_menu_cover.rs` | 1150 | **1075** | er-title-flow 879 / STAY 185 / DELETE 52 / er-telemetry 9 | 5 |
+| `loading_cover/profile_table_gfx_files.rs` | 810 | **898** | NEW:er-scaleform-hooks 653 / er-quit-menu 51 / er-loading-portrait 51 / DELETE 43 | 4 |
+| `loading_cover/title_scaleform_msgbox.rs` | 935 | **868** | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 | 3 |
+| `quit_menu/save_picker_path_editor.rs` | -- | **758** | **UNANALYSED** -- new since baseline (#226) | ? |
+| `quit_menu/system_quit_hooks.rs` | 1046 | **673** | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** | 5 |
+| `quit_menu/save_flow_boxes.rs` | 655 | 655 | er-quit-menu 628 / DELETE 7 | 2 |
+| `loading_cover/window_reconfig_observer.rs` | 471 | 471 | NEW:er-boot-window 461 | 1 |
+| `save_picker/save_picker_boot.rs` | 469 | 469 | er-save-picker 387 / DELETE 64 / STAY 1 | 3 |
+| `diagnostics/layout_global_hooks.rs` | 439 | **383** | er-title-flow 160 / er-quit-menu 112 / STAY 105 / DELETE 55 | 4 |
+| `quit_menu/system_quit_row_identity.rs` | 289 | 289 | er-quit-menu 263 / DELETE 19 | 2 |
+| `loading_cover/portrait_equip_oracle.rs` | 277 | 277 | er-loading-portrait 220 / DELETE 51 | 2 |
+| `quit_menu/mod.rs` | 198 | **204** | STAY 196 | 1 |
+| `loading_cover/mod.rs` | 189 | 189 | STAY 188 | 1 |
+| `diagnostics/mod.rs` | 174 | 174 | STAY 172 | 1 |
+| `save_picker/mod.rs` | 171 | 171 | STAY 169 | 1 |
+| `diagnostics/dlc_roots_trace.rs` | 169 | 169 | STAY 162 | 1 |
+| `diagnostics/msb_parse_trace.rs` | 139 | 139 | STAY 136 | 1 |
+| `diagnostics/loadlist_wait_trace.rs` | 139 | 139 | STAY 135 | 1 |
+| `save_picker/save_picker_surface.rs` | 122 | 122 | er-quit-menu 53 / STAY 32 / er-save-picker 23 / DELETE 10 | 4 |
+| `loading_cover/scaleform_descriptor_guard.rs` | 95 | 95 | NEW:er-scaleform-hooks 94 | 1 |
+| `save_picker/save_picker_os_dialog.rs` | 27 | 27 | DELETE 25 | 1 |
+| `quit_menu/save_dest_identity.rs` | 7 | 7 | DELETE 5 | 1 |
+| `quit_menu/save_picker_dim_overlay.rs` | 6 | 6 | DELETE 5 | 1 |
+| `loading_cover/dlc_roots_self_heal.rs` | 2 | 2 | DELETE 2 | 1 |
 
 ---
 
@@ -225,12 +284,18 @@ problem.
 ## 6. Ordering
 
 1. **Deletions first.** Every later line-count is wrong until 2,141 dead lines are gone.
+   **Status at `877f1261`: partly done.** `system_quit_repro_guards.rs` (-886) and
+   `system_quit_hooks.rs` (-373) already shed 1,259 of those lines. Re-run the caller proofs in SS5
+   before opening a deletion slice; several rows are already satisfied.
 2. **`er-telemetry` counter moves** (366 lines) -- mechanical, unblocks the accounting.
 3. **Whole-file moves** with no split: `scaleform_descriptor_guard.rs`, `window_reconfig_observer.rs`,
    `system_quit_dialog_handlers.rs` (2-way, 96% one destination).
 4. **Single-cut splits** -- the cleanest is `profile_rows_system_quit_menu.rs` at **line 511**:
    1-511 are title hooks -> `er-title-flow`, 512+ are quit-menu. Independently confirmed by arming
    call sites: its title installers are all armed from `lifecycle.rs`.
+   **The 511 is stale** -- the file grew 1,858 -> 1,957 at `877f1261`. The *cut* is still real (the
+   title/quit-menu boundary is a structural fact, not a line number); re-derive the offset from the
+   last title installer before slicing. Tracked as bd `er-effects-rs-5obc`.
 5. **`loading_cover_save_slot.rs` 6-way split** -- unblocks three things at once, and its
    `er-save-loader` half is a **dedupe, not a move** (see SS7).
 6. **The hook-heavy quit-menu surfaces** -- highest risk, do last.

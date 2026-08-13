@@ -1,16 +1,61 @@
 # experiments/ crate targets -- plan of record
 
-**Baseline: `b49dd5e2` (HEAD, 2026-08-02).** Every line number below was measured against this
+**Analysis baseline: `b49dd5e2` (2026-08-02).** Every line number below was measured against that
 commit, not inherited. The working tree was clean when measured.
+
+**Re-measured and re-proved at `877f1261` (main, 2026-08-13) -- see SS0.1.** Unlike the
+`startup_hooks/` half, this subtree barely moved: **30 of 40 files are unchanged to the line**, and
+**all 26 caller-count proofs behind S1-S4 still hold**. The corrected line numbers are folded into
+SS5 directly; the rest of the plan stands as written.
 
 **Scope: `crates/er-effects-rs/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
 owned by a separate concurrent analysis -- see SS8.
 
 ---
 
+## 0.1 Re-verification at `877f1261` (2026-08-13)
+
+**40 files / 27,847 lines** (was 27,106 -- **+741**, no files added or removed).
+
+Ten files moved; only four materially:
+
+| file | plan | now | delta | consequence |
+|---|---:|---:|---:|---|
+| `input_block.rs` | 1013 | 1443 | **+430** | `render_liveness_probe` moved 997 -> **1287-1303**. The orphaned doc block is still at **57-60** and `#[allow(dead_code)]` still at **61** -- unmoved |
+| `save_redirect/path_hooks.rs` | 1741 | 1954 | **+213** | `wide_with_nul` 1319 -> **1510-1514**; `SAVE_CREATEFILEW_DIAG_ALL_BELOW` 564 -> **576-579**. SS8.5's "+81 past line 743" advice is superseded |
+| `trace/menu_constructor_capture.rs` | 1176 | 1227 | +51 | whole-file move to er-menu-trace; no offsets to correct |
+| `lifecycle.rs` | 2336 | 2374 | +38 | S10's 4-way split offsets need re-deriving |
+| `own_load/loaders.rs` | 1140 | 1145 | +5 | S11 offsets need re-deriving |
+| `continue_load/slot_resolution.rs` | 769 | 773 | +4 | -- |
+| `profiler.rs` | 382 | 383 | +1 | whole-file move; unaffected |
+| `input_trace.rs` | 925 | 924 | -1 | STAY; unaffected |
+
+**Every S1-S4 target file is either unchanged or has been re-pinned above.** `boot_progress.rs`
+(3,055), `submit.rs` (577), `live_loadgame_node.rs` (200), `product_continue.rs` (993),
+`present_overlay.rs` (1,166), `menu_observation.rs` (855), `menu_trace_hooks.rs` (2,077),
+`native_result_map_hooks.rs` (702), `bootstrap_drive.rs` (950), `load_steps.rs` (844),
+`env_flags.rs` (727), `runtime_modes.rs` (157) are all **unchanged to the line**.
+
+**Proofs re-run, not assumed:**
+
+* **S1: all 12 symbols still return exactly 1 comment-stripped code hit** (their own definition)
+  over a **605-file** corpus (was 565).
+* **S2/S3: still zero-caller.** `composite_effect_selector_on_swapchain` 1 hit
+  (`boot_progress.rs:2648`); `install_dxgi_factory_export_hook` 1 hit (`present_overlay.rs:415`);
+  `factory2_hook` 2 hits, both inside the dead block (`:389` def, `:435` use).
+* **S4: all 14 items still have exactly one caller, and every gate is still a literal `false`.**
+  A fresh whole-file scan of `gating/` finds **45 hard-`false` gates** -- exactly the count SS7
+  Decision 2 was costed against, so that decision's arithmetic is unchanged.
+
+**Nothing in this plan has been executed.** No S-slice has landed; `submit.rs` and
+`live_loadgame_node.rs` are still present at full size.
+
+---
+
 ## 1. Bottom line
 
-There are **40 files / 27,106 lines** here (not the 41 / 27,216 the task brief stated -- measured at
+There are **40 files / 27,847 lines** here at `877f1261` (27,106 at the analysis baseline; not the
+41 / 27,216 the task brief stated -- measured at
 both `e930b7fc` = 27,019 and HEAD = 27,106; the delta is commit `b49dd5e2`, which added 87 lines to
 `save_redirect/path_hooks.rs` and `own_load/drive.rs`). **Zero of these files use `include!`** -- I
 scanned all of `experiments/**` and found 0 sites, so the brief's central worry is void and every
@@ -67,31 +112,31 @@ and I sided with the verifier.
 Module mechanism verified for every file: **all real `mod` + glob re-export; 0 `include!` sites in
 the entire subtree.** `use super::*` is the actual coupling cost.
 
-| File (under `experiments/`) | Lines | Mechanism | Destination | Splits? |
+| File (under `experiments/`) | Lines (`877f1261`) | Mechanism | Destination | Splits? |
 |---|---|---|---|---|
 | `gpu_readback/boot_progress.rs` | 3055 | real `mod` (`gpu_readback.rs:66`), `use super::*` | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) | **yes, 4 ways** |
-| `lifecycle.rs` | 2336 | real `mod` (`mod.rs:110`), `use super::*:6` | er-quit-menu (1,485) / **STAY** (748) / **DELETE** (92) | **yes, 4 ways** |
+| `lifecycle.rs` | 2374 | real `mod` (`mod.rs:110`), `use super::*:6` | er-quit-menu (1,485) / **STAY** (748) / **DELETE** (92) | **yes, 4 ways** |
 | `trace/menu_trace_hooks.rs` | 2077 | real `mod` (`trace.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) | **yes, 3 ways** |
-| `save_redirect/path_hooks.rs` | 1741 | real `mod` (`save_redirect.rs:7`), near-copy header + `use super::*:62` | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) | **yes, 3 ways** |
+| `save_redirect/path_hooks.rs` | 1954 | real `mod` (`save_redirect.rs:7`), near-copy header + `use super::*:62` | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) | **yes, 3 ways** |
 | `own_load/drive.rs` | 1703 | real `mod` (`own_load.rs:7`), explicit preamble + `use super::*` | er-load-drive (~1,040) / **STAY** (~662, rule-4 gated) | **yes** |
 | `mod/product_core_own_stepper.rs` | 1328 | `#[path]` `mod` (`mod.rs:113-115`), `use super::*:1` | er-load-drive (634) / **STAY** (694, unreachable tail) | **yes, cuts one 776-line fn** |
-| `trace/menu_constructor_capture.rs` | 1176 | real `mod` (`trace.rs:10`), `use super::*:1` | er-menu-trace (whole) | no |
+| `trace/menu_constructor_capture.rs` | 1227 | real `mod` (`trace.rs:10`), `use super::*:1` | er-menu-trace (whole) | no |
 | `present_overlay.rs` | 1166 | real `mod` (`mod.rs:61`), own imports + `use super::*:43` | STAY (mechanism) / er-d3d12-compositor (128) / er-hook (34) / **DELETE** (66) | **yes, 4 ways** |
-| `own_load/loaders.rs` | 1140 | real `mod` (`own_load.rs:10`), `use super::*:1` **only** | er-load-drive (590) / **STAY** (550) | **yes -- live/dead alternate 5x** |
-| `input_block.rs` | 1013 | real `mod` (`mod.rs:74`), own 55-line preamble + `use super::*:55` | **STAY** (996) / **DELETE** (17) | minimal |
+| `own_load/loaders.rs` | 1145 | real `mod` (`own_load.rs:10`), `use super::*:1` **only** | er-load-drive (590) / **STAY** (550) | **yes -- live/dead alternate 5x** |
+| `input_block.rs` | 1443 | real `mod` (`mod.rs:74`), own 55-line preamble + `use super::*:55` | **STAY** (996) / **DELETE** (17) | minimal |
 | `continue_load/product_continue.rs` | 993 | real `mod` (`continue_load.rs:7`), explicit preamble + `use super::*:45` | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) | **yes, 3 ways** |
 | `own_stepper/bootstrap_drive.rs` | 950 | real `mod` (`own_stepper.rs:7`), preamble + `use super::*:45` | er-load-drive (51) / **STAY** (851) / **DELETE** (48) | **yes -- 5% live** |
-| `input_trace.rs` | 925 | real `mod` (`mod.rs:77`), `use super::*:21` | **STAY** (rule 4 + blocked on startup_hooks) | no |
+| `input_trace.rs` | 924 | real `mod` (`mod.rs:77`), `use super::*:21` | **STAY** (rule 4 + blocked on startup_hooks) | no |
 | `menu_diag/menu_observation.rs` | 855 | real `mod` (`menu_diag.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (629) / **DELETE** (226) | **yes** |
 | `own_stepper/load_steps.rs` | 844 | real `mod` (`own_stepper.rs:10`), `use super::*:1` **only** | er-load-drive (420) / **STAY** (388) / **DELETE** (36) | **yes, 3 ways** |
-| `continue_load/slot_resolution.rs` | 769 | real `mod` (`continue_load.rs:10`), `use super::*:1` **only** | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) | **yes -- see override** |
+| `continue_load/slot_resolution.rs` | 773 | real `mod` (`continue_load.rs:10`), `use super::*:1` **only** | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) | **yes -- see override** |
 | `gating/env_flags.rs` | 727 | real `mod` (`gating.rs:7`), `use super::*:45` | **er-gates** (720) / **DELETE** (7) | minimal |
 | `trace/native_result_map_hooks.rs` | 702 | real `mod` (`trace.rs:13`), `use super::*:1` **only** | er-menu-trace (677) / **DELETE** (25) | minimal |
 | `submit.rs` | 577 | real `mod` (`mod.rs:101`), pasted header + `use super::*:49` | **DELETE -- entire file** | n/a |
 | `gpu_readback/gpu_draw_shared.rs` | 476 | real `mod` (`gpu_readback.rs:63`), `use super::*:1` | er-boot-cover (whole) | no |
 | `gpu_frame_timing.rs` | 424 | real `mod` (`mod.rs:64`), own imports + `use super::*:54` | **STAY** (rule 4: control-file gated, device-removed the game) | no |
 | `can_move_probe.rs` | 418 | real `mod` (`mod.rs:73`), **no `use super::*`** -- explicit imports only | **STAY** (rule 4) -- **the conversion template** | no |
-| `profiler.rs` | 382 | real `mod` (`mod.rs:104`), real minimal imports + `use super::*:56` | **er-boot-profiler** (whole) | no |
+| `profiler.rs` | 383 | real `mod` (`mod.rs:104`), real minimal imports + `use super::*:56` | **er-boot-profiler** (whole) | no |
 | `save_redirect/file_ops.rs` | 352 | real `mod` (`save_redirect.rs:10`), `use super::*:1` | er-save-redirect (whole) -- **cannot move without path_hooks.rs** | no |
 | `mem.rs` | 206 | real `mod` (`mod.rs:86`), preamble + `use super::*:49` | er-game-base (36) / **er-hook** (109) / **STAY** (61, the er-game-base re-export shim) | **yes, 3 ways** |
 | `menu_diag/live_loadgame_node.rs` | 200 | real `mod` (`menu_diag.rs:10`), `use super::*:1` | **DELETE -- entire file** | n/a |
@@ -226,27 +271,32 @@ for s in ['own_stepper_selffire_enabled','title_registrar_advance_gate_enabled',
 ```
 
 **Measured result at `b49dd5e2`: corpus 565 files; every symbol returns exactly 1 code hit -- its own
-definition.** Comments are stripped, so doc-comment mentions do not inflate the count; the scan is by
-bare name, so the `pub(crate) use <child>::*` glob chain (`experiments/mod.rs` 21 globs) cannot hide
-a caller; and there are **0 `include!` sites under `experiments/`**, so no file can be textually
-pasted somewhere a name search would miss.
+definition. Re-run at `877f1261`: corpus 605 files; still exactly 1 code hit each.** Comments are
+stripped, so doc-comment mentions do not inflate the count; the scan is by bare name, so the
+`pub(crate) use <child>::*` glob chain (`experiments/mod.rs` 21 globs) cannot hide a caller; and
+there are **0 `include!` sites under `experiments/`**, so no file can be textually pasted somewhere a
+name search would miss.
 
 ### Exact edits
 
+**Line numbers below are pinned at `877f1261`.** The five that moved since the analysis baseline are
+marked; each was re-derived by walking the item's own brace/attribute extent, not by adding an
+offset.
+
 | # | File | Delete lines | Item | Notes |
 |---|---|---|---|---|
-| 1 | `experiments/gating/runtime_modes.rs` | **103-110** | `own_stepper_selffire_enabled` + doc | 8 lines |
-| 2 | `experiments/gating/env_flags.rs` | **256-262** | `title_registrar_advance_gate_enabled` + doc | 7 lines. Do **not** touch its sibling `title_accept_byte_gate_enabled` -- that is live at `er-title-flow/src/product_autoload_gates.rs:223` |
-| 3 | `experiments/input_block.rs` | **997-1013** | `render_liveness_probe` | 17 lines. Doubly dead: first statement is `if !title_accept_enabled() { return; }` and that gate is a bare `false` at `gating/runtime_modes.rs:132`. Also delete the **orphaned doc block at `input_block.rs:57-60`**, which describes this function but sits on the unrelated `BLOCK_INPUT_ACTIVE` re-export at `:66`. **Leave `#[allow(dead_code)]` at `:61` alone** -- it is a live attribute on that re-export, not stray |
-| 4 | `experiments/save_redirect/path_hooks.rs` | **1319-1323** | `wide_with_nul` | 5 lines. NUL termination now happens in `er_save_redirect::redirect_wide_roaming_eldenring_path`. **Note this line number moved from 1283 -> 1319 in commit `b49dd5e2`** |
-| 5 | `experiments/save_redirect/path_hooks.rs` | **564-567** | `SAVE_CREATEFILEW_DIAG_ALL_BELOW` + 3-line doc | 4 lines. Superseded by `er_save_redirect::CreateFileSavePathDiag::should_capture_diag_log`. Do **not** confuse with `SAVE_REDIRECT_MODE_UNSET` at `:351`, which is live |
-| 6 | `experiments/gpu_readback/boot_progress.rs` | **1215-1217** | `boot_bg_image_rgba_clone` | 3 lines |
-| 7 | `experiments/gpu_readback/boot_progress.rs` | **233** | `BOOT_VIEW_GLYPH_W` | 1 line |
-| 8 | `experiments/gpu_readback/boot_progress.rs` | **86-87** | `BOOT_VIEW_EPOCH_KIND_BOOT` + doc | 2 lines. It documents the `0` default; the only explicit call passes `..._RELOAD` (`boot_progress.rs:686`) |
-| 9 | `experiments/gpu_readback/boot_progress.rs` | **195-197** | `BOOT_VIEW_HANDOFF_HOLD_BAIL_MS` + doc | 3 lines. **File an issue** -- its documented 5s backstop is unimplemented; `BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS` now covers it. Do not silently re-add the backstop inside a deletion PR |
-| 10 | `experiments/continue_load/product_continue.rs` | **204-236** | `product_continue_entry_action` | 33 lines |
-| 11 | `experiments/continue_load/product_continue.rs` | **237-251** | `captured_continue_task_node` | 15 lines |
-| 12 | `experiments/continue_load/product_continue.rs` | **252-265** | `drive_product_continue_post_click_dispatchers` | 14 lines. This strands `SYNTH_MMS_OWNER`, `B80_DISPATCHER1_RVA`, `B80_DISPATCHER2_RVA` -- **leave them**, they are a follow-up constants slice |
+| 1 | `experiments/gating/runtime_modes.rs` | **103-110** | `own_stepper_selffire_enabled` + doc | 8 lines. Unmoved |
+| 2 | `experiments/gating/env_flags.rs` | **256-262** | `title_registrar_advance_gate_enabled` + doc | 7 lines. Unmoved. Do **not** touch its sibling `title_accept_byte_gate_enabled` -- that is live at `er-title-flow/src/product_autoload_gates.rs:223` |
+| 3 | `experiments/input_block.rs` | **1287-1303** | `render_liveness_probe` | 17 lines. **Moved from 997-1013** (the file grew +430). Doubly dead: first statement is `if !title_accept_enabled() { return; }` and that gate is a bare `false` at `gating/runtime_modes.rs:132`. Also delete the **orphaned doc block at `input_block.rs:57-60`** (unmoved), which describes this function but sits on the unrelated `BLOCK_INPUT_ACTIVE` re-export at `:66`. **Leave `#[allow(dead_code)]` at `:61` alone** -- it is a live attribute on that re-export, not stray |
+| 4 | `experiments/save_redirect/path_hooks.rs` | **1510-1514** | `wide_with_nul` | 5 lines. **Moved 1319 -> 1510.** NUL termination now happens in `er_save_redirect::redirect_wide_roaming_eldenring_path` |
+| 5 | `experiments/save_redirect/path_hooks.rs` | **576-579** | `SAVE_CREATEFILEW_DIAG_ALL_BELOW` + 3-line doc | 4 lines. **Moved 564 -> 576.** Superseded by `er_save_redirect::CreateFileSavePathDiag::should_capture_diag_log`. Do **not** confuse with `SAVE_REDIRECT_MODE_UNSET`, which is live |
+| 6 | `experiments/gpu_readback/boot_progress.rs` | **1215-1217** | `boot_bg_image_rgba_clone` | 3 lines. Unmoved |
+| 7 | `experiments/gpu_readback/boot_progress.rs` | **233** | `BOOT_VIEW_GLYPH_W` | 1 line. Unmoved |
+| 8 | `experiments/gpu_readback/boot_progress.rs` | **86-87** | `BOOT_VIEW_EPOCH_KIND_BOOT` + doc | 2 lines. Unmoved. It documents the `0` default; the only explicit call passes `..._RELOAD` |
+| 9 | `experiments/gpu_readback/boot_progress.rs` | **195-197** | `BOOT_VIEW_HANDOFF_HOLD_BAIL_MS` + doc | 3 lines. Unmoved. **File an issue** -- its documented 5s backstop is unimplemented; `BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS` now covers it. Do not silently re-add the backstop inside a deletion PR |
+| 10 | `experiments/continue_load/product_continue.rs` | **204-236** | `product_continue_entry_action` | 33 lines. Unmoved |
+| 11 | `experiments/continue_load/product_continue.rs` | **237-251** | `captured_continue_task_node` | 15 lines. Unmoved |
+| 12 | `experiments/continue_load/product_continue.rs` | **252-265** | `drive_product_continue_post_click_dispatchers` | 14 lines. Unmoved. This strands `SYNTH_MMS_OWNER`, `B80_DISPATCHER1_RVA`, `B80_DISPATCHER2_RVA` -- **leave them**, they are a follow-up constants slice |
 
 Delete **bottom-up within each file** so earlier deletions do not shift later line numbers.
 
@@ -268,9 +318,13 @@ None -- this slice creates no module.
 ### Verification
 
 ```bash
+# Build BOTH sides in the SAME directory -- a sibling worktree differs in ~9% of .text at
+# identical section sizes, which would make the gate meaningless.
+SCRATCH=${SCRATCH:-$(mktemp -d)}
+
 # 1. Build the BEFORE DLL and stash it.
 cargo xwin build --release --target x86_64-pc-windows-msvc
-cp -f target/x86_64-pc-windows-msvc/release/er_effects_rs.dll /tmp/claude-1000/-home-banon-projects-er-effects-rs/8eeb36ba-800a-47a8-bef5-03c4bfcbc443/scratchpad/before.dll
+cp -f target/x86_64-pc-windows-msvc/release/er_effects_rs.dll "$SCRATCH"/before.dll
 
 # 2. Apply the 12 deletions.
 
@@ -279,7 +333,7 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 
 # 4. THE GATE. Exit 0 with .text identical => provably no behavior change, NO RUNTIME RUN REQUIRED.
 python3 scripts/dll-code-fingerprint.py \
-  /tmp/claude-1000/-home-banon-projects-er-effects-rs/8eeb36ba-800a-47a8-bef5-03c4bfcbc443/scratchpad/before.dll \
+  "$SCRATCH"/before.dll \
   target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
 
 # 5. Full quality gate.
@@ -489,9 +543,10 @@ file and must be coordinated:
    already resolve without the glob. STAY is right; the cost figure is not load-bearing anywhere in
    this plan.
 
-5. **`save_redirect/path_hooks.rs` line numbers past ~743 shifted** in commit `b49dd5e2`. Everything
-   printed in this document was re-measured at HEAD, but the source analysis was written against
-   `e930b7fc` -- if you consult it directly, add up to +81 to any line past 743. Its block list also
+5. **`save_redirect/path_hooks.rs` line numbers are twice-shifted and the "+81" rule is dead.**
+   The file went 1,741 -> 1,954 between `b49dd5e2` and `877f1261`, on top of the earlier
+   `e930b7fc` -> `b49dd5e2` shift. Do **not** apply any fixed offset to a line number from either
+   older analysis -- re-derive it. The two S1 items in this file are re-pinned in SS5. Its block list also
    has three overlapping ranges with contradictory destinations (470-573 swallows both 538-556 and
    564-567); re-cut that file into a true partition before slicing it.
 
