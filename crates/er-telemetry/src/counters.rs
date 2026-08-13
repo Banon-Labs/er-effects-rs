@@ -1155,17 +1155,6 @@ pub static BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0
 // skipped on the exact frame the native loading screen first appears.
 pub static BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
-pub static EFFECT_SELECTOR_VIEW_BUSY: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_FENCE: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_QUEUE: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_UPLOAD: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
-pub static EFFECT_SELECTOR_VIEW_W: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_H: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_HASH: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static EFFECT_SELECTOR_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_RT_PIN: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_RT_PIN_SWITCHES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
