@@ -10,8 +10,8 @@
 mod common;
 
 use er_gfx::announce_notice::{
-    ALIGN_CENTER, ALIGN_LEFT, EDIT_TEXT_AUTO_SIZE, EDIT_TEXT_HAS_LAYOUT, NOTICE_TEXT_CHARACTER_ID,
-    with_centered_notice_text,
+    ALIGN_CENTER, ALIGN_LEFT, EDIT_TEXT_AUTO_SIZE, EDIT_TEXT_HAS_LAYOUT, NOTICE_FIELD_WIDTH_PX,
+    NOTICE_TEXT_CHARACTER_ID, with_centered_notice_text,
 };
 use er_gfx::{Movie, Tag};
 
@@ -79,11 +79,21 @@ fn the_vanilla_field_has_the_shape_the_edit_assumes() {
          would change nothing on screen while every assertion here still passed"
     );
     // The box has to be substantially wider than a line of text, or "centred" and "left" would
-    // look the same and this edit would be pointless. ~1726 px at 20 twips per pixel.
+    // look the same and this edit would be pointless.
     let width_px = (bounds.x_max - bounds.x_min) / 20;
     assert!(
         width_px > 800,
         "the field is only {width_px}px wide; centring needs spare width to be visible"
+    );
+    // And it must match the constant the DLL's blank-banner oracle subtracts. The engine truncates
+    // each EDGE to int before subtracting, so this is reproduced edge-wise rather than as a plain
+    // width -- `(int)(x_max*0.05) - (int)(x_min*0.05)`, which is not the same as `(x_max-x_min)/20`
+    // when either edge is negative, and this field's left edge is.
+    let engine_width =
+        ((f64::from(bounds.x_max) * 0.05) as i32) - ((f64::from(bounds.x_min) * 0.05) as i32);
+    assert_eq!(
+        engine_width, NOTICE_FIELD_WIDTH_PX,
+        "the oracle's baseline must equal what the engine measures for this field"
     );
 }
 

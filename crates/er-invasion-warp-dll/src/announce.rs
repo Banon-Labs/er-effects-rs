@@ -95,19 +95,26 @@ pub const MSG_TEXT_OFFSET: usize = 0x10;
 /// `announcePlayState`, written as a BYTE by the game (`movb $0x1`), not as the enum's full width.
 pub const PLAY_STATE_OFFSET: usize = 0x0b50;
 
-/// `FeSystemAnnounceView +0xb64` — the WIDTH the game measured for the text it just loaded.
+/// `FeSystemAnnounceView +0xb64` — how far the loaded text OVERFLOWS its field, in pixels.
 ///
-/// # Why this is the oracle and the `SHOWN` counter is not
+/// # What this actually is, corrected after reading it live
 ///
-/// The `Load` case calls `FUN_14074a140` on the text widget and stores the result here; the
-/// `Scrolling` case then compares the scroll offset against it, which is what makes it a real
-/// extent rather than a status code. `FUN_14074a140` returns **0** outright when the underlying GFx
-/// object is not a live text field, and an empty string measures zero as well.
+/// The `Load` case stores `FUN_14074a140`'s result here and the `Scrolling` case advances a scroll
+/// offset toward it, which is what makes it a real measurement rather than a status code. It was
+/// first taken for the text's WIDTH. It is not: `FUN_140d82660` returns
+/// `textWidth - (fieldRight - fieldLeft)`, i.e. the OVERFLOW, and a live read proved it —
+/// "Rejected Castle Front (elsewhere)" measured **-1418** on a 1728 px field, so the text itself is
+/// 310 px wide and the value is negative whenever the line comfortably fits.
 ///
-/// So a non-zero value means the engine measured glyphs from OUR pointer. That is a fact read back
-/// out of the game's RAM, and it is the check whose absence let an empty banner ship with
-/// `SHOWN = 1` and a log line quoting the exact text it had "placed".
-pub const TEXT_MEASURED_WIDTH_OFFSET: usize = 0x0b64;
+/// That correction matters, because the first version of this oracle tested `!= 0` and would NOT
+/// have caught the bug it was written for: an EMPTY string does not measure zero, it measures
+/// `-fieldWidth`. Zero is returned only when the GFx object is not a live text field at all. So the
+/// text's own width has to be reconstructed by adding the field width back, and THAT is what must
+/// be positive.
+pub const TEXT_OVERFLOW_OFFSET: usize = 0x0b64;
+
+/// The notice field's width, the baseline added back to recover the text's own width.
+pub const NOTICE_FIELD_WIDTH_PX: i32 = er_gfx::announce_notice::NOTICE_FIELD_WIDTH_PX;
 /// `+0xb5c` — whether the measured text is long enough to need scrolling. Diagnostic company for
 /// the width: a wide string that does not scroll is a different bug from one that measures zero.
 pub const TEXT_NEEDS_SCROLL_OFFSET: usize = 0x0b5c;
@@ -188,15 +195,20 @@ pub fn poll_measurement() {
     if view == 0 {
         return;
     }
-    let width = unsafe { er_game_base::mem::safe_read_i32(view + TEXT_MEASURED_WIDTH_OFFSET) };
+    let overflow = unsafe { er_game_base::mem::safe_read_i32(view + TEXT_OVERFLOW_OFFSET) };
     let scrolls = unsafe { er_game_base::mem::safe_read_u8(view + TEXT_NEEDS_SCROLL_OFFSET) };
-    match width {
-        Some(width) if width != 0 => {
+    // The stored value is `textWidth - fieldWidth`, so the text's own width is that plus the field.
+    // An empty string lands at exactly `-fieldWidth` and therefore reconstructs to 0 -- which is
+    // the whole point of doing the arithmetic rather than testing the raw value against zero.
+    let text_width = overflow.map(|overflow| overflow + NOTICE_FIELD_WIDTH_PX);
+    match text_width {
+        Some(width) if width > 0 => {
             let drawn = MEASURED_DRAWN.fetch_add(1, Ordering::SeqCst) + 1;
             if drawn == 1 {
                 crate::standalone_log(format_args!(
-                    "announce: the game measured the notice at width={width} \
-                     (needs_scroll={scrolls:?}) -- it read glyphs out of our own buffer, which is \
+                    "announce: the game measured the notice text at {width}px \
+                     (overflow={overflow:?} against a {NOTICE_FIELD_WIDTH_PX}px field, \
+                     needs_scroll={scrolls:?}) -- it read glyphs out of our own buffer, which is \
                      the proof a SHOWN counter could never give"
                 ));
             }
@@ -205,9 +217,10 @@ pub fn poll_measurement() {
             MEASURED_EMPTY.fetch_add(1, Ordering::SeqCst);
             crate::standalone_log(format_args!(
                 "announce: BLANK BANNER -- the notice was placed but the game measured its text at \
-                 width={other:?} (needs_scroll={scrolls:?}). The surface is drawing an empty line. \
-                 The text pointer at AnnounceMessage+{MSG_TEXT_POINTER_OFFSET:#x} is not reaching \
-                 the text widget; do NOT treat the SHOWN tally as success"
+                 {other:?}px (overflow={overflow:?} against a {NOTICE_FIELD_WIDTH_PX}px field, \
+                 needs_scroll={scrolls:?}). The surface is drawing an empty line. The text pointer \
+                 at AnnounceMessage+{MSG_TEXT_POINTER_OFFSET:#x} is not reaching the text widget; \
+                 do NOT treat the SHOWN tally as success"
             ));
         }
     }
@@ -398,13 +411,13 @@ mod tests {
     #[test]
     fn the_measurement_offsets_sit_after_the_play_state_and_do_not_overlap() {
         assert_eq!(TEXT_NEEDS_SCROLL_OFFSET, 0x0b5c);
-        assert_eq!(TEXT_MEASURED_WIDTH_OFFSET, 0x0b64);
+        assert_eq!(TEXT_OVERFLOW_OFFSET, 0x0b64);
         assert!(
             PLAY_STATE_OFFSET < TEXT_NEEDS_SCROLL_OFFSET,
             "the play state is written before these are read"
         );
         assert!(
-            TEXT_NEEDS_SCROLL_OFFSET + 1 <= TEXT_MEASURED_WIDTH_OFFSET,
+            TEXT_NEEDS_SCROLL_OFFSET + 1 <= TEXT_OVERFLOW_OFFSET,
             "the scroll flag must not overlap the width"
         );
         // Measuring on the same frame reads the PREVIOUS notice's width, which would report a

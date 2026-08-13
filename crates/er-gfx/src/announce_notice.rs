@@ -42,6 +42,18 @@ pub const ALIGN_LEFT: u8 = 0;
 /// Centre — what the banner is changed to.
 pub const ALIGN_CENTER: u8 = 2;
 
+/// The notice field's width in PIXELS, as the engine computes it.
+///
+/// Bounds are `x_min = -40`, `x_max = 34_520` twips. The engine's own measurement
+/// (`FUN_140d82660`) scales each edge by `0.05` (twips to pixels) and truncates to `int` BEFORE
+/// subtracting: `(int)(34520 * 0.05) - (int)(-40 * 0.05)` = `1726 - -2` = `1728`.
+///
+/// Reproduced here rather than approximated because it is the baseline the DLL's blank-banner
+/// oracle subtracts: that measurement returns `textWidth - fieldWidth`, so the text's own width is
+/// only recoverable by adding this back. Getting it wrong shifts the threshold that decides whether
+/// a banner drew anything.
+pub const NOTICE_FIELD_WIDTH_PX: i32 = 1_728;
+
 /// `flags2` bit meaning the layout block is present. Without it there is nothing to align.
 pub const EDIT_TEXT_HAS_LAYOUT: u8 = 0x20;
 /// `flags2` bit meaning the field shrinks to its text. Clear on this field, which is what makes
