@@ -399,6 +399,51 @@ pub(crate) fn save_flow_menu_enter_stage(expected: usize, stage: usize, reason: 
 }
 
 #[cfg(test)]
+mod save_picker_row_hit_tests {
+    use super::save_picker_row_from_stage_y;
+    use er_gfx::title_05_010::{
+        COMPACT_ROW_PITCH_PX, COMPACT_SCROLLBAR_TOP_Y_PX, COMPACT_VISIBLE_ROW_COUNT,
+    };
+
+    const TOP: f32 = COMPACT_SCROLLBAR_TOP_Y_PX as f32;
+    const PITCH: f32 = COMPACT_ROW_PITCH_PX as f32;
+
+    #[test]
+    fn each_row_owns_exactly_one_pitch() {
+        for row in 0..COMPACT_VISIBLE_ROW_COUNT as usize {
+            let top_edge = TOP + PITCH * row as f32;
+            assert_eq!(save_picker_row_from_stage_y(top_edge), Some(row));
+            assert_eq!(
+                save_picker_row_from_stage_y(top_edge + PITCH * 0.5),
+                Some(row)
+            );
+            assert_eq!(
+                save_picker_row_from_stage_y(top_edge + PITCH - 0.01),
+                Some(row)
+            );
+        }
+    }
+
+    /// A click above or below the list must select NOTHING. Clamping to the nearest row instead
+    /// would move the selection -- and therefore the game's activation -- for a click that never
+    /// touched a row, on a screen whose rows load and overwrite saves.
+    #[test]
+    fn a_point_outside_the_band_hits_no_row() {
+        assert_eq!(save_picker_row_from_stage_y(TOP - 0.01), None);
+        let bottom = TOP + PITCH * COMPACT_VISIBLE_ROW_COUNT as f32;
+        assert_eq!(save_picker_row_from_stage_y(bottom), None);
+        assert_eq!(save_picker_row_from_stage_y(bottom + 500.0), None);
+    }
+
+    #[test]
+    fn a_non_finite_point_hits_no_row() {
+        assert_eq!(save_picker_row_from_stage_y(f32::NAN), None);
+        assert_eq!(save_picker_row_from_stage_y(f32::INFINITY), None);
+        assert_eq!(save_picker_row_from_stage_y(f32::NEG_INFINITY), None);
+    }
+}
+
+#[cfg(test)]
 mod save_picker_menu_stage_transition_tests {
     use super::save_flow_menu_stage_cas;
     use super::*;
@@ -973,9 +1018,9 @@ fn save_picker_client_point_to_movie_stage(
     Some((stage_x, stage_y))
 }
 
-fn save_picker_drive_strip_hit_from_live_cursor(
-    cell_count: usize,
-) -> Option<(DriveStripPointerHit, f32, f32)> {
+/// The live pointer in movie stage coordinates, or `None` when it is outside the movie's content
+/// box. Shared by the drive strip and the row hit test so both read the same space.
+fn save_picker_stage_cursor() -> Option<(f32, f32)> {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetForegroundWindow, GetWindowRect,
@@ -997,8 +1042,36 @@ fn save_picker_drive_strip_hit_from_live_cursor(
     let height = (rect.bottom - rect.top).max(1) as f32;
     let window_x = point.x - rect.left;
     let window_y = point.y - rect.top;
-    let (stage_x, stage_y) =
-        save_picker_client_point_to_movie_stage(window_x as f32, window_y as f32, width, height)?;
+    save_picker_client_point_to_movie_stage(window_x as f32, window_y as f32, width, height)
+}
+
+/// Which visible list row a stage-space Y lands on.
+///
+/// The list band is authored geometry rather than a guess: it starts at
+/// `COMPACT_SCROLLBAR_TOP_Y_PX` and runs `COMPACT_VISIBLE_ROW_COUNT` rows of
+/// `COMPACT_ROW_PITCH_PX` -- the same span the scrollbar track covers, which
+/// `stats_panel_output_scrollbar_track_and_thumb_span_the_visible_rows` already asserts. Rows are
+/// native view rows `0..9`, which are model rows too (`PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET` = 0).
+fn save_picker_row_from_stage_y(stage_y: f32) -> Option<usize> {
+    if !stage_y.is_finite() {
+        return None;
+    }
+    let local = stage_y - er_gfx::title_05_010::COMPACT_SCROLLBAR_TOP_Y_PX as f32;
+    if local < 0.0 {
+        return None;
+    }
+    let row = (local / er_gfx::title_05_010::COMPACT_ROW_PITCH_PX as f32).floor();
+    if row < 0.0 {
+        return None;
+    }
+    let row = row as usize;
+    (row < er_gfx::title_05_010::COMPACT_VISIBLE_ROW_COUNT as usize).then_some(row)
+}
+
+fn save_picker_drive_strip_hit_from_live_cursor(
+    cell_count: usize,
+) -> Option<(DriveStripPointerHit, f32, f32)> {
+    let (stage_x, stage_y) = save_picker_stage_cursor()?;
     save_picker_drive_strip_hit_from_x(stage_x, cell_count).map(|hit| (hit, stage_x, stage_y))
 }
 
@@ -1224,6 +1297,7 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     crate::experiments::ensure_save_picker_user_nav_input_hooks_installed();
     install_save_picker_set_cursor_hook();
     install_save_picker_wheel_delta_hook();
+    install_save_picker_hit_test_hook();
     let mut down_mask = 0usize;
     if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
         down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
@@ -1305,15 +1379,49 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         return;
     }
     if !on_drive_row {
-        // LEFT CLICK ON A LIST ROW = ACCEPT. Raising the native Confirm event rather than calling an
-        // activation path directly means the click goes through the SAME chain as every other accept
-        // (keyboard, pad, the native confirm handler and its hooks), so a row cannot behave one way
-        // when clicked and another way when confirmed. Right-click already reached the context menu
-        // natively; this is the missing half of the pair.
+        // LEFT CLICK ON A LIST ROW = ACCEPT, on the row that was actually CLICKED -- and the ONLY
+        // thing done here is moving the native selection onto that row. The game activates the click
+        // itself; it simply had nothing to act on while the pointer could not reach the selection.
+        //
+        // Two things had to be unlearned to get here. Raising the Confirm menu event at
+        // `CSMenuManImp+0x90+0x3d` did nothing at all: the write LANDED on every click
+        // (`confirm_raised=true`) and the only `ProfileLoadDialog ACTIVATE` in that window arrived
+        // 1.3 SECONDS later from a real key press, so that constant is not the id this dialog reads.
+        // Calling the activation ourselves then worked far too well -- one click produced TWO
+        // parent-folder steps, ours at `+114118ms` (`listed 'save-files'`) and the game's own at
+        // `+114139ms` (`listed 'er-effects-rs'`), twenty milliseconds apart. That is the wheel's
+        // double-scroll wearing a different hat, and on a screen whose rows load and overwrite saves
+        // an uninvited second activation is a hazard rather than a cosmetic flaw. Same rule as the
+        // wheel: where two mechanisms can serve one input, leave exactly one of them holding it.
         if pressed & SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK != 0 {
-            let raised = unsafe { save_picker_raise_confirm_menu_event() };
+            let Some(hit_row) = save_picker_stage_cursor()
+                .and_then(|(_, stage_y)| save_picker_row_from_stage_y(stage_y))
+            else {
+                append_autoload_debug(format_args!(
+                    "save-picker: left click ignored, pointer is over no list row native_cursor={cursor}"
+                ));
+                return;
+            };
+            let Ok(target) = i32::try_from(hit_row) else {
+                return;
+            };
+            if save_picker_model_row_from_native_cursor(target).is_none() {
+                return;
+            }
+            let mut moved = false;
+            if target != cursor {
+                if let (Ok(index), Ok(select)) = (
+                    u32::try_from(target),
+                    game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32),
+                ) {
+                    let select: unsafe extern "system" fn(usize, u32) -> u64 =
+                        unsafe { std::mem::transmute(select) };
+                    unsafe { select(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, index) };
+                    moved = true;
+                }
+            }
             append_autoload_debug(format_args!(
-                "save-picker: left click accepts native_cursor={cursor} model_row={model_row} confirm_raised={raised}"
+                "save-picker: left click selects row={hit_row} (was native_cursor={cursor} model_row={model_row}) moved={moved}; the game owns the activation"
             ));
             return;
         }
@@ -1778,6 +1886,109 @@ unsafe fn save_picker_wheel_step_native_cursor(
     i32::try_from(index).unwrap_or(from_cursor)
 }
 
+/// `FUN_140736c90(grid, point)` -- the grid's pointer hit test, byte-verified unique at
+/// `0x140736c90` in the 1.16.2 deobf image.
+const MENU_ITEM_LIST_POINT_TO_INDEX_RVA: usize = 0x736c90;
+static SAVE_PICKER_HIT_TEST_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_HIT_TEST_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_HIT_TEST_REBASED: AtomicUsize = AtomicUsize::new(0);
+
+/// Neutralise the view base for the grid's POINTER HIT TEST, the same way the select hook does for
+/// the select itself.
+///
+/// The hit test walks the visible cells and turns the one under the pointer into an ABSOLUTE item
+/// index by adding the view base, then discards the hit if that index is past the item count:
+///
+///     140736d41  MOV  R11D, [RSI + 0x348]   ; view row base
+///     140736d80  LEA  EDI, [R10 + R11*1]    ; view row + base
+///     140736daf  CMP  [RSI + 0xd0], EDI     ; count vs index
+///     140736db5  JLE  ...                   ; index >= count -> report NO hit
+///
+/// The picker keeps its MODEL's scroll offset in that base so the native scrollbar thumb tracks a
+/// listing far longer than the ten staged records (`save-picker: native scrollbar sync`). For the
+/// hit test that offset is poison: with base 10 against 10 records every visible cell computes an
+/// index >= count, so the pointer hits nothing, nothing is selected, and the game's click
+/// activation has nothing to act on. Clicking therefore worked only while the scrollbar sat at the
+/// very top, where the base happens to be 0 -- reported 2026-08-12, and the same shape as the wheel
+/// dying at a clamped base.
+///
+/// Zeroing the base for the duration of the call makes the hit test return a VIEW-relative index
+/// `0..9`, which is exactly the space the ten staged records live in and the space the select hook
+/// already leaves `+0xd4` in. The base is restored immediately afterwards, so the scrollbar thumb is
+/// unaffected.
+unsafe extern "system" fn save_picker_hit_test_hook(list: usize, point: usize) -> u32 {
+    let orig_addr = SAVE_PICKER_HIT_TEST_ORIG.load(Ordering::SeqCst);
+    if orig_addr == 0 {
+        return u32::MAX;
+    }
+    let orig: unsafe extern "system" fn(usize, usize) -> u32 =
+        unsafe { std::mem::transmute(orig_addr) };
+    let dialog = save_picker_live_profile_dialog();
+    let ours = dialog != 0
+        && SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0
+        && list == dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET;
+    if !ours {
+        return unsafe { orig(list, point) };
+    }
+    let before = unsafe { save_picker_grid_view_base(list) };
+    if before == (0, 0) {
+        return unsafe { orig(list, point) };
+    }
+    unsafe { save_picker_set_grid_view_base(list, (0, 0)) };
+    let ret = unsafe { orig(list, point) };
+    unsafe { save_picker_set_grid_view_base(list, before) };
+    let n = SAVE_PICKER_HIT_TEST_REBASED.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 20 || n % 100 == 0 {
+        append_autoload_debug(format_args!(
+            "save-picker: hit test rebased #{n} view {before:?} -> (0, 0) index={ret}"
+        ));
+    }
+    ret
+}
+
+pub(crate) fn install_save_picker_hit_test_hook() {
+    if SAVE_PICKER_HIT_TEST_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Ok(addr) = game_rva(MENU_ITEM_LIST_POINT_TO_INDEX_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve hit-test rva 0x{MENU_ITEM_LIST_POINT_TO_INDEX_RVA:x}"
+        ));
+        SAVE_PICKER_HIT_TEST_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            save_picker_hit_test_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SAVE_PICKER_HIT_TEST_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "save-picker: queue_enable hit-test failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "save-picker: hooked pointer hit test FUN_140736c90 0x{addr:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "save-picker: hit-test MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "save-picker: MhHook::new hit-test failed: {status:?}"
+        )),
+    }
+}
+
 /// The grid's own view-scroll base as `(column, row)`.
 unsafe fn save_picker_grid_view_base(list: usize) -> (i32, i32) {
     unsafe {
@@ -1812,20 +2023,6 @@ unsafe fn save_picker_log_grid_geometry_once(list: usize) {
     append_autoload_debug(format_args!(
         "save-picker: grid geometry count={count} cols={cols} rows={rows} view_base={view:?}"
     ));
-}
-
-/// Raise the native Confirm menu event, as a device would.
-///
-/// This is the accept path itself, not an imitation of one: the keystate byte at
-/// `CSMenuManImp+0x90+0x3d` is what the menu's own confirm predicate reads, so everything
-/// downstream -- the native handler, our activation hook, the dest/overwrite routing -- runs
-/// identically to a keyboard or pad accept.
-unsafe fn save_picker_raise_confirm_menu_event() -> bool {
-    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
-        return false;
-    };
-    unsafe { *keystate.add(MENU_EVENT_CONFIRM_3D) |= MENU_EVENT_PRESSED_BIT };
-    true
 }
 
 /// Clear this frame's vertical menu event so the native list never moves.
