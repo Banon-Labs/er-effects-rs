@@ -1,0 +1,17 @@
+[package]
+name = "oodle-dcx-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone offline measurement tool -- NOT a workspace member (built directly with
+# `cargo xwin build --release --target x86_64-pc-windows-msvc --manifest-path ...`).
+
+[workspace]
+
+[[bin]]
+name = "oodle-dcx-probe"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

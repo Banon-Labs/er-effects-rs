@@ -47,6 +47,7 @@
 use bitflags::bitflags;
 use std::fmt;
 
+pub mod announce_notice;
 pub mod arts_badge;
 pub mod edit;
 pub mod options_02_040;

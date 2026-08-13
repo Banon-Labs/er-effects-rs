@@ -56,6 +56,30 @@ DEBUG_LOG_NAMES = (
     "er-invasion-warp-dll.log",
 )
 
+# Evidence a run produces OUTSIDE the game directory. Frida-gadget traces are driven from the
+# host and write where they are told, which is deliberately not the repo and not next to the
+# executable -- so without this the gate is blind to them exactly as it was blind to
+# er-invasion-warp-dll.log, and any predicate they own would read NEVER OBSERVED forever.
+# Missing files are skipped silently: absence is what "no run has looked yet" looks like.
+EXTRA_EVIDENCE_PATHS = (
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl",
+)
+
+def _extra_evidence_paths() -> tuple[str, ...]:
+    """Host-side evidence files, indirected so the selftest can switch them off.
+
+    Reading them directly meant the selftest's synthetic fixtures absorbed whatever the last LIVE
+    run had written, so a genuine runtime contradiction could fail a test about fixture logic.
+    A test that depends on the machine's current state is not a test.
+    """
+    return EXTRA_EVIDENCE_PATHS
+
+
 # Where a live run drops its artifacts, and where this session archives them.
 DEFAULT_RUN_DIRS = [
     os.path.expanduser("~/.local/share/Steam/steamapps/common/ELDEN RING/Game"),
@@ -87,10 +111,23 @@ class Predicate:
     oracle_all: dict[str, object] = field(default_factory=dict)
     log_any: tuple[str, ...] = ()
     informative_if: tuple[str, ...] = ()
+    informative_oracle: dict[str, object] = field(default_factory=dict)
 
     def is_informative(self, telemetry: dict, log_text: str) -> bool:
-        """Whether this run reached the state the predicate is about."""
-        if not self.informative_if:
+        """Whether this run reached the state the predicate is about.
+
+        `informative_oracle` exists because a LOG regex is a poor precondition for a state the
+        telemetry names exactly. `epoch [1-9]` matched somewhere in a combined multi-DLL log on a
+        BOOT-ONLY run, so three reload predicates read that run as a contradiction and refused
+        every launch -- the precondition has to be the field that actually says a reload
+        happened, not a substring that can appear anywhere.
+        """
+        if not self.informative_if and not self.informative_oracle:
+            return True
+        for key, want in self.informative_oracle.items():
+            if key not in telemetry or not _values_agree(telemetry[key], want):
+                return False
+        if self.informative_oracle and not self.informative_if:
             return True
         return any(re.search(pattern, log_text) for pattern in self.informative_if)
 
@@ -147,8 +184,9 @@ PREDICATES: tuple[Predicate, ...] = (
         oracle_all={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
         log_any=(r"cvar10-warp-clear: load2 epoch [1-9]\d* mms=1[3-8] fin=[0-4]",),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="case7_gate_clear_at_release",
@@ -173,8 +211,9 @@ PREDICATES: tuple[Predicate, ...] = (
             r"reload-drain-b80",
         ),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="warp_clear_release_world_live",
@@ -195,8 +234,9 @@ PREDICATES: tuple[Predicate, ...] = (
             "oracle_player_present": True,
         },
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="legacy_converter_tree_readable",
@@ -220,6 +260,118 @@ PREDICATES: tuple[Predicate, ...] = (
         ),
         # Only a run that actually built a world-map ViewModel has an opinion on the tree walk.
         informative_if=(r"map-inject:",),
+    ),
+    # RETIRED: steam_matchmaking_reached. It was ANSWERED, in the negative, and a predicate whose
+    # question is settled must not sit here refusing launches forever. Measured 2026-08-04: 33
+    # steam_api64 flat exports hooked at BOOT -- 18 ISteamMatchmaking, 10 ISteamNetworking*, 5
+    # ISteamFriends rich presence -- and a complete invasion produced ZERO calls. Seamless does
+    # not reach Steam through the flat C API. That is why the predicate below exists instead.
+    Predicate(
+        name="steam_vtable_call_observed",
+        why=(
+            "THE ONLY REMAINING ROUTE TO SEAMLESS TARGETING. Static reading is out -- the "
+            "deciding functions (ersc 0x18006a2d0, 0x18006a1e0) are Themida-VIRTUALIZED, proven "
+            "by a live dump whose jump targets are themselves chains of `e9` jumps, so no dump "
+            "recovers them. The flat Steam C API is out -- 33 exports hooked at boot, zero calls "
+            "across a full invasion. What is left is the interface VTABLE: a C++ mod fetches the "
+            "pointer once and calls slots directly. If a vtable call is never observed either, "
+            "Steam is not the layer at all and the next one is ERSC's own sockets -- and a run "
+            "that cannot tell those apart is a run wasted, which is what this gate is for."
+        ),
+        owner="scripts/frida-steam-vtable-trace.py",
+        # A vtable CALL, not merely an interface handed out. Capturing the pointer proves the
+        # accessor fired; it says nothing about whether Seamless ever calls through it, and
+        # conflating the two is the same "hooked is not called" error the retired predicate hit.
+        log_any=(r'"type":\s*"vcall"',),
+        # Only a run whose vtable trace produced SOMETHING has an opinion. An empty file means
+        # the tracer never attached or attached too late, which is a silence, not a refutation.
+        informative_if=(r'"type":\s*"(vcall|iface)"',),
+    ),
+    Predicate(
+        name="steam_interface_version_resolved",
+        why=(
+            "WITHOUT THIS THE 10068 RECORDED VTABLE CALLS ARE ANONYMOUS. All 5 interfaces came "
+            "back through SteamInternal_FindOrCreateUserInterface with version=None, because the "
+            "capture used a prefix allowlist that matched nothing -- so every interface was "
+            "labelled by its accessor and none could be told from another. Slot indices without "
+            "an interface identity name no mechanism: slot[29] firing 6908 times is a transport, "
+            "and the targeting call is one of the slots that fired twice. The filter is now any "
+            "'<Name><3 digits>' string, and this run has to show it resolving."
+        ),
+        owner="scripts/frida-steam-vtable-trace.py",
+        # A non-null version on an iface record. NOT satisfied by vcalls: those were already
+        # plentiful while every interface stayed unidentified, which is the exact failure here.
+        # Satisfied by an interface being IDENTIFIABLE, which is the actual requirement -- either
+        # the decoded version field, or the raw argument bytes carrying one. The bytes route is
+        # not a loophole: 'Steam'/'STEAM' in hex at the head of an accessor argument decoded
+        # offline to SteamUser021 and STEAMUSERSTATS_INTERFACE_VERSION, which answered the
+        # question the field was only ever a convenience for. Testing for the FIELD when the
+        # requirement is the ANSWER is how a gate refuses a launch over settled ground.
+        log_any=(
+            r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',
+            r'"bytes":\s*"5374 ?65 ?61 ?6d'.replace(' ', ''),
+            r'"bytes":\s*"535445414d',
+        ),
+        informative_if=(r'"type":\s*"iface"',),
+    ),
+    Predicate(
+        name="ersc_session_state_observed",
+        why=(
+            "THE LAST UNREAD LINK. What sets session state 0x15 -- the only state offering 'Seek "
+            "opponent' -- and what consumes the opponent handle that option latches at S+0x1F0 "
+            "both live inside the Themida-virtualized seamless_session_manager dispatcher and "
+            "CANNOT be read. They can only be watched. If OSM is never captured, the tracer saw "
+            "nothing and the run proves nothing about the state machine; that must not be "
+            "mistaken for 'the state never changed'."
+        ),
+        owner="scripts/frida-ersc-session-trace.py",
+        # A real session reading. NOT satisfied by an 'osm' capture alone: capturing the object
+        # proves a hook fired, not that S+0x110 was ever readable through it -- the same
+        # hooked-is-not-called conflation that made two earlier predicates look promising.
+        log_any=(r'"type":\s*"session"',),
+        informative_if=(r'"type":\s*"(session|osm|menu-open|action)"',),
+    ),
+    Predicate(
+        name="hunt_hook_lands_on_steamclient",
+        why=(
+            "THE ONE FACT ABOUT HUNT MODE NO OFFLINE WORK CAN ESTABLISH. Every other detour this "
+            "repo installs targets the game image or ersc; hunt's goes onto vtable slot 4 of "
+            "ISteamMatchmaking, which lives in steamclient64.dll -- a different module, loaded by "
+            "Steam, with its own page protections. Whether the union dispatcher can take that "
+            "target is answerable only in a live process. If it cannot, hunt is INERT: every query "
+            "goes out unfiltered and the player sees a perfectly ordinary search, which is exactly "
+            "what 'the filter is working and nobody is there' looks like. The DLL logs the failure "
+            "and the oracle carries it, so a run that comes back with this false has told us "
+            "something; a run that never looks has not."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (install_hunt_hook)",
+        oracle_all={"oracle_invasion_warp_hunt_hooked": True},
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        # A run with hunt off, or one that never reached a lobby query, has no opinion about
+        # whether the hook can land. Only a run where the DLL published its oracle document at all
+        # counts -- absence of the field means the feature never got that far.
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: isinstance(v, bool),
+        },
+    ),
+    Predicate(
+        name="hunt_filter_reaches_the_wire",
+        why=(
+            "Installing the detour is NOT the same as narrowing a query. `hunt_target` declines "
+            "whenever hunt is off, the player's block is unreadable, or several locations are "
+            "marked -- a Steam string filter is one equality test with no OR, so the multi-mark "
+            "case refuses on purpose. All three declines leave a hooked, silent run that looks "
+            "identical to a working one from outside. Only a non-zero filter count says Seamless's "
+            "own outgoing search actually carried our key."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (request_lobby_list_hook)",
+        oracle_all={
+            "oracle_invasion_warp_hunt_filters": lambda v: isinstance(v, int) and v >= 1
+        },
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: v is True,
+        },
     ),
 )
 
@@ -253,8 +405,9 @@ def load_run(directory: str) -> RunEvidence | None:
     except (OSError, ValueError):
         return None
     chunks = []
-    for name in DEBUG_LOG_NAMES:
-        path = os.path.join(directory, name)
+    paths = [os.path.join(directory, name) for name in DEBUG_LOG_NAMES]
+    paths.extend(_extra_evidence_paths())
+    for path in paths:
         if not os.path.exists(path):
             continue
         try:
@@ -425,6 +578,8 @@ def gate(run_dirs: list[str]) -> int:
 def selftest() -> int:
     """The gate must FAIL on an unreachable predicate; a gate that only ever passes is decoration."""
     fails = 0
+    # Fixtures only. See _extra_evidence_paths.
+    globals()["_extra_evidence_paths"] = lambda: ()
 
     def report(ok: bool, label: str) -> None:
         nonlocal fails
@@ -515,6 +670,27 @@ def selftest() -> int:
         # be CONTRADICTED, so the refusal has to come from the gate's own no-evidence check
         # rather than from scoring -- which is exactly what `gate()` does.
         report(gate([]) != 0, "no recorded run refuses rather than passes")
+
+        # THE STEAM-TRACE DISTINCTION: hooks INSTALLING is not calls HAPPENING. A trace that
+        # attached to every export and then recorded nothing during an invasion means the
+        # approach is dead, and it must not read as proof.
+        steam_pred = [p for p in PREDICATES if p.name == "steam_vtable_call_observed"][0]
+        called = '{"type": "vcall", "iface": "SteamMatchMaking009", "slot": 12}'
+        ok_called, _ = steam_pred.check({}, called)
+        report(ok_called, "a recorded vtable call proves the interface route")
+
+        # THE DISTINCTION THAT RETIRED THE PREVIOUS PREDICATE: capturing an interface pointer
+        # proves the accessor fired, NOT that anything is ever called through it.
+        iface_only = '{"type": "iface", "version": "SteamMatchMaking009", "slotsHooked": 20}'
+        ok_iface, _ = steam_pred.check({}, iface_only)
+        report(
+            not ok_iface and steam_pred.is_informative({}, iface_only),
+            "an interface captured but never called is informative and NOT satisfied",
+        )
+        report(
+            not steam_pred.is_informative({}, "nothing here"),
+            "no vtable trace at all is a silence, not a contradiction",
+        )
 
         # A run from BEFORE the current sources is a silence, not a disagreement. Without this
         # every bug fix is unprovable: the recorded run still shows the old failure, so the gate

@@ -41,7 +41,8 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
-command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego"
+python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
@@ -75,12 +76,19 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
-# The stale-run sentinel kills a live game when a tracked file is edited, so its process matching is
-# load-bearing: a name it cannot match is a run it cannot stop. `/proc/<pid>/comm` is capped at 15
-# characters by the kernel, which made the verbatim `start_protected_game.exe` entry unmatchable
-# against any process that has ever existed. The selftest proves the truncation handling end to end
-# against a real process, so that class of silent no-op cannot come back.
+# The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
+# directions are load-bearing: a name it cannot match is a run it cannot stop, and a path it
+# misclassifies is either contaminated evidence or a run killed mid-measurement. The selftest proves
+# the classifier in both directions (a crate feeding a loaded DLL and its transitive dependencies
+# tear down; host-side scripts, policy, docs and crates building UNLOADED DLLs do not), plus the
+# `/proc/<pid>/comm` 15-character truncation handling end to end against a real process.
+#
+# It deliberately never calls `teardown` -- a real game may be live while this gate runs. The other
+# half (/proc profile discovery + the kill itself) is proven by
+# scripts/test-er-stale-run-sentinel-e2e.sh, which is NOT run here because it is destructive by
+# design; run it by hand, and it refuses if a real run is live.
 bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
 
 # LAUNCH REACHABILITY GATE (2026-08-04). A launch takes the user's screen and yields one recording;

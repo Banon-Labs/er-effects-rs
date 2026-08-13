@@ -218,7 +218,7 @@ fn report_step(
                 append_autoload_debug(format_args!(
                     "invasion-warp oracle: catalog not ready (not-ready attempt {attempt}): {reason}"
                 ));
-                publish_oracle_json(&catalog_oracle_json("waiting", reason));
+                crate::oracles::publish_document("waiting", reason);
             }
         }
         CatalogSampleStep::Sampled {
@@ -230,10 +230,10 @@ fn report_step(
                 "invasion-warp oracle: {} [unsettled, same totals {stable_streak}/{CATALOG_STABLE_SAMPLES_TO_LATCH} samples]",
                 describe_catalog_oracle(summary)
             ));
-            publish_oracle_json(&catalog_oracle_json(
+            crate::oracles::publish_document(
                 "sampling",
                 &format!("same totals for {stable_streak} consecutive samples"),
-            ));
+            );
         }
         CatalogSampleStep::Latched { summary, verdict } => {
             publish_catalog_oracles(summary);
@@ -247,20 +247,20 @@ fn report_step(
             append_autoload_debug(format_args!(
                 "invasion-warp oracle: {NEGATIVE_ORACLES_UNMEASURED_NOTE}"
             ));
-            publish_oracle_json(&catalog_oracle_json(
+            crate::oracles::publish_document(
                 "latched",
                 &format!("totals settled; verdict {}", verdict.tag()),
-            ));
+            );
         }
         CatalogSampleStep::GaveUp { attempts } => {
             append_autoload_debug(format_args!(
                 "invasion-warp oracle: GAVE UP after {attempts} attempts -- oracle 1 is UNPROVEN, \
                  not passed. Last reason: {reason}"
             ));
-            publish_oracle_json(&catalog_oracle_json(
+            crate::oracles::publish_document(
                 "gave_up",
                 &format!("gave up after {attempts} attempts: {reason}"),
-            ));
+            );
         }
     }
 }

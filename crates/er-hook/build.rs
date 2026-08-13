@@ -37,6 +37,25 @@ fn main() {
     println!("cargo:rerun-if-changed={}", mh_src_dir.display());
 }
 
+/// The main working tree, asked of git rather than guessed from the directory layout.
+///
+/// Returns `None` for anything that is not a git checkout, or if git is unavailable -- the caller
+/// then falls through to its existing panic, which names the env overrides.
+fn git_common_dir_parent(manifest_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(manifest_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let common = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    // `<main tree>/.git` -> `<main tree>`. A bare repo has no working tree and yields nothing
+    // useful, which the `buffer.c` check at the call site rejects anyway.
+    common.parent().map(Path::to_path_buf)
+}
+
 fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
     for env_name in ["ER_MINHOOK_SRC_DIR", "ER_EFFECTS_MINHOOK_SRC_DIR"] {
         if let Ok(dir) = env::var(env_name) {
@@ -66,6 +85,21 @@ fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
             if candidate.join("buffer.c").is_file() {
                 return candidate;
             }
+        }
+    }
+
+    // A git WORKTREE has no `vendor/` of its own: the directory is gitignored, so it exists only in
+    // the checkout that populated it, and a worktree's ancestors are wherever it happens to sit --
+    // typically a sibling of the repo, where the loop above finds nothing. Every worktree therefore
+    // failed this build with "set ER_MINHOOK_SRC_DIR", which is a per-agent, per-session workaround
+    // for a path the repo can resolve by itself.
+    //
+    // `--git-common-dir` is the main checkout's `.git` even when invoked from a worktree, so its
+    // parent is the main working tree and the vendor drop lives beneath it.
+    if let Some(main_tree) = git_common_dir_parent(manifest_dir) {
+        let candidate = main_tree.join("vendor/minhook/src");
+        if candidate.join("buffer.c").is_file() {
+            return candidate;
         }
     }
 

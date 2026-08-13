@@ -64,8 +64,28 @@ pub const RE_IMAGE_BASE: usize = 0x1_4000_0000;
 pub const UNION_DISPATCHER_ARG_COUNT: usize = 4;
 
 /// `CS::WorldMapViewModel::WorldMapViewModel` -- `0x1408855b0`. The row list at `+0x2d8` is
-/// populated here and NOWHERE else, and the ViewModel is constructed exactly once per session,
-/// so an epilogue hook here is the injection seam for synthetic rows.
+/// populated here and NOWHERE else, so an epilogue hook here is the injection seam for synthetic
+/// rows.
+///
+/// LIFETIME, corrected twice and now pinned by the static call graph: the ViewModel is built ONCE
+/// PER WORLD ENTRY -- not once per session, and not once per map view. This ctor's only code xref
+/// is `FUN_1407ed840 @0x1407ed8d3`, whose body is `if (popupMenu->worldMapViewModel == NULL) {
+/// alloc(0x450, MenuHeap); ctor(...) }`; its only caller is `FUN_140766010 @0x14076607b`, whose
+/// only caller is `MoveMapStep`'s constructor `@0x140af2e47`, reached from `STEP_MoveMap_Init`.
+/// Teardown mirrors it: `~MoveMapStep -> FUN_140765fa0 @0x140af3eb5 -> FUN_1407ed790`, which runs
+/// the dtor, frees the block and nulls the slot. So the object's lifetime IS `MoveMapStep`'s.
+///
+/// Two consequences that have each cost a wrong diagnosis:
+/// - A map-LAYER switch (`FUN_1409c1fc0`) does not come near this function -- it mutates
+///   `dialog+0xa88` and re-sizes the clip pool. `VIEWMODEL_CTOR_HITS > 1` means the player MOVED
+///   MAPS, never that they toggled a layer.
+/// - Opening the map does not rebuild the list either. There is no refresh, rebuild or dirty-flag
+///   path anywhere in the image: the grow helper, the row ctor and the row copy-ctor each have
+///   exactly one calling function, and it is this one. Anything the list must gain later, we have
+///   to put there ourselves.
+///
+/// Keying injection on the `this` pointer is therefore unsound: the block is freed to the same heap
+/// at the same size class, so a later ViewModel can land on the same address.
 pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
     name: "CS::WorldMapViewModel::WorldMapViewModel",
     rva: 0x088_55b0,
@@ -74,6 +94,27 @@ pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
     ],
     arg_count: 1,
 };
+
+/// `CS::SosSignMan::SetMultiplayJoinData` -- `0x1406fb520`. The single function that writes every
+/// CSGameMan field the invasion destination lives in, from a 128-byte server-pushed struct in RDX:
+/// `SetTargetMapId` -> `GameMan+0xAC8`, `SetMultiplayJoinTargetBlockPos` -> `+0xAA0`,
+/// `SetNPCInvadeTargetEntryPoint(0)` -> `+0xAF0` (hard zero, which is why that field always read
+/// 0 in the RAM sampling).
+///
+/// This is the seam the location filter judges at: the destination is DECIDED and the player has
+/// NOT moved. Measured live 2026-08-05 -- `ServerPushJoinData+0x00` was the only offset in all 128
+/// bytes whose u32 equalled the destination that landed in `GameMan+0xAC8`, so the field is
+/// identified by correlation rather than by its reversed name (`matchPlayerCount`, which would
+/// have pointed at the wrong dword).
+pub const SET_MULTIPLAY_JOIN_DATA: MapSeam = MapSeam {
+    name: "CS::SosSignMan::SetMultiplayJoinData",
+    rva: 0x06f_b520,
+    prologue: &[0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00],
+    arg_count: 2,
+};
+
+/// Offset of the destination block id within `ServerPushJoinData`.
+pub const JOIN_DATA_DESTINATION_BLOCK_OFFSET: usize = 0x00;
 
 /// `FUN_1407a04f0` -- the warp-job assembler. All five confirm routes funnel through it, which
 /// makes it the single chokepoint before a MenuJob exists.

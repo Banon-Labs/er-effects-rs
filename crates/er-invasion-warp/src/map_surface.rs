@@ -39,6 +39,8 @@
 //! and returns NULL, and every caller null-checks -- it would make a real grace warp silently
 //! run our code, which is worse. Hence the deliberate distance rather than a tight fit.
 
+use std::collections::BTreeSet;
+
 use crate::invasion_warp::{BlockKey, InvasionWarpCatalog, InvasionWarpTarget};
 
 /// First synthetic bonfire entity id. Chosen far above real map-derived ids (which sit below
@@ -168,9 +170,317 @@ impl InvasionRowRegistry {
     }
 }
 
+/// Harvested points that are not on the live map yet.
+///
+/// # Why identity is `(block, point)` and never `block`
+///
+/// A legacy dungeon the player has not entered carries a WHOLE-DUNGEON marker: one pin at the
+/// dungeon's centre, placed precisely because its interior was unknown
+/// ([`InvasionWarpTarget::provisional`]). The moment its MSB becomes resident its real points
+/// arrive -- and every one of them is in that same block. Asking "does this block already have a
+/// pin?" answers yes, and the dungeon's entire per-point set is discarded.
+///
+/// That has now happened twice, in two different filters. The first was the `.aip` suppression set
+/// in the injection path, which is why that set is restricted to non-legacy areas. The second was
+/// this test in the live top-up, where it made the whole function a permanent no-op: measured
+/// 2026-08-05, the Haligtree's 9 markers were offered on ~35,900 consecutive frames and refused on
+/// every one. Hence a named function with the rule written down, rather than a set comprehension
+/// inlined at each site.
+///
+/// `already` holds `(block, point_index)` pairs that are shown, claimed, or known unplaceable.
+#[must_use]
+pub fn points_not_yet_shown(
+    harvested: &[InvasionWarpTarget],
+    already: &BTreeSet<(u32, u32)>,
+) -> Vec<InvasionWarpTarget> {
+    harvested
+        .iter()
+        .filter(|target| !already.contains(&(target.block.raw(), target.point_index)))
+        .copied()
+        .collect()
+}
+
+/// The claimed prefix of a reserved dormant span, if it is safely inside the live row list.
+///
+/// # Why this is a named, tested function
+///
+/// A world-map pin the player can see is not necessarily in the injected span. A legacy dungeon
+/// harvested mid-session has its markers written into rows RESERVED as dormant by the constructor
+/// and claimed later. Anything that walks "our rows" must cover both, and the live re-colour did
+/// not: marking such a dungeon repainted exactly one row -- the whole-dungeon marker that had
+/// already been hidden -- while every marker actually on screen went untouched.
+///
+/// Only the CLAIMED prefix qualifies. Unclaimed dormant rows are blank, carry a zero layer mask and
+/// are not drawn, so they have no appearance to change.
+///
+/// Returns `None` when nothing is claimed or when the span does not lie wholly inside
+/// `list_begin..list_end` -- a span outside the live list describes a buffer that has been freed.
+#[must_use]
+pub fn claimed_dormant_span(
+    dormant_begin: usize,
+    claimed_slots: usize,
+    row_stride: usize,
+    list_begin: usize,
+    list_end: usize,
+) -> Option<(usize, usize)> {
+    if dormant_begin == 0 || claimed_slots == 0 || row_stride == 0 {
+        return None;
+    }
+    let end = dormant_begin.checked_add(claimed_slots.checked_mul(row_stride)?)?;
+    if dormant_begin < list_begin || end > list_end {
+        return None;
+    }
+    Some((dormant_begin, end))
+}
+
+/// A pin's ordinal among the pins sharing its place name. `0` means it has no sibling.
+pub type PlaceOrdinal = u32;
+
+/// The ordinal of a pin whose name is unique, which is not shown.
+pub const PLACE_ORDINAL_UNIQUE: PlaceOrdinal = 0;
+
+/// Number the pins that share a place name, so a player can say "meet at X, 2".
+///
+/// # What "deterministic" must mean, and what it cannot
+///
+/// Two players have to arrive at the SAME number for the same spot or the feature is worse than
+/// useless -- it sends them to different places while they agree out loud. That rules out numbering
+/// by position in the currently-known pin set: a legacy dungeon's per-point markers only exist once
+/// that map has been resident, so the player who has been to fewer places would number the same
+/// point differently.
+///
+/// So the ordinal is derived ONLY from properties intrinsic to the point -- `(block, point_index)`.
+/// `point_index` is the point's index in its own map's MSB region list and `block` is that map's
+/// id; both are fixed by the game version, not by what the player has seen. Sorting a name group by
+/// that pair yields the same sequence on any machine that knows the same points.
+///
+/// # The limit, stated rather than hidden
+///
+/// A dungeon's points arrive together -- one MSB read yields the whole map's set -- so two players
+/// inside the same dungeon always agree, which is the case that matters for arranging a meeting.
+/// A place name shared across SEPARATE blocks, where one player has visited a block the other has
+/// not, can still disagree. Nothing available at runtime fixes that: the absent block's point count
+/// is unknowable until it is read.
+///
+/// Returns one ordinal per input, in the input's own order.
+#[must_use]
+pub fn number_shared_place_names(pins: &[(InvasionWarpTarget, i32)]) -> Vec<PlaceOrdinal> {
+    use std::collections::BTreeMap;
+
+    // A negative id is "no name": those pins are never drawn, so they neither get a number nor
+    // pull anything else into a group.
+    let mut groups: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+    for (at, (_, place_name)) in pins.iter().enumerate() {
+        if *place_name >= 0 {
+            groups.entry(*place_name).or_default().push(at);
+        }
+    }
+
+    let mut ordinals = vec![PLACE_ORDINAL_UNIQUE; pins.len()];
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let mut ordered = members.clone();
+        // Sort by the INTRINSIC key, never by input order -- the harvest order must not be able to
+        // change what a player is told to meet at.
+        ordered.sort_by_key(|at| {
+            let target = &pins[*at].0;
+            (target.block.raw(), target.point_index)
+        });
+        for (rank, at) in ordered.into_iter().enumerate() {
+            ordinals[at] = u32::try_from(rank + 1).unwrap_or(u32::MAX);
+        }
+    }
+    ordinals
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STRIDE: usize = 0x350;
+
+    fn pin(block: u32, point: u32, place_name: i32) -> (InvasionWarpTarget, i32) {
+        (
+            InvasionWarpTarget::new(BlockKey::from_raw(block), point, [0.0; 3], 0.0),
+            place_name,
+        )
+    }
+
+    #[test]
+    fn pins_sharing_a_name_are_numbered_from_one() {
+        let pins = [pin(0x0f00_0000, 3, 700), pin(0x0f00_0000, 1, 700)];
+        // Ordered by point_index, so the SECOND input is number 1.
+        assert_eq!(number_shared_place_names(&pins), vec![2, 1]);
+    }
+
+    /// THE INVARIANT THE WHOLE FEATURE RESTS ON. If harvest order could change the numbering, two
+    /// players would be sent to different places while saying the same words.
+    #[test]
+    fn the_numbering_does_not_depend_on_input_order() {
+        let a = pin(0x0f00_0000, 9, 700);
+        let b = pin(0x0f00_0000, 1, 700);
+        let c = pin(0x1c00_0000, 4, 700);
+        assert_eq!(number_shared_place_names(&[a, b, c]), vec![2, 1, 3]);
+        // Same points, reversed input -- each point keeps its own number.
+        assert_eq!(number_shared_place_names(&[c, b, a]), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn a_unique_name_is_not_numbered() {
+        let pins = [pin(0x0f00_0000, 1, 700), pin(0x1c00_0000, 1, 800)];
+        assert_eq!(
+            number_shared_place_names(&pins),
+            vec![PLACE_ORDINAL_UNIQUE, PLACE_ORDINAL_UNIQUE]
+        );
+    }
+
+    #[test]
+    fn separate_names_are_numbered_separately() {
+        let pins = [
+            pin(0x0f00_0000, 1, 700),
+            pin(0x0f00_0000, 2, 700),
+            pin(0x1c00_0000, 5, 800),
+            pin(0x1c00_0000, 6, 800),
+        ];
+        assert_eq!(number_shared_place_names(&pins), vec![1, 2, 1, 2]);
+    }
+
+    /// An unnamed pin is never drawn, so numbering it would be meaningless -- and it must not form
+    /// a phantom group with other unnamed pins.
+    #[test]
+    fn unnamed_pins_are_skipped_and_do_not_form_a_group() {
+        let pins = [pin(0x0f00_0000, 1, -1), pin(0x1c00_0000, 2, -1)];
+        assert_eq!(
+            number_shared_place_names(&pins),
+            vec![PLACE_ORDINAL_UNIQUE, PLACE_ORDINAL_UNIQUE]
+        );
+    }
+
+    #[test]
+    fn a_name_spanning_two_blocks_orders_by_block_first() {
+        let pins = [pin(0x1c00_0000, 0, 700), pin(0x0f00_0000, 99, 700)];
+        assert_eq!(number_shared_place_names(&pins), vec![2, 1]);
+    }
+
+    #[test]
+    fn no_pins_yields_no_ordinals() {
+        assert!(number_shared_place_names(&[]).is_empty());
+    }
+
+    /// THE REGRESSION: rows a live top-up claimed must be walked, or marking the dungeon they
+    /// belong to changes nothing the player can see.
+    #[test]
+    fn the_claimed_prefix_is_returned_and_stops_at_the_last_claim() {
+        let span = claimed_dormant_span(0x1000, 9, STRIDE, 0x0, 0x1000 + 512 * STRIDE);
+        assert_eq!(span, Some((0x1000, 0x1000 + 9 * STRIDE)));
+    }
+
+    /// Unclaimed rows are blank and undrawn; walking them would repaint nothing and cost a pass
+    /// over 512 rows.
+    #[test]
+    fn nothing_claimed_yields_no_span() {
+        assert_eq!(
+            claimed_dormant_span(0x1000, 0, STRIDE, 0x0, 0x100_000),
+            None
+        );
+    }
+
+    /// A span outside the live list describes a freed buffer. Writing through it is the crash this
+    /// module's ownership rules exist to prevent.
+    #[test]
+    fn a_span_outside_the_live_list_is_refused() {
+        // Ends past the list.
+        assert_eq!(
+            claimed_dormant_span(0x1000, 9, STRIDE, 0x1000, 0x1000 + 8 * STRIDE),
+            None
+        );
+        // Starts before the list.
+        assert_eq!(
+            claimed_dormant_span(0x900, 1, STRIDE, 0x1000, 0x100_000),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unrecorded_span_is_refused_rather_than_treated_as_address_zero() {
+        assert_eq!(claimed_dormant_span(0, 9, STRIDE, 0, 0x100_000), None);
+    }
+
+    /// Arithmetic that would wrap must refuse, not produce an in-range-looking span.
+    #[test]
+    fn an_overflowing_claim_count_is_refused() {
+        assert_eq!(
+            claimed_dormant_span(usize::MAX - 1, 9, STRIDE, 0, usize::MAX),
+            None
+        );
+        assert_eq!(
+            claimed_dormant_span(0x1000, usize::MAX, STRIDE, 0, usize::MAX),
+            None
+        );
+    }
+
+    /// THE REGRESSION. A whole-dungeon marker and the dungeon's real points share a block, so a
+    /// block-keyed test hides exactly the points the marker exists to be replaced by.
+    #[test]
+    fn a_whole_dungeon_marker_does_not_suppress_its_own_blocks_real_points() {
+        let dungeon = BlockKey::from_raw(0x1c00_0000);
+        let marker = InvasionWarpTarget::provisional(dungeon);
+        let points: Vec<InvasionWarpTarget> = (0..3)
+            .map(|index| InvasionWarpTarget::new(dungeon, index, [1.0, 2.0, 3.0], 0.0))
+            .collect();
+        let already: BTreeSet<(u32, u32)> = [(marker.block.raw(), marker.point_index)]
+            .into_iter()
+            .collect();
+        let fresh = points_not_yet_shown(&points, &already);
+        assert_eq!(fresh.len(), 3, "all three points are still to be shown");
+        // And the block-keyed test it replaced would have returned none of them.
+        let block_keyed: Vec<&InvasionWarpTarget> = points
+            .iter()
+            .filter(|t| t.block.raw() != marker.block.raw())
+            .collect();
+        assert!(
+            block_keyed.is_empty(),
+            "block-keyed filtering discards the whole dungeon"
+        );
+    }
+
+    /// A point already placed must not be offered again -- re-offering burns one reserved row per
+    /// frame and stacks duplicate markers on the same spot.
+    #[test]
+    fn a_point_already_shown_is_not_offered_again() {
+        let dungeon = BlockKey::from_raw(0x1c00_0000);
+        let points: Vec<InvasionWarpTarget> = (0..3)
+            .map(|index| InvasionWarpTarget::new(dungeon, index, [0.0; 3], 0.0))
+            .collect();
+        let already: BTreeSet<(u32, u32)> = [(dungeon.raw(), 0), (dungeon.raw(), 2)]
+            .into_iter()
+            .collect();
+        let fresh = points_not_yet_shown(&points, &already);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].point_index, 1);
+    }
+
+    /// The same point index in a DIFFERENT block is a different place.
+    #[test]
+    fn the_same_point_index_in_another_block_is_still_fresh() {
+        let a = BlockKey::from_raw(0x1c00_0000);
+        let b = BlockKey::from_raw(0x1d00_0000);
+        let points = vec![
+            InvasionWarpTarget::new(a, 0, [0.0; 3], 0.0),
+            InvasionWarpTarget::new(b, 0, [0.0; 3], 0.0),
+        ];
+        let already: BTreeSet<(u32, u32)> = [(a.raw(), 0)].into_iter().collect();
+        let fresh = points_not_yet_shown(&points, &already);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].block, b);
+    }
+
+    #[test]
+    fn nothing_harvested_yields_nothing_fresh() {
+        assert!(points_not_yet_shown(&[], &BTreeSet::new()).is_empty());
+    }
 
     fn block(area: u8, index: u8) -> BlockKey {
         BlockKey::from_parts(area, 34, 51, index)
