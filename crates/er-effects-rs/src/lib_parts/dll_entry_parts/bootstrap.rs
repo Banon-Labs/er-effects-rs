@@ -297,8 +297,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
     // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
     // opt-in sub-switch. Gated OFF unless ER_EFFECTS_PROFILE=1 / er-effects-profile.txt.
-    if profiler_enabled() {
-        START_BOOT_PROFILER.call_once(spawn_boot_profiler);
+    if er_boot_profiler::profiler_enabled() {
+        START_BOOT_PROFILER
+            .call_once(|| er_boot_profiler::spawn_boot_profiler(append_autoload_debug));
     }
 
     // Install the crash/exit logger first so it can observe an exit or access

@@ -20,16 +20,22 @@
 //! (default `<game_dir>/er-effects-profile.jsonl`). The offline renderer
 //! (`scripts/boot-profile-render.py`) diffs consecutive samples per thread.
 
+#![cfg(windows)]
 #![allow(clippy::too_many_lines)]
 
 use std::{
     collections::HashMap,
     fmt::Write as _,
-    fs,
     io::Write as _,
     path::PathBuf,
-    sync::{atomic::Ordering, mpsc},
+    sync::mpsc,
     time::{Duration, Instant},
+};
+
+use er_game_base::{
+    log::game_directory_path,
+    log::open_fresh_run_append,
+    mem::{game_module_base, safe_read_usize},
 };
 
 use windows::Win32::System::Diagnostics::Debug::{CONTEXT, CONTEXT_FLAGS};
@@ -53,14 +59,12 @@ use windows::Win32::{
     },
 };
 
-use super::*;
-
 /// AMD64 `CONTEXT_CONTROL` (the segment-regs/IP/SP subset). The `windows` crate only exposes the
 /// generic `CONTEXT_CONTROL` for x86; on x86_64 the value is `0x0010_0001`. We only need `Rip`.
 const CONTEXT_CONTROL_AMD64: u32 = 0x0010_0001;
 
 /// Profiler master switch: env `ER_EFFECTS_PROFILE=1` or `<game_dir>/er-effects-profile.txt`.
-pub(crate) fn profiler_enabled() -> bool {
+pub fn profiler_enabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_PROFILE").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -199,13 +203,13 @@ unsafe fn scan_stack(rsp: u64, base: u64) -> Vec<u64> {
 }
 
 /// Public entry: spawn the sampler daemon thread. Idempotent via the `Once` in the caller.
-pub(crate) fn spawn_boot_profiler() {
+pub fn spawn_boot_profiler(log: fn(std::fmt::Arguments<'_>)) {
     let _ = std::thread::Builder::new()
         .name("er-effects-profiler".to_owned())
-        .spawn(profiler_main);
+        .spawn(move || profiler_main(log));
 }
 
-fn profiler_main() {
+fn profiler_main(log: fn(std::fmt::Arguments<'_>)) {
     let pid = unsafe { GetCurrentProcessId() };
     let self_tid = unsafe { GetCurrentThreadId() };
     let rip_on = profiler_rip_enabled();
@@ -224,8 +228,8 @@ fn profiler_main() {
     // write (previous run kept one generation as `.prev`). The offline renderer reads the header
     // line below and then every sample after it as ONE run's timeline; a second run's header
     // appearing mid-file would be read as samples.
-    let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) else {
-        append_autoload_debug(format_args!("profiler: cannot open {path:?}"));
+    let Some(mut file) = open_fresh_run_append(&path) else {
+        log(format_args!("profiler: cannot open {path:?}"));
         return;
     };
     // Header line documents the run for the offline renderer. `module_base` lets RIP samples be made
@@ -238,7 +242,7 @@ fn profiler_main() {
         interval.as_millis(),
         rip_on
     );
-    append_autoload_debug(format_args!(
+    log(format_args!(
         "profiler: started ncpu={ncpu} interval_ms={} rip={rip_on} -> {path:?}",
         interval.as_millis()
     ));
@@ -356,7 +360,7 @@ fn profiler_main() {
     }
 
     let _ = file.flush();
-    append_autoload_debug(format_args!(
+    log(format_args!(
         "profiler: stopped after {}ms ({} samples)",
         epoch.elapsed().as_millis(),
         iter
