@@ -1223,6 +1223,7 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
     }
     crate::experiments::ensure_save_picker_user_nav_input_hooks_installed();
     install_save_picker_set_cursor_hook();
+    install_save_picker_wheel_delta_hook();
     let mut down_mask = 0usize;
     if unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) < 0 } {
         down_mask |= SAVE_PICKER_DRIVE_STRIP_LBUTTON_MASK;
@@ -1548,6 +1549,8 @@ unsafe fn save_picker_learn_vertical_menu_event_ids(down: bool, up: bool) {
 static SAVE_PICKER_SET_CURSOR_ORIG: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_SET_CURSOR_NEUTRALISED: AtomicUsize = AtomicUsize::new(0);
+/// Wheel detents the native grid refused (view base at a clamp) that this pump stepped instead.
+static SAVE_PICKER_WHEEL_NATIVE_STEPS: AtomicUsize = AtomicUsize::new(0);
 
 /// `FUN_14073bc10` detour: neutralise the ensure-visible base for EVERY select on the picker's list.
 ///
@@ -1630,6 +1633,149 @@ pub(crate) fn install_save_picker_set_cursor_hook() {
             "save-picker: MhHook::new select-index failed: {status:?}"
         )),
     }
+}
+
+/// `FUN_140757c70` -- the ONLY place the grid reads a wheel notch. Byte-verified unique in the
+/// 1.16.2 deobf image at `0x140757c70` (`48 89 5c 24 08 57 48 83 ec 20 48 8b da 48 8b f9 ba 2c ..`).
+///
+/// It resolves the wheel to a `(col, row)` step from menu event ids `0x2c` (up, row -1) and `0x2d`
+/// (down, row +1) via `FUN_14075d8f0`, and its only two callers are the grid mouse handler
+/// `FUN_14073a5c0` and `FUN_140781460`.
+const MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA: usize = 0x757c70;
+static SAVE_PICKER_WHEEL_DELTA_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::new(0);
+
+/// THE INTERLOCK: while the picker owns the screen, the game's own grid never sees a wheel notch.
+///
+/// Two mechanisms can scroll this list for one detent -- the native grid handler and this pump --
+/// and the double scroll is simply both of them running. Every attempt to arbitrate them by TIMING
+/// failed, and the live log says why: the handler acts LATER than the tick the detent arrives on and
+/// later than the tick after it too (our step at `+107884ms`, the handler's move only visible at
+/// `+107911ms`), so there is no tick on which the pump can ask "did the game already take this one?"
+/// and get a true answer. Deferring by a fixed number of ticks just moves the guess.
+///
+/// So do not arbitrate: remove one of the two mechanisms. Zeroing the delta here makes the wheel
+/// branch in `FUN_14073a5c0` (`if (delta.col != 0 || delta.row != 0)`) fall through, so the native
+/// grid performs no view scroll and no cursor move at all, and the pump is the sole owner of the
+/// wheel with no timing assumption anywhere. It also removes the reason the wheel was uneven in the
+/// first place: the native step was gated on the grid's own view base being able to move, which is
+/// false at a clamp, so the game was an unreliable owner even when it was the only one.
+///
+/// Scoped to the picker's own screen, and it silences a READ rather than dropping the user's input:
+/// our own wheel latch comes from `GetRawInputData` and is untouched, so the detent still reaches
+/// the picker. Every other menu keeps its native wheel exactly as designed.
+unsafe extern "system" fn save_picker_wheel_delta_hook(msg: usize, out: *mut i32) -> *mut i32 {
+    let orig_addr = SAVE_PICKER_WHEEL_DELTA_ORIG.load(Ordering::SeqCst);
+    if orig_addr == 0 {
+        return out;
+    }
+    let orig: unsafe extern "system" fn(usize, *mut i32) -> *mut i32 =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(msg, out) };
+    let owned = save_picker_live_profile_dialog() != 0
+        && SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0;
+    if !owned || out.is_null() {
+        return ret;
+    }
+    let had_notch = unsafe { out.read_unaligned() != 0 || out.add(1).read_unaligned() != 0 };
+    if had_notch {
+        unsafe {
+            out.write_unaligned(0);
+            out.add(1).write_unaligned(0);
+        }
+        let n = SAVE_PICKER_WHEEL_DELTA_SILENCED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 20 || n % 50 == 0 {
+            append_autoload_debug(format_args!(
+                "save-picker: silenced native wheel notch #{n} (the pump owns the wheel)"
+            ));
+        }
+    }
+    ret
+}
+
+pub(crate) fn install_save_picker_wheel_delta_hook() {
+    if SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Ok(addr) = game_rva(MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve wheel-delta rva 0x{MENU_EVENT_WHEEL_DELTA_ACCESSOR_RVA:x}"
+        ));
+        SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED.store(0, Ordering::SeqCst);
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            save_picker_wheel_delta_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SAVE_PICKER_WHEEL_DELTA_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "save-picker: queue_enable wheel-delta failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "save-picker: hooked wheel-delta FUN_140757c70 0x{addr:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "save-picker: wheel-delta MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "save-picker: MhHook::new wheel-delta failed: {status:?}"
+        )),
+    }
+}
+
+/// Move the picker's selection one row for a wheel detent the native grid declined to act on.
+///
+/// This calls `FUN_14073bc10` -- the list's own select-index primitive, the same call the grid's
+/// mouse hit test makes (`FUN_14073a5c0` tail) and the same one the wheel path would have reached
+/// via `FUN_14073b0c0` had its view-base gate let it through. Going through the select rather than
+/// writing `list+0xd4` is what carries the chrome with the selection; a bare field write moves the
+/// index and leaves the highlight where it was, which is the "rows scroll but the chrome doesn't
+/// travel" half of the report. The call re-enters our own detour above, so the view base stays
+/// pinned exactly as it does for a hover or a click.
+unsafe fn save_picker_wheel_step_native_cursor(
+    dialog: usize,
+    model_row: usize,
+    from_cursor: i32,
+) -> i32 {
+    let Ok(index) = i32::try_from(model_row)
+        .map(|row| row.saturating_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET))
+        .and_then(u32::try_from)
+    else {
+        return from_cursor;
+    };
+    let Ok(select) = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
+        return from_cursor;
+    };
+    let select: unsafe extern "system" fn(usize, u32) -> u64 =
+        unsafe { std::mem::transmute(select) };
+    let ret = unsafe { select(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, index) };
+    // Keep the pump's edge sampling honest: the next tick compares against this, and leaving the
+    // pre-step row here would read our own step back as a NATIVE move and swallow the next detent.
+    SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
+        usize::try_from(index).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
+        Ordering::SeqCst,
+    );
+    let n = SAVE_PICKER_WHEEL_NATIVE_STEPS.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 20 || n % 25 == 0 {
+        append_autoload_debug(format_args!(
+            "save-picker: wheel step #{n} the grid declined from={from_cursor} to_index={index} select_ret={ret}"
+        ));
+    }
+    i32::try_from(index).unwrap_or(from_cursor)
 }
 
 /// The grid's own view-scroll base as `(column, row)`.
@@ -1747,13 +1893,14 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
         usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
         Ordering::SeqCst,
     );
-    let (last_visible_row, at_scroll_top, at_scroll_bottom) = {
+    let (last_visible_row, first_content_row, at_scroll_top, at_scroll_bottom) = {
         let guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_ref() else {
             return;
         };
         (
             model.visible_row_count().saturating_sub(1),
+            model.entry_row_base(),
             model.scroll_offset() == 0,
             model.scroll_offset() >= model.scroll_max(),
         )
@@ -1905,15 +2052,40 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
         model.scroll_window_from_edge_press(model_row, down)
     };
     let Some(outcome) = outcome else {
-        // Away from an edge there is no window work AND no cursor work: the native list moves its
-        // own selection for a key, a pad direction AND a wheel detent.
+        // Away from an edge there is normally no window work AND no cursor work: the native list
+        // moves its own selection for a key, a pad direction AND a wheel detent.
         //
-        // The wheel case was mis-read twice. It looked inert because at the top and bottom rows the
-        // native list has nowhere to go (it does not wrap for the wheel), so the only rows where
-        // nothing happened were the rows where the WINDOW should have scrolled instead. Adding a
-        // step here to "fix" that gave every detent two moves -- the live log caught mine at
-        // `row 9 -> 8` and the game's own at `8 -> 7` one millisecond later, which is precisely the
-        // two-row jump. Off an edge, the wheel belongs entirely to the game.
+        // The WHEEL is the exception, and the reason is in the grid's own mouse handler. In
+        // `FUN_14073a5c0` the wheel branch reads the notch delta and then, per notch:
+        //
+        //     if (FUN_14073b670(grid, delta))                  // scroll the VIEW; "did base move?"
+        //         FUN_14073b0c0(grid, grid->cursor, delta);    // ...only then move the CURSOR
+        //
+        // so the detent's cursor step is GATED on the grid's own view base (`grid+0x348`, the
+        // scrollbar position) actually changing. `FUN_14073b670` clamps the new base into
+        // `[0, ((count-1)/cols) - rows + 1]` (`FUN_14073a0a0`) and reports "unchanged" at either
+        // clamp -- and the picker owns scrolling in its MODEL, staging a fixed window of records, so
+        // that native range is a degenerate one or two positions that our select hook then pins.
+        // At a clamped base the whole detent reaches nothing at all: no view move, no cursor move,
+        // no chrome. That is the reported dead wheel at the top of the scrollbar.
+        //
+        // The wheel is UNCONDITIONALLY ours, and it is safe to act on the spot only because the
+        // other mechanism no longer exists: `save_picker_wheel_delta_hook` zeroes the notch the grid
+        // would have read, so `FUN_14073a5c0` never scrolls or moves the cursor while the picker is
+        // up. Two earlier shapes of this both double-scrolled, because both tried to decide WHO acts
+        // by looking at the cursor -- once on the arrival tick, once a tick later -- and the native
+        // handler runs later than either (live log: our step `+107884ms`, its move `+107911ms`).
+        // There is no tick that answers the question, so the question had to stop being asked.
+        if wheel_only {
+            let step_row = if down {
+                model_row.saturating_add(1).min(last_visible_row)
+            } else {
+                model_row.saturating_sub(1).max(first_content_row)
+            };
+            if step_row != model_row {
+                unsafe { save_picker_wheel_step_native_cursor(dialog, step_row, cursor) };
+            }
+        }
         return;
     };
     let pinned_row = outcome.pin_row();

@@ -691,7 +691,10 @@ impl SavePickerModel {
     }
 
     /// Row index of the first directory/file entry.
-    fn entry_row_base(&self) -> usize {
+    /// First row of the listing proper, i.e. the row below any header rows the view puts above the
+    /// entries. Public because the menu pump needs the same "first content row" the edge-press rule
+    /// uses when it has to clamp a cursor step of its own.
+    pub fn entry_row_base(&self) -> usize {
         self.pinned_row_count() + self.nav_row_count()
     }
 
