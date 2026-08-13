@@ -29,6 +29,30 @@
 //! It is already a character in this same movie, so nothing new is defined and no texture is
 //! shipped: the edit is one `RemoveObject2` and one `PlaceObject3` on a dead frame.
 //!
+//! # Why every marker is drawn dimmed
+//!
+//! Invasion locations are NOT warp destinations -- `er_invasion_warp::warp`'s policy gate refuses
+//! every warp to one, from the map and from the hotkeys alike. A pin that looks exactly as solid as
+//! a Site of Grace but does nothing when you confirm it is a worse UI than no pin at all, so the
+//! marker itself carries the answer: all three tiers are placed through a `CXFORMWITHALPHA` that
+//! drops them to [`DIMMED_ALPHA_MULT`] of full opacity.
+//!
+//! The dim is ALPHA-ONLY, and that is measured rather than stylistic. A scan of the vanilla movie
+//! finds 193 distinct colour transforms; exactly ONE moves an RGB multiplier off
+//! [`CXFORM_UNITY_MULT`] (sprite 180, `[223, 218, 205, 256]`) and it is a parchment tint that
+//! leaves alpha alone, i.e. not a dim. Five carry no multiply term at all. Every remaining one
+//! holds RGB at unity and varies only alpha. So the movie has no precedent for dimming by colour
+//! and 187 for dimming by alpha.
+//!
+//! The reason behind the convention is the one that matters here: reducing the RGB multipliers
+//! pushes the marker toward black, and against a light parchment map that RAISES contrast -- the
+//! opposite of the intent -- whereas lowering alpha blends toward whatever is behind it and is
+//! therefore monotonically less visible on any background, which is a property no assumption about
+//! the map's colour is needed to rely on.
+//!
+//! Note that the whole cxform lives on frames nothing else uses, so it inherits the same
+//! containment argument as the placement it rides on: no shipped pin can be dimmed by it.
+//!
 //! # Fail-closed
 //!
 //! Every structural assumption is checked before anything is written, and a mismatch returns an
@@ -36,7 +60,7 @@
 //! movie with fewer frames than expected all abort. A map with the old icon is a disappointment;
 //! a corrupted menu movie is a crash on the title screen.
 
-use crate::{GfxError, Matrix, Movie, Tag};
+use crate::{CxformWithAlpha, GfxError, Matrix, Movie, Tag};
 
 /// The movie that owns the world-map pin icons.
 pub const WORLD_MAP_MOVIE_FILE_NAME: &str = "02_120_worldmap.gfx";
@@ -193,8 +217,56 @@ pub const ICON_DEPTH: u16 = 1;
 
 /// `PlaceObject3` `flags1`: `HasCharacter | HasMatrix`, matching every shipped icon frame.
 const PLACE_FLAGS1_CHARACTER_AND_MATRIX: u8 = 0x06;
+/// `PlaceObject3` `flags1` for OUR frames: the above plus `HasColorTransform`.
+///
+/// The flags byte is the writer's source of truth -- it emits the `CXFORMWITHALPHA` iff `0x08` is
+/// set and panics on a transform supplied without the bit -- so the two must be changed together.
+const PLACE_FLAGS1_CHARACTER_MATRIX_AND_CXFORM: u8 =
+    PLACE_FLAGS1_CHARACTER_AND_MATRIX | PLACE_FLAGS_HAS_COLOR_TRANSFORM;
+/// `PlaceFlagHasColorTransform`.
+const PLACE_FLAGS_HAS_COLOR_TRANSFORM: u8 = 0x08;
 /// `PlaceObject3` `flags2`: `HasImage`. External-image placements in this movie all set it.
 const PLACE_FLAGS2_HAS_IMAGE: u8 = 0x10;
+
+/// A `CXFORM` multiplier meaning "unchanged". The terms are 8.8 fixed point, so `1.0` is `256`.
+pub const CXFORM_UNITY_MULT: i32 = 256;
+
+/// Alpha multiplier every marker is drawn with, out of [`CXFORM_UNITY_MULT`].
+///
+/// `102/256` is ~40%, and it is taken from shipped art rather than invented: `01_002_fe_saveicon.
+/// gfx` places its `AutoSaveIcon` at exactly `[256, 256, 256, 102]` (ffdec-confirmed, and covered by
+/// this crate's codec tests). That is the closest thing the menu corpus has to a "present but
+/// inactive" convention -- the world map's own alpha values are all frames of fade RAMPS, which say
+/// nothing about where a steady faded element should sit.
+///
+/// Whether ~40% reads as "much dimmer" against the parchment at map zoom is a claim about pixels
+/// and is NOT settled by any test here; it is one constant precisely so retuning it is a one-line
+/// change that automatically applies to all three tiers.
+pub const DIMMED_ALPHA_MULT: i32 = 102;
+
+/// Bit width the emitted `CXFORMWITHALPHA` packs its terms at.
+///
+/// Every alpha cxform in the vanilla world-map movie uses `10`, and the width must hold
+/// [`CXFORM_UNITY_MULT`] as a SIGNED value -- 9 bits reach only 255, so 256 would be written as
+/// `-256` and the marker would render inverted rather than dim.
+const CXFORM_NBITS: u32 = 10;
+
+/// The colour transform every marker placement carries: full RGB, reduced alpha.
+#[must_use]
+pub fn dimmed_marker_cxform() -> CxformWithAlpha {
+    CxformWithAlpha {
+        has_add: false,
+        has_mult: true,
+        nbits: CXFORM_NBITS,
+        mult: Some([
+            CXFORM_UNITY_MULT,
+            CXFORM_UNITY_MULT,
+            CXFORM_UNITY_MULT,
+            DIMMED_ALPHA_MULT,
+        ]),
+        add: None,
+    }
+}
 
 /// Half of `MENU_MAP_Enemy_02`'s 146x146 at half scale, in twips: `146 / 2 / 2 * 20`.
 ///
@@ -258,10 +330,10 @@ impl core::fmt::Display for RedPinError {
 
 impl std::error::Error for RedPinError {}
 
-/// The `PlaceObject3` that draws one marker, centred, at the icon depth.
+/// The `PlaceObject3` that draws one marker, centred and dimmed, at the icon depth.
 fn marker_placement(marker: PinMarker) -> Tag {
     Tag::PlaceObject3 {
-        flags1: PLACE_FLAGS1_CHARACTER_AND_MATRIX,
+        flags1: PLACE_FLAGS1_CHARACTER_MATRIX_AND_CXFORM,
         flags2: PLACE_FLAGS2_HAS_IMAGE,
         depth: ICON_DEPTH,
         class_name: None,
@@ -279,7 +351,7 @@ fn marker_placement(marker: PinMarker) -> Tag {
             translate_x: marker.translate_x_twips(),
             translate_y: marker.translate_y_twips(),
         }),
-        color_transform: None,
+        color_transform: Some(dimmed_marker_cxform()),
         ratio: None,
         name: None,
         clip_depth: None,
@@ -624,6 +696,74 @@ mod tests {
                 marker.name
             );
         }
+    }
+
+    #[test]
+    fn every_marker_is_placed_dimmed_and_the_flag_bit_agrees() {
+        // Two independent ways to lose the dim: forget the transform, or set it without the flags
+        // bit. The second is the dangerous one -- the writer emits the CXFORM iff `0x08` is set, so
+        // a transform with the bit clear is silently dropped and the pins come back fully opaque
+        // with every other assertion still green.
+        let mut movie = movie_with(sprite_with_frames(
+            ICON_SPRITE_ID,
+            ICON_SPRITE_FRAME_COUNT,
+            &[1],
+        ));
+        install_red_pin_frame(&mut movie).expect("installs");
+        let Tag::DefineSprite { tags, .. } = &movie.tags[0] else {
+            panic!("sprite");
+        };
+        for marker in PIN_MARKERS {
+            let (_, place) = frame_span(tags, marker.frame).expect("marker frame");
+            let Tag::PlaceObject3 {
+                flags1,
+                color_transform,
+                ..
+            } = place
+            else {
+                panic!("{} did not place a character", marker.name);
+            };
+            assert_eq!(
+                flags1 & PLACE_FLAGS_HAS_COLOR_TRANSFORM,
+                PLACE_FLAGS_HAS_COLOR_TRANSFORM,
+                "{} must set HasColorTransform or the writer drops the dim",
+                marker.name
+            );
+            let cxform = color_transform.unwrap_or_else(|| panic!("{} has no dim", marker.name));
+            assert_eq!(cxform, dimmed_marker_cxform(), "{}", marker.name);
+        }
+    }
+
+    #[test]
+    fn the_dim_lowers_alpha_only_and_stays_representable() {
+        let cxform = dimmed_marker_cxform();
+        let mult = cxform.mult.expect("a multiply term");
+        // RGB untouched: the world map's own art dims by alpha (192 of its 193 cxforms), and
+        // darkening RGB would RAISE contrast against a light parchment map.
+        assert_eq!(
+            [mult[0], mult[1], mult[2]],
+            [CXFORM_UNITY_MULT; 3],
+            "the dim must not touch the colour channels"
+        );
+        assert!(
+            mult[3] < CXFORM_UNITY_MULT,
+            "alpha must actually be reduced, got {}",
+            mult[3]
+        );
+        assert!(
+            mult[3] > 0,
+            "a fully transparent marker is an invisible one"
+        );
+        assert!(cxform.has_mult && !cxform.has_add);
+        // The terms are packed SIGNED at `nbits`, so unity (256) needs 10 bits. At 9 it would be
+        // written as -256 and the marker would render inverted rather than dim.
+        let widest = mult.iter().copied().max().expect("four terms");
+        let representable = 1_i32 << (cxform.nbits - 1);
+        assert!(
+            widest < representable,
+            "nbits={} cannot hold {widest} as a signed value",
+            cxform.nbits
+        );
     }
 
     #[test]

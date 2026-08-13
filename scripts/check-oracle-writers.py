@@ -21,6 +21,12 @@ reference (`MhHook::new(addr, detour, &TITLE_UPDATE_ORIG)`) and written through 
 naive scan flags all ~20 `*_ORIG` statics as dead. They are not. Omitting this rule was the
 difference between a first audit reporting 86 dead counters and the true figure of 13.
 
+That by-reference rule accepts a PATH QUALIFIER (`&crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER`),
+because the installer and the trampoline do not have to live in the same module. Requiring a bare
+name made this gate punish exactly the refactor it should be neutral about: moving a hook into its
+own file turned a written static into a reported offender without changing one line of behaviour,
+which teaches the reader to distrust the gate rather than the code.
+
 Usage:
   python3 scripts/check-oracle-writers.py            # scan the repo, exit 1 on any offender
   python3 scripts/check-oracle-writers.py --selftest # run the built-in regression cases
@@ -56,8 +62,13 @@ def write_re(name: str) -> re.Pattern[str]:
     )
 
 
+# `&NAME`, `&crate::map_confirm::NAME`, `&self::NAME`, `&super::hooks::NAME`, `&raw const NAME`.
+# The qualifier is optional and bounded to path segments so it cannot swallow arbitrary text.
+BY_REF_QUALIFIER = r"(?:(?:raw\s+(?:const|mut)\s+)?(?:(?:crate|self|super|[A-Za-z_]\w*)\s*::\s*)*)"
+
+
 def by_ref_re(name: str) -> re.Pattern[str]:
-    return re.compile(rf"&\s*{re.escape(name)}\b")
+    return re.compile(rf"&\s*{BY_REF_QUALIFIER}{re.escape(name)}\b")
 
 
 def read_re(name: str) -> re.Pattern[str]:
@@ -113,6 +124,8 @@ def selftest() -> int:
             "pub static WRITTEN_INLINE: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_WRAPPED: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_BY_REF: AtomicUsize = AtomicUsize::new(0);",
+            "pub static WRITTEN_BY_REF_QUALIFIED: AtomicUsize = AtomicUsize::new(0);",
+            "pub static WRITTEN_BY_RAW_REF: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_INDEXED: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];",
             "pub static DEAD_READ_ONCE: AtomicUsize = AtomicUsize::new(0);",
             "pub static NEVER_TOUCHED: AtomicUsize = AtomicUsize::new(0);",
@@ -128,6 +141,13 @@ def selftest() -> int:
             # by-reference write through the hook installer
             "MhHook::new(addr, detour, &WRITTEN_BY_REF);\n"
             "let c = WRITTEN_BY_REF.load(Ordering::SeqCst);\n"
+            # ... and the same write once the trampoline lives in another module. Regressed
+            # 2026-08-12 when the world-map confirm hook moved into `map_confirm`: behaviour
+            # identical, static still written by the installer, gate reported it as dead.
+            "register_union_hook(a, h, &crate::map_confirm::WRITTEN_BY_REF_QUALIFIED);\n"
+            "let e = crate::map_confirm::WRITTEN_BY_REF_QUALIFIED.load(Ordering::SeqCst);\n"
+            "let p = &raw const WRITTEN_BY_RAW_REF;\n"
+            "let f = WRITTEN_BY_RAW_REF.load(Ordering::SeqCst);\n"
             "WRITTEN_INDEXED[idx].fetch_add(1, Ordering::SeqCst);\n"
             "let d = WRITTEN_INDEXED[0].load(Ordering::SeqCst);\n"
             # the defect: read to emit an oracle, never written
@@ -136,7 +156,14 @@ def selftest() -> int:
     }
     got = {n for n, _ in audit(sources, counters)}
     failures = []
-    for name in ("WRITTEN_INLINE", "WRITTEN_WRAPPED", "WRITTEN_BY_REF", "WRITTEN_INDEXED"):
+    for name in (
+        "WRITTEN_INLINE",
+        "WRITTEN_WRAPPED",
+        "WRITTEN_BY_REF",
+        "WRITTEN_BY_REF_QUALIFIED",
+        "WRITTEN_BY_RAW_REF",
+        "WRITTEN_INDEXED",
+    ):
         if name in got:
             failures.append(f"{name} was flagged but IS written")
     if "DEAD_READ_ONCE" not in got:
@@ -147,7 +174,10 @@ def selftest() -> int:
         for f in failures:
             print(f"[check-oracle-writers] SELFTEST FAIL: {f}")
         return 1
-    print("[check-oracle-writers] selftest ok (6 cases: inline, wrapped, by-ref, indexed, dead, unread)")
+    print(
+        "[check-oracle-writers] selftest ok (8 cases: inline, wrapped, by-ref, by-ref-qualified, "
+        "by-raw-ref, indexed, dead, unread)"
+    )
     return 0
 
 

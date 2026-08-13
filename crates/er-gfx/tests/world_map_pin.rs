@@ -11,8 +11,8 @@
 mod common;
 
 use er_gfx::world_map_pin::{
-    ICON_SPRITE_FRAME_COUNT, ICON_SPRITE_ID, PIN_MARKERS, RED_MARKER_CHARACTER, RED_PIN_FRAME,
-    with_red_pin_frame,
+    CXFORM_UNITY_MULT, ICON_SPRITE_FRAME_COUNT, ICON_SPRITE_ID, PIN_MARKERS, RED_MARKER_CHARACTER,
+    RED_PIN_FRAME, dimmed_marker_cxform, with_red_pin_frame,
 };
 use er_gfx::{Movie, Tag};
 
@@ -181,6 +181,69 @@ fn every_marker_frame_of_the_real_movie_carries_a_drawable_placement() {
         characters.len(),
         PIN_MARKERS.len(),
         "the marker frames must reference distinct bitmaps, got {characters:?}"
+    );
+}
+
+/// The colour transform of the placement on `frame`, or `None` if that frame places nothing.
+fn cxform_on_frame(tags: &[Tag], frame: u16) -> Option<Option<er_gfx::CxformWithAlpha>> {
+    let mut current = 1_u16;
+    for tag in tags {
+        match tag {
+            Tag::ShowFrame { .. } => current += 1,
+            Tag::PlaceObject3 {
+                color_transform, ..
+            } if current == frame => return Some(color_transform.clone()),
+            _ => {}
+        }
+    }
+    None
+}
+
+#[test]
+fn the_dim_survives_serialisation_into_the_real_movie() {
+    // The unit tests assert the Tag we BUILD carries the transform. This asserts the transform is
+    // still there after the writer packed it into real bytes and the reader unpacked it again --
+    // the bit-level round trip the game actually consumes. A CXFORM is bit-packed and byte-aligned
+    // at its end, so a width or ordering mistake corrupts the tags that FOLLOW it rather than
+    // failing loudly here; parsing the whole movie back is what catches that.
+    let Some(vanilla) = vanilla_or_skip() else {
+        return;
+    };
+    let edited = with_red_pin_frame(&vanilla).expect("installs");
+    let after = Movie::parse(&edited).expect("edited world map movie re-parses");
+    let tags = icon_sprite(&after);
+    let expected = dimmed_marker_cxform();
+    for marker in PIN_MARKERS {
+        let placed = cxform_on_frame(tags, marker.frame)
+            .unwrap_or_else(|| panic!("{} placed nothing on frame {}", marker.name, marker.frame));
+        let cxform =
+            placed.unwrap_or_else(|| panic!("{} came back with no colour transform", marker.name));
+        assert_eq!(cxform, expected, "{}", marker.name);
+    }
+
+    // And no SHIPPED icon frame gained one. The dim is meant to be contained to the three dead
+    // frames; sprite 171 carries no colour transform at all in vanilla, so any non-`None` on a
+    // frame that is not ours means the splice landed in the wrong span.
+    let ours = |frame: u16| PIN_MARKERS.iter().any(|marker| marker.frame == frame);
+    let mut current = 1_u16;
+    for tag in tags {
+        match tag {
+            Tag::ShowFrame { .. } => current += 1,
+            Tag::PlaceObject3 {
+                color_transform: Some(cxform),
+                ..
+            } if !ours(current) => {
+                panic!("shipped icon frame {current} gained a colour transform: {cxform:?}")
+            }
+            _ => {}
+        }
+    }
+    // Guards the assertion above against a silent no-op: unity is what "not dimmed" would be, so
+    // a dim equal to unity would pass every check while changing nothing on screen.
+    assert_ne!(
+        expected.mult.expect("a multiply term")[3],
+        CXFORM_UNITY_MULT,
+        "the marker alpha must differ from unity or nothing is dimmed"
     );
 }
 

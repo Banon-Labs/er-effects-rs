@@ -1,19 +1,41 @@
-//! The user-facing trigger: three hotkeys that warp the player to invasion spawn points, and the
-//! arrival oracle that decides whether the warp actually worked.
+//! The arrival oracle that decides whether a warp actually worked, and the three hotkeys that used
+//! to trigger one.
 //!
-//! F7 warps to the nearest point, F8 steps through the catalog's stable order, and F9 jumps to
-//! another AREA entirely. Only F7 needs world coordinates -- see the note on the candidate set
-//! in [`InvasionWarpDrive::tick`] for why that distinction is load-bearing.
+//! # The hotkeys no longer move the player
 //!
-//! # Why hotkeys, when the goal is the world map
+//! Invasion locations are map markers, not fast-travel destinations
+//! ([`er_invasion_warp::warp::WarpPolicy::MarkersOnly`]), so F7/F8/F9 are refused along with the
+//! world map's own confirm. The refusal is taken HERE, at the top of the press handler, rather than
+//! left to the warp call at the bottom: reaching that call means decoding the whole invasion
+//! catalog and resolving thousands of candidate coordinates, and doing all of that on every press
+//! to then decline is a stutter the player would feel for no reason.
 //!
-//! The world-map surface is a shell around a warp call. Until that call is proven to relocate
-//! the player and stream the destination, a map UI would be decoration over an unknown. These
-//! hotkeys are the smallest trigger that exercises the whole payload -- catalog -> engine
+//! The keys are still read and still answer, because a key that does nothing at all and a key
+//! whose handler is broken look identical from the outside. Pressing one now logs why.
+//!
+//! # The oracle is still live, and still needed
+//!
+//! [`note_external_warp`] is how the world-map confirm hook hands over a warp it issued, and the
+//! arrival classification below is the only thing that can say a warp ARRIVED rather than merely
+//! being requested. That is a distinction worth keeping wired up even while nothing issues one:
+//! if the policy is ever revisited, the evidence path is the part that took real runs to build.
+//!
+//! What each key MEANT, kept because the selection helpers still implement it: F7 the nearest
+//! point, F8 the catalog's stable order, F9 another AREA entirely. Only F7 needed world
+//! coordinates -- see the note on the candidate set in [`InvasionWarpDrive::tick`] for why that
+//! distinction is load-bearing.
+//!
+//! # Why hotkeys existed, when the goal was the world map (historical)
+//!
+//! The world-map surface is a shell around a warp call. Until that call was proven to relocate the
+//! player and stream the destination, a map UI would have been decoration over an unknown. These
+//! hotkeys were the smallest trigger that exercised the whole payload -- catalog -> engine
 //! coordinate conversion -> target choice -> explicit spawn -> stage kick -> settled read-back --
-//! and they answer the questions static RE could not: whether the world streams at the
-//! destination, whether the disaster remap moves the block under us, and whether the yaw lands
-//! the way the `.aip` table authored it.
+//! and they answered the questions static RE could not: whether the world streams at the
+//! destination, whether the disaster remap moves the block under us, and whether the yaw lands the
+//! way the `.aip` table authored it. That work is done; the warp is proven and then deliberately
+//! not offered. Read this section as the record of how the mechanism below was established, not as
+//! a description of what pressing a key does today.
 //!
 //! # What "it worked" means here
 //!
@@ -201,6 +223,13 @@ pub struct InvasionWarpDrive {
     last_target_id: Option<u64>,
     warps_issued: u32,
     warps_arrived: u32,
+    /// Presses declined because invasion locations are markers rather than warp destinations.
+    ///
+    /// Separate from "ignored" for the reason every other counter here is separate: a key that was
+    /// never pressed and a key that was pressed and deliberately declined are the same silence in
+    /// the log otherwise, and only one of them means the player is trying to do something the
+    /// build no longer does.
+    warps_refused_by_policy: u32,
     /// Game-task ticks seen, for the heartbeat cadence.
     ticks: u64,
 }
@@ -224,6 +253,7 @@ impl InvasionWarpDrive {
             last_target_id: None,
             warps_issued: 0,
             warps_arrived: 0,
+            warps_refused_by_policy: 0,
             ticks: 0,
         }
     }
@@ -344,7 +374,9 @@ impl InvasionWarpDrive {
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
                  banner[shown={banners_shown} refused={banners_refused}] \
-                 -- press F7 (nearest), F8 (next), F9 (other area)",
+                 hotkey_refused={} \
+                 -- invasion locations are markers, not warp destinations: F7/F8/F9 and the map's \
+                 own confirm are all declined, and the pins are drawn dimmed to show it",
                 self.ticks,
                 self.nearest_key.raw_state() as u16,
                 self.next_key.raw_state() as u16,
@@ -358,6 +390,7 @@ impl InvasionWarpDrive {
                 verdicts.0,
                 verdicts.3,
                 verdicts.2,
+                self.warps_refused_by_policy,
             ));
         }
 
@@ -376,6 +409,24 @@ impl InvasionWarpDrive {
         log(format_args!(
             "invasion-warp: hotkey edge detected (nearest={want_nearest} next={want_next})"
         ));
+
+        // Refuse BEFORE the catalog decode below. `request_invasion_warp` would refuse anyway --
+        // it is the single choke point and this is not a second gate that could disagree with it
+        // -- but only after ~7000 targets had been collected and, for F7, run through coordinate
+        // conversion. Declining early costs the player nothing; declining late costs a frame hitch
+        // on every press.
+        if er_invasion_warp::warp::invasion_warp_policy()
+            == er_invasion_warp::warp::WarpPolicy::MarkersOnly
+        {
+            self.warps_refused_by_policy = self.warps_refused_by_policy.saturating_add(1);
+            log(format_args!(
+                "invasion-warp: hotkey ignored -- {}. The pins mark where invasions can be \
+                 TARGETED, which is what the location filter acts on; they are not fast-travel \
+                 points, and the map draws them dimmed to say so",
+                er_invasion_warp::warp::WarpError::NotAWarpDestination
+            ));
+            return;
+        }
 
         let Some(player_position) =
             (unsafe { er_invasion_warp::warp::player_physics_position(base) })

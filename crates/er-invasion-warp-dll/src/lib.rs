@@ -29,6 +29,7 @@ pub mod drive;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
 #[cfg(windows)]
+pub mod map_confirm;
 pub mod map_gfx;
 pub mod map_hooks;
 #[cfg(windows)]

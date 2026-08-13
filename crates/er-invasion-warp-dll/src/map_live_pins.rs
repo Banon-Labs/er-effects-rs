@@ -525,7 +525,10 @@ pub unsafe fn top_up_live_pins() -> usize {
         }
         record_place_name(target.block.raw(), place_name_text_id);
         // The registry is a dense index and this id is past its end, so the confirm hook cannot
-        // resolve it from there. Without this the pin would draw and then refuse to warp.
+        // resolve it from there. Still recorded even though no confirm can warp any more: an id the
+        // hook cannot resolve takes its UNRESOLVED path, which means "our registry and our rows
+        // disagree" and is a bug to chase. Registering it here keeps that signal honest, so the
+        // only thing selecting a top-up pin reports is the policy refusal every other pin gives.
         record_top_up_target(entity_id, target);
         // LAST: the re-bind token. Everything above is invisible until the draw re-binds this row's
         // clip, and it re-binds only on an id it has not cached.

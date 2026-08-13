@@ -240,9 +240,45 @@ pub const fn spawn_orientation(yaw: f32) -> FloatVector4 {
     FloatVector4::new(0.0, yaw, 0.0, 0.0)
 }
 
+/// Whether an invasion location may be used as a warp destination.
+///
+/// # Why this is a type and not two edits at the call sites
+///
+/// There are two ways to ask for one of these warps -- confirming a pin on the world map, and the
+/// F7/F8/F9 hotkeys -- and a gate placed at each is a gate a third caller silently skips. The
+/// requirement is "the player cannot warp to ANY invasion location", which is a statement about the
+/// PRIMITIVE, so the check lives inside [`native::request_invasion_warp`] where nothing can route
+/// around it. The two callers were left alone deliberately: both already handle
+/// [`WarpError`] and neither treats a refusal as a reason to fall through to anything else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarpPolicy {
+    /// Invasion locations are informational map markers only. Every warp request is refused
+    /// before anything is written.
+    MarkersOnly,
+    /// Selecting an invasion location relocates the player. The mechanism below is what does it.
+    Warpable,
+}
+
+/// The policy in force.
+///
+/// `MarkersOnly` by user requirement (2026-08-12): the pins exist to show WHERE invasions can be
+/// targeted -- which is what the location filter acts on -- not to be fast-travel points.
+///
+/// This is a function rather than a `const` on purpose. A `const false` would make everything after
+/// the check in `request_invasion_warp` provably unreachable, and the warp sequence is still the
+/// proven mechanism worth keeping legible and reviewable rather than something to delete and
+/// re-derive if the requirement moves.
+#[must_use]
+pub fn invasion_warp_policy() -> WarpPolicy {
+    WarpPolicy::MarkersOnly
+}
+
 /// Why a warp request could not be issued. Every variant means "nothing was written".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WarpError {
+    /// The destination is an invasion location, and [`invasion_warp_policy`] says those are
+    /// markers rather than warp destinations. Refused before any engine state is touched.
+    NotAWarpDestination,
     /// `GetModuleHandleA(NULL)` failed.
     ModuleBase(String),
     /// The target's block key is the `0xFFFFFFFF` sentinel.
@@ -260,6 +296,11 @@ pub enum WarpError {
 impl core::fmt::Display for WarpError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::NotAWarpDestination => write!(
+                f,
+                "invasion locations are map markers, not warp destinations; nothing was written \
+                 and the player did not move"
+            ),
             Self::ModuleBase(detail) => write!(f, "game module base unavailable: {detail}"),
             Self::BlockIdIsNone => write!(f, "target block id is the NONE sentinel (0xFFFFFFFF)"),
             Self::SpawnSlotDidNotLatch { flag } => write!(
@@ -323,7 +364,8 @@ mod native {
         SESSION_PROTOCOL_STATE_IN_GAME, SESSION_PROTOCOL_STATE_OFFSET,
         SET_DISABLE_MAP_ENTER_ANIM_RVA, SET_EXPLICIT_SPAWN_RVA, SET_INITIAL_AREA_ENTITY_ID_RVA,
         SET_MOVE_MAP_STEP_BLOCK_ID_RVA, SETUP_MAP_REENTRY_RVA, SessionGate,
-        WARP_NEXT_STAGE_KICK_RVA, WarpError, WarpOutcome, spawn_orientation, spawn_position,
+        WARP_NEXT_STAGE_KICK_RVA, WarpError, WarpOutcome, WarpPolicy, invasion_warp_policy,
+        spawn_orientation, spawn_position,
     };
     use crate::invasion_warp::InvasionWarpTarget;
     use crate::select::ResolvedTarget;
@@ -354,6 +396,11 @@ mod native {
 
     /// Issue a local warp to `target`.
     ///
+    /// Refuses outright while [`super::invasion_warp_policy`] is
+    /// [`WarpPolicy::MarkersOnly`], which it is. This is the single choke point every warp to an
+    /// invasion location passes through -- the world-map confirm hook and the hotkeys both end up
+    /// here -- so the refusal cannot be routed around by adding a caller.
+    ///
     /// # Safety
     ///
     /// Must be called on the game task thread with the world loaded (`GameMan` and the session
@@ -362,6 +409,13 @@ mod native {
     pub unsafe fn request_invasion_warp(
         target: &InvasionWarpTarget,
     ) -> Result<WarpOutcome, WarpError> {
+        // FIRST, before the block check and before the module base is even resolved: a refusal
+        // must be indistinguishable from never having been called. Every later `return Err` in
+        // this function is careful to leave engine state alone; this one does not have to be,
+        // because it runs before any of it.
+        if invasion_warp_policy() == WarpPolicy::MarkersOnly {
+            return Err(WarpError::NotAWarpDestination);
+        }
         let requested_block = target.block.raw();
         if requested_block == BLOCK_ID_NONE {
             return Err(WarpError::BlockIdIsNone);
@@ -925,6 +979,7 @@ mod tests {
     #[test]
     fn every_warp_error_says_what_went_wrong_without_claiming_a_warp_happened() {
         let errors = [
+            WarpError::NotAWarpDestination,
             WarpError::ModuleBase("boom".to_string()),
             WarpError::BlockIdIsNone,
             WarpError::SpawnSlotDidNotLatch { flag: 0 },
@@ -934,5 +989,27 @@ mod tests {
             assert!(!rendered.is_empty());
             assert!(!rendered.contains("warped"), "{rendered}");
         }
+    }
+
+    #[test]
+    fn invasion_locations_are_markers_and_not_warp_destinations() {
+        // The product requirement, asserted directly rather than inferred from the absence of a
+        // warp in a log. `request_invasion_warp` is `#[cfg(windows)]`, so this is the only place
+        // the rule can be checked on the host -- which is exactly why the rule was made a value
+        // the gate reads instead of an `if` buried in Windows-only code.
+        assert_eq!(invasion_warp_policy(), WarpPolicy::MarkersOnly);
+    }
+
+    #[test]
+    fn the_refusal_names_the_reason_rather_than_looking_like_a_malfunction() {
+        // This string is what a player sees in the log after selecting a pin and not moving. If it
+        // reads like a failure they will report a bug; it has to read like a decision.
+        let rendered = WarpError::NotAWarpDestination.to_string();
+        assert!(rendered.contains("markers"), "{rendered}");
+        assert!(rendered.contains("not warp destinations"), "{rendered}");
+        assert!(
+            rendered.contains("nothing was written"),
+            "a refusal must say the engine was left alone: {rendered}"
+        );
     }
 }
