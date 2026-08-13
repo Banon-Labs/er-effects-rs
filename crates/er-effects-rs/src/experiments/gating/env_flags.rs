@@ -584,15 +584,6 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
             .load(std::sync::atomic::Ordering::SeqCst)
             == 0
 }
-/// WORLD-RES STREAMING-DRIVER COLD-BUILD PROBE gate (env ER_EFFECTS_WORLDRES_COLDBUILD /
-/// er-effects-worldres-coldbuild.txt). OFF by default. When on, own_stepper runs a ONE-SHOT,
-/// SAVE-SAFE probe at the parked title that cold-builds the CSEmkResManImp streaming driver
-/// (0x143d7c088) + registers the stream worker (0x144842d40) via the CSResStep tick getter
-/// 0x140cd6c50 with a stub `this` -- NO SetState, NO world load, zero save-write risk. See bd
-/// emk-resman-streaming-driver-coldbuild-stub-lever-2026.
-pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
-    false
-}
 /// COLD CHAR-MOUNT experiment gate (env ER_EFFECTS_COLD_CHAR_MOUNT / er-effects-cold-char-mount.txt,
 /// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-
 /// decisive-untested-experiment-2026): with the stream worker REGISTERED, can the b80 save-IO read
