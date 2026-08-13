@@ -70,7 +70,26 @@ help -- the embedded paths are already crate-relative.
 non-DLL crates, and fails for essentially every genuine code move.** A red run on a real
 refactor is not a bug in the gate and is not fixable by changing the code.
 
-Two things did survive that pure move unchanged, and are the honest invariants if a
+### How much of that 17% is layout cascade
+
+Almost all of it. Two one-word edits to the same string literal in the same crate:
+
+| Change | Differing bytes | Share of image | Sections touched |
+| --- | --- | --- | --- |
+| `"standalone loaded"` -> `"standalone active"` (same length) | 479 | 0.2% | `.text` 356, `.rdata` 112, `.pdata` 11 |
+| `"standalone loaded"` -> `"standalone attached"` (2 chars longer) | 41,264 | 17.0% | all of them |
+
+A length change shifts every `.rdata` address after the literal, and the shift
+cascades into code immediates, unwind data and relocations. So the size of a diff says
+nothing about the size of the behaviour change: 0.2% and 17.0% here are the same edit,
+differing only in whether the replacement word happened to be the same length.
+
+Practical consequence for reading a failure: the per-section breakdown and the printable
+context in the report are informative for a change that preserves layout, and near
+useless once anything shifts a section. Do not read "17% of the image changed" as
+"something big happened".
+
+Two things did survive the pure move unchanged, and are the honest invariants if a
 future gate wants one that a refactor can actually satisfy:
 
 - the export table (`['DllMain']` before and after)
