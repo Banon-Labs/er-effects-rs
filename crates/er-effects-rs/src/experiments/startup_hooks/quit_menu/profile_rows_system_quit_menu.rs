@@ -1726,9 +1726,29 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     if finalized_profile != 0
         && let Ok(base) = game_module_base()
     {
-        unsafe {
-            system_quit_restore_real_system_windows(base, "restore-real-profile-native-finalizer")
-        };
+        // A PICK owns its own close. Picking a save file closes this window on purpose and queues a
+        // reopen as the slot view (`SAVE_PICKER_OPEN_SLOTS_PENDING`, resubmitted further down this
+        // same function). Restoring the System windows here would be a second owner of the same
+        // close, and it wins simply by running first: `system_quit_restore_real_system_windows`
+        // resets the ProfileSelect state, which clears both the pending flag and the System dialog
+        // the resubmit needs, so the resubmit below then finds nothing pending and never fires. That
+        // is why picking an `.sl2` landed back on the Quit menu instead of the character list -- the
+        // live log shows the finalizer restore at `+161525ms` and NO resubmit line at all after it.
+        //
+        // So the restore runs only for a close nobody claimed: a real backout. Leaving the hide
+        // state up is also what the reopen wants -- the window is coming straight back.
+        if save_picker_resubmit_pending() {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: skipped finalizer restore for window=0x{finalized_profile:x}; a picker resubmit owns this close"
+            ));
+        } else {
+            unsafe {
+                system_quit_restore_real_system_windows(
+                    base,
+                    "restore-real-profile-native-finalizer",
+                )
+            };
+        }
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
