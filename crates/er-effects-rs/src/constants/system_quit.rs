@@ -254,19 +254,6 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
-/// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
-/// snapshot the live TitleTopDialog dwords just BEFORE the Down (cursor should read 0) and again
-/// AFTER it settles (cursor should read 1); the dword that goes 0->1 IS the cursor field. This
-/// observes the real offset instead of trusting the unverified +0xb0c guess (which the self-fire
-/// run read as 0). Frames are relative to the first poll after menu-open.
-pub(crate) const CURSOR_PROBE_BASELINE_FRAME: usize = INJECT_NAV_SETTLE_FRAMES - 2;
-pub(crate) const CURSOR_PROBE_POSTDOWN_FRAME: usize = INJECT_NAV_SETTLE_FRAMES + 12;
-/// Dwords to scan from the dialog base (covers 0..0x2400, the known field range).
-pub(crate) const CURSOR_PROBE_SCAN_DWORDS: usize = 0x900;
-/// Only dwords in [0, this) are logged as cursor candidates (a row index is small).
-pub(crate) const CURSOR_PROBE_SMALL_MAX: u32 = 8;
-/// Cap the candidate-dword log per snapshot.
-pub(crate) const CURSOR_PROBE_LOG_CAP: usize = 96;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
 pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;

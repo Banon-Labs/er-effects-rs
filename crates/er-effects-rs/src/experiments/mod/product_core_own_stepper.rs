@@ -1056,13 +1056,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 DIK_NONE
             };
             InputBlocker::get_instance().set_injected_key(dik);
-            // Find the cursor offset by observing it across the ONE deterministic Down: snapshot
-            // before (cursor=0), diff after it settles (cursor=1). The 0->1 dword IS the cursor.
-            if nf as usize == CURSOR_PROBE_BASELINE_FRAME {
-                unsafe { cursor_offset_probe(owner, base, true) };
-            } else if nf as usize == CURSOR_PROBE_POSTDOWN_FRAME {
-                unsafe { cursor_offset_probe(owner, base, false) };
-            }
             if dik != DIK_NONE {
                 let lc = INJECT_NAV_LOG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                 if lc < INJECT_NAV_LOG_FIRST {
@@ -1087,17 +1080,16 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        // SAFE DEFAULT (RTTI-corrected, 2026-06-17). The "title-confirm" menu-drive below was built
-        // on a MISIDENTIFIED function: 0x14078e1c0 is CommandSelectDialog::Update (an in-game
-        // dialog), NOT the TitleTopDialog (owner+0xe0, RTTI vt 0x142b26468) confirm router, so its
-        // cursor [+0xb0c] / rows [+0x1290] offsets do not apply here (bd rtti-correction-...). It is
-        // now DEMOTED behind legacy_menu_drive_enabled(). A plain own_stepper run must NOT take that
-        // wrong route -- it reaches the open menu zero-input and STAYS there (no fire, no SetState,
-        // save-safe). The real headless Load path is the own-the-stepper / session-activation route,
-        // not driving these fake-menu steppers.
+        // SAFE DEFAULT (RTTI-corrected, 2026-06-17). The "title-confirm" menu-drive that used to sit
+        // below was built on a MISIDENTIFIED function: 0x14078e1c0 is CommandSelectDialog::Update (an
+        // in-game dialog), NOT the TitleTopDialog (owner+0xe0, RTTI vt 0x142b26468) confirm router, so
+        // its cursor [+0xb0c] / rows [+0x1290] offsets do not apply here (bd rtti-correction-...). It
+        // was demoted behind legacy_menu_drive_enabled() and is now deleted. A plain own_stepper run
+        // reaches the open menu zero-input and STAYS there (no fire, no SetState, save-safe). The real
+        // headless Load path is the own-the-stepper / session-activation route, not driving these
+        // fake-menu steppers.
         if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
             && !own_stepper_passive_enabled()
-            && !legacy_menu_drive_enabled()
             && !input_probe_enabled()
             && !inject_nav_enabled()
         {
@@ -1120,53 +1112,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 let _ = unsafe { scan_dialog_for_loadgame(owner, base) };
             }
             if menu_build_timed_out {
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-            }
-            pass_through(false);
-            return;
-        }
-        // LEGACY / DISPROVEN title-confirm Load -- gated behind legacy_menu_drive_enabled() (OFF by
-        // default). Built on titletop-confirm-route-static-validated-no-input-needed-2026, which RTTI
-        // later REFUTED (0x14078e1c0 = CommandSelectDialog::Update). fire_titletop_load_entry is
-        // self-validating so it fail-closes on the wrong object, but it is the WRONG layer entirely;
-        // kept only to revisit the dead path deliberately. Never the default.
-        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-            && !own_stepper_passive_enabled()
-            && legacy_menu_drive_enabled()
-        {
-            let null = TITLE_OWNER_SCAN_START_ADDRESS;
-            let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
-                .unwrap_or(null);
-            let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
-            let cur_vt = if dialog != null {
-                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
-            } else {
-                null
-            };
-            if cur_vt == pld_vt {
-                // The fired Load-Game action already built the ProfileLoadDialog at owner+0xe0.
-                OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
-                own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
-                append_autoload_debug(format_args!(
-                    "own_stepper: title-confirm built ProfileLoadDialog=0x{dialog:x} at owner+0xe0 -- entering STAGE2 ACTIVATE (slot={want_slot})"
-                ));
-                pass_through(false);
-                return;
-            }
-            if OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) == null {
-                // Not yet fired: attempt the validated fire (fail-closed no-op + retry if the rows
-                // are not realized yet -- never writes on a non-realized/contaminated state).
-                if unsafe { fire_titletop_load_entry(dialog, base) } {
-                    OWN_STEPPER_TITLE_FIRED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-                }
-                pass_through(false);
-                return;
-            }
-            // Fired; waiting for the ProfileLoadDialog to appear at owner+0xe0. Bounded timeout.
-            if menu_build_timed_out {
-                append_autoload_debug(format_args!(
-                    "own_stepper: title-confirm fired but ProfileLoadDialog not at owner+0xe0 after {waits} polls/{menu_elapsed_ms}ms -- STAY (NO-WRITE)"
-                ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
             pass_through(false);
