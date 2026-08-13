@@ -549,34 +549,9 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
         && utf16_names_equal(&profile_name, &pgd_name, pgd_name_len);
     result
 }
-/// CHAR-FINGERPRINT save-write gate: returns (is_real, level, name_len) by reading the live
-/// CS::PlayerGameData (GameDataMan `[base+0x3d5df38]` -> +0x08 -> PlayerGameData), the validated
-/// reading (the same chain dump_load_correctness uses). A REAL mounted character has level>=1 AND
-/// a non-empty-like 16-bit name (`"_"`, empty, and all-spaces are empty-like). Pure
-/// fault-tolerant safe_read_usize -> never faults. Used to FAIL-CLOSED SetState(5): the c30
-/// oracle is ambiguous (m10_01 collision), so the character actually present in PlayerGameData is
-/// the decisive signal.
-pub(crate) unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const ZERO_U32: u32 = 0;
-    const MIN_REAL_LEVEL: u32 = 1;
-    const NAME_LEN_NONE: usize = 0;
-    let gdm = game_data_man_ptr_or_null();
-    let pgd = if gdm != NULL {
-        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    if pgd == NULL {
-        return (false, ZERO_U32, NAME_LEN_NONE);
-    }
-    let level = unsafe { safe_read_usize(pgd + PGD_LEVEL_68_OFFSET) }
-        .map(|v| v as u32)
-        .unwrap_or(ZERO_U32);
-    let (name_units, name_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
-    let is_real = level >= MIN_REAL_LEVEL && !utf16_name_empty_like(&name_units, name_len);
-    (is_real, level, name_len)
-}
+// Character identity now belongs to the loading-portrait feature crate, which already owns the
+// PlayerGameData layout and GameDataMan host seam. Preserve the historical flat product name.
+pub(crate) use er_loading_portrait::char_fingerprint;
 /// Read the load-correctness invariants at the in-world transition and log a single greppable
 /// `LOAD-CORRECTNESS` record: GameMan c30/ac0/name_is_empty + the CS::PlayerGameData
 /// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,

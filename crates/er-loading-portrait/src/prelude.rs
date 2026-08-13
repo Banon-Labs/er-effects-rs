@@ -27,6 +27,8 @@ pub(crate) use crate::native_overlay::*;
 #[cfg(windows)]
 pub(crate) use crate::pgd_layout::*;
 #[cfg(windows)]
+pub(crate) use crate::player_identity::*;
+#[cfg(windows)]
 pub(crate) use crate::portrait_camera::*;
 #[cfg(windows)]
 pub(crate) use crate::portrait_lookat::*;
@@ -86,6 +88,10 @@ pub(crate) use eldenring::{
 };
 #[cfg(windows)]
 pub(crate) use er_game_base::mem::*;
+#[cfg(windows)]
+pub(crate) use er_game_base::pgd::{
+    read_utf16_name_units, utf16_name_empty_like, utf16_names_equal,
+};
 #[cfg(windows)]
 pub(crate) use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 #[cfg(windows)]

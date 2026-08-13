@@ -33,12 +33,9 @@ pub const PGD_LEVEL_68_OFFSET: usize = core::mem::offset_of!(PlayerGameData, lev
 
 pub const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 
-/// `character_name` is private upstream, so compute its start from the preceding public `chr_type`
-/// field and its length from the following public `gender` field.
-pub const PGD_NAME_9C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type)
-    + core::mem::size_of::<eldenring::cs::ChrType>();
-pub const PGD_NAME_LEN_U16: usize =
-    (PGD_GENDER_BE_OFFSET - PGD_NAME_9C_OFFSET) / core::mem::size_of::<u16>();
+// Character-name layout belongs to the lower er-game-base tier because the product and portrait
+// crate both consume it. Re-export the historical names so existing portrait callers stay stable.
+pub use er_game_base::pgd::{PGD_NAME_9C_OFFSET, PGD_NAME_LEN_U16};
 
 pub const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 

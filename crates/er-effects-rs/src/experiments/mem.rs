@@ -59,39 +59,9 @@ pub(crate) use er_game_base::mem::{
     safe_read_u16, safe_read_usize, vtable_in_game_image,
 };
 
-pub(crate) fn utf16_name_empty_like(units: &[u16], len: usize) -> bool {
-    const NAME_LEN_NONE: usize = 0;
-    const NAME_LEN_SINGLE: usize = 1;
-    const NAME_UNDERSCORE: u16 = '_' as u16;
-    const NAME_SPACE: u16 = ' ' as u16;
-    if len == NAME_LEN_NONE {
-        return true;
-    }
-    if len == NAME_LEN_SINGLE && units.first().copied() == Some(NAME_UNDERSCORE) {
-        return true;
-    }
-    units.iter().take(len).all(|unit| *unit == NAME_SPACE)
-}
-pub(crate) fn utf16_names_equal(left: &[u16], right: &[u16], len: usize) -> bool {
-    left.get(..len) == right.get(..len)
-}
-pub(crate) unsafe fn read_utf16_name_units(addr: usize) -> ([u16; PGD_NAME_LEN_U16], usize) {
-    const ZERO_U16: u16 = 0;
-    const U16_STRIDE: usize = 2;
-    const IDX_START: usize = 0;
-    const IDX_STEP: usize = 1;
-    let mut units = [ZERO_U16; PGD_NAME_LEN_U16];
-    let mut len = IDX_START;
-    while len < PGD_NAME_LEN_U16 {
-        let unit = unsafe { safe_read_usize(addr + len * U16_STRIDE) }
-            .map(|value| value as u16)
-            .unwrap_or(ZERO_U16);
-        units[len] = unit;
-        if unit == ZERO_U16 {
-            break;
-        }
-        len += IDX_STEP;
-    }
-    (units, len)
-}
+// PlayerGameData character-name layout/readers now live beside the shared fault-safe RAM readers.
+// Keep the historical flat product names while the remaining experiments modules are extracted.
+pub(crate) use er_game_base::pgd::{
+    read_utf16_name_units, utf16_name_empty_like, utf16_names_equal,
+};
 // safe_read_usize/i32/f32/u8/u16 moved to er_game_base::mem (re-exported above).
