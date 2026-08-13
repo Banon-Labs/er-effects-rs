@@ -84,7 +84,6 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_PORTRAIT_SPARED_BASELINE;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_REACHED_MASK;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_TFC_CONTINUE_BASELINE;
 /// `BOOT_VIEW_EPOCH_KIND` values.
-const BOOT_VIEW_EPOCH_KIND_BOOT: usize = 0;
 const BOOT_VIEW_EPOCH_KIND_RELOAD: usize = 1;
 
 // Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
@@ -192,9 +191,6 @@ const BOOT_VIEW_CREEP_K_MS: u64 = 2600;
 /// native fade-in luminance plateaus around CS::LoadingScreen update hit ~12, ~1.8s after the
 /// loading-table build.
 const BOOT_VIEW_NATIVE_LIT_UPDATE_HITS: usize = 12;
-/// If the CS::LoadingScreen update semaphore never advances (hook missing/regressed), stop this
-/// long after the handoff anyway so the cover can never mask the live loading screen indefinitely.
-const BOOT_VIEW_HANDOFF_HOLD_BAIL_MS: u64 = 5_000;
 /// After the native loading close/result and a render-ready player, keep a black overlay and fade it
 /// away over the live world. This covers the final native loading fade/black edge without popping from
 /// a full loading-cover frame straight into gameplay.
@@ -230,7 +226,6 @@ pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
-pub(crate) const BOOT_VIEW_GLYPH_W: usize = er_loading_bar::GLYPH_W;
 pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
 pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
@@ -1210,10 +1205,6 @@ pub(super) fn boot_fill_rect(
     rgb: [u8; 3],
 ) {
     er_loading_bar::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
-}
-
-pub(crate) fn boot_bg_image_rgba_clone() -> Option<(usize, usize, Vec<u8>)> {
-    boot_bg_image().map(|img| (img.width, img.height, img.rgba.clone()))
 }
 
 fn boot_bg_image() -> Option<&'static BootBgImage> {

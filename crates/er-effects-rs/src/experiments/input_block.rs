@@ -54,10 +54,6 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-/// Render-thread liveness + bootstrap probe. Runs from an optional render callback (a
-/// separate thread from the game-task scheduler), so it keeps reporting after the
-/// title->menu phase transition stops the title CSTask. Distinguishes "the title
-/// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
 #[allow(dead_code)]
 /// When set, foreign KEYBOARD + GAMEPAD game input is blocked at the API layer (see
 /// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) AND XInput
@@ -1283,24 +1279,6 @@ pub(crate) fn enforce_input_block_now() {
 // during normal play, so this whole-in-world keyboard disable is gone. The DInput keyboard block is now
 // driven ONLY by enforce_input_block_now()/release_input_block_now() (boot/reload driving windows), which
 // release the block on world entry -- so the dwell keeps full keyboard control.
-
-pub(crate) fn render_liveness_probe() {
-    if !title_accept_enabled() {
-        return;
-    }
-    let frame = RENDER_FRAME_COUNT.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst);
-    if frame % RENDER_PROBE_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS {
-        return;
-    }
-    let Ok(base) = game_module_base() else {
-        return;
-    };
-    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    let latch = unsafe { *((base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
-    append_autoload_debug(format_args!(
-        "render_probe: frame={frame} csfeman=0x{csfeman:x} latch={latch}"
-    ));
-}
 
 #[cfg(test)]
 mod save_picker_stick_nav_tests {

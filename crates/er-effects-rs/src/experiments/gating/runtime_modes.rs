@@ -100,14 +100,6 @@ pub(crate) fn title_menu_resource_observer_enabled() -> bool {
 pub(crate) fn auto_confirm_enabled() -> bool {
     false
 }
-/// Whether STAGE 1d should SELF-FIRE the TitleTopDialog open-menu registrar (0x1409b24e0).
-/// DEFAULT OFF (file-gated): with the connection-error modal now handled (clean headless boot),
-/// the NATURAL Continue/Load main menu builds from SetState(2)=BeginLogo, and force-firing the
-/// TitleTopDialog registrar opens a COMPETING dialog that prevents the natural menu's Load-Game
-/// item d180 from ticking through the capture hooks. Off => let the natural menu surface d180.
-pub(crate) fn own_stepper_selffire_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_SUBMIT_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn submit_play_game_enabled() -> bool {
     false

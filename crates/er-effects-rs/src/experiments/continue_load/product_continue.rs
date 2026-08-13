@@ -201,68 +201,6 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     ));
     Some(diagnostic_mode)
 }
-pub(crate) unsafe fn product_continue_entry_action(
-    owner: usize,
-    base: usize,
-) -> Option<NativeContinueEntry> {
-    const ROUTER_CURSOR_OFFSET: usize = DIALOG_SLOT_CURSOR_B0C_OFFSET;
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let (_, continue_entry, cursor) = unsafe { dump_titletop_menu_entries(owner, base) };
-    let entry = continue_entry.unwrap_or_else(|| MENU_CONTINUE_ENTRY.load(Ordering::SeqCst));
-    let mut functor = MENU_CONTINUE_FUNCTOR.load(Ordering::SeqCst);
-    let mut do_call = MENU_CONTINUE_DOCALL.load(Ordering::SeqCst);
-    let mut router = MENU_CONTINUE_ROUTER.load(Ordering::SeqCst);
-    let mut index = MENU_CONTINUE_INDEX.load(Ordering::SeqCst);
-    let mut entry = entry;
-    if entry == null || functor == null || do_call == null || index == null {
-        return None;
-    }
-    let do_call_vtable = unsafe { safe_read_usize(functor) }.unwrap_or(null);
-    if do_call_vtable == null || !vtable_in_game_image(do_call_vtable, base) {
-        append_autoload_debug(format_args!(
-            "product-core-autoload: native Continue row rejected functor=0x{functor:x} vt=0x{do_call_vtable:x} entry=0x{entry:x}"
-        ));
-        return None;
-    }
-    let live_cursor = unsafe { safe_read_i32(router + ROUTER_CURSOR_OFFSET) }.unwrap_or(cursor);
-    Some(NativeContinueEntry {
-        entry,
-        functor,
-        do_call,
-        router,
-        index,
-        cursor: live_cursor,
-    })
-}
-pub(crate) unsafe fn captured_continue_task_node(base: usize) -> usize {
-    let node = MENU_CONTINUE_TASK_NODE.load(Ordering::SeqCst);
-    if node == TITLE_OWNER_SCAN_START_ADDRESS {
-        return TITLE_OWNER_SCAN_START_ADDRESS;
-    }
-    let update_rva = unsafe { task_node_update_rva(base, node) };
-    if update_rva != TRACE_MENU_CONTINUE_WRAPPER_RVA as usize {
-        append_autoload_debug(format_args!(
-            "product-core-autoload: captured Continue task node 0x{node:x} rejected update_rva=0x{update_rva:x} expected=0x{:x}",
-            TRACE_MENU_CONTINUE_WRAPPER_RVA as usize
-        ));
-        return TITLE_OWNER_SCAN_START_ADDRESS;
-    }
-    node
-}
-pub(crate) unsafe fn drive_product_continue_post_click_dispatchers(base: usize, slot: i32) {
-    let synth = &raw mut SYNTH_MMS_OWNER as *mut u8;
-    unsafe {
-        *synth.add(SYNTH_MMS_SKIP_APPLY_12A_OFFSET) = SYNTH_MMS_SKIP_APPLY_ON;
-        *(synth.add(SYNTH_MMS_DESER_SLOT_12C_OFFSET) as *mut i32) = slot;
-    }
-    let synth_ptr = synth as usize;
-    let dispatcher1: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + B80_DISPATCHER1_RVA) };
-    let dispatcher2: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + B80_DISPATCHER2_RVA) };
-    unsafe { dispatcher1(synth_ptr) };
-    unsafe { dispatcher2(synth_ptr) };
-}
 pub(crate) unsafe fn product_continue_autoload_tick(
     owner: usize,
     base: usize,

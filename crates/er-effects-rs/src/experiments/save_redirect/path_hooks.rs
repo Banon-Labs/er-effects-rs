@@ -573,10 +573,6 @@ pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
 /// the exact `EldenRing\<steamid>\ER0000.sl2` path the game builds (steamid match vs the staged 766).
 pub(crate) use er_telemetry::counters::SAVE_SL2_QUERY_LOGGED;
 const SAVE_SL2_QUERY_MAX: usize = 40;
-/// Log EVERY CreateFileW path for the first N calls (the whole early-boot save-detection window), so
-/// we can see exactly what the game opens after our staged EldenRing\ dir (why it never reads the
-/// save). Beyond this, only save-LIKE paths are logged.
-const SAVE_CREATEFILEW_DIAG_ALL_BELOW: usize = 120;
 
 /// Frames of "profile summary present but ZERO active slots" tolerated before the save-load watchdog
 /// aborts. ~15s at 60fps -- long enough to ignore the boot transient before the summary is parsed,
@@ -1505,12 +1501,6 @@ fn remove_stale_staged_saves(dir: &Path, source: &Path, container_names: &[&str]
             }
         }
     }
-}
-
-fn wide_with_nul(path: &[u16]) -> Vec<u16> {
-    let mut out = path.to_vec();
-    out.push(0);
-    out
 }
 
 /// If `path` is anywhere under the game's `%APPDATA%\Roaming\EldenRing` save root, return a
