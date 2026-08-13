@@ -10,9 +10,20 @@ is what appears below.
 days and the analysis was NOT re-run.** Destination assignments below are still the plan of record;
 intra-file line offsets are only trustworthy for files SS0.1 marks unchanged.
 
+**Re-checked at `f54e4041` (main, 2026-08-13, after #236): this directory is BYTE-IDENTICAL to
+`877f1261`.** `git diff 877f1261..f54e4041 -- startup_hooks/` is empty and no commit in that range
+touches it -- the six merged `experiments/` deletion slices (#229-#235) reached zero files here,
+including the `profile_rows_system_quit_menu.rs` edit SS6 of the sibling plan warned about (it is
+deferred to S4d, still open). **SS0.1 stands in full.**
+
+**One SS0.1 number was wrong and is corrected here: the directory is 35 files / 25,525 lines, not
+25,516.** `quit_menu/system_quit_hooks.rs` is **682**, not 673, at both commits -- so its DELETE row
+had already shed **364** lines, not 373, and the two files together shed **1,250** of the planned
+2,141, not 1,259. This is a re-measurement error in SS0.1, not drift; nothing moved.
+
 **Scope:** at baseline, 32 files / 20,834 lines under
 `crates/er-effects-rs/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
-in-directory, plus `startup_hooks.rs` (197) = **25,516**. The rest of `experiments/` is covered by
+in-directory, plus `startup_hooks.rs` (197) = **25,525** (SS0.1 said 25,516; corrected above). The rest of `experiments/` is covered by
 `docs/plans/experiments-crate-targets.md`.
 
 ---
@@ -39,7 +50,7 @@ unassigned**. Do not quote the SS2 totals as current.
 | `quit_menu/save_picker_menu.rs` | 1,096 | 2,895 | **+1,799** | 4-way split offsets void; file now 2.6x plan size |
 | `loading_cover/title_resources_stats_text.rs` | 1,088 | 2,402 | **+1,314** | the `er-scaleform-hooks` 648-line row is void |
 | `quit_menu/system_quit_repro_guards.rs` | 2,067 | 1,181 | **-886** | **the 903-line DELETE row largely LANDED** -- re-verify before re-deleting |
-| `quit_menu/system_quit_hooks.rs` | 1,046 | 673 | **-373** | part of its 439-line DELETE row landed |
+| `quit_menu/system_quit_hooks.rs` | 1,046 | **682** | **-364** | part of its 439-line DELETE row landed |
 | `loading_cover/loading_cover_save_slot.rs` | 1,444 | 1,587 | +143 | SS7 dedupe line refs stale; the finding itself is unaffected |
 | `quit_menu/profile_rows_system_quit_menu.rs` | 1,858 | 1,957 | +99 | **the line-511 cut in SS6.4 must be re-derived** |
 | `quit_menu/save_swap_profile_table.rs` | 1,097 | 1,163 | +66 | 3-way split offsets stale |
@@ -57,7 +68,7 @@ move in SS6.3 (`scaleform_descriptor_guard.rs`, `window_reconfig_observer.rs`,
 `system_quit_row_identity.rs`) -- carry forward unchanged.
 
 **Consequence for sequencing: SS6's "deletions first" is partly done.** `system_quit_repro_guards.rs`
-and `system_quit_hooks.rs` already shed 1,259 of the planned 2,141 dead lines. Re-run the caller
+and `system_quit_hooks.rs` already shed 1,250 of the planned 2,141 dead lines. Re-run the caller
 proofs before opening a deletion slice here; do not assume the SS5 table is still live.
 
 ---
@@ -167,7 +178,7 @@ the destinations still hold but the line *quantities* -- and any offset derived 
 | `loading_cover/profile_table_gfx_files.rs` | 810 | **898** | NEW:er-scaleform-hooks 653 / er-quit-menu 51 / er-loading-portrait 51 / DELETE 43 | 4 |
 | `loading_cover/title_scaleform_msgbox.rs` | 935 | **868** | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 | 3 |
 | `quit_menu/save_picker_path_editor.rs` | -- | **758** | **UNANALYSED** -- new since baseline (#226) | ? |
-| `quit_menu/system_quit_hooks.rs` | 1046 | **673** | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** | 5 |
+| `quit_menu/system_quit_hooks.rs` | 1046 | **682** | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** | 5 |
 | `quit_menu/save_flow_boxes.rs` | 655 | 655 | er-quit-menu 628 / DELETE 7 | 2 |
 | `loading_cover/window_reconfig_observer.rs` | 471 | 471 | NEW:er-boot-window 461 | 1 |
 | `save_picker/save_picker_boot.rs` | 469 | 469 | er-save-picker 387 / DELETE 64 / STAY 1 | 3 |
@@ -285,7 +296,7 @@ problem.
 
 1. **Deletions first.** Every later line-count is wrong until 2,141 dead lines are gone.
    **Status at `877f1261`: partly done.** `system_quit_repro_guards.rs` (-886) and
-   `system_quit_hooks.rs` (-373) already shed 1,259 of those lines. Re-run the caller proofs in SS5
+   `system_quit_hooks.rs` (-364) already shed 1,250 of those lines. Re-run the caller proofs in SS5
    before opening a deletion slice; several rows are already satisfied.
 2. **`er-telemetry` counter moves** (366 lines) -- mechanical, unblocks the accounting.
 3. **Whole-file moves** with no split: `scaleform_descriptor_guard.rs`, `window_reconfig_observer.rs`,

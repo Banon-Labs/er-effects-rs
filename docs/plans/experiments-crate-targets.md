@@ -8,6 +8,11 @@ commit, not inherited. The working tree was clean when measured.
 **all 26 caller-count proofs behind S1-S4 still hold**. The corrected line numbers are folded into
 SS5 directly; the rest of the plan stands as written.
 
+**Re-baselined again at `f54e4041` (main, 2026-08-13, after #236) -- see SS0.2.** Six deletion
+slices have now MERGED and the directory is **1,796 lines smaller than SS0.1 measured**. Every line
+number in SS0.1 and SS5 for a file those slices touched is stale by construction; SS0.2 re-pins the
+ones that still matter and states, item by item, exactly what is left of the S4 block.
+
 **Scope: `crates/er-effects-rs/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
 owned by a separate concurrent analysis -- see SS8.
 
@@ -47,22 +52,22 @@ Ten files moved; only four materially:
   A fresh whole-file scan of `gating/` finds **45 hard-`false` gates** -- exactly the count SS7
   Decision 2 was costed against, so that decision's arithmetic is unchanged.
 
-### Execution status (2026-08-13)
+### Execution status -- the whole deletion stack MERGED (2026-08-13)
 
-The deletion block is in flight as a stack of draft PRs off `877f1261`, each proven by fingerprint,
-none requiring a runtime run:
+Six slices, each proven by fingerprint or by a static gate reading, **none requiring a runtime run**:
 
-| slice | PR | net | fingerprint verdict |
-|---|---|---:|---|
-| **S1** delete zero-caller code | #229 | -118 | `.text` + `.pdata` byte-identical; 24 `.rdata` bytes, all `panic::Location` line numbers shifted by exactly the lines deleted above them |
-| **S2** delete the effect-selector HUD | #230 | -454 | **whole DLL byte-identical** |
-| **S3** delete the dxgi factory-export hook | #231 | -67 | **whole DLL byte-identical** |
-| **S4a** delete `submit.rs` + its 4 hard-false levers | #232 | -608 | **whole DLL byte-identical at `codegen-units=1`** -- see FP-CGU1 in SS4 |
-| **S4b** delete the live-dialog / native-profile-capture path | #234 | -529 | **byte-identity impossible** -- this code WAS emitted; proof is static (three literal-`false` gates) |
+| slice | PR | merge | net | fingerprint verdict |
+|---|---|---|---:|---|
+| **S1** delete zero-caller code | #229 | `516c9f1c` | -118 | `.text` + `.pdata` byte-identical; 24 `.rdata` bytes, all `panic::Location` line numbers shifted by exactly the lines deleted above them |
+| **S2** delete the effect-selector HUD | #230 | `616326e7` | -454 | **whole DLL byte-identical** |
+| **S3** delete the dxgi factory-export hook | #231 | `c3721b7f` | -67 | **whole DLL byte-identical** |
+| **S4a** delete `submit.rs` + its 4 hard-false levers | #232 | `acb31bd1` | -608 | **whole DLL byte-identical at `codegen-units=1`** -- see FP-CGU1 in SS4 |
+| **S4b** delete the live-dialog / native-profile-capture path | #234 | `9253a126` | -529 | **byte-identity impossible** -- this code WAS emitted; proof is static (three literal-`false` gates) |
+| **S4c** delete the retired menu-task-update trace lever | #235 | `5814bf8a` | -47 | **regime B** -- address-taken detour, emitted but never installed |
 
-| **S4c** delete the retired menu-task-update trace lever | #235 | -47 | **regime B** -- address-taken detour, emitted but never installed |
-
-**S1-S4b merged 2026-08-13** (`9253a126`). S4c is open off that.
+Measured directory effect: **27,847 -> 26,051 lines, 40 -> 38 files** (SS0.2). The PR nets sum to
+1,823 against a measured 1,796 because four of the six also deleted lines outside this directory
+(`er-telemetry/src/counters.rs`, `lib_parts/`, one startup_hooks file).
 
 ### The three proof regimes -- which one a slice is in decides the gate
 
@@ -86,19 +91,80 @@ counters are declared outside it; S3's import narrows for one more reason than t
 S2-S4 would all come back `.text`-identical at the default profile** -- it does not, and the fix is
 FP-CGU1, not a runtime run.
 
-Still unexecuted: **S4d** (the switch harness) plus the two S4 items split out along the way --
-`step3_init_rebuild_call_enabled` (gates an early return inside a live function; carries the
-`STEP3_INIT_REBUILD_FIRED`/`_COUNT` oracle cascade) and the `menu_observation` trio -- and everything
-from S5 onward.
-Note S4b took only the `live_loadgame_node` half of the plan's S4b sketch -- the `menu_observation`
-items (`fire_titletop_load_entry`, `functor_ptr_hits_factory`, `cursor_offset_probe`) are tangled
-into `product_core_own_stepper.rs`'s `legacy_menu_drive_enabled` branch and belong with S4c.
+Note S4b took only the `live_loadgame_node` half of the plan's S4b sketch, and S4c took only the
+`menu_task_update_wrapper_hook` pair. **Six S4 items are still in the tree**; SS0.2 re-proves each of
+them at `f54e4041` and re-cuts them into three slices (S4d/S4e/S4f) that are sized like #229-#235.
+
+---
+
+## 0.2 Re-baseline at `f54e4041` (2026-08-13, after #236)
+
+**38 files / 26,051 lines** -- down **1,796** from SS0.1, with **two files gone**: `submit.rs` (577,
+S4a) and `menu_diag/live_loadgame_node.rs` (200, S4b). Every other file in the subtree is unchanged
+to the line except the fifteen below.
+
+| file | SS0.1 | now | delta | slice |
+|---|---:|---:|---:|---|
+| `gpu_readback/boot_progress.rs` | 2603 | **2603** | -452 | S1, S2 |
+| `continue_load/product_continue.rs` | 698 | **698** | -295 | S1, S4b |
+| `input_block.rs` | 1421 | **1421** | -22 | S1 |
+| `save_redirect/path_hooks.rs` | 1944 | **1944** | -10 | S1 |
+| `gating/runtime_modes.rs` | 141 | **141** | -16 | S1, S4a |
+| `gating/env_flags.rs` | 706 | **706** | -21 | S1, S4a, S4b, S4c |
+| `present_overlay.rs` | 1099 | **1099** | -67 | S3 |
+| `own_stepper/load_steps.rs` | 780 | **780** | -64 | S4b |
+| `mod/product_core_own_stepper.rs` | 1301 | **1301** | -27 | S4b |
+| `trace/menu_trace_hooks.rs` | 2064 | **2064** | -13 | S4c |
+| `trace/native_result_map_hooks.rs` | 676 | **676** | -26 | S4c |
+| `mod.rs` | 116 | **116** | -3 | S4a, S4b |
+| `menu_diag.rs` | 8 | **8** | -3 | S4b |
+| `submit.rs` | 577 | **gone** | -577 | S4a |
+| `menu_diag/live_loadgame_node.rs` | 200 | **gone** | -200 | S4b |
+
+`boot_progress.rs` is now **2,603**, i.e. **597 lines of headroom** under the
+`check-rust-file-sizes.py` 3,200 hard fail (was 145 before S2). Ordering constraint 1's stated
+purpose is discharged.
+
+### The six S4 items still in the tree -- proofs re-run at `f54e4041`
+
+Corpus: **621 files** (`**/*.rs` minus `target/`, `.worktrees/`, `.claude/`), `//` comments
+stripped. Every gate body below was read at its current line, not carried over.
+
+| item | def | sole caller | gate | gate line now | body |
+|---|---|---|---|---|---|
+| `switch_harness_discovery_tick` (+ `_enabled`, `_note_menu_filename`) | `lifecycle.rs:47`, `:26`, `:32` | `lifecycle.rs:1388`; `profile_rows_system_quit_menu.rs:1755-1756` | `lifecycle.rs:26` | -- | `false` |
+| `fire_titletop_load_entry` | `menu_observation.rs:340` | `product_core_own_stepper.rs:1159` | `legacy_menu_drive_enabled` | `env_flags.rs:597` | `false` |
+| `functor_ptr_hits_factory` | `menu_observation.rs:239` | `menu_observation.rs:378` (inside the above) | transitive | -- | -- |
+| `cursor_offset_probe` | `menu_observation.rs:430` | `product_core_own_stepper.rs:1062,1064` | `inject_nav_enabled` | `env_flags.rs:512` | `false` |
+| `worldres_coldbuild_probe` | `bootstrap_drive.rs:98` | `product_core_own_stepper.rs:653` | `worldres_coldbuild_probe_enabled` | `env_flags.rs:606` | `false` |
+| `step3_init_rebuild_call_enabled` + branch | `menu_trace_hooks.rs:1464` | `:1614` | self | -- | `false` |
+| `invoke_menu_item_functor` | `load_steps.rs:15` | `product_core_own_stepper.rs:815` | not a call -- `as usize` inside a discarded `let _ = (...)` | -- | -- |
+
+**Three gate line numbers moved and the old ones are now wrong**: `legacy_menu_drive_enabled`
+618 -> **597**, `cursor_offset_probe`'s gate 533 -> **512** (and it is `inject_nav_enabled`, which
+SS6 did not name), `worldres_coldbuild_probe_enabled` 627 -> **606**. `switch_reload_autopilot_enabled`
+-- the name SS6 used for the switch-harness gate -- **does not exist anywhere in the corpus**; the real
+gate is `lifecycle.rs:switch_harness_discovery_enabled`.
+
+### Re-cut into three slices
+
+| # | PR title | Files | Est. net | Gate | Regime |
+|---|---|---|---:|---|---|
+| **S4d** | Delete the switch-harness discovery probe | 3 | ~-100 | CHK + FP | **B** -- `switch_harness_note_menu_filename` is called from a live detour behind an `if` |
+| **S4e** | Delete the disproven legacy menu-drive route | 3 | ~-280 | CHK + FP | **B** -- `fire_titletop_load_entry` and `cursor_offset_probe` sit in emitted functions |
+| **S4f** | Delete the last three hard-false S4 levers | 5 | ~-200 | CHK + FP | **B** -- `invoke_menu_item_functor` is address-taken |
+
+All three are regime B by the SS0.1 table, so **expect `MATERIAL` and do not reach for a runtime
+run**: the proof is the gate body plus the caller count, both re-measured above. S4d and S4e are
+independent (disjoint files apart from `product_core_own_stepper.rs`, which only S4e touches); S4f
+depends on neither. Stack them anyway so each PR's diff is readable against its parent.
 
 ---
 
 ## 1. Bottom line
 
-There are **40 files / 27,847 lines** here at `877f1261` (27,106 at the analysis baseline; not the
+There are **38 files / 26,051 lines** here at `f54e4041` (27,847 at `877f1261`, 27,106 at the
+analysis baseline; not the
 41 / 27,216 the task brief stated -- measured at
 both `e930b7fc` = 27,019 and HEAD = 27,106; the delta is commit `b49dd5e2`, which added 87 lines to
 `save_redirect/path_hooks.rs` and `own_load/drive.rs`). **Zero of these files use `include!`** -- I
@@ -156,36 +222,34 @@ and I sided with the verifier.
 Module mechanism verified for every file: **all real `mod` + glob re-export; 0 `include!` sites in
 the entire subtree.** `use super::*` is the actual coupling cost.
 
-| File (under `experiments/`) | Lines (`877f1261`) | Mechanism | Destination | Splits? |
+| File (under `experiments/`) | Lines (`f54e4041`) | Mechanism | Destination | Splits? |
 |---|---|---|---|---|
-| `gpu_readback/boot_progress.rs` | 3055 | real `mod` (`gpu_readback.rs:66`), `use super::*` | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) | **yes, 4 ways** |
+| `gpu_readback/boot_progress.rs` | 2603 | real `mod` (`gpu_readback.rs:66`), `use super::*` | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) | **yes, 4 ways** |
 | `lifecycle.rs` | 2374 | real `mod` (`mod.rs:110`), `use super::*:6` | er-quit-menu (1,485) / **STAY** (748) / **DELETE** (92) | **yes, 4 ways** |
-| `trace/menu_trace_hooks.rs` | 2077 | real `mod` (`trace.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) | **yes, 3 ways** |
-| `save_redirect/path_hooks.rs` | 1954 | real `mod` (`save_redirect.rs:7`), near-copy header + `use super::*:62` | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) | **yes, 3 ways** |
+| `trace/menu_trace_hooks.rs` | 2064 | real `mod` (`trace.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) | **yes, 3 ways** |
+| `save_redirect/path_hooks.rs` | 1944 | real `mod` (`save_redirect.rs:7`), near-copy header + `use super::*:62` | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) | **yes, 3 ways** |
 | `own_load/drive.rs` | 1703 | real `mod` (`own_load.rs:7`), explicit preamble + `use super::*` | er-load-drive (~1,040) / **STAY** (~662, rule-4 gated) | **yes** |
-| `mod/product_core_own_stepper.rs` | 1328 | `#[path]` `mod` (`mod.rs:113-115`), `use super::*:1` | er-load-drive (634) / **STAY** (694, unreachable tail) | **yes, cuts one 776-line fn** |
+| `mod/product_core_own_stepper.rs` | 1301 | `#[path]` `mod` (`mod.rs:113-115`), `use super::*:1` | er-load-drive (634) / **STAY** (694, unreachable tail) | **yes, cuts one 776-line fn** |
 | `trace/menu_constructor_capture.rs` | 1227 | real `mod` (`trace.rs:10`), `use super::*:1` | er-menu-trace (whole) | no |
-| `present_overlay.rs` | 1166 | real `mod` (`mod.rs:61`), own imports + `use super::*:43` | STAY (mechanism) / er-d3d12-compositor (128) / er-hook (34) / **DELETE** (66) | **yes, 4 ways** |
+| `present_overlay.rs` | 1099 | real `mod` (`mod.rs:61`), own imports + `use super::*:43` | STAY (mechanism) / er-d3d12-compositor (128) / er-hook (34) / **DELETE** (66) | **yes, 4 ways** |
 | `own_load/loaders.rs` | 1145 | real `mod` (`own_load.rs:10`), `use super::*:1` **only** | er-load-drive (590) / **STAY** (550) | **yes -- live/dead alternate 5x** |
-| `input_block.rs` | 1443 | real `mod` (`mod.rs:74`), own 55-line preamble + `use super::*:55` | **STAY** (996) / **DELETE** (17) | minimal |
-| `continue_load/product_continue.rs` | 993 | real `mod` (`continue_load.rs:7`), explicit preamble + `use super::*:45` | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) | **yes, 3 ways** |
+| `input_block.rs` | 1421 | real `mod` (`mod.rs:74`), own 55-line preamble + `use super::*:55` | **STAY** (996) / **DELETE** (17) | minimal |
+| `continue_load/product_continue.rs` | 698 | real `mod` (`continue_load.rs:7`), explicit preamble + `use super::*:45` | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) | **yes, 3 ways** |
 | `own_stepper/bootstrap_drive.rs` | 950 | real `mod` (`own_stepper.rs:7`), preamble + `use super::*:45` | er-load-drive (51) / **STAY** (851) / **DELETE** (48) | **yes -- 5% live** |
 | `input_trace.rs` | 924 | real `mod` (`mod.rs:77`), `use super::*:21` | **STAY** (rule 4 + blocked on startup_hooks) | no |
 | `menu_diag/menu_observation.rs` | 855 | real `mod` (`menu_diag.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (629) / **DELETE** (226) | **yes** |
-| `own_stepper/load_steps.rs` | 844 | real `mod` (`own_stepper.rs:10`), `use super::*:1` **only** | er-load-drive (420) / **STAY** (388) / **DELETE** (36) | **yes, 3 ways** |
+| `own_stepper/load_steps.rs` | 780 | real `mod` (`own_stepper.rs:10`), `use super::*:1` **only** | er-load-drive (420) / **STAY** (388) / **DELETE** (36) | **yes, 3 ways** |
 | `continue_load/slot_resolution.rs` | 773 | real `mod` (`continue_load.rs:10`), `use super::*:1` **only** | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) | **yes -- see override** |
-| `gating/env_flags.rs` | 727 | real `mod` (`gating.rs:7`), `use super::*:45` | **er-gates** (720) / **DELETE** (7) | minimal |
-| `trace/native_result_map_hooks.rs` | 702 | real `mod` (`trace.rs:13`), `use super::*:1` **only** | er-menu-trace (677) / **DELETE** (25) | minimal |
-| `submit.rs` | 577 | real `mod` (`mod.rs:101`), pasted header + `use super::*:49` | **DELETE -- entire file** | n/a |
+| `gating/env_flags.rs` | 706 | real `mod` (`gating.rs:7`), `use super::*:45` | **er-gates** (720) / **DELETE** (7) | minimal |
+| `trace/native_result_map_hooks.rs` | 676 | real `mod` (`trace.rs:13`), `use super::*:1` **only** | er-menu-trace (677) / **DELETE** (25) | minimal |
 | `gpu_readback/gpu_draw_shared.rs` | 476 | real `mod` (`gpu_readback.rs:63`), `use super::*:1` | er-boot-cover (whole) | no |
 | `gpu_frame_timing.rs` | 424 | real `mod` (`mod.rs:64`), own imports + `use super::*:54` | **STAY** (rule 4: control-file gated, device-removed the game) | no |
 | `can_move_probe.rs` | 418 | real `mod` (`mod.rs:73`), **no `use super::*`** -- explicit imports only | **STAY** (rule 4) -- **the conversion template** | no |
 | `profiler.rs` | 383 | real `mod` (`mod.rs:104`), real minimal imports + `use super::*:56` | **er-boot-profiler** (whole) | no |
 | `save_redirect/file_ops.rs` | 352 | real `mod` (`save_redirect.rs:10`), `use super::*:1` | er-save-redirect (whole) -- **cannot move without path_hooks.rs** | no |
 | `mem.rs` | 206 | real `mod` (`mod.rs:86`), preamble + `use super::*:49` | er-game-base (36) / **er-hook** (109) / **STAY** (61, the er-game-base re-export shim) | **yes, 3 ways** |
-| `menu_diag/live_loadgame_node.rs` | 200 | real `mod` (`menu_diag.rs:10`), `use super::*:1` | **DELETE -- entire file** | n/a |
-| `gating/runtime_modes.rs` | 157 | real `mod` (`gating.rs:10`), `use super::*:1` | **er-gates** (149) / **DELETE** (8) | minimal |
-| `mod.rs` | 119 | root of the tree (`lib.rs:60` `mod experiments;`) | **STAY** -- 20 `mod` + 2 `#[path]`, 21 globs, 1,414 items | no |
+| `gating/runtime_modes.rs` | 141 | real `mod` (`gating.rs:10`), `use super::*:1` | **er-gates** (149) / **DELETE** (8) | minimal |
+| `mod.rs` | 116 | root of the tree (`lib.rs:60` `mod experiments;`) | **STAY** -- 20 `mod` + 2 `#[path]`, 21 globs, 1,414 items | no |
 | `mod/own_stepper_idx6_memory.rs` | 112 | `#[path]` `mod` (`mod.rs:117-119`), `use super::*:1` | er-load-drive (~102) / er-loading-portrait (10) | **yes** |
 | `gpu_readback.rs` | 70 | real `mod` (`mod.rs:58`) | **STAY** until subtree moves, then delete | no |
 | `gpu_readback/save_picker_overlay.rs` | 23 | real `mod` (`gpu_readback.rs:69`), fully qualified | **STAY** -- re-home as a sibling of `experiments/` | no |
@@ -193,14 +257,17 @@ the entire subtree.** `use super::*` is the actual coupling cost.
 | `save_redirect.rs` | 11 | real `mod` (`mod.rs:49`) | **DELETE** when children move | no |
 | `own_stepper.rs` | 11 | real `mod` (`mod.rs:92`) | **STAY** as re-export shim | no |
 | `own_load.rs` | 11 | real `mod` (`mod.rs:80`) | **STAY** as re-export shim | no |
-| `menu_diag.rs` | 11 | real `mod` (`mod.rs:83`) | **DELETE** when children move | no |
+| `menu_diag.rs` | 8 | real `mod` (`mod.rs:83`) | **DELETE** when children move | no |
 | `gating.rs` | 11 | real `mod` (`mod.rs:89`) | **STAY**, rewritten to `pub(crate) use er_gates::*;` | no |
 | `continue_load.rs` | 11 | real `mod` (`mod.rs:98`) | **STAY** as re-export shim | no |
 | `title.rs` | 7 | real `mod` (`mod.rs:95`) -- `pub(crate) use er_title_flow::*;` | **STAY** -- removing it is a constants-cluster job | no |
 | `save_picker.rs` | 3 | real `mod` (`mod.rs:107`) -- `pub(crate) use er_save_picker::model::*;` | **STAY** | no |
 
-**Totals:** ~27,106 lines -> ~13,900 to crates, ~1,700 deleted, ~11,500 STAY (harness + orchestrator
-+ shims + rule-4 gated code).
+**Totals, restated at `f54e4041`:** the ~1,700-line DELETE column is **1,796 lines already gone**
+(SS0.2) with ~580 left in S4d/S4e/S4f. Of the 26,051 remaining, ~13,900 are targeted at crates and
+~11,500 STAY (harness + orchestrator + shims + rule-4 gated code). The two DELETE-entire-file rows
+(`submit.rs`, `menu_diag/live_loadgame_node.rs`) are struck from the table above because the files
+no longer exist.
 
 ---
 
@@ -238,9 +305,12 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 
 ### Ordering constraints, stated
 
-1. **Deletions come first (S1-S4).** They are the only slices whose `.text` is provably unchanged,
-   they shrink `boot_progress.rs` out of the 3,200 hard-fail danger zone (3,055 -> 2,601, headroom
-   145 -> 599 lines), and every later motion PR then has ~1,700 fewer lines to reason about.
+1. **Deletions come first (S1-S4).** **Discharged for S1-S4c as of `f54e4041`.** They were the only
+   slices whose `.text` is provably unchanged, and they shrank `boot_progress.rs` out of the 3,200
+   hard-fail danger zone (3,055 -> **2,603 measured**, headroom 145 -> **597**). 1,796 lines are gone;
+   S4d/S4e/S4f carry the last ~580 (SS0.2). Every later motion PR now has that much less to reason
+   about. Note the predicted 2,601 was 2 lines off the measured 2,603 -- the S2 range was itemised
+   before S1 deleted 3 lines above it.
 2. **A file split precedes its crate move.** `loaders.rs` alternates live/dead five times and
    `own_stepper_idx10` must be cut at its early return before either can move without dragging
    agent-only code into a shipped crate (ground rule 4).
@@ -259,15 +329,18 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S2** | Delete the unreachable effect-selector HUD from boot_progress | 2 | -454 | CHK + FP + SZ | S1 | **LANDED #230** |
 | **S3** | Delete the dxgi factory-export hook from present_overlay | 2 | -67 | CHK + FP | S1 | **LANDED #231** |
 | **S4a** | Delete submit.rs and its four hard-false levers | 6 | -608 | CHK + **FP-CGU1** | S1 | **LANDED #232** |
-| **S4b** | Delete the live-dialog / native-profile-capture path | 8 | -529 | CHK + **static gate proof** (regime B) | S4a | **OPEN #234** |
-| **S4c-d** | the trace pair, the switch harness | 6 | ~-200 | CHK + FP-CGU1 | S4b | |
+| **S4b** | Delete the live-dialog / native-profile-capture path | 8 | -529 | CHK + **static gate proof** (regime B) | S4a | **LANDED #234** |
+| **S4c** | Delete the retired menu-task-update trace lever | 3 | -47 | CHK + static gate proof (regime B) | S4b | **LANDED #235** |
+| **S4d** | Delete the switch-harness discovery probe | 3 | ~-100 | CHK + static gate proof (regime B) | S4c | **re-cut in SS0.2** |
+| **S4e** | Delete the disproven legacy menu-drive route | 3 | ~-280 | CHK + static gate proof (regime B) | S4d | **re-cut in SS0.2** |
+| **S4f** | Delete the last three hard-false S4 levers | 5 | ~-200 | CHK + static gate proof (regime B) | S4e | **re-cut in SS0.2** |
 | **S5** | **Move the code-patch primitives into er-hook** | 5 | ~-40 | CHK + FP | S1 |
 | **S6** | Move the boot profiler into er-boot-profiler | 5 | ~+30 | CHK | S1 |
 | **S7** | Move the PGD name offsets into er-game-base | 3 | ~+15 | CHK | -- |
 | **S8** | Move the UTF-16 save-name readers into er-game-base | 4 | ~-20 | CHK | S7 |
 | **S9** | Move char_fingerprint into the loading portrait crate | 3 | ~+10 | CHK | S8 |
-| **S10** | Split lifecycle.rs into four modules | 5 | ~0 | CHK + **FP** + SZ | S4 |
-| **S11** | Split loaders.rs live/dead and cut own_stepper_idx10 | 4 | ~0 | CHK + FP + SZ | S4 |
+| **S10** | Split lifecycle.rs into four modules | 5 | ~0 | CHK + **FP** + SZ | S4f |
+| **S11** | Split loaders.rs live/dead and cut own_stepper_idx10 | 4 | ~0 | CHK + FP + SZ | S4f |
 | **S12** | Move the shared dialog RVAs into er-game-base | 3 | ~+40 | CHK + RVA | -- |
 | **S13** | Move the gate layer into er-gates *(new crate)* | 6 | ~+950 | CHK | S1, S12 |
 | **S14-S17** | Delete the duplicated gate seams from er-title-flow / er-loading-portrait / er-quit-menu / er-save-picker (one crate per PR) | 2-3 ea | ~-60 ea | CHK | S13 |
@@ -275,7 +348,7 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S19** | Move the bar geometry and raster helpers into er-loading-bar | 3 | ~-160 | CHK + `cargo test -p er-loading-bar` | S2 |
 | **S20** | Split boot_progress.rs into three modules | 4 | ~0 | CHK + FP + SZ | S2, S19 |
 | **S21-S24** | Move the boot cover into er-boot-cover *(new crate, 4 slices)* | 3-5 ea | ~+600 ea | CHK + **runtime** | S20 |
-| **S25** | Convert native_result_map_hooks to explicit imports | 1 | ~+30 | CHK + FP | S4 |
+| **S25** | Convert native_result_map_hooks to explicit imports | 1 | ~+30 | CHK + FP | S4f |
 | **S26-S28** | Same for menu_constructor_capture / menu_trace_hooks / menu_observation | 1 ea | ~+30 ea | CHK + FP | S25 |
 | **S29** | Move the world-res reload fix into er-title-flow | 3 | ~+1000 | CHK + **runtime** | S27 |
 | **S30-S39** | Move the menu trace into er-menu-trace *(new crate, ~10 slices)* | 2-5 ea | ~350 ea | CHK + runtime on the latch slices | S29 |
@@ -305,7 +378,11 @@ the product already enable, so the cycle never forms.
 
 ---
 
-## 5. Slice 1, fully specified
+## 5. Slice 1, fully specified -- **LANDED as #229 (`516c9f1c`)**
+
+Kept as the worked example of the method: a zero-caller proof, a bottom-up itemisation, and a
+fingerprint gate that discharges the runtime requirement. **The line numbers below are at `877f1261`
+and are spent** -- the twelve items no longer exist. Reuse the shape, not the coordinates.
 
 ### PR title
 `Delete zero-caller code from experiments`
@@ -419,14 +496,20 @@ push to `main`; open a draft PR.
 
 ## 6. Deletions
 
-**1,700 lines total across four slices.** Every proof below was re-run at `b49dd5e2` over a 565-file
-corpus (`**/*.rs` minus `target/`, `.worktrees/`, `.claude/`) with `//` comments stripped.
+**Measured outcome: 1,796 lines removed across six merged slices (S1-S4c), ~580 left in S4d/S4e/S4f.**
+The estimate here was 1,700 across four slices.
 
-### S1 -- zero-caller items (218 lines)
+**Every line number in this section is at `b49dd5e2` and is now stale for any file S1-S4c touched.**
+For the six items still in the tree, use the re-proved table in **SS0.2**, not the table below --
+three of its gate line numbers moved and one gate name (`switch_reload_autopilot_enabled`) does not
+exist. The proofs below were re-run at `b49dd5e2` over a 565-file corpus (`**/*.rs` minus `target/`,
+`.worktrees/`, `.claude/`) with `//` comments stripped; SS0.2 re-runs the surviving ones over 621.
+
+### S1 -- zero-caller items (218 lines) -- **LANDED #229 at -118**
 Twelve items, each returning **exactly 1 comment-stripped code hit = its own definition**. Full table
-in SS5.
+in SS5. The 218 headline never matched its own itemisation (116); the merged net was -118.
 
-### S2 -- the in-world effect-selector HUD (454 lines)
+### S2 -- the in-world effect-selector HUD (454 lines) -- **LANDED #230**
 `gpu_readback/boot_progress.rs:2614-3055` + `er-telemetry/src/counters.rs:1131-1141`.
 **Two independent proofs.** (a) `composite_effect_selector_on_swapchain` has exactly 1 code hit --
 its definition at `boot_progress.rs:2648`. (b) Even if called, the body is inert by construction:
@@ -436,7 +519,7 @@ crate (`er-net-effects-dll/src/present_overlay.rs:71`). No `oracle_effect_select
 `check-oracle-writers.py` stays green. **This is the slice that removes the 3,200 hard-fail exposure**
 -- `boot_progress.rs` 3,055 -> 2,601.
 
-### S3 -- the dxgi factory-export hook (67 lines)
+### S3 -- the dxgi factory-export hook (67 lines) -- **LANDED #231**
 `present_overlay.rs:383-448` + `er-telemetry/src/counters.rs:114`.
 `install_dxgi_factory_export_hook` has 1 code hit (its definition at `:415`; the block including
 `FACTORY2_ORIG` and `Factory2Fn` spans 383-448). `factory2_hook` appears only at `:389` (def) and
@@ -446,7 +529,7 @@ crate (`er-net-effects-dll/src/present_overlay.rs:71`). No `oracle_effect_select
 `MH_Initialize` is used at `:467, :471` and `MH_STATUS` at `:468`, both outside the dead block.
 The import **narrows to** `use crate::mh::{MH_Initialize, MH_STATUS};`.
 
-### S4 -- hard-false levers (800 lines)
+### S4 -- hard-false levers (800 lines) -- **S4a #232, S4b #234, S4c #235 LANDED; S4d/S4e/S4f open**
 Each is one caller behind a gate whose entire body is the literal `false` (all gate bodies
 re-measured at `b49dd5e2`). Delete the item **and** its `if <gate>()` block **and** the gate, in one PR.
 
@@ -469,8 +552,10 @@ re-measured at `b49dd5e2`). Delete the item **and** its `if <gate>()` block **an
 | `invoke_menu_item_functor` | `load_steps.rs:79` | `product_core_own_stepper.rs:820` | not a call -- an `as usize` element of a discarded `let _ = (...)` tuple | -- |
 | switch-harness autopilot, `lifecycle.rs:8-99` + `counters.rs:1468-1469` + `profile_rows_system_quit_menu.rs:1680-1682` | `:26,:32,:47` | `:48`, `:1372`, `:1680` | `lifecycle.rs:26` | `false` |
 
-**Split S4 into 3-4 PRs** (submit.rs; live_loadgame_node + menu_observation; the trace pair; the
-switch harness) to stay inside the #180-#188 size calibration. Three of these blocks make **native
+**Split S4 into 3-4 PRs** -- executed as **six**: S4a `submit.rs`; S4b `live_loadgame_node`;
+S4c the trace pair; and then S4d the switch harness, S4e the legacy menu-drive route (which is where
+the `menu_observation` trio actually lives -- it is tangled into `product_core_own_stepper.rs`'s
+`legacy_menu_drive_enabled` branch, not into `live_loadgame_node`), S4f the last three levers. Three of these blocks make **native
 state-changing calls** -- `submit_play_game_once`'s SetState/deserialize/streaming-enable,
 `ingameinit_drive_tick`'s `IngameInit` on a leaked synthetic `this`, `fire_live_loadgame_node`'s
 dialog-factory call and profile-slot pre-activate -- so this removes latent save-adjacent risk, not
@@ -481,9 +566,11 @@ just lines. The switch-harness block blocks the user's keyboard and injects a sy
 `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs:1680-1682` (3 lines). Coordinate with the
 startup_hooks owner. `filename`, used at `:1684`, must survive.
 
-**Gate for all four slices:** `dll-code-fingerprint.py`. For S1 expect `.text` identical. For S2-S4
-`.text` will likely be identical too (the bodies are behind compile-visible `false`), and if it is,
-that is a stronger safety proof than any runtime run could give.
+**Gate for all four slices:** `dll-code-fingerprint.py`. **This prediction was half wrong and the
+correction is in SS0.1.** S1-S3 came back `.text`-identical as predicted; S4a needed FP-CGU1 to do so;
+and S4b/S4c/S4d/S4e/S4f cannot be identical at all -- they delete code the compiler actually emitted
+(regime B), so `MATERIAL` is the expected verdict and the proof is the literal-`false` gate body plus
+the caller count, not the hash.
 
 ---
 
@@ -534,9 +621,20 @@ which the proposing analysis missed entirely (it attributed those bindings to `e
 they are actually at `constants/anti_debug.rs:204`, `constants/profile_render.rs:303`,
 `constants/own_load_pump.rs:88`).
 
-**Recommendation: do it, but delete the dead gates first.** Run S4 to completion, then re-count. If
-the 45 hard-false gates fall to ~20, er-gates is an ~500-line crate of live product levers and is
+**Recommendation: do it, but delete the dead gates first.** Run S4 to completion, then re-count.
+If the 45 hard-false gates fall to ~20, er-gates is an ~500-line crate of live product levers and is
 clearly right. Building it at 892 lines with 45 dead entries just relocates the debt.
+
+**Re-count at `f54e4041` (S4a-S4c landed, S4d-S4f still open): `gating/` holds 74 `fn() -> bool`, of
+which 37 have a body that is exactly the literal `false`** -- measured by matching a `fn NAME() ->
+bool` line followed by a bare `false` and a closing brace, across `env_flags.rs` (706) and
+`runtime_modes.rs` (141), 847 lines total. That is **50%**, down from 55%, and the directory is 45
+lines lighter than the 892 this decision was costed against. The trend is right but the target was
+~20; **the decision stays open until S4d-S4f land and it is counted a third time.** S4d/S4e/S4f
+remove three more gates between them (`switch_harness_discovery_enabled`, `legacy_menu_drive_enabled`,
+`worldres_coldbuild_probe_enabled`), which lands the count near 34 -- still well above ~20, so the
+honest reading is that the remaining hard-false gates are NOT concentrated in the S4 block and
+er-gates would ship roughly half-dead whenever it is built.
 
 ### Decision 3 -- `er-menu-trace`: new crate, or fold into er-title-flow?
 
