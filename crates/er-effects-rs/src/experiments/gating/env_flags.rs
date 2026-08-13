@@ -230,12 +230,6 @@ pub(crate) fn continue_trace_disabled() -> bool {
 pub(crate) fn trace_continue_enabled() -> bool {
     product_autoload_enabled()
 }
-/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the menu-task-update trace was a
-/// diagnostic env/marker probe. Env/marker feature gates are forbidden, so this passive trace is
-/// retired (permanently off); re-add via a non-env/marker diagnostic mechanism if needed.
-pub(crate) fn trace_menu_task_update_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_title_job_enabled() -> bool {
     false
