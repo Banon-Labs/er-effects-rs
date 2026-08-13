@@ -17,20 +17,6 @@ pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize =
     ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
 pub(crate) use er_title_flow::MEMBERFUNCJOB_VTABLE_RVA;
 pub(crate) use er_title_flow::DIALOG_ROW_REGISTRY_A48_OFFSET;
-/// NATIVE-LOAD fire latch states (one-shot: fire the Load-Game run exactly once).
-pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
-pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
-pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
-pub(crate) static NATIVE_LOAD_LAST_NODE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_NODE_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_FN: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_ADJUST: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).

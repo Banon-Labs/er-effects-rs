@@ -3136,14 +3136,8 @@ fn write_game_module_oracles(body: &mut String) {
             SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
-            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
+            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),
-            NATIVE_LOAD_FIRED.load(Ordering::SeqCst) == NATIVE_LOAD_FIRED_YES,
-            NATIVE_LOAD_LAST_NODE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_NODE_VTABLE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_DIALOG.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_FN.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_ADJUST.load(Ordering::SeqCst),
             title_custom_cover_profile_source_ready,
             TITLE_CUSTOM_COVER_SYSTEX_TARGET,
             TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,
