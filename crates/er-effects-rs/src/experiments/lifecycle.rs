@@ -5,99 +5,6 @@
 
 use super::*;
 
-// === SWITCH-HARNESS DISCOVERY (agent-owned; user authorized self-driving 2026-07-15) ===
-// Highest-value feasibility probe for the autonomous consecutive-switch harness: does injecting the
-// menu-open key via the DInput keyboard BLOCK actually open the in-game menu on NATIVE WINDOWS? Under
-// Proton the game reads DInput keyboard (where this injection works); native Windows may use raw input,
-// in which case injection never reaches the menu and the harness needs a different vehicle (PostMessage).
-// Enabled ONLY by ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 or a marker file next to the game exe; OFF for
-// product. Once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once, and (via run_post) logs
-// every MenuWindowJob::Run filename that appears -- so the log reveals whether a menu opened and its
-// structure. Then it unblocks. No effect on the default/product path.
-const HARNESS_DISC_DIK_ESCAPE: u8 = 0x01;
-pub(crate) use er_telemetry::counters::HARNESS_DISC_STABLE;
-static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,2 release,3 observe,4 done
-pub(crate) use er_telemetry::counters::HARNESS_DISC_PHASE_FRAME;
-static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-
-/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the agent-owned switch-harness
-/// feasibility probe (blocks keyboard, pulses DIK_ESCAPE, logs MenuWindowJob::Run filenames) was an
-/// env/marker-gated diagnostic autopilot. Env/marker feature gates are forbidden; retired (off).
-pub(crate) fn switch_harness_discovery_enabled() -> bool {
-    false
-}
-
-/// Called from run_post for every MenuWindowJob::Run filename during discovery: log each distinct
-/// name once so the menu structure is revealed without per-frame spam.
-pub(crate) fn switch_harness_note_menu_filename(name: &str) {
-    if name.is_empty() {
-        return;
-    }
-    if let Ok(mut seen) = HARNESS_DISC_SEEN.lock() {
-        if !seen.iter().any(|n| n == name) {
-            seen.push(name.to_string());
-            append_autoload_debug(format_args!(
-                "switch-harness-disc: MenuWindowJob::Run filename seen = '{name}' (distinct #{})",
-                seen.len()
-            ));
-        }
-    }
-}
-
-pub(crate) unsafe fn switch_harness_discovery_tick() {
-    if !switch_harness_discovery_enabled() {
-        return;
-    }
-    let phase = HARNESS_DISC_PHASE.load(Ordering::SeqCst);
-    if phase == 4 {
-        return;
-    }
-    let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
-    if !player_present {
-        HARNESS_DISC_STABLE.store(0, Ordering::SeqCst);
-        return;
-    }
-    let ib = InputBlocker::get_instance();
-    if phase == 0 {
-        let stable = HARNESS_DISC_STABLE.fetch_add(1, Ordering::SeqCst) + 1;
-        if stable < 180 {
-            return; // ~3s settled in-world before touching input
-        }
-        let _ = unsafe { ib.install_hooks() };
-        ib.block(InputFlags::Keyboard);
-        HARNESS_DISC_PHASE.store(1, Ordering::SeqCst);
-        HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "switch-harness-disc: in-world+stable -> keyboard BLOCKED, pulsing DIK_ESCAPE (0x01) to test whether DInput injection opens the native-Windows menu"
-        ));
-        return;
-    }
-    let pf = HARNESS_DISC_PHASE_FRAME.fetch_add(1, Ordering::SeqCst);
-    if phase == 1 {
-        ib.set_injected_key(HARNESS_DISC_DIK_ESCAPE);
-        if pf >= 4 {
-            HARNESS_DISC_PHASE.store(2, Ordering::SeqCst);
-            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
-        }
-    } else if phase == 2 {
-        ib.set_injected_key(0);
-        if pf >= 10 {
-            HARNESS_DISC_PHASE.store(3, Ordering::SeqCst);
-            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
-        }
-    } else if phase == 3 {
-        if pf >= 150 {
-            ib.set_injected_key(0);
-            ib.unblock(InputFlags::Keyboard);
-            HARNESS_DISC_PHASE.store(4, Ordering::SeqCst);
-            let count = HARNESS_DISC_SEEN.lock().map(|s| s.len()).unwrap_or(0);
-            append_autoload_debug(format_args!(
-                "switch-harness-disc: observation done -> keyboard UNBLOCKED. distinct MenuWindowJob filenames seen after ESC = {count} (if a game menu like 02_000_IngameTop appeared, DInput injection WORKS on native Windows)"
-            ));
-        }
-    }
-}
-
 // === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
 // Drives the System->Quit "Save Game" row's destination pick and CLOSE-THEN-FIRE commit.
 // Stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
@@ -1385,7 +1292,6 @@ fn save_flow_degraded_commit_wait_tick(ticks: usize, completions_at_fire: u64) {
 }
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
-    unsafe { switch_harness_discovery_tick() };
     // PROFILE-SWITCH RELOAD SOFTLOCK FIX (bd
     // FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30): the
     // title start-game flow blanks the 13 `*_dlc2` DLIO virtual roots on every pass, but the job
