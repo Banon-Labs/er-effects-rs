@@ -111,7 +111,6 @@ pub static PRESENT_FIND_LAST_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_ACCEPT_PATH: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_BACKBUFFER_FORMAT: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
-pub static FACTORY2_ORIG: AtomicUsize = AtomicUsize::new(0);
 
 // ---- migrated group: portrait_lookat, portrait_semaphores, return_title, anti_debug, stats_panel_text, stats_panel_background, tpf_textures, portrait_camera, gaitem_restore, loading_cover, switch_liveness, player_correctness, software_breakpoints (399 counters) ----
 pub static PROFILE_LOOKAT_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);

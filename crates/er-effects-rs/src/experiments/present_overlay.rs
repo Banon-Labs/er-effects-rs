@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{IUnknown, Interface, w};
 
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_Initialize, MH_STATUS};
 
 use super::*;
 
@@ -377,73 +377,6 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
         NATIVE_LS_GATE_DREW
     } else {
         NATIVE_LS_GATE_COVER_STOPPED
-    }
-}
-
-pub(crate) use er_telemetry::counters::FACTORY2_ORIG;
-type Factory2Fn =
-    unsafe extern "system" fn(u32, *const windows::core::GUID, *mut *mut c_void) -> i32;
-
-/// Detour for the `dxgi.dll!CreateDXGIFactory2` EXPORT -- logs that the GAME created a DXGI factory AFTER
-/// our hook installed (the timing precondition for catching its swapchain creation via the export chain).
-unsafe extern "system" fn factory2_hook(
-    flags: u32,
-    riid: *const windows::core::GUID,
-    out: *mut *mut c_void,
-) -> i32 {
-    let orig = FACTORY2_ORIG.load(Ordering::SeqCst);
-    let hr = if orig != 0 {
-        let f: Factory2Fn = unsafe { std::mem::transmute(orig) };
-        unsafe { f(flags, riid, out) }
-    } else {
-        -1
-    };
-    let factory = if out.is_null() {
-        0
-    } else {
-        (unsafe { *out }) as usize
-    };
-    append_autoload_debug(format_args!(
-        "present-overlay: GAME called CreateDXGIFactory2 (export) -> hr={hr} factory=0x{factory:x} (export chain viable)"
-    ));
-    hr
-}
-
-/// Hook the `dxgi.dll!CreateDXGIFactory2` export (a fixed export address, reliable under Wine) to learn
-/// whether the game creates its DXGI factory after our install -- the precondition for the export chain
-/// (factory -> CreateSwapChainForHwnd -> swapchain -> Present) that catches the game's ACTUAL swapchain.
-fn install_dxgi_factory_export_hook() {
-    let dxgi = match unsafe { GetModuleHandleW(windows::core::w!("dxgi.dll")) } {
-        Ok(h) => h,
-        Err(_) => {
-            append_autoload_debug(format_args!("present-overlay: dxgi.dll not loaded yet"));
-            return;
-        }
-    };
-    let proc = unsafe {
-        windows::Win32::System::LibraryLoader::GetProcAddress(
-            dxgi,
-            windows::core::s!("CreateDXGIFactory2"),
-        )
-    };
-    let Some(addr) = proc else {
-        append_autoload_debug(format_args!(
-            "present-overlay: GetProcAddress(CreateDXGIFactory2) failed"
-        ));
-        return;
-    };
-    match unsafe { MhHook::new(addr as *mut c_void, factory2_hook as *mut c_void) } {
-        Ok(hook) => {
-            FACTORY2_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-            append_autoload_debug(format_args!(
-                "present-overlay: hooked dxgi.dll!CreateDXGIFactory2 export 0x{:x}",
-                addr as usize
-            ));
-        }
-        Err(e) => append_autoload_debug(format_args!(
-            "present-overlay: hook CreateDXGIFactory2 export failed: {e:?}"
-        )),
     }
 }
 
