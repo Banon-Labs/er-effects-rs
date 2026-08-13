@@ -58,6 +58,24 @@ none requiring a runtime run:
 | **S2** delete the effect-selector HUD | #230 | -454 | **whole DLL byte-identical** |
 | **S3** delete the dxgi factory-export hook | #231 | -67 | **whole DLL byte-identical** |
 | **S4a** delete `submit.rs` + its 4 hard-false levers | #232 | -608 | **whole DLL byte-identical at `codegen-units=1`** -- see FP-CGU1 in SS4 |
+| **S4b** delete the live-dialog / native-profile-capture path | #234 | -529 | **byte-identity impossible** -- this code WAS emitted; proof is static (three literal-`false` gates) |
+
+**S1-S4a merged 2026-08-13** (`acb31bd1`). S4b is open off that.
+
+### The three proof regimes -- which one a slice is in decides the gate
+
+S4b is the boundary case that makes this worth stating, because the first four slices all landed in
+regime A and it is easy to assume every deletion does:
+
+| regime | what was deleted | fingerprint result | what proves it |
+|---|---|---|---|
+| **A -- never emitted** | zero-caller items; items behind a `false` gate that rustc folded away | **byte-identical** (`.text` at minimum; use FP-CGU1 if a module disappears) | the fingerprint itself. No runtime run |
+| **B -- emitted but unreachable** | code the compiler DID emit, reachable only through a literal-`false` gate | **cannot be identical** -- `.gfids` moves and every later function shifts | a STATIC gate-body reading. A runtime run is a regression smoke, not an equivalence proof |
+| **C -- reachable** | anything a product path can actually execute | irrelevant | a runtime run, per the repo's standing rules |
+
+Telling A from B is not a judgement call -- build it and look. The trap is treating a regime-B
+`MATERIAL` as regime C and reaching for the game; the gate cannot distinguish "this code changed"
+from "this code left the image", and only the gate-body reading answers it.
 
 Corrections these produced, folded into the sections below: the S1 headline `-218` never matched its
 own itemisation (116); S2's counter range is only safe because three live `EFFECT_SELECTOR_*`
@@ -66,8 +84,10 @@ counters are declared outside it; S3's import narrows for one more reason than t
 S2-S4 would all come back `.text`-identical at the default profile** -- it does not, and the fix is
 FP-CGU1, not a runtime run.
 
-Still unexecuted: **S4b-S4d** (`live_loadgame_node` + `menu_observation`, the trace pair, the switch
-harness) and everything from S5 onward.
+Still unexecuted: **S4c-S4d** (the trace pair, the switch harness) and everything from S5 onward.
+Note S4b took only the `live_loadgame_node` half of the plan's S4b sketch -- the `menu_observation`
+items (`fire_titletop_load_entry`, `functor_ptr_hits_factory`, `cursor_offset_probe`) are tangled
+into `product_core_own_stepper.rs`'s `legacy_menu_drive_enabled` branch and belong with S4c.
 
 ---
 
@@ -234,7 +254,8 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S2** | Delete the unreachable effect-selector HUD from boot_progress | 2 | -454 | CHK + FP + SZ | S1 | **LANDED #230** |
 | **S3** | Delete the dxgi factory-export hook from present_overlay | 2 | -67 | CHK + FP | S1 | **LANDED #231** |
 | **S4a** | Delete submit.rs and its four hard-false levers | 6 | -608 | CHK + **FP-CGU1** | S1 | **LANDED #232** |
-| **S4b-d** | live-loadgame node, the trace pair, the switch harness | 6 | ~-200 | CHK + FP-CGU1 | S4a | |
+| **S4b** | Delete the live-dialog / native-profile-capture path | 8 | -529 | CHK + **static gate proof** (regime B) | S4a | **OPEN #234** |
+| **S4c-d** | the trace pair, the switch harness | 6 | ~-200 | CHK + FP-CGU1 | S4b | |
 | **S5** | **Move the code-patch primitives into er-hook** | 5 | ~-40 | CHK + FP | S1 |
 | **S6** | Move the boot profiler into er-boot-profiler | 5 | ~+30 | CHK | S1 |
 | **S7** | Move the PGD name offsets into er-game-base | 3 | ~+15 | CHK | -- |
