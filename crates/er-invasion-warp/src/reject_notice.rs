@@ -67,7 +67,16 @@ impl RejectNotice {
     /// `enabled` is threaded through rather than checked by the caller so that a disabled notice
     /// still advances the state — otherwise turning it on mid-session would announce a stale place
     /// the player was rejected from minutes ago.
-    pub fn observe(&mut self, enabled: bool, block: u32, reason: RejectReason) -> Option<String> {
+    /// `place` is the area's own name when the world map has been read this session, and `None`
+    /// before that. It is passed in rather than looked up here so this type stays testable off the
+    /// game: resolving a name means calling into the engine's message repository.
+    pub fn observe(
+        &mut self,
+        enabled: bool,
+        block: u32,
+        reason: RejectReason,
+        place: Option<&str>,
+    ) -> Option<String> {
         let repeat = self.last_announced == Some((block, reason));
         self.last_announced = Some((block, reason));
         if repeat {
@@ -83,12 +92,25 @@ impl RejectNotice {
         // message that overflows is silently truncated rather than wrapped. WHERE and WHY, because
         // the place alone does not tell the player whether to move, un-exclude somewhere, or open
         // their map.
-        let _ = write!(
-            text,
-            "Rejected {} ({})",
-            BlockKey::from_raw(block),
-            reason_phrase(reason)
-        );
+        //
+        // The NAME when there is one. A block id is precise and unreadable -- being told you were
+        // rejected from `m60_50_39_00` on a banner that closes itself in a couple of seconds is a
+        // lookup task, not a notification. The id remains the fallback rather than being dropped,
+        // because it is the only thing available before the map has been opened, and a rejection
+        // with no place at all would be strictly worse than an unfriendly one.
+        match place {
+            Some(place) if !place.is_empty() => {
+                let _ = write!(text, "Rejected {place} ({})", reason_phrase(reason));
+            }
+            _ => {
+                let _ = write!(
+                    text,
+                    "Rejected {} ({})",
+                    BlockKey::from_raw(block),
+                    reason_phrase(reason)
+                );
+            }
+        }
         Some(text)
     }
 
@@ -119,10 +141,54 @@ mod tests {
     fn the_first_rejection_at_a_place_is_announced() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
             .expect("announced");
         assert!(text.contains("m60_42_36_00"), "names the place: {text}");
         assert!(text.starts_with("Rejected"), "says what happened: {text}");
+    }
+
+    #[test]
+    fn a_named_area_is_printed_instead_of_the_block_id() {
+        let mut notice = RejectNotice::new();
+        let text = notice
+            .observe(
+                true,
+                LIMGRAVE,
+                RejectReason::WrongPlaceName,
+                Some("Limgrave"),
+            )
+            .expect("announced");
+        assert!(text.contains("Limgrave"), "names the area: {text}");
+        assert!(
+            !text.contains("m60_42_36_00"),
+            "the raw block id must not survive alongside the name -- the banner is one short line \
+             and the id is the part a player cannot read: {text}"
+        );
+        assert!(text.contains("elsewhere"), "still says why: {text}");
+    }
+
+    #[test]
+    fn the_block_id_is_the_fallback_when_nothing_has_a_name_yet() {
+        // Before the world map is opened NOTHING has a name, which is the same condition that makes
+        // `area` mode fail closed. A rejection with no place at all would be worse than an
+        // unfriendly one, so the id stays as the fallback rather than being dropped.
+        let mut notice = RejectNotice::new();
+        let text = notice
+            .observe(true, LIMGRAVE, RejectReason::NothingToMatchAgainst, None)
+            .expect("announced");
+        assert!(text.contains("m60_42_36_00"), "{text}");
+        assert!(text.contains("open your map"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_name_falls_back_rather_than_printing_nothing() {
+        // A resolver that returns Some("") would otherwise render "Rejected  (elsewhere)", which
+        // reads as a bug in the mod rather than as a rejection.
+        let mut notice = RejectNotice::new();
+        let text = notice
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, Some(""))
+            .expect("announced");
+        assert!(text.contains("m60_42_36_00"), "{text}");
     }
 
     /// THE POINT OF THE MODULE. Seamless retries every ~20s and the same wrong place recurs; a
@@ -132,12 +198,12 @@ mod tests {
         let mut notice = RejectNotice::new();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
                 .is_some()
         );
         for _ in 0..20 {
             assert_eq!(
-                notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName),
+                notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
                 None
             );
         }
@@ -147,9 +213,9 @@ mod tests {
     #[test]
     fn a_different_place_is_new_information_and_is_announced() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
         let text = notice
-            .observe(true, ELSEWHERE, RejectReason::WrongPlaceName)
+            .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None)
             .expect("announced");
         assert!(text.contains("m21_01_00_00"), "{text}");
         assert_eq!(
@@ -164,11 +230,11 @@ mod tests {
     #[test]
     fn returning_to_an_earlier_place_announces_again() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName);
-        notice.observe(true, ELSEWHERE, RejectReason::WrongPlaceName);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
+        notice.observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None);
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
                 .is_some()
         );
     }
@@ -179,18 +245,18 @@ mod tests {
     fn disabled_stays_silent_but_still_tracks_where_we_are() {
         let mut notice = RejectNotice::new();
         assert_eq!(
-            notice.observe(false, LIMGRAVE, RejectReason::WrongPlaceName),
+            notice.observe(false, LIMGRAVE, RejectReason::WrongPlaceName, None),
             None
         );
         // Same place, now enabled: still silent, because we already know we are being sent there.
         assert_eq!(
-            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName),
+            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
             None
         );
         // Somewhere new, though, is genuinely new.
         assert!(
             notice
-                .observe(true, ELSEWHERE, RejectReason::WrongPlaceName)
+                .observe(true, ELSEWHERE, RejectReason::WrongPlaceName, None)
                 .is_some()
         );
     }
@@ -199,15 +265,15 @@ mod tests {
     #[test]
     fn a_reset_makes_the_next_rejection_speak_up() {
         let mut notice = RejectNotice::new();
-        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName);
+        notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None);
         assert_eq!(
-            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName),
+            notice.observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None),
             None
         );
         notice.reset();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
                 .is_some()
         );
         assert_eq!(notice.suppressed(), 0);
@@ -228,7 +294,9 @@ mod tests {
             RejectReason::ExcludedByUser,
         ] {
             let mut notice = RejectNotice::new();
-            let text = notice.observe(true, LIMGRAVE, reason).expect("announced");
+            let text = notice
+                .observe(true, LIMGRAVE, reason, None)
+                .expect("announced");
             assert!(
                 text.chars().count() <= 40,
                 "banner text must stay short; {reason:?} gave {} chars: {text}",
@@ -247,12 +315,12 @@ mod tests {
     fn the_message_names_why_not_just_where() {
         let mut notice = RejectNotice::new();
         let excluded = notice
-            .observe(true, LIMGRAVE, RejectReason::ExcludedByUser)
+            .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None)
             .expect("announced");
         assert!(excluded.contains("excluded"), "{excluded}");
         let mut notice = RejectNotice::new();
         let elsewhere = notice
-            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+            .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
             .expect("announced");
         assert_ne!(
             excluded, elsewhere,
@@ -267,12 +335,12 @@ mod tests {
         let mut notice = RejectNotice::new();
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName)
+                .observe(true, LIMGRAVE, RejectReason::WrongPlaceName, None)
                 .is_some()
         );
         assert!(
             notice
-                .observe(true, LIMGRAVE, RejectReason::ExcludedByUser)
+                .observe(true, LIMGRAVE, RejectReason::ExcludedByUser, None)
                 .is_some()
         );
     }

@@ -1197,7 +1197,14 @@ fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.observe(enabled, destination, reason)
+        // Resolve the area's own name for the banner. Done here rather than inside the notice so
+        // that type stays testable off the game: this is a call into the message repository.
+        //
+        // `None` before the world map has been read this session, which is the same condition that
+        // makes `area` mode fail closed -- the notice falls back to the block id, which is
+        // unfriendly but true.
+        let place = crate::place_name::place_name_for_block(destination);
+        guard.observe(enabled, destination, reason, place.as_deref())
     };
     let Some(text) = announcement else {
         return;

@@ -58,6 +58,14 @@ const PARSE_SIG: &str =
 const WORLD_MAP_VANILLA_LEN: usize = 68_763;
 const WORLD_MAP_VANILLA_FNV1A64: u64 = 0xed66_8483_91a2_d273;
 
+/// Vanilla `01_080_emergencynotice.gfx` -- the announcement banner, fingerprinted the same way.
+///
+/// This is the surface the rejection notice is written to. Its one text field ships LEFT-aligned
+/// inside a box ~1726 px wide, so a short line sat against the far edge; the edit centres it. Kept
+/// in step with `er-gfx`'s own corpus test, which asserts the identical pair.
+const NOTICE_VANILLA_LEN: usize = 3_205;
+const NOTICE_VANILLA_FNV1A64: u64 = 0x6973_a088_b693_13f8;
+
 /// Live game base, stored at install so the handler can validate the MemoryFile vtable.
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline to the original tag-parse entry.
@@ -67,6 +75,20 @@ static HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// The edited movie, derived once and then served for the process lifetime.
 static EDITED_MOVIE: OnceLock<Vec<u8>> = OnceLock::new();
+/// The edited announcement movie, likewise.
+static EDITED_NOTICE: OnceLock<Vec<u8>> = OnceLock::new();
+/// Notice movies seen and served, so a run can say whether the centring reached the game.
+static NOTICE_SEEN: AtomicUsize = AtomicUsize::new(0);
+static NOTICE_SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Notice-movie tallies: `(seen, served)`.
+#[must_use]
+pub fn notice_tallies() -> (usize, usize) {
+    (
+        NOTICE_SEEN.load(Ordering::SeqCst),
+        NOTICE_SERVED.load(Ordering::SeqCst),
+    )
+}
 
 /// Counters, so a run can say what happened without a screenshot.
 static PARSE_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -179,15 +201,25 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
             core::array::from_fn(|i| unsafe { safe_read_u8(data + 4 + i) }.unwrap_or(0));
         u32::from_le_bytes(raw) as usize
     };
-    if declared != WORLD_MAP_VANILLA_LEN || declared > buffer_len as usize {
+    // Two movies are edited now, so the cheap length gate tests both before any bulk read. Every
+    // other movie the game loads leaves here having cost four byte reads.
+    if declared != WORLD_MAP_VANILLA_LEN && declared != NOTICE_VANILLA_LEN {
+        return;
+    }
+    if declared > buffer_len as usize {
         return;
     }
     let mut input = vec![0_u8; declared];
     if !unsafe { read_bytes(data, &mut input) } {
         return;
     }
-    if fnv1a64(&input) != WORLD_MAP_VANILLA_FNV1A64 {
-        // Same length, different bytes: another mod's world map. Serve theirs untouched.
+    let fingerprint = fnv1a64(&input);
+    if declared == NOTICE_VANILLA_LEN && fingerprint == NOTICE_VANILLA_FNV1A64 {
+        unsafe { swap_notice(file, &input) };
+        return;
+    }
+    if fingerprint != WORLD_MAP_VANILLA_FNV1A64 {
+        // Same length, different bytes: another mod's movie. Serve theirs untouched.
         return;
     }
     WORLD_MAP_SEEN.fetch_add(1, Ordering::SeqCst);
@@ -233,6 +265,59 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
          icon frame {}",
         edited.len(),
         er_gfx::world_map_pin::RED_PIN_FRAME
+    ));
+}
+
+/// Serve the announcement movie with its text field centred.
+///
+/// Separate from the world-map path because the two share only the MemoryFile plumbing: this one
+/// derives a different edit, and a failure here must leave the banner working (left-aligned) rather
+/// than take the map down with it.
+///
+/// # Safety
+/// Game thread, inside the parse detour. Writes only the MemoryFile's `{data, len, cursor}`.
+#[cfg(windows)]
+unsafe fn swap_notice(file: usize, input: &[u8]) {
+    NOTICE_SEEN.fetch_add(1, Ordering::SeqCst);
+    let edited = match EDITED_NOTICE.get() {
+        Some(cached) => cached,
+        None => match er_gfx::announce_notice::with_centered_notice_text(input) {
+            Ok(bytes) => {
+                crate::standalone_log(format_args!(
+                    "map-gfx: derived the announcement movie with its text CENTRED (in={} out={}) \
+                     -- the notice field ships left-aligned in a box far wider than any line we \
+                     write, which is why a short message sat against the edge",
+                    input.len(),
+                    bytes.len()
+                ));
+                EDITED_NOTICE.get_or_init(|| bytes)
+            }
+            Err(error) => {
+                crate::standalone_log(format_args!(
+                    "map-gfx: notice text NOT centred ({error}); serving the game's own movie, so \
+                     the banner still works and is merely left-aligned"
+                ));
+                return;
+            }
+        },
+    };
+    // The buffer is leaked for the process lifetime by OnceLock, which is required: Scaleform reads
+    // from it lazily after this returns.
+    unsafe {
+        core::ptr::write(
+            (file + MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            edited.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            edited.len() as u32,
+        );
+        core::ptr::write((file + MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    let served = NOTICE_SERVED.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "map-gfx: served centred announcement movie #{served} ({} bytes)",
+        edited.len()
     ));
 }
 
