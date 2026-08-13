@@ -33,7 +33,7 @@ pub unsafe extern "system" fn DllMain(
                 },
                 module as usize,
             );
-            er_crash_logging::write_breadcrumb("dll-attach", format_args!("standalone loaded"));
+            er_crash_logging::write_breadcrumb("dll-attach", format_args!("standalone active"));
         });
     }
     DLL_MAIN_SUCCESS
