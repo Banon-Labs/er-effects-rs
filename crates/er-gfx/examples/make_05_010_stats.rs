@@ -30,6 +30,10 @@
 //!   native-backed ten-row picker prefix (`Item_0_0..Item_9_0`) plus top/bottom recycle cells. Row
 //!   population and activation still use native row indices; this moves the row clips, their internal
 //!   chrome, the scroll tween offsets, the viewport mask, and the scrollbar together.
+//! - ADD an invisible full-row `HitArea` child to the row template. The engine's row hit resolver
+//!   prefers a child of that name over `Cursor`, and the drive-row runtime shrinks `Cursor` onto
+//!   the focused sub-control -- which is what made the row hoverable only over whatever already had
+//!   focus. The plate restores a full-row mouse target and leaves `Cursor` as pure focus chrome.
 //! - MOVE and shrink the native `ScrollBarV` so the game's own scrollbar controller remains the
 //!   visible long-list affordance. The DLL feeds that native controller the real save-picker scroll
 //!   offset instead of drawing private fake thumbs or pips.
@@ -41,7 +45,7 @@ use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, CURRENT_PATH_BUTTON_NAME, CURRENT_PATH_FIELD_NAME,
     DRIVE_BUTTON_FIELD_NAMES, DRIVE_BUTTON_NATIVE_ART_HEIGHT_PX, DRIVE_BUTTON_NATIVE_ART_WIDTH_PX,
     DRIVE_CELL_CAPACITY, DRIVE_CELL_FIELD_NAMES, DRIVE_CELL_FIRST_X_PX, DRIVE_CELL_PITCH_PX,
-    STATS_FIELD_NAME,
+    ROW_HIT_AREA_NAME, STATS_FIELD_NAME,
 };
 use er_gfx::{CxformWithAlpha, Matrix, Movie, Rect, Tag};
 
@@ -59,6 +63,9 @@ const DRIVE_BUTTON_DEPTH_BASE: u16 = 100;
 const DRIVE_CELL_DEPTH_BASE: u16 = DRIVE_BUTTON_DEPTH_BASE + DRIVE_CELL_CAPACITY as u16;
 const CURRENT_PATH_BUTTON_DEPTH: u16 = DRIVE_CELL_DEPTH_BASE + DRIVE_CELL_CAPACITY as u16;
 const CURRENT_PATH_TEXT_DEPTH: u16 = CURRENT_PATH_BUTTON_DEPTH + 1;
+/// Depth of the invisible row hit target. Vanilla sprite 76 uses depths 1, 4, 6, 8, 10, 12, 14 and
+/// 16..21, so 2 is free and sits under every child except the row backing itself.
+const ROW_HIT_AREA_DEPTH: u16 = 2;
 fn fixed_from_px(px: f32) -> i32 {
     (px * TW as f32).round() as i32
 }
@@ -561,6 +568,54 @@ fn main() {
             color_transform: opacity_transform(path_button.opacity),
             ratio: None,
             name: Some(CURRENT_PATH_BUTTON_NAME.to_owned()),
+            clip_depth: None,
+            force_long: false,
+        },
+    );
+
+    // FULL-ROW MOUSE TARGET. `GridControl::HandleMouse` -> `FUN_140736c90` asks
+    // `FUN_14074b0d0(cell)` for each row's hit object, and that resolver takes the child named
+    // `HitArea` FIRST, the child named `Cursor` second, and the cell component only as a last
+    // resort (1.16.2; "HitArea" is the movie-facing name at 0x142a8fa08 and the ONLY occurrence of
+    // that literal in the image, referenced by nothing but this resolver). It then hit-tests that
+    // ONE object's own bounds -- so with no `HitArea`, the row's mouse target IS the `Cursor`
+    // sprite, which `apply_drive_row_native_cursor` shrinks onto the focused sub-control. That is
+    // why the drive row was only hoverable over whatever already had focus, forcing the user into
+    // a drive cell + RIGHT to reach the path editor.
+    //
+    // The plate reuses the row's own backing art (char 54) at the `Backing` transform, so its
+    // bounds are the drawn row to the twip, and it is baked fully transparent: a hit test is not a
+    // render, and `PointTestLocal` is called with mask 0 (bounds test, no visibility term). Depth 2
+    // sits under every other child of the row template; alpha 0 makes occlusion moot regardless.
+    let hit_area = &profile_layout.row_chrome.hit_area;
+    row.insert(
+        row_show_frame,
+        Tag::PlaceObject2 {
+            flags: 0x26 | 0x08, // HasName|HasMatrix|HasCharacter|HasColorTransform
+            depth: ROW_HIT_AREA_DEPTH,
+            character_id: Some(54),
+            matrix: Some({
+                let mut matrix = Matrix {
+                    has_scale: false,
+                    scale_nbits: 0,
+                    scale_x: 0,
+                    scale_y: 0,
+                    has_rotate: false,
+                    rotate_nbits: 0,
+                    rotate_skew0: 0,
+                    rotate_skew1: 0,
+                    translate_nbits: 16,
+                    translate_x: 0,
+                    translate_y: 0,
+                };
+                set_matrix_transform(&mut matrix, hit_area);
+                matrix
+            }),
+            // The schema pins this to 0; `opacity_transform` only emits a transform below 1.0, so
+            // reading it here keeps the authored value and the baked bytes the same fact.
+            color_transform: opacity_transform(hit_area.opacity),
+            ratio: None,
+            name: Some(ROW_HIT_AREA_NAME.to_owned()),
             clip_depth: None,
             force_long: false,
         },

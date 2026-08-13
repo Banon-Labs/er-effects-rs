@@ -1,4 +1,4 @@
-use crate::profile_05_010_layout::{Profile05_010Layout, TextAlign};
+use crate::profile_05_010_layout::{Profile05_010Layout, RowChromeLayout, TextAlign};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -167,13 +167,7 @@ impl ProfileEditorCommand {
             &editor.font_height.to_string(),
         );
         push_kv(&mut out, "path_editor.align", editor.align.as_str());
-        for (name, transform) in [
-            ("backing", &self.layout.row_chrome.backing),
-            ("cursor", &self.layout.row_chrome.cursor),
-            ("cursor_body", &self.layout.row_chrome.cursor_body),
-            ("drive_button", &self.layout.row_chrome.drive_button),
-            ("path_button", &self.layout.row_chrome.path_button),
-        ] {
+        for (name, transform) in self.layout.row_chrome.sections() {
             push_kv(
                 &mut out,
                 &format!("row_chrome.{name}.x"),
@@ -297,13 +291,8 @@ impl ProfileEditorCommand {
                 let (name, prop) = rest
                     .rsplit_once('.')
                     .ok_or_else(|| ProtocolError::UnknownKey(key.clone()))?;
-                let transform = match name {
-                    "backing" => &mut layout.row_chrome.backing,
-                    "cursor" => &mut layout.row_chrome.cursor,
-                    "cursor_body" => &mut layout.row_chrome.cursor_body,
-                    "drive_button" => &mut layout.row_chrome.drive_button,
-                    "path_button" => &mut layout.row_chrome.path_button,
-                    _ => return Err(ProtocolError::UnknownKey(key.clone())),
+                let Some(transform) = layout.row_chrome.section_mut(name) else {
+                    return Err(ProtocolError::UnknownKey(key.clone()));
                 };
                 match prop {
                     "x" => transform.x = parse_f32(value, key)?,
@@ -571,6 +560,43 @@ mod tests {
         let parsed = ProfileEditorCommand::parse(&command.serialize()).expect("command parses");
         assert_eq!(parsed.selected_kind, SelectedKind::PathEditor);
         assert_eq!(parsed.selected_name, "ActivePathEditor");
+    }
+
+    /// EVERY chrome section the schema knows must survive a live-control round trip.
+    ///
+    /// The channel fails closed on one unknown key, so a section present in the schema but missing
+    /// from the protocol rejects the WHOLE control file. That happened when `hit_area` was added
+    /// (2026-08-12): the game ran fine, the editor showed no ack, and the only evidence was an
+    /// `unknown key row_chrome.hit_area.editable` line inside `status.txt`.
+    #[test]
+    fn every_schema_chrome_section_survives_a_live_control_round_trip() {
+        let mut layout = Profile05_010Layout::default();
+        // A distinct, non-default x per section proves the value lands in the right one rather
+        // than every name resolving onto a single shared transform.
+        for (index, name) in RowChromeLayout::SECTION_NAMES.iter().enumerate() {
+            layout
+                .row_chrome
+                .section_mut(name)
+                .unwrap_or_else(|| panic!("{name} must resolve"))
+                .x = -100.0 - index as f32;
+        }
+        let command = ProfileEditorCommand::from_layout(
+            9,
+            RenderMode::LiveRuntime,
+            SelectedKind::Chrome,
+            "hit_area",
+            layout,
+        );
+        let text = command.serialize();
+        let mut parsed = ProfileEditorCommand::parse(&text)
+            .unwrap_or_else(|e| panic!("every chrome section must parse: {e}\n{text}"));
+        for (index, name) in RowChromeLayout::SECTION_NAMES.iter().enumerate() {
+            assert_eq!(
+                parsed.layout.row_chrome.section_mut(name).unwrap().x,
+                -100.0 - index as f32,
+                "{name} did not round trip"
+            );
+        }
     }
 
     #[test]

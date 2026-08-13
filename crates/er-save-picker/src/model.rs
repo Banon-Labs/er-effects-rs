@@ -253,6 +253,35 @@ pub enum DriveStripFocus {
     CurrentPath,
 }
 
+/// What an UP/DOWN press taken at a window edge should do to the native list, from
+/// [`SavePickerModel::scroll_window_from_edge_press`]. Both variants carry the row the caller must
+/// write into the native list cursor, because the list has already moved its own cursor by the time
+/// the menu pump sees the press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgePressOutcome {
+    /// The window advanced one row; hold the selection on the edge row it scrolled from so the next
+    /// press is still an edge press.
+    Scrolled { pin_row: usize },
+    /// The listing has no more rows that way. Hold the selection where it was: the native list
+    /// wraps to the opposite end here, and a selection that teleports from the last row to the
+    /// drives row reads as the list losing the player's place.
+    HeldAtLimit { pin_row: usize },
+}
+
+impl EdgePressOutcome {
+    /// Row to write into the native list cursor.
+    pub fn pin_row(self) -> usize {
+        match self {
+            Self::Scrolled { pin_row } | Self::HeldAtLimit { pin_row } => pin_row,
+        }
+    }
+
+    /// True when the listing window moved and the row records must be re-staged.
+    pub fn scrolled(self) -> bool {
+        matches!(self, Self::Scrolled { .. })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerActivation {
     PickedFile(PathBuf),
@@ -291,15 +320,6 @@ pub struct SavePickerModel {
     /// listing or status reflects reality again -- so a corrected entry drops the marking
     /// without any caller having to remember to.
     rejected_path_text: Option<String>,
-    /// Menu-pump dwell counter for native edge scrolling. The native cursor cannot report an
-    /// attempted move past the first/last row, so while it rests on an edge this counter turns a held
-    /// edge into one-row window slides.
-    edge_scroll_ticks: u8,
-    /// Number of consecutive edge-scroll slides while held on an edge. Used to accelerate from a slow
-    /// first repeat to a capped repeat rate that stays below the old constant 8-tick speed.
-    edge_scroll_repeats: u8,
-    /// 0 = no held edge, 1 = scrolling up, 2 = scrolling down. Direction changes restart the slow dwell.
-    edge_scroll_direction: u8,
     /// Mounted drives that browse as folders (cached at open). Two or more of them add the drive
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
@@ -377,15 +397,6 @@ fn path_file_name_text(path: &Path) -> Option<&str> {
     }
     let index = trimmed.rfind(['\\', '/'])?;
     trimmed.get(index + 1..).filter(|name| !name.is_empty())
-}
-
-fn edge_scroll_dwell_ticks_for_repeat(repeats: u8) -> u8 {
-    const INITIAL_DWELL_TICKS: u8 = 40;
-    const DWELL_STEP_TICKS: u8 = 2;
-    const MIN_DWELL_TICKS: u8 = 11;
-    INITIAL_DWELL_TICKS
-        .saturating_sub(repeats.saturating_mul(DWELL_STEP_TICKS))
-        .max(MIN_DWELL_TICKS)
 }
 
 fn path_text_eq_case_insensitive(left: &Path, right: &Path) -> bool {
@@ -635,9 +646,6 @@ impl SavePickerModel {
             drive_strip_offset: 0,
             status_message: None,
             rejected_path_text: None,
-            edge_scroll_ticks: 0,
-            edge_scroll_repeats: 0,
-            edge_scroll_direction: 0,
             drives: enumerate_drives(),
             last_dir_per_drive: HashMap::new(),
             intent,
@@ -683,7 +691,10 @@ impl SavePickerModel {
     }
 
     /// Row index of the first directory/file entry.
-    fn entry_row_base(&self) -> usize {
+    /// First row of the listing proper, i.e. the row below any header rows the view puts above the
+    /// entries. Public because the menu pump needs the same "first content row" the edge-press rule
+    /// uses when it has to clamp a cursor step of its own.
+    pub fn entry_row_base(&self) -> usize {
         self.pinned_row_count() + self.nav_row_count()
     }
 
@@ -756,12 +767,6 @@ impl SavePickerModel {
 
     fn clamp_scroll_offset(&mut self) {
         self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
-    }
-
-    fn reset_edge_scroll_dwell(&mut self) {
-        self.edge_scroll_ticks = 0;
-        self.edge_scroll_repeats = 0;
-        self.edge_scroll_direction = 0;
     }
 
     /// Compatibility name for callers/tests that care how many entries fit without scrolling.
@@ -1190,8 +1195,26 @@ impl SavePickerModel {
         changed
     }
 
-    /// Native `05_010` edge-scroll adapter. Returns true when row records must be restaged.
-    pub fn edge_scroll_from_native_cursor_tick(&mut self, cursor: usize) -> bool {
+    /// Scroll the ten-row native window by one row for an explicit UP/DOWN press taken at an edge.
+    ///
+    /// `cursor` is the row the selection occupied BEFORE the press. The native list moves (and
+    /// wraps) its own cursor as soon as the key is read, so the value sampled after the press is
+    /// already somewhere else -- at the bottom row a DOWN press lands the selection back on the
+    /// drives row, which is what the player sees as "it wrapped instead of scrolling".
+    ///
+    /// Scrolls if and only if the window can actually move that way, which is exactly the condition
+    /// the scrollbar draws: more rows below for DOWN, more above for UP. When the list is already at
+    /// that hard limit the press still reports a row to pin, so the caller can hold the selection
+    /// where it was instead of letting the native list wrap around to the far end. Returns `None`
+    /// only for a press that is not at an edge at all, where ordinary row movement is correct.
+    ///
+    /// Replaced a dwell timer (2026-08-12) that slid the window whenever the cursor merely SAT on
+    /// an edge row, moving the list under a player who was only resting there.
+    pub fn scroll_window_from_edge_press(
+        &mut self,
+        cursor: usize,
+        down: bool,
+    ) -> Option<EdgePressOutcome> {
         let first_content_row = self
             .entry_row_base()
             .min(PICKER_ROW_COUNT.saturating_sub(1));
@@ -1199,36 +1222,25 @@ impl SavePickerModel {
             .visible_row_count()
             .saturating_sub(1)
             .min(PICKER_ROW_COUNT.saturating_sub(1));
-        let direction =
-            if cursor >= last_visible_row && self.scroll_offset < self.max_scroll_offset() {
-                Some(true)
-            } else if cursor <= first_content_row && self.scroll_offset > 0 {
-                Some(false)
-            } else {
-                None
-            };
-        let Some(down) = direction else {
-            self.reset_edge_scroll_dwell();
-            return false;
-        };
-        let direction_code = if down { 2 } else { 1 };
-        if self.edge_scroll_direction != direction_code {
-            self.edge_scroll_ticks = 0;
-            self.edge_scroll_repeats = 0;
-            self.edge_scroll_direction = direction_code;
-        }
-        self.edge_scroll_ticks = self.edge_scroll_ticks.saturating_add(1);
-        if self.edge_scroll_ticks < edge_scroll_dwell_ticks_for_repeat(self.edge_scroll_repeats) {
-            return false;
-        }
-        self.edge_scroll_ticks = 0;
-        if self.scroll_window_one(down) {
-            self.edge_scroll_repeats = self.edge_scroll_repeats.saturating_add(1);
-            true
+        let (at_edge, edge_row) = if down {
+            (cursor >= last_visible_row, last_visible_row)
         } else {
-            self.reset_edge_scroll_dwell();
-            false
+            (cursor <= first_content_row, first_content_row)
+        };
+        if !at_edge {
+            return None;
         }
+        // `scroll_window_one` is the single source of "can the window move that way", so it decides
+        // scroll-versus-hold on exactly the condition the scrollbar draws.
+        if self.scroll_window_one(down) {
+            return Some(EdgePressOutcome::Scrolled { pin_row: edge_row });
+        }
+        // No window left to move. DOWN off the last row and UP off row 0 are where the native list
+        // wraps to the opposite end of the listing, which reads as the selection teleporting; hold
+        // the press row instead. An UP press that merely runs out of ENTRIES is not at the top of
+        // the list -- the drive and parent rows sit above it -- so leave that to normal movement.
+        let hard_limit = if down { true } else { cursor == 0 };
+        hard_limit.then_some(EdgePressOutcome::HeldAtLimit { pin_row: cursor })
     }
 
     pub fn entry_count(&self) -> usize {
@@ -1273,7 +1285,6 @@ impl SavePickerModel {
         self.rejected_path_text = None;
         self.entries.clear();
         self.scroll_offset = 0;
-        self.reset_edge_scroll_dwell();
         // Owned copies so the per-entry predicate borrows nothing from `self` while the listing is
         // being built. `save_picker_accepts` is the SAME function the OS dialog's post-return check
         // calls, which is what keeps the two surfaces from disagreeing about what a save is.
@@ -1675,7 +1686,6 @@ impl SavePickerModel {
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
-        self.reset_edge_scroll_dwell();
         let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
             .filter(|&r| self.row_selectable(r))
             .collect();

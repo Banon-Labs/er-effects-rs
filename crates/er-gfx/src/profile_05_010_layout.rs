@@ -84,12 +84,63 @@ pub struct TransformLayout {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowChromeLayout {
     pub backing: TransformLayout,
+    /// Full-row invisible mouse target. `GridControl::HandleMouse` resolves a row's hit object as
+    /// child `HitArea` FIRST, then `Cursor`, then the cell itself (`FUN_14074b0d0`, 1.16.2), and
+    /// hit-tests the resolved object's own bounds. Without a `HitArea` the row's hit box IS the
+    /// `Cursor` sprite -- which the drive-row runtime shrinks onto the focused sub-control, so the
+    /// row stops being hoverable anywhere else. This placement is baked alpha-0 and never renders;
+    /// it only restores a full-row hit box so `Cursor` can stay pure focus chrome.
+    pub hit_area: TransformLayout,
     pub cursor: TransformLayout,
     pub cursor_body: TransformLayout,
     /// Relative transform applied to every `DriveButton_*` frame around its derived drive cell.
     pub drive_button: TransformLayout,
     /// Independent transform/opacity for the complete-path button frame.
     pub path_button: TransformLayout,
+}
+
+impl RowChromeLayout {
+    /// Every chrome section, by the name the schema and the live-editor protocol both use.
+    ///
+    /// This exists because the same list used to be hand-written in several places. `hit_area` was
+    /// added to the schema (2026-08-12) without being added to the live protocol's own match, and
+    /// since ONE unknown key rejects the WHOLE control file, every live nudge after that failed
+    /// with `unknown key row_chrome.hit_area.editable` -- the editor showed "no ack" while the game
+    /// ran perfectly, which reads as a dead channel rather than a rejected key. Both directions of
+    /// the protocol now enumerate through here, so a new section cannot break the channel again.
+    pub const SECTION_NAMES: [&'static str; 6] = [
+        "backing",
+        "hit_area",
+        "cursor",
+        "cursor_body",
+        "drive_button",
+        "path_button",
+    ];
+
+    /// The sections in `SECTION_NAMES` order, for serialization.
+    pub fn sections(&self) -> [(&'static str, &TransformLayout); 6] {
+        [
+            ("backing", &self.backing),
+            ("hit_area", &self.hit_area),
+            ("cursor", &self.cursor),
+            ("cursor_body", &self.cursor_body),
+            ("drive_button", &self.drive_button),
+            ("path_button", &self.path_button),
+        ]
+    }
+
+    /// Resolve a section by name for mutation, or `None` when the name is not a chrome section.
+    pub fn section_mut(&mut self, name: &str) -> Option<&mut TransformLayout> {
+        match name {
+            "backing" => Some(&mut self.backing),
+            "hit_area" => Some(&mut self.hit_area),
+            "cursor" => Some(&mut self.cursor),
+            "cursor_body" => Some(&mut self.cursor_body),
+            "drive_button" => Some(&mut self.drive_button),
+            "path_button" => Some(&mut self.path_button),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -289,6 +340,15 @@ impl Profile05_010Layout {
                     1.0,
                     true,
                     "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art",
+                ),
+                hit_area: transform(
+                    -20.0,
+                    0.0,
+                    20.0,
+                    1.0,
+                    0.0,
+                    false,
+                    "invisible full-row mouse target: row sprite 76 named HitArea / char 54; the native hit resolver prefers it over Cursor, so the row stays hoverable while Cursor shrinks to the focused sub-control",
                 ),
                 cursor: transform(
                     -20.0,
@@ -540,8 +600,18 @@ impl Profile05_010Layout {
                 "list row_pitch/mask_height/scrollbar_track_height must be positive".to_owned(),
             ));
         }
+        // The row hit target must never draw. It is a full-row plate sitting over every row of a
+        // template shared with the character-slot views, so any nonzero alpha would paint a solid
+        // rectangle across the whole list rather than merely being ugly.
+        if self.row_chrome.hit_area.opacity != 0.0 {
+            return Err(LayoutError::InvalidValue(
+                "row_chrome.hit_area.opacity must stay 0: it is an invisible mouse target, not chrome"
+                    .to_owned(),
+            ));
+        }
         for (name, t) in [
             ("row_chrome.backing", &self.row_chrome.backing),
+            ("row_chrome.hit_area", &self.row_chrome.hit_area),
             ("row_chrome.cursor", &self.row_chrome.cursor),
             ("row_chrome.cursor_body", &self.row_chrome.cursor_body),
             ("row_chrome.drive_button", &self.row_chrome.drive_button),
@@ -582,6 +652,9 @@ impl Profile05_010Layout {
             "path_editor" => set_field_layout(&mut self.path_editor, section, key, raw_value)?,
             "row_chrome.backing" => {
                 set_transform(&mut self.row_chrome.backing, section, key, raw_value)?
+            }
+            "row_chrome.hit_area" => {
+                set_transform(&mut self.row_chrome.hit_area, section, key, raw_value)?
             }
             "row_chrome.cursor" => {
                 set_transform(&mut self.row_chrome.cursor, section, key, raw_value)?
@@ -693,6 +766,7 @@ fn validate_section(section: &str) -> Result<(), LayoutError> {
     match section {
         "path_editor"
         | "row_chrome.backing"
+        | "row_chrome.hit_area"
         | "row_chrome.cursor"
         | "row_chrome.cursor_body"
         | "row_chrome.drive_button"
@@ -768,6 +842,21 @@ mod tests {
         }
         assert!(layout.row_chrome.backing.editable);
         assert!(layout.row_chrome.cursor.editable);
+        // The hit target is geometry, not chrome: it must cover exactly the drawn row and must
+        // never render. Anything else either shrinks the hoverable band or paints a plate over
+        // every row of a template the character-slot views also use.
+        assert_eq!(layout.row_chrome.hit_area.x, layout.row_chrome.backing.x);
+        assert_eq!(layout.row_chrome.hit_area.y, layout.row_chrome.backing.y);
+        assert_eq!(
+            layout.row_chrome.hit_area.scale_x,
+            layout.row_chrome.backing.scale_x
+        );
+        assert_eq!(
+            layout.row_chrome.hit_area.scale_y,
+            layout.row_chrome.backing.scale_y
+        );
+        assert_eq!(layout.row_chrome.hit_area.opacity, 0.0);
+        assert!(!layout.row_chrome.hit_area.editable);
         assert!(layout.row_chrome.cursor_body.editable);
         assert!(layout.row_chrome.drive_button.editable);
         assert!(layout.row_chrome.path_button.editable);
@@ -819,6 +908,22 @@ mod tests {
         let err = Profile05_010Layout::parse("[field.Nope]\nx = 1\n")
             .expect_err("unknown field section must fail");
         assert!(err.to_string().contains("unknown section"), "{err}");
+    }
+
+    /// A visible hit target is a full-row opaque plate over EVERY row, not a cosmetic slip: the
+    /// row template is shared with the character-slot views. The schema refuses to describe one.
+    #[test]
+    fn a_visible_row_hit_target_fails_closed() {
+        let err = Profile05_010Layout::parse("[row_chrome.hit_area]\nopacity = 1\n")
+            .expect_err("a rendering hit target must fail");
+        assert!(
+            err.to_string().contains("hit_area.opacity must stay 0"),
+            "{err}"
+        );
+        assert!(
+            Profile05_010Layout::parse("[row_chrome.hit_area]\nopacity = 0\n").is_ok(),
+            "an invisible hit target is the only accepted authoring"
+        );
     }
 
     #[test]

@@ -1024,6 +1024,142 @@ pub(crate) unsafe fn apply_path_editor_window_position(base: usize, menu_window:
             "save-picker-path: positioned 02_990 MenuWindow attempt={attempt} window=0x{menu_window:x} proxy=0x{proxy:x} target=({x:.1},{y:.1}) applied={applied} unsupported={unsupported} detail={detail}"
         ));
     }
+    unsafe { apply_path_editor_caret_to_end(base, menu_window) };
+}
+
+/// Applications of the end-caret per editor open. The field is not guaranteed to be focused on the
+/// frame the window first runs, and taking focus is what would reset a caret we set too early, so the
+/// request is repeated over the same short window the positioning pass uses. It stays far shorter
+/// than any human can type into a box that has only just appeared, so it can never fight the user's
+/// own Home/End.
+const PATH_EDITOR_CARET_APPLY_FRAMES: usize = 8;
+static PATH_EDITOR_CARET_APPLIES: AtomicUsize = AtomicUsize::new(0);
+static PATH_EDITOR_CARET_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Re-arm the end-caret for a newly opened path editor. Keyed off the window's open transition rather
+/// than a window pointer, because the allocator reuses that address across opens and a pointer-keyed
+/// latch would silently skip every editor after the first.
+pub(crate) fn reset_path_editor_caret_latch() {
+    PATH_EDITOR_CARET_APPLIES.store(0, Ordering::SeqCst);
+    PATH_EDITOR_CARET_RESOLVED.store(0, Ordering::SeqCst);
+}
+
+/// Put the caret at the END of the prefilled path when the editor opens.
+///
+/// The editor is prefilled with the current path and the caret sits at index 0, so typing prepends to
+/// the path instead of appending to it. No native object owns that caret: the SoftwareKeyboard config
+/// holds only a prompt string, a max length and flags, and its set-initial path is a pure `DLString`
+/// assign. The caret is Scaleform's, and [`GFX_TEXT_FIELD_SET_SELECTION_RVA`] is what moves it -- the
+/// same primitive ActionScript's `Selection.setSelection` calls after its own type check.
+unsafe fn apply_path_editor_caret_to_end(base: usize, menu_window: usize) {
+    let applies = PATH_EDITOR_CARET_APPLIES.fetch_add(1, Ordering::SeqCst);
+    if applies >= PATH_EDITOR_CARET_APPLY_FRAMES {
+        return;
+    }
+    let outcome = unsafe { place_path_editor_caret_at_end(base, menu_window) };
+    // Log the first resolution either way, then stay quiet: this runs every frame of the open window
+    // and a per-frame line would bury the rest of the editor's trace.
+    if PATH_EDITOR_CARET_RESOLVED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        match outcome {
+            Ok(detail) => append_autoload_debug(format_args!(
+                "save-picker-path: caret moved to end of the prefilled path window=0x{menu_window:x} {detail}"
+            )),
+            Err(error) => append_autoload_debug(format_args!(
+                "save-picker-path: caret stays at the start window=0x{menu_window:x}; {error}"
+            )),
+        }
+    }
+}
+
+/// Resolve the live editable field by its authored name (`root -> TextInput -> Text_0`) through the
+/// same native `assignComponentWithName` binder the stats push uses, then move its caret.
+unsafe fn place_path_editor_caret_at_end(
+    base: usize,
+    menu_window: usize,
+) -> Result<String, String> {
+    if menu_window == 0 || menu_window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err("02_990 MenuWindow not live".to_owned());
+    }
+    let root_proxy = menu_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
+    let sprite_name = er_gfx::text_input_02_990::TEXT_INPUT_SPRITE_NAME;
+    let field_name = er_gfx::text_input_02_990::TEXT_FIELD_INSTANCE_NAME;
+    let Some((sprite_proxy, _sprite_slot)) =
+        (unsafe { resolve_row_child_proxy(base, root_proxy, sprite_name) })
+    else {
+        return Err(format!(
+            "child {sprite_name} did not resolve on 02_990 root proxy=0x{root_proxy:x}"
+        ));
+    };
+    let result = match unsafe { resolve_row_child_proxy(base, sprite_proxy, field_name) } {
+        Some((field_proxy, _field_slot)) => {
+            let outcome = unsafe {
+                set_text_field_caret_to_end(
+                    base,
+                    field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET,
+                )
+            };
+            unsafe { destroy_resolved_row_child_proxy(base, field_proxy) };
+            outcome
+        }
+        None => Err(format!(
+            "child {sprite_name}/{field_name} did not resolve on 02_990 window=0x{menu_window:x}"
+        )),
+    };
+    unsafe { destroy_resolved_row_child_proxy(base, sprite_proxy) };
+    result
+}
+
+/// Move a resolved field's caret to the end of its text.
+///
+/// Guarded exactly like the native text helpers: the value must carry a text object, whose vtable and
+/// runtime type tag must both check out before anything is handed to a native call. The setter clamps
+/// both indices to the live text length, so [`GFX_TEXT_FIELD_SELECTION_END`] asks for the end rather
+/// than guessing a position, and a collapsed range leaves a caret rather than a selection.
+unsafe fn set_text_field_caret_to_end(base: usize, cs_value: usize) -> Result<String, String> {
+    let handle = unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_HANDLE_OFFSET) }.unwrap_or(0);
+    if handle == 0 || handle == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!("CSScaleformValue handle empty at 0x{cs_value:x}"));
+    }
+    let text_object =
+        unsafe { safe_read_usize(handle + GFX_VALUE_TEXT_OBJECT_OFFSET) }.unwrap_or(0);
+    if text_object == 0 || text_object == TITLE_OWNER_SCAN_START_ADDRESS {
+        return Err(format!(
+            "GFx value at 0x{handle:x} has no text object at +0x{GFX_VALUE_TEXT_OBJECT_OFFSET:x}"
+        ));
+    }
+    let text_vt = unsafe { safe_read_usize(text_object) }.unwrap_or(0);
+    if text_vt == 0 || !vtable_in_game_image(text_vt, base) {
+        return Err(format!(
+            "text object vt invalid object=0x{text_object:x} vt=0x{text_vt:x}"
+        ));
+    }
+    let kind_fn =
+        unsafe { safe_read_usize(text_vt + GFX_TEXT_OBJECT_KIND_VTABLE_SLOT) }.unwrap_or(0);
+    if kind_fn == 0 || !vtable_in_game_image(kind_fn, base) {
+        return Err(format!(
+            "text object kind function invalid object=0x{text_object:x} vt=0x{text_vt:x} kind=0x{kind_fn:x}"
+        ));
+    }
+    let kind: unsafe extern "system" fn(usize) -> i32 = unsafe { std::mem::transmute(kind_fn) };
+    let kind = unsafe { kind(text_object) };
+    if kind != GFX_TEXT_OBJECT_KIND_TEXT_FIELD {
+        return Err(format!(
+            "GFx object at 0x{text_object:x} is kind {kind}, not text-field kind {GFX_TEXT_OBJECT_KIND_TEXT_FIELD}"
+        ));
+    }
+    let set_selection: unsafe extern "system" fn(usize, i64, i64) =
+        unsafe { std::mem::transmute(base + GFX_TEXT_FIELD_SET_SELECTION_RVA) };
+    unsafe {
+        set_selection(
+            text_object,
+            GFX_TEXT_FIELD_SELECTION_END,
+            GFX_TEXT_FIELD_SELECTION_END,
+        )
+    };
+    Ok(format!("text object=0x{text_object:x}"))
 }
 
 unsafe fn apply_profile_editor_transform_to_proxy(

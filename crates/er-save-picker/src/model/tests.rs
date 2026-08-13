@@ -33,9 +33,6 @@ fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel 
         drive_strip_offset: 0,
         status_message: None,
         rejected_path_text: None,
-        edge_scroll_ticks: 0,
-        edge_scroll_repeats: 0,
-        edge_scroll_direction: 0,
         drives: Vec::new(),
         last_dir_per_drive: HashMap::new(),
         intent,
@@ -1083,48 +1080,101 @@ fn long_listing_uses_scroll_window_instead_of_page_row() {
     );
 }
 
+/// One press at an edge row moves the window exactly one row, and only at an edge. The window used
+/// to slide from a pointer DWELL on the edge row, which moved the list under a player who was only
+/// resting there; a press is now the sole trigger, so nothing moves without an explicit input.
 #[test]
-fn native_cursor_edge_tick_slides_the_scroll_window_with_smooth_slow_start_acceleration() {
-    let dwell: Vec<u8> = (0..=20).map(edge_scroll_dwell_ticks_for_repeat).collect();
-    assert_eq!(dwell[0], 40);
-    assert_eq!(dwell[1], 38);
-    assert_eq!(dwell[14], 12);
-    assert_eq!(dwell[15], 11);
-    assert_eq!(dwell[20], 11);
-    for pair in dwell.windows(2) {
-        let [current, next] = pair else {
-            unreachable!()
-        };
-        assert!(
-            *next <= *current,
-            "edge-scroll dwell must not slow while held: {dwell:?}"
-        );
-        assert!(
-            current.saturating_sub(*next) <= 2,
-            "edge-scroll dwell changes must stay smooth: {dwell:?}"
-        );
-    }
-
+fn an_edge_press_scrolls_exactly_one_row_and_only_from_the_edge() {
     let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 20);
-    for _ in 0..39 {
-        assert!(!model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
-        assert_eq!(model.scroll_offset(), 0);
-    }
-    assert!(model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
-    assert_eq!(model.scroll_offset(), 1);
-    for _ in 0..37 {
-        assert!(!model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
-        assert_eq!(model.scroll_offset(), 1);
-    }
-    assert!(model.edge_scroll_from_native_cursor_tick(PICKER_ROW_COUNT - 1));
-    assert_eq!(model.scroll_offset(), 2);
+    let last = PICKER_ROW_COUNT - 1;
 
-    model.reset_edge_scroll_dwell();
-    for _ in 0..39 {
-        model.edge_scroll_from_native_cursor_tick(0);
+    // Repeated presses at the bottom edge advance one row each -- no dwell, no acceleration -- and
+    // each reports the edge row the caller must pin the native cursor to. Without that pin the
+    // selection leaves the edge and the next press is not an edge press at all.
+    for expected in 1..=3 {
+        assert_eq!(
+            model.scroll_window_from_edge_press(last, true),
+            Some(EdgePressOutcome::Scrolled { pin_row: last })
+        );
+        assert_eq!(model.scroll_offset(), expected);
     }
-    assert!(model.edge_scroll_from_native_cursor_tick(0));
-    assert_eq!(model.scroll_offset(), 1);
+
+    // A press away from either edge must not move the window at all.
+    assert_eq!(model.scroll_window_from_edge_press(last / 2, true), None);
+    assert_eq!(model.scroll_window_from_edge_press(last / 2, false), None);
+    assert_eq!(model.scroll_offset(), 3);
+
+    // Pressing DOWN at the top edge (and UP at the bottom) is not an edge press for that direction.
+    assert_eq!(model.scroll_window_from_edge_press(0, true), None);
+    assert_eq!(model.scroll_offset(), 3);
+
+    // Up at the top edge walks back one row per press, and stops at the top rather than wrapping.
+    // The pinned row is the first CONTENT row, which is 1 here rather than 0: this listing has a
+    // parent ("up one directory") row above the entries, so row 0 is not an entry. Pinning to the
+    // literal top of the window would park the selection on a non-entry row.
+    let top_content_row = 1;
+    for expected in (0..3).rev() {
+        assert_eq!(
+            model.scroll_window_from_edge_press(0, false),
+            Some(EdgePressOutcome::Scrolled {
+                pin_row: top_content_row
+            })
+        );
+        assert_eq!(model.scroll_offset(), expected);
+    }
+    // At the top of the listing the press holds row 0 rather than reporting nothing: reporting
+    // nothing leaves the native list free to wrap the selection to the last row.
+    assert_eq!(
+        model.scroll_window_from_edge_press(0, false),
+        Some(EdgePressOutcome::HeldAtLimit { pin_row: 0 })
+    );
+    assert_eq!(model.scroll_offset(), 0);
+}
+
+/// A DOWN press on the last row of the LAST window holds that row instead of letting the native
+/// list wrap the selection back to the top. Reported from a live run (2026-08-12): stepping down
+/// through a long listing and pressing DOWN once more at the bottom jumped the selection to the
+/// drives row, which reads as the list losing the player's place.
+#[test]
+fn a_down_press_at_the_end_of_the_listing_holds_instead_of_wrapping_to_the_top() {
+    let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", PICKER_ROW_COUNT + 2);
+    let last = PICKER_ROW_COUNT - 1;
+
+    // Walk the window to its last position: from there the scrollbar shows nothing further below,
+    // which is the state where the native list wraps instead of scrolling.
+    let scrollable_rows = model.scroll_max();
+    assert!(scrollable_rows > 0, "fixture must overflow the window");
+    for _ in 0..scrollable_rows {
+        assert_eq!(
+            model.scroll_window_from_edge_press(last, true),
+            Some(EdgePressOutcome::Scrolled { pin_row: last })
+        );
+    }
+    assert_eq!(model.scroll_offset(), model.scroll_max());
+
+    for _ in 0..3 {
+        assert_eq!(
+            model.scroll_window_from_edge_press(last, true),
+            Some(EdgePressOutcome::HeldAtLimit { pin_row: last })
+        );
+        assert_eq!(model.scroll_offset(), model.scroll_max());
+    }
+}
+
+/// A listing that fits entirely in the window has no scroll at all, and DOWN on its final row must
+/// still hold rather than wrap. The window-scrolling path never runs here, so this is the case a
+/// scroll-only rule would miss.
+#[test]
+fn a_down_press_at_the_bottom_of_a_short_listing_holds_without_any_scroll() {
+    let mut model = model_with(PickerIntent::LoadSource, "Z:\\saves", 3);
+    let last = model.visible_row_count() - 1;
+
+    assert_eq!(model.scroll_max(), 0);
+    assert_eq!(
+        model.scroll_window_from_edge_press(last, true),
+        Some(EdgePressOutcome::HeldAtLimit { pin_row: last })
+    );
+    assert_eq!(model.scroll_offset(), 0);
 }
 
 #[test]
