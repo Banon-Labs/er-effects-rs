@@ -100,7 +100,6 @@ KEYS = [
     "oracle_own_stepper_s2_invoke_last_update_ret",
     "oracle_own_stepper_s2_invoke_last_candidate",
     "oracle_own_stepper_s2_invoke_last_blocker",
-    "oracle_native_load_game_fired",
     "oracle_native_submit_hits",
     "oracle_continue_phase",
     "oracle_player_present",

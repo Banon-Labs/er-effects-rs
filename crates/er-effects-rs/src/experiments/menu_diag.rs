@@ -6,6 +6,3 @@ use super::*;
 
 mod menu_observation;
 pub(crate) use menu_observation::*;
-
-mod live_loadgame_node;
-pub(crate) use live_loadgame_node::*;

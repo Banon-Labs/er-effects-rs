@@ -608,11 +608,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         pass_through(false);
         return;
     }
-    if native_load_enabled() {
-        unsafe { native_load_tick(owner, base, n) };
-        pass_through(false);
-        return;
-    }
     // OBSERVE-ONLY NATIVE-CONTINUE mode (PATH B, gated OFF by default). Same precedence/structure as
     // native_load: it does NOT force the title machine -- the native boot advances naturally via
     // pass-through, and once the live menu is rendered + settled we fire the native Continue
@@ -1076,28 +1071,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     ));
                 }
             }
-            pass_through(false);
-            return;
-        }
-        // 2026-06-18 MODEL B LIVE-DIALOG (gated, OFF by default). SIBLING to direct_build: instead
-        // of FORGING a non-live dialog (which loads the wrong map + crashes), locate the REAL
-        // Load-Game registry node and fire its NATIVE run 0x1409aaba0 -> a LIVE registered
-        // ProfileLoadDialog the native menu group pumps. own_stepper_live_dialog_fire latches the
-        // fire (one-shot), waits for the live dialog at owner+0xe0, then routes to STAGE2 ACTIVATE
-        // (load_activate + char-fingerprint-gated continue_confirm). Fail-closed at every step.
-        // Checked BEFORE direct_build so enabling live-dialog takes the live path, not the forge.
-        if live_dialog_enabled()
-            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
-        {
-            unsafe {
-                own_stepper_live_dialog_fire(
-                    owner,
-                    base,
-                    waits,
-                    menu_build_timed_out,
-                    menu_elapsed_ms,
-                )
-            };
             pass_through(false);
             return;
         }
