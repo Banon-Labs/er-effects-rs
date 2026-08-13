@@ -378,7 +378,7 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S4d** | Delete the switch-harness discovery probe | 3 | -99 | CHK + **FP-CGU1** (came back regime A) | S4c | **OPEN #237** |
 | **S4e** | Delete the disproven legacy menu-drive route | 5 | -263 | CHK + FP-CGU1 + `.pdata`/disasm delta | S4d | **OPEN #238** |
 | **S4f** | Delete the last three hard-false S4 levers | 7 | -148 | CHK + FP-CGU1 + `.pdata`/disasm delta | S4e | **OPEN #239** |
-| **S5** | **Move the code-patch primitives into er-hook** | 5 | ~-40 | CHK + FP | S1 |
+| **S5** | **Move the code-patch primitives into er-hook** | 7 | +28 | CHK + FP-CGU1 + **runtime smoke** | -- | **OPEN #241** |
 | **S6** | Move the boot profiler into er-boot-profiler | 5 | ~+30 | CHK | S1 |
 | **S7** | Move the PGD name offsets into er-game-base | 3 | ~+15 | CHK | -- |
 | **S8** | Move the UTF-16 save-name readers into er-game-base | 4 | ~-20 | CHK | S7 |
@@ -407,11 +407,34 @@ touches `er-telemetry/src/counters.rs:1131-1141`; S3 touches `counters.rs:114`; 
 `mod/product_core_own_stepper.rs` and one startup_hooks file. Landing S1 first proves the
 fingerprint workflow on the smallest possible blast radius.
 
-**Why S5 is so early:** it is the cheapest net-negative slice in the whole plan. er-hook has **zero
-`[dependencies]`** (only `build-dependencies = cc`, `Cargo.toml:13-14`) and already solved the
-logging problem -- `pub type HookLogFn` at `er-hook/src/lib.rs:27` and `pub fn set_hook_logger` at
-`:32` -- so the 5 `append_autoload_debug` calls become hook-logger calls with **no new seam**, and
-the move **deletes two** er-title-flow seam fields.
+**Why S5 is so early:** er-hook has **zero `[dependencies]`** (only `build-dependencies = cc`,
+`Cargo.toml:13-14`) and already solved the logging problem -- `pub type HookLogFn` at
+`er-hook/src/lib.rs:27` and `pub fn set_hook_logger` at `:32` -- so the 5 `append_autoload_debug`
+calls become hook-logger calls with **no new seam**, and the move **deletes two** er-title-flow seam
+fields.
+
+**Executed as #241. Three things the plan had wrong, all in S5's favour except the last:**
+
+* It is **not** net-negative. Measured **+28 lines**, not ~-40: er-hook gains 156, the product sheds
+  109 plus 2 bootstrap lines, er-title-flow sheds 26 host lines and gains 5 constant lines. The
+  *seam* count is what falls (-2 fields, -2 defaults, -2 wrappers, -2 assignments), and that was
+  always the real point.
+* **The product had ZERO call sites of its own.** Both functions existed only to be handed across
+  the seam, so the move empties them out of `experiments/` entirely rather than leaving a re-export.
+* **It needs a runtime smoke and the earlier "CHK + FP" gate was too weak.** This is the first slice
+  that touches reachable product code, and the log sink genuinely changes -- direct
+  `append_autoload_debug` call becomes `hook_log`'s atomic-load-and-indirect-call. That is visible in
+  the measurement: the two moved functions **GREW** (310->331, 355->399), which is the per-log-site
+  cost of the indirection. FP-DELTA localises the whole change to 5 of 6,266 functions and shows every
+  log string surviving with an identical count, but a string table is not a running game.
+  The smoke ran (`run-product-continue-direct-probe.sh`, staged DLL hash verified equal to the build):
+  both primitives fired at +347ms with byte-identical text, and `patch_3byte_stub`'s **return value**
+  came back `ok=true`, so validation + VirtualProtect + write all succeeded from the new crate. Boot
+  reached a loaded character with zero MessageBoxDialog builds.
+
+**Generalise the gate, not just this row: any slice that moves code whose logging crosses a seam
+needs a runtime smoke, because the fingerprint can prove the strings survived and still not prove the
+sink is installed when they fire.**
 
 **Why S7 before S8 before S9:** `read_utf16_name_units` returns
 `([u16; PGD_NAME_LEN_U16], usize)`, and `PGD_NAME_LEN_U16` is derived in
