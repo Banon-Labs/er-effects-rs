@@ -38,6 +38,11 @@ pub mod pgd_layout;
 pub use pgd_layout::*;
 
 #[cfg(windows)]
+pub mod player_identity;
+#[cfg(windows)]
+pub use player_identity::*;
+
+#[cfg(windows)]
 pub mod portrait_lookat;
 #[cfg(windows)]
 pub use portrait_lookat::*;
