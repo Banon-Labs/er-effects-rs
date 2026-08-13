@@ -50,12 +50,17 @@ def require_measure_reads_title_flow() -> None:
         raise SystemExit("measure must read er-title-flow as part of the logical autoload module")
 
 
-def require_attach_order_uses_runtime_calls() -> None:
+def load_checker():
     spec = importlib.util.spec_from_file_location("check_autoload_happy_path", CHECK_SCRIPT)
     if spec is None or spec.loader is None:
         raise SystemExit("could not load check-autoload-happy-path.py")
     checker = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(checker)
+    return checker
+
+
+def require_attach_order_uses_runtime_calls() -> None:
+    checker = load_checker()
 
     # Logical-module concatenation order is not runtime order: a split may put the latch source
     # alphabetically before the visual source while DllMain still installs visuals first.
@@ -76,9 +81,42 @@ def require_attach_order_uses_runtime_calls() -> None:
     )
 
 
+def require_split_runtime_path_is_followed() -> None:
+    checker = load_checker()
+    source = """
+fn own_stepper_idx10() {
+    own_stepper_idx10_fallbacks!();
+}
+macro_rules! own_stepper_idx10_fallbacks {
+    () => {{
+        title_boot_ready();
+        startup_modal_blocking_state();
+    }};
+}
+"""
+    path = "\n".join(
+        [
+            checker.rust_fn_body(source, "own_stepper_idx10"),
+            checker.rust_macro_body(source, "own_stepper_idx10_fallbacks"),
+        ]
+    )
+    assert "title_boot_ready" in path
+    assert "startup_modal_blocking_state" in path
+
+    incomplete = source.replace("startup_modal_blocking_state();", "")
+    incomplete_path = "\n".join(
+        [
+            checker.rust_fn_body(incomplete, "own_stepper_idx10"),
+            checker.rust_macro_body(incomplete, "own_stepper_idx10_fallbacks"),
+        ]
+    )
+    assert "startup_modal_blocking_state" not in incomplete_path
+
+
 def main() -> int:
     require_measure_reads_title_flow()
     require_attach_order_uses_runtime_calls()
+    require_split_runtime_path_is_followed()
 
     with tempfile.TemporaryDirectory(prefix="er-effects-autoload-stage-") as tmp:
         tmp_path = Path(tmp)

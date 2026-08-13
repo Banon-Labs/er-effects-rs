@@ -142,9 +142,31 @@ def optional_rust_fn_body(source: str, name: str) -> str:
     return rust_fn_body(source, name) if f"fn {name}(" in source else ""
 
 
+def rust_macro_body(source: str, name: str) -> str:
+    marker = f"macro_rules! {name}"
+    start = source.find(marker)
+    if start < 0:
+        raise AssertionError(f"missing macro {name}")
+    brace = source.find("{", start)
+    if brace < 0:
+        raise AssertionError(f"missing macro body for {name}")
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace + 1 : index]
+    raise AssertionError(f"unterminated macro body for {name}")
+
+
 def product_path_uses_semantic_readiness(experiments: str) -> bool:
     product_core = rust_fn_body(experiments, "product_core_autoload_tick")
-    own_stepper = rust_fn_body(experiments, "own_stepper_idx10")
+    own_stepper = "\n".join(
+        [rust_fn_body(experiments, "own_stepper_idx10"), rust_macro_body(experiments, "own_stepper_idx10_fallbacks")]
+    )
     # own_stepper_live_dialog_fire / native_load_tick were deleted as unreachable: each was
     # called from exactly one site, behind a gate whose whole body is the literal `false`
     # (live_dialog_enabled, native_load_enabled). Kept as optional lookups so the semantic
