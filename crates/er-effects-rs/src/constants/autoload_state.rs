@@ -216,10 +216,8 @@ pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
 pub(crate) use er_title_flow::ONLINE_DISABLE_RVA;
-pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
+pub(crate) use er_title_flow::ONLINE_DISABLE_EXPECTED_FIRST;
 pub(crate) use er_title_flow::ONLINE_DISABLE_STUB;
-pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
-pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
 // Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
