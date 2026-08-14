@@ -202,9 +202,31 @@ fn the_selected_sibling_owner_points_toward_the_codec_when_present() {
     let source = fs::read_to_string(&scaleform_hooks)
         .unwrap_or_else(|error| panic!("read {}: {error}", scaleform_hooks.display()));
     let dependencies = dependency_names(&source);
+    let required = BTreeSet::from([
+        "er-game-base".to_owned(),
+        "er-gfx".to_owned(),
+        "er-hook".to_owned(),
+        "er-telemetry".to_owned(),
+    ]);
     assert!(
-        dependencies.contains("er-gfx"),
-        "er-scaleform-hooks must consume the codec rather than duplicate it"
+        required.is_subset(&dependencies),
+        "er-scaleform-hooks must own native plumbing over the selected shared layers; missing {:?}",
+        required.difference(&dependencies).collect::<Vec<_>>()
+    );
+
+    let forbidden = [
+        "er-effects-rs",
+        "er-loading-portrait",
+        "er-scaleform-hooks",
+        "er-title-flow",
+    ];
+    let found: Vec<_> = forbidden
+        .into_iter()
+        .filter(|dependency| dependencies.contains(*dependency))
+        .collect();
+    assert!(
+        found.is_empty(),
+        "er-scaleform-hooks must use its narrow host callback instead of depending on product/feature owners {found:?}"
     );
     assert!(
         !dependency_names(&manifest("er-gfx")).contains("er-scaleform-hooks"),
