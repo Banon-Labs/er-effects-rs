@@ -397,55 +397,6 @@ mod save_picker_boot_tests {
     use super::*;
     use std::time::Duration;
 
-    /// THE decision that can terminate a user's game, pinned. Only a cancel -- the one outcome
-    /// that IS a user decision -- quits; every "we could not ask" outcome falls back to the
-    /// in-game browser instead of acting on a choice nobody made.
-    ///
-    /// The table is exhaustive over [`OsPickAbort`] on purpose: a NEW way for an open to end with
-    /// nothing staged must be classified here before it compiles, because the default that a
-    /// catch-all would supply is "quit the user's game".
-    #[test]
-    fn only_a_user_cancel_quits_the_game() {
-        assert_eq!(
-            boot_abort_action(OsPickAbort::Cancelled),
-            BootAbortAction::QuitGame
-        );
-        assert_eq!(
-            boot_abort_action(OsPickAbort::Failed),
-            BootAbortAction::FallBackToInGame,
-            "a comdlg32 defect -- or an exhausted reopen bound -- must never terminate the process"
-        );
-        assert_eq!(
-            boot_abort_action(OsPickAbort::NotOpened),
-            BootAbortAction::FallBackToInGame,
-            "no dialog ever ran, so there is no user decision to act on; this thread cannot retry, \
-             so the in-game browser takes the pick instead"
-        );
-    }
-
-    /// Every boot state is distinct. They are exported as one telemetry field, so a collision
-    /// would make two different outcomes indistinguishable in the only record that survives the
-    /// process -- and one of those outcomes is a quit.
-    #[test]
-    fn the_boot_states_are_distinguishable_in_telemetry() {
-        let states = [
-            BOOT_PICKER_IDLE,
-            BOOT_PICKER_OPEN,
-            BOOT_PICKER_PICKED,
-            BOOT_PICKER_CANCEL_EXIT,
-            BOOT_PICKER_FELL_BACK,
-        ];
-        for (index, state) in states.iter().enumerate() {
-            for other in &states[index + 1..] {
-                assert_ne!(state, other, "two boot states share a telemetry value");
-            }
-        }
-        assert_eq!(
-            BOOT_PICKER_IDLE, 0,
-            "a session that never reaches a missing-save boot must read as IDLE"
-        );
-    }
-
     /// The detour wait is finite, and the CANCEL PATH HAS NO WAIT AT ALL.
     ///
     /// The second half is the point. The first version of this file made the user's quit depend on

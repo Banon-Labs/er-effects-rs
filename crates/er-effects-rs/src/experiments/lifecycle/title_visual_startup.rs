@@ -1,6 +1,7 @@
 //! Attach-time installation for title, portrait, and loading-surface hooks.
 
 use super::*;
+use er_quit_menu::install_picker_dim_overlay;
 
 pub(crate) fn install_title_visual_startup_hooks() {
     // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent

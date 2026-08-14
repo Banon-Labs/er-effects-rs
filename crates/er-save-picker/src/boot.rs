@@ -44,6 +44,13 @@ pub fn boot_abort_action(abort: OsPickAbort) -> BootAbortAction {
 mod tests {
     use super::*;
 
+    /// THE decision that can terminate a user's game, pinned. Only a cancel -- the one outcome
+    /// that IS a user decision -- quits; every "we could not ask" outcome falls back to the
+    /// in-game browser instead of acting on a choice nobody made.
+    ///
+    /// The table is exhaustive over [`OsPickAbort`] on purpose: a NEW way for an open to end with
+    /// nothing staged must be classified here before it compiles, because the default that a
+    /// catch-all would supply is "quit the user's game".
     #[cfg(feature = "os-dialog")]
     #[test]
     fn only_a_user_cancel_quits_the_game() {
@@ -59,10 +66,14 @@ mod tests {
         assert_eq!(
             boot_abort_action(OsPickAbort::NotOpened),
             BootAbortAction::FallBackToInGame,
-            "no dialog ever ran, so there is no user decision to act on"
+            "no dialog ever ran, so there is no user decision to act on; this thread cannot retry, \
+             so the in-game browser takes the pick instead"
         );
     }
 
+    /// Every boot state is distinct. They are exported as one telemetry field, so a collision
+    /// would make two different outcomes indistinguishable in the only record that survives the
+    /// process -- and one of those outcomes is a quit.
     #[test]
     fn the_boot_states_are_distinguishable_in_telemetry() {
         let states = [
