@@ -163,6 +163,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 
+# Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
+# er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
+# the default build, staged product payload, or required ME3 native list.
+python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
+python3 "$repo_root/scripts/check-single-dll-product-contract.py"
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # Dead/unused code in the save-disable DLL, on its shipping target. Scoped to that one
