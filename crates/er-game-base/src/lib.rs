@@ -13,6 +13,7 @@ pub mod log;
 pub mod mem;
 #[cfg(all(windows, feature = "game-types"))]
 pub mod pgd;
+pub mod profile_summary;
 pub mod rva;
 
 /// Tier B typed-binding re-export facade. Only compiled when `game-types` is
