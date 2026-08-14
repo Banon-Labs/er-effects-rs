@@ -14,6 +14,7 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::arts_badge::arts_badge;
 use er_gfx::{Movie, Tag};
 
@@ -57,7 +58,7 @@ fn hud_movie_badge_edit_derives() {
     println!(
         "{HUD_MOVIE}: {} bytes  fnv=0x{:016x}",
         vanilla.len(),
-        er_gfx::title_05_000::fnv1a64(&vanilla)
+        fnv1a64(&vanilla)
     );
 
     let edited = match arts_badge(&vanilla) {
@@ -103,7 +104,7 @@ fn hud_movie_badge_edit_derives() {
     println!(
         "edited: {} bytes  fnv=0x{:016x}",
         edited.len(),
-        er_gfx::title_05_000::fnv1a64(&edited)
+        fnv1a64(&edited)
     );
 
     let v = Movie::parse(&vanilla).expect("parse vanilla");

@@ -1,5 +1,6 @@
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::text_input_02_990::{
     INLINE_FNV1A64, INLINE_LEN, VANILLA_FNV1A64, VANILLA_LEN, inline_current_path_editor,
     is_known_vanilla,
@@ -12,14 +13,14 @@ fn native_text_input_is_inlined_over_current_path_without_its_own_chrome() {
         "win/02_990_textinput.gfx",
         VANILLA_LEN,
         VANILLA_FNV1A64,
-        er_gfx::title_05_000::fnv1a64,
+        fnv1a64,
         is_known_vanilla,
     ) else {
         return;
     };
     let out = inline_current_path_editor(&vanilla).expect("known 02_990 derives");
     assert_eq!(out.len(), INLINE_LEN);
-    assert_eq!(er_gfx::title_05_000::fnv1a64(&out), INLINE_FNV1A64);
+    assert_eq!(fnv1a64(&out), INLINE_FNV1A64);
     let movie = Movie::parse(&out).expect("derived movie parses");
     let layout = er_gfx::profile_05_010_layout::Profile05_010Layout::default();
     let path = &layout.path_editor;

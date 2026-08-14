@@ -1,4 +1,5 @@
 use super::*;
+use er_game_base::fnv1a::fnv1a64;
 // Boot-progress view -- our own pre-Continue cover content, drawn from the FIRST presented frame.
 //
 // With the splash/logo/title visuals suppressed, every frame the game presents between its first
@@ -809,12 +810,7 @@ fn boot_view_progress() -> (usize, usize) {
 }
 
 fn boot_view_label_hash(text: &str) -> usize {
-    let mut h = 14_695_981_039_346_656_037usize;
-    for b in text.bytes() {
-        h ^= b as usize;
-        h = h.wrapping_mul(1_099_511_628_211usize);
-    }
-    h
+    fnv1a64(text.as_bytes()) as usize
 }
 
 fn boot_view_single_submilestone(label: &'static str) -> (&'static str, usize, usize) {

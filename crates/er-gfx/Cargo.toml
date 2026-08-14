@@ -10,4 +10,5 @@ description = "Tier-0 lossless Scaleform-GFX (uncompressed 'GFX' v11) reader/wri
 
 [dependencies]
 bitflags = "2.11.0"
-# Intentionally none. Tier-0 codec is std-only.
+# Shared zero-dependency content fingerprint owner.
+er-game-base = { path = "../er-game-base" }

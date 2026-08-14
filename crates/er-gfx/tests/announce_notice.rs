@@ -9,6 +9,7 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::announce_notice::{
     ALIGN_CENTER, ALIGN_LEFT, EDIT_TEXT_AUTO_SIZE, EDIT_TEXT_HAS_LAYOUT, NOTICE_FIELD_WIDTH_PX,
     NOTICE_TEXT_CHARACTER_ID, with_centered_notice_text,
@@ -19,15 +20,6 @@ use er_gfx::{Movie, Tag};
 /// so a drift here and a drift there are the same fact and must be updated together.
 const NOTICE_LEN: usize = 3_205;
 const NOTICE_FNV1A64: u64 = 0x6973_a088_b693_13f8;
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
 
 fn vanilla_or_skip() -> Option<Vec<u8>> {
     let path = common::corpus_root().join("01_080_emergencynotice.gfx");

@@ -37,11 +37,11 @@
 //! the badge's position/scale are all derived from the movie being edited, so one code path
 //! serves all three (and tracks the vanilla layout if an asset ever shifts).
 
-use crate::title_05_000::fnv1a64;
 use crate::{
     GfxError, Matrix, Movie, PO2_HAS_CHARACTER, PO2_HAS_MATRIX, PO2_HAS_NAME, PO3_HAS_VISIBLE,
     Rect, Tag,
 };
+use er_game_base::fnv1a::fnv1a64;
 
 /// Instance name of the tile child the badge DLL binds and draws into. This is a VANILLA
 /// child, not an injected one.

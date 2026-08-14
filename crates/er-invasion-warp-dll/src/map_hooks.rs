@@ -62,6 +62,8 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
+
 use crate::map_seams::WORLDMAP_VIEWMODEL_CTOR;
 // `verify_seam` reads live process memory, so it only exists on the game target. The import has
 // to be gated with it: an ungated `use` of a `cfg(windows)` item fails the HOST build outright,
@@ -621,10 +623,9 @@ static CATALOG_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 /// the vanilla one and keep serving stale pins. This is not a cryptographic digest and does not
 /// need to be; it needs to change when the data changes.
 fn catalog_signature(registry: &er_invasion_warp::map_surface::InvasionRowRegistry) -> usize {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut hash = fnv1a64(b"");
     let mut mix = |value: u64| {
-        hash ^= value;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
+        hash = fnv1a64_mix(hash, value);
     };
     mix(registry.len() as u64);
     for target in registry.targets() {
