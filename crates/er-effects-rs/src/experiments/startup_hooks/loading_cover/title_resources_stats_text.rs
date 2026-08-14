@@ -1066,10 +1066,8 @@ pub(crate) unsafe fn stage_profile_record_place_name(slot: i32, place_name_id: u
     if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
         return None;
     }
-    let field = summary
-        + PROFILE_SUMMARY_RECORD_BASE
-        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE
-        + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    let field =
+        profile_summary_record_address(summary, slot as usize) + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
     let displaced = unsafe { safe_read_i32(field) }? as u32;
     if displaced == place_name_id {
         return None;
@@ -1134,10 +1132,8 @@ pub(crate) unsafe fn restore_profile_record_place_name(slot: i32, displaced: u32
     if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
         return;
     }
-    let field = summary
-        + PROFILE_SUMMARY_RECORD_BASE
-        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE
-        + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    let field =
+        profile_summary_record_address(summary, slot as usize) + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
     unsafe { core::ptr::write_volatile(field as *mut u32, displaced) };
 }
 
@@ -1179,8 +1175,7 @@ pub(crate) unsafe fn profile_slot_location_is_this_characters(slot: i32) -> bool
     if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
         return true;
     }
-    let record =
-        summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let record = profile_summary_record_address(summary, slot as usize);
     let Some(record_map) = (unsafe { safe_read_i32(record + PROFILE_SUMMARY_MAP_OFFSET) }) else {
         return true;
     };

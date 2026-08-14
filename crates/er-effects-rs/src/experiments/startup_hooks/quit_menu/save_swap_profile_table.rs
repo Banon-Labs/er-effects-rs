@@ -29,12 +29,8 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
     });
     unsafe {
         for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            core::ptr::write_bytes(
-                (summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE)
-                    as *mut u8,
-                0,
-                PROFILE_SUMMARY_RECORD_STRIDE,
-            );
+            let record = profile_summary_record_address(summary, slot);
+            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
             *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
         }
@@ -73,7 +69,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                 fallback_slot
             };
             let fallback = fallback_src_slot.and_then(|src_slot| {
-                let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
+                let start = profile_summary_record_offset(src_slot);
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
@@ -570,7 +566,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let mut names: Vec<String> = Vec::with_capacity(TITLE_PROFILE_SLOT_COUNT);
         let mut any_real = false;
         for s in 0..TITLE_PROFILE_SLOT_COUNT {
-            let rec = summary + PROFILE_SUMMARY_RECORD_BASE + s * PROFILE_SUMMARY_RECORD_STRIDE;
+            let rec = profile_summary_record_address(summary, s);
             let (units, len) = unsafe { read_utf16_name_units(rec) };
             let name = if utf16_name_empty_like(&units, len) {
                 "(empty)".to_owned()

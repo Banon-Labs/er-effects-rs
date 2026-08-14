@@ -11,7 +11,8 @@ pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
 
 /// Live table of the ten CSMenuProfModelRend pointers filled by the title/profile renderer setup.
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA: usize = 0x3d6d8d0;
-pub const TITLE_PROFILE_SLOT_COUNT: usize = 10;
+pub const TITLE_PROFILE_SLOT_COUNT: usize =
+    er_game_base::profile_summary::PROFILE_SUMMARY_SLOT_COUNT;
 /// CSMenuAsmModelRend base stores CSEzOffscreenRend* at +0xa8; CSEzOffscreenRend stores
 /// CSRuntimeTexResCap* registered under SYSTEX_Menu_ProfileNN at +0x10.
 pub const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
@@ -185,26 +186,13 @@ pub const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize =
 pub const SCALEFORM_MEMORY_FILE_DATA_OFFSET: usize = 0x18;
 pub const SCALEFORM_MEMORY_FILE_LEN_OFFSET: usize = 0x20;
 
-/// GameDataMan private tail fields used by the save/profile probes.
-#[repr(C)]
-pub struct GameDataManProfileSummaryLayout {
-    pub unknown_000: [u8; 0x78],
-    pub profile_summary: usize,
-}
+// The in-memory CS::ProfileSummary ABI is cross-cutting game state, so er-game-base is its
+// single deep owner. Keep this public re-export while portrait/product callers migrate without
+// recreating an intermediate layout definition here.
+pub use er_game_base::profile_summary::*;
 
-/// GameDataMan -> `profile_summary`; private upstream, but documented locally as a typed layout.
-pub const SLOT_MANAGER_CONTAINER_OFFSET: usize =
-    core::mem::offset_of!(GameDataManProfileSummaryLayout, profile_summary);
-
-// From experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs (product keeps the rest of the
-// ProfileSummary record offsets; these four are shared with the moved stats producer).
-/// ProfileSummary save-record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe):
-/// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
-pub const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
-pub const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
-
-pub const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
-pub const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
+/// Compatibility role name used by the existing product code.
+pub const SLOT_MANAGER_CONTAINER_OFFSET: usize = GAME_DATA_MAN_PROFILE_SUMMARY_OFFSET;
 
 // From experiments/startup_hooks/title_resources_stats_text.rs: the attribute-count that
 // sizes the per-slot stats arrays crossing the host seam.

@@ -425,10 +425,6 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
     const ZERO_U32: u32 = 0;
     const NAME_LEN_NONE: usize = 0;
     const MIN_REAL_LEVEL: u32 = 1;
-    const PROFILE_RECORD_BASE: usize = 0x18;
-    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
-    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
-    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
     if slot < OWN_STEPPER_SLOT_ZERO {
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
@@ -441,12 +437,11 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
     if profile_summary == NULL {
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
-    let slot_index = slot as usize;
-    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+    let rec = profile_summary_record_address(profile_summary, slot as usize);
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
         .map(|value| value as u32 as i32)
         .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
         .map(|value| value as u32)
         .unwrap_or(ZERO_U32);
     let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
@@ -493,10 +488,6 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     const BAD_I32: i32 = -1;
     const ZERO_U32: u32 = 0;
     const NAME_LEN_NONE: usize = 0;
-    const PROFILE_RECORD_BASE: usize = 0x18;
-    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
-    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
-    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
     let mut result = RequestedSlotIdentity {
         matches: false,
         profile_summary: NULL,
@@ -521,12 +512,11 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     if pgd == NULL || profile_summary == NULL {
         return result;
     }
-    let slot_index = slot as usize;
-    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+    let rec = profile_summary_record_address(profile_summary, slot as usize);
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
         .map(|value| value as u32 as i32)
         .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
         .map(|value| value as u32)
         .unwrap_or(ZERO_U32);
     let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
