@@ -2810,6 +2810,7 @@ dependencies = [
  "er-save-picker",
  "er-save-redirect",
  "er-save-suppress",
+ "er-scaleform-hooks",
  "er-telemetry",
  "er-title-flow",
  "er-tpf",
