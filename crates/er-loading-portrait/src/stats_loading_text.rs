@@ -108,7 +108,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let mut name = String::new();
     let mut level = 0i32;
     if valid(summary) {
-        let rec = summary + PROFILE_SUMMARY_RECORD_BASE + slot_u * PROFILE_SUMMARY_RECORD_STRIDE;
+        let rec = profile_summary_record_address(summary, slot_u);
         let (units, len) = unsafe { read_utf16_name_units(rec) };
         name = String::from_utf16_lossy(&units[..len]);
         level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);

@@ -582,28 +582,15 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     slot: i32,
 ) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
-    const PROFILE_SUMMARY_SLOT_DATA_OFFSET: usize = 0x18;
-    const PROFILE_SUMMARY_SLOT_STRIDE: usize = 0x2a0;
     const SAVE_BODY_PLAYER_GAME_DATA_OFFSET: usize = 0xebae;
-    const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
-    const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
-    const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
-    const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
-    /// Native ProfileSummary slot layout: `FaceData` wrapper at slot+0x38; its inner
-    /// `FaceDataBuffer` (`FACE` magic) starts at slot+0x40. 2026-06-27 native row dumps showed
-    /// the staged SL2 inner `FaceDataBuffer` bytes match the native row exactly, but the saved
-    /// `FaceData` wrapper header does not. Mirror `FUN_14025f9b0`: call
-    /// `FaceData::CopyFromBuffer` (FACE_DATA_COPY_FROM_BUFFER_RVA, shared constant) instead of
-    /// memcpy'ing the saved wrapper over the live slot.
-    const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
-    /// Native row builder passes slot+0x1a8 to the equipment renderer (CHR_ASM_COPY_RVA, shared
-    /// constant) instead of leaving a zero/default `ChrAsm` that only proves renderer plumbing.
-    const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
-    const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
-    const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
-    const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
-    const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
+    // Native ProfileSummary slot layout: `FaceData` wrapper at slot+0x38; its inner
+    // `FaceDataBuffer` (`FACE` magic) starts at slot+0x40. 2026-06-27 native row dumps showed
+    // the staged SL2 inner `FaceDataBuffer` bytes match the native row exactly, but the saved
+    // `FaceData` wrapper header does not. Mirror `FUN_14025f9b0`: call
+    // `FaceData::CopyFromBuffer` (FACE_DATA_COPY_FROM_BUFFER_RVA, shared constant) instead of
+    // memcpy'ing the saved wrapper over the live slot. The native row builder passes slot+0x1a8
+    // to the equipment renderer (CHR_ASM_COPY_RVA, shared constant) instead of leaving a
+    // zero/default `ChrAsm` that only proves renderer plumbing.
     if profile_summary <= NULL
         || slot < OWN_STEPPER_SLOT_ZERO
         || slot as usize >= TITLE_PROFILE_SLOT_COUNT
@@ -651,11 +638,9 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     let pgd = body
         .as_ptr()
         .wrapping_add(SAVE_BODY_PLAYER_GAME_DATA_OFFSET) as usize;
-    let slot_data = profile_summary
-        + PROFILE_SUMMARY_SLOT_DATA_OFFSET
-        + slot as usize * PROFILE_SUMMARY_SLOT_STRIDE;
+    let slot_data = profile_summary_record_address(profile_summary, slot as usize);
     unsafe {
-        core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_SLOT_STRIDE);
+        core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
         core::ptr::copy_nonoverlapping(
             (pgd + PGD_NAME_9C_OFFSET) as *const u8,
             slot_data as *mut u8,

@@ -137,8 +137,7 @@ pub(crate) unsafe fn portrait_equip_read_sample(
     // rewrite of the record cannot retroactively make an earlier bad frame look correct.
     let mut record_ids = [CHR_ASM_OVERRIDE_ABSENT; CHR_ASM_PROTECTOR_SLOT_COUNT];
     let cached = PORTRAIT_EQUIP_RECORD_PARAM_ID[0].load(Ordering::SeqCst) != 0;
-    let record =
-        summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let record = profile_summary_record_address(summary, slot as usize);
     for slot_index in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
         record_ids[slot_index] = if cached {
             portrait_equip_unpack(PORTRAIT_EQUIP_RECORD_PARAM_ID[slot_index].load(Ordering::SeqCst))
