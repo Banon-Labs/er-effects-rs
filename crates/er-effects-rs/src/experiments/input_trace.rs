@@ -19,6 +19,7 @@
 //! `ms` matches the `[+Nms]` prefix clock of er-effects-autoload-debug.log for cross-correlation.
 
 use super::*;
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 use std::io::Write as _;
 use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -639,10 +640,9 @@ impl TraceSem {
     /// counters (`stable_frames`) and the advisory `mms_blocks` so sem rows fire on transitions,
     /// not every frame of a settled state.
     fn key(&self) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut h = fnv1a64(b"");
         let mut mix = |v: u64| {
-            h ^= v.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            h = fnv1a64_mix(h, v.wrapping_add(0x9e37_79b9_7f4a_7c15));
         };
         mix(self.focused as u64);
         mix(self.menu_top as u64);

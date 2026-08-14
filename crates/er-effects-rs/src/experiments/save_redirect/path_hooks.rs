@@ -18,6 +18,7 @@ use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
+use er_game_base::fnv1a::fnv1a64;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use er_save_redirect::{
     DIRECT_STAGE_ROOT_DIR_NAME, DirectStageNoSteamIdKind, DirectStageRequestPlan,
@@ -31,9 +32,9 @@ use er_save_redirect::{
     is_staged_save_container_name, plan_create_file_open, plan_direct_stage_request,
     plan_save_path_telemetry, plan_save_query_path, plausible_steam_id64,
     probe_direct_stage_file_status, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, save_file_is_readonly, save_normalize_hash_bytes,
-    staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
-    wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+    save_detour_disk_io_allowed, save_file_is_readonly, staged_entry_fate,
+    steam_id64_from_dir_name, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
+    wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
@@ -225,7 +226,7 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
         ));
         return;
     };
-    let before = save_normalize_hash_bytes(&bytes);
+    let before = fnv1a64(&bytes);
     log_save_steam_id_locations(&bytes, steam_id, reason);
     match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
         Ok(report) => {
@@ -244,7 +245,7 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
             }
             match fs::write(path, &bytes) {
                 Ok(()) => {
-                    let after = save_normalize_hash_bytes(&bytes);
+                    let after = fnv1a64(&bytes);
                     append_autoload_debug(format_args!(
                         "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                         path.display()
@@ -309,7 +310,7 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
         ));
         return;
     };
-    let before = save_normalize_hash_bytes(&bytes);
+    let before = fnv1a64(&bytes);
     let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
         return;
     };
@@ -324,7 +325,7 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     }
     match fs::write(&path, &bytes) {
         Ok(()) => {
-            let after = save_normalize_hash_bytes(&bytes);
+            let after = fnv1a64(&bytes);
             append_autoload_debug(format_args!(
                 "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                 path.display()

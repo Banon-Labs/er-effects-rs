@@ -15,9 +15,10 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::title_05_000::{
-    STRIPPED_FNV1A64, STRIPPED_LEN, StripError, VANILLA_FNV1A64, VANILLA_LEN, fnv1a64,
-    is_known_vanilla, strip,
+    STRIPPED_FNV1A64, STRIPPED_LEN, StripError, VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla,
+    strip,
 };
 
 fn read_vanilla_or_skip() -> Option<Vec<u8>> {

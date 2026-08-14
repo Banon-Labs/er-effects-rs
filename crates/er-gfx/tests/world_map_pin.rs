@@ -10,6 +10,7 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::world_map_pin::{
     CXFORM_UNITY_MULT, ICON_SPRITE_FRAME_COUNT, ICON_SPRITE_ID, PIN_MARKERS, RED_MARKER_CHARACTER,
     RED_PIN_FRAME, dimmed_marker_cxform, with_red_pin_frame,
@@ -20,15 +21,6 @@ use er_gfx::{Movie, Tag};
 /// extractions of the same game build.
 const WORLD_MAP_LEN: usize = 68_763;
 const WORLD_MAP_FNV1A64: u64 = 0xed66_8483_91a2_d273;
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
 
 fn vanilla_or_skip() -> Option<Vec<u8>> {
     let path = common::corpus_root().join("02_120_worldmap.gfx");

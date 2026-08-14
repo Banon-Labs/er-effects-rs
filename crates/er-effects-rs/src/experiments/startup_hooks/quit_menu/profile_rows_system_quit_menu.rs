@@ -1,4 +1,5 @@
 use super::*;
+use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64};
 
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
@@ -1402,7 +1403,7 @@ pub(crate) fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
 }
 
 pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
-    let mut hash = 0xcbf2_9ce4_8422_2325usize;
+    let mut hash = FNV1A64_OFFSET_BASIS as usize;
     if label_ptr < TITLE_OWNER_SCAN_START_ADDRESS {
         return hash;
     }
@@ -1410,6 +1411,8 @@ pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
         let Some(unit) = (unsafe { safe_read_u16(label_ptr + idx * 2) }) else {
             break;
         };
+        // Preserve this diagnostic signature's historical non-FNV multiplier exactly. It is not
+        // a content fingerprint and therefore is not routed through the canonical FNV round.
         hash ^= unit as usize;
         hash = hash.wrapping_mul(0x1000_0000_01b3usize);
         if unit == 0 {
@@ -1462,8 +1465,8 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
     let mut cloned_mask = 0usize;
     let mut native_save_mask = 0usize;
     let mut quit_label_mask = 0usize;
-    let mut action_hash = 0xcbf2_9ce4_8422_2325usize;
-    let mut label_hash = 0xcbf2_9ce4_8422_2325usize;
+    let mut action_hash = fnv1a64(b"") as usize;
+    let mut label_hash = fnv1a64(b"") as usize;
     for row_idx in 0..count {
         let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_idx);
         let controller =

@@ -10,9 +10,9 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::profile_05_010_layout::Profile05_010Layout;
 use er_gfx::raster::RasterFont;
-use er_gfx::title_05_000::fnv1a64;
 use er_gfx::title_05_010::{
     CHAR_STATS_FIELD_NAME, COMPACT_LIST_HEIGHT_PX, COMPACT_ROW_PITCH_PX,
     COMPACT_SCROLLBAR_TOP_Y_PX, COMPACT_SCROLLBAR_TRACK_HEIGHT_PX, COMPACT_SCROLLBAR_X_PX,

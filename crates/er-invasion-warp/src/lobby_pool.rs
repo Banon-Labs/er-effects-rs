@@ -43,6 +43,8 @@
 //! behaviour they would have had anyway, not a crash or a corrupt session. The failure direction is
 //! benign, which is the other reason a weak hash is tolerable here.
 
+use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64_extend};
+
 /// Tags the pool. Changing this string splits users across DLL versions, so it is versioned
 /// deliberately rather than derived from anything that drifts (a build id, a timestamp, a file
 /// hash). Every DLL that shares this constant can match every other.
@@ -54,22 +56,11 @@ pub const POOL_NAMESPACE: &str = "er-invasion-warp/dll-pool/v1";
 /// the same shape cannot trip any length assumption inside ersc or Steam. The seeds differ so the
 /// passes are not four copies of one 64-bit value.
 const PASS_SEEDS: [u64; 4] = [
-    0xcbf2_9ce4_8422_2325,
+    FNV1A64_OFFSET_BASIS,
     0x9e37_79b9_7f4a_7c15,
     0xff51_afd7_ed55_8ccd,
     0xc4ce_b9fe_1a85_ec53,
 ];
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
-/// FNV-1a over the bytes, from an explicit starting basis.
-fn fnv1a64(seed: u64, bytes: &[u8]) -> u64 {
-    let mut hash = seed;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
 
 /// The key this player should publish and filter on, or `None` to leave Seamless's own key alone.
 ///
@@ -89,7 +80,7 @@ pub fn pooled_lobby_key(enabled: bool, original: &str) -> Option<String> {
     let bytes = material.as_bytes();
     let mut out = String::with_capacity(64);
     for seed in PASS_SEEDS {
-        out.push_str(&format!("{:016x}", fnv1a64(seed, bytes)));
+        out.push_str(&format!("{:016x}", fnv1a64_extend(seed, bytes)));
     }
     Some(out)
 }
