@@ -23,6 +23,11 @@ python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
+# An unresolvable staged save is terminal for the process. Pin the caller-side state transitions and
+# the nonzero recurrence semaphore so the 120,959-call identical-rejection loop cannot return.
+python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py" --selftest
+python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py"
+python3 "$repo_root/scripts/check-yk0j-runtime-proof.py" --selftest
 python3 "$repo_root/scripts/check-user-release-package.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
@@ -134,6 +139,10 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-scaleform-hooks --lib
 # corpus-gated (skip when local save-files/ fixtures are absent; game-derived bytes are
 # never versioned).
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
+
+# Host simulation for the own-load terminal-rejection state machine. It drives the preserved
+# 120,959-tick churn shape and requires exactly one resolver call plus zero repeated rejections.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
 # er-loading-portrait's host-portable stats-line layer: proves the UNIFIED loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live

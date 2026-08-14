@@ -1200,6 +1200,16 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
             return true;
         }
     }
+    // State 2 is a consumed failure, not "try again next row". Also honor the shared own-load
+    // terminal transition before calling the resolver: either condition makes this cache fail closed
+    // without adding to the repeated-rejection semaphore. Cache invalidation may retry an ordinary
+    // cache failure, but cannot override the process-terminal staged-source rejection.
+    if PROFILE_SLOT_STATS_CACHE_STATE.load(Ordering::SeqCst) == 2
+        || crate::experiments::own_load_save_rejection_terminal()
+    {
+        PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
+        return false;
+    }
     let Some(sl2) = (unsafe { crate::experiments::own_load_read_sl2_bytes(base) }) else {
         PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
         append_autoload_debug(format_args!(
