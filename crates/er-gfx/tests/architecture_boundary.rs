@@ -149,6 +149,7 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
 #[test]
 fn codec_stays_below_the_native_hook_layer() {
     let dependencies = dependency_names(&manifest("er-gfx"));
+    // er-game-base's default tier is the zero-dependency owner for shared content primitives.
     let forbidden = [
         "eldenring",
         "er-effects-rs",
