@@ -490,6 +490,34 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     patched
 }
 
+fn incoming_portrait_slot_pending(phase: usize, selected: usize, fresh_deser: usize) -> bool {
+    phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        || (selected < TITLE_PROFILE_SLOT_COUNT && fresh_deser == 0)
+}
+
+#[cfg(test)]
+mod portrait_target_pending_tests {
+    use super::*;
+
+    #[test]
+    fn selected_slot_survives_transient_idle_phase_until_deserialize() {
+        assert!(incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            0
+        ));
+    }
+
+    #[test]
+    fn completed_selection_no_longer_overrides_resident_slot() {
+        assert!(!incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            1
+        ));
+    }
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
@@ -585,8 +613,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // selected incoming row. The 19:54 softlock repro proved the drift: target slot=1 but this path
     // kicked "LOADED slot 2", so the first other-slot load displayed no matching profile render. Use the
     // selected switch target when present, otherwise fall back to the confirmed loaded slot for boot/load1.
-    let target_slot = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let selected_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    let fresh_deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
+    // The phase can transiently return to IDLE during the clean-title handoff, before the selected
+    // slot's deserialize. The old phase-only gate then fell back to ac0 (the outgoing character)
+    // and latched that stale slot for the entire incoming loading window. Keep the explicit selected
+    // slot authoritative until its fresh deserialize completes, regardless of phase churn.
+    let target_slot = if incoming_portrait_slot_pending(quickload_phase, selected_slot, fresh_deser)
     {
         portrait_target_slot()
     } else {
@@ -610,18 +644,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     //   * boot:   c30 is a real saved map (not the m10 new-game default) AND the native slot
     //             request register (`GameMan+0xb78`) is back at its no-request sentinel, i.e. no
     //             load is still in flight.
-    let deserialize_completed = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-    {
-        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
-    } else {
-        let gm = game_man_ptr_or_null();
-        gm != TITLE_OWNER_SCAN_START_ADDRESS
-            && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
-                .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
-            && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
-                .is_some_and(|b78| b78 < 0)
-    };
+    let deserialize_completed =
+        if incoming_portrait_slot_pending(quickload_phase, selected_slot, fresh_deser) {
+            fresh_deser == 1
+        } else {
+            let gm = game_man_ptr_or_null();
+            gm != TITLE_OWNER_SCAN_START_ADDRESS
+                && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+                    .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
+                && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
+                    .is_some_and(|b78| b78 < 0)
+        };
     if deserialize_completed {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }
