@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""Keep the PR #193 execution roadmap's current-file ledger honest.
+"""Verify the current crate-extraction R1 file and critical caller ledger."""
 
-The roadmap intentionally contains estimates and decision-gated destinations, but its baseline
-file list and line counts are mechanical facts. Fail when a tracked Rust file is added/removed or
-changes size without refreshing the roadmap baseline and disposition ledger.
-"""
 from __future__ import annotations
 
 import argparse
@@ -14,16 +10,68 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = ROOT / "crates/er-effects-rs/src/experiments"
+SOURCE = ROOT / "crates/er-effects-rs/src"
 ROADMAP = ROOT / "docs/plans/crate-extraction-execution-roadmap.md"
 ROW = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|", re.MULTILINE)
 TOTAL = re.compile(r"^\| all `experiments/\*\*` \| ([0-9,]+) \| ([0-9,]+) \|$", re.MULTILINE)
+FORBIDDEN_OWNERSHIP = re.compile(
+    r"UNANALYSED|UNANALYZED|UNCLASSIFIED|APPROXIMATE(?:LY)?|ESTIMAT(?:E|ED|ES)|~",
+    re.IGNORECASE,
+)
+LEDGER_HEADING = "## Appendix A -- R1 current 79-file partition and caller ledger"
+
+# These are source edges that define the ownership seams R1 refreshes. A later move must
+# update this table and the roadmap in the same PR; it cannot silently preserve an old caller map.
+REQUIRED_EDGES = {
+    "save_flow_tick": {"experiments/lifecycle/task_tick.rs"},
+    "tick_before_player_lookup": {"lib_parts/dll_entry_parts/task_registration.rs"},
+    "install_title_visual_startup_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
+    "install_profile_and_system_quit_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
+    "install_boot_diagnostics_and_trace_hooks": {"lib_parts/dll_entry_parts/bootstrap.rs"},
+    "own_load_pump_tick": {"experiments/lifecycle/task_tick.rs"},
+    "own_load_switch_reload_fire": set(),
+    "enforce_save_override_or_abort": {"lib_parts/dll_entry_parts/bootstrap.rs"},
+    "install_save_redirect_hooks": {"experiments/save_redirect/path_hooks.rs"},
+    "profile_editor_necromancy_tick": {"lib_parts/dll_entry_parts/task_registration.rs"},
+    "profile_editor_runtime_tick": {
+        "experiments/startup_hooks/loading_cover/title_resources_stats_text.rs"
+    },
+    "save_picker_request_path_editor": {
+        "experiments/startup_hooks/quit_menu/save_picker_menu.rs"
+    },
+    "save_picker_menu_pump_path_editor": {
+        "experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
+    },
+}
+
+REQUIRED_TERMS = {
+    "S10 lifecycle",
+    "S11 own-load",
+    "R12B1 transport",
+    "R12B5 Scaleform primitives",
+    "R13B1 path model",
+    "R13B4 lifecycle adapter",
+    "R32 re-baselines the existing `er-save-redirect` interface",
+}
 
 
-def current_inventory() -> dict[str, int]:
+def current_inventory(root: Path = EXPERIMENTS) -> dict[str, int]:
     return {
-        path.relative_to(EXPERIMENTS).as_posix(): sum(1 for _ in path.open(errors="replace"))
-        for path in sorted(EXPERIMENTS.rglob("*.rs"))
+        path.relative_to(root).as_posix(): sum(1 for _ in path.open(encoding="utf-8", errors="replace"))
+        for path in sorted(root.rglob("*.rs"))
     }
+
+
+def source_has_function(function: str) -> bool:
+    pattern = re.compile(rf"\bfn\s+{re.escape(function)}\s*[<(]")
+    return any(pattern.search(path.read_text(encoding="utf-8", errors="replace")) for path in SOURCE.rglob("*.rs"))
+
+
+def source_has_call(caller: str, function: str) -> bool:
+    path = SOURCE / caller
+    if not path.is_file():
+        return False
+    return re.search(rf"\b{re.escape(function)}\s*\(", path.read_text(encoding="utf-8", errors="replace")) is not None
 
 
 def validate(
@@ -31,6 +79,7 @@ def validate(
     current: dict[str, int],
     expected_total: tuple[int, int] | None,
     ledger_count: int,
+    text: str,
 ) -> list[str]:
     errors: list[str] = []
     missing = sorted(current.keys() - listed.keys())
@@ -42,7 +91,6 @@ def validate(
     for path in sorted(current.keys() & listed.keys()):
         if current[path] != listed[path]:
             errors.append(f"line count drift: {path}: roadmap={listed[path]} current={current[path]}")
-
     if expected_total is None:
         errors.append("current measured-state total row is missing")
     elif expected_total != (len(current), sum(current.values())):
@@ -52,24 +100,42 @@ def validate(
             f"current={len(current)}/{sum(current.values())}"
         )
     if ledger_count != 1:
-        errors.append("roadmap must contain exactly one current disposition ledger")
+        errors.append("roadmap must contain exactly one R1 current partition and caller ledger")
+    if match := FORBIDDEN_OWNERSHIP.search(text):
+        errors.append(f"forbidden non-exact ownership marker: {match.group(0)!r}")
+    for term in sorted(REQUIRED_TERMS):
+        if term not in text:
+            errors.append(f"roadmap missing required partition term: {term}")
+    return errors
+
+
+def validate_caller_edges() -> list[str]:
+    errors: list[str] = []
+    for function, callers in REQUIRED_EDGES.items():
+        if not source_has_function(function):
+            errors.append(f"required partition function missing from source: {function}")
+        for caller in sorted(callers):
+            if not source_has_call(caller, function):
+                errors.append(f"required caller edge missing: {caller} -> {function}")
     return errors
 
 
 def selftest() -> int:
     clean = {"a.rs": 2, "b.rs": 3}
     cases = [
-        ("clean", clean, clean, (2, 5), 1, 0),
-        ("missing file", {"a.rs": 2}, clean, (2, 5), 1, 1),
-        ("stale file", {**clean, "old.rs": 1}, clean, (2, 5), 1, 1),
-        ("line drift", {"a.rs": 1, "b.rs": 3}, clean, (2, 5), 1, 1),
-        ("total drift", clean, clean, (2, 6), 1, 1),
-        ("missing total", clean, clean, None, 1, 1),
-        ("duplicate ledger", clean, clean, (2, 5), 2, 1),
+        ("clean", clean, clean, (2, 5), 1, "exact", 0),
+        ("missing file", {"a.rs": 2}, clean, (2, 5), 1, "exact", 1),
+        ("stale file", {**clean, "old.rs": 1}, clean, (2, 5), 1, "exact", 1),
+        ("line drift", {"a.rs": 1, "b.rs": 3}, clean, (2, 5), 1, "exact", 1),
+        ("total drift", clean, clean, (2, 6), 1, "exact", 1),
+        ("missing total", clean, clean, None, 1, "exact", 1),
+        ("duplicate ledger", clean, clean, (2, 5), 2, "exact", 1),
+        ("forbidden marker", clean, clean, (2, 5), 1, "approximate", 1),
     ]
     failures = []
-    for label, listed, current, total, ledgers, want_errors in cases:
-        got = validate(listed, current, total, ledgers)
+    required_text = "\n".join(REQUIRED_TERMS)
+    for label, listed, current, total, ledgers, text, want_errors in cases:
+        got = validate(listed, current, total, ledgers, f"{required_text}\n{text}")
         if (len(got) == 0) != (want_errors == 0):
             failures.append(f"{label}: expected {'pass' if want_errors == 0 else 'failure'}, got {got}")
     if failures:
@@ -89,7 +155,6 @@ def main() -> int:
 
     text = ROADMAP.read_text(encoding="utf-8")
     listed = {path: int(lines.replace(",", "")) for path, lines in ROW.findall(text)}
-    current = current_inventory()
     total = TOTAL.search(text)
     expected_total = (
         (int(total.group(1).replace(",", "")), int(total.group(2).replace(",", "")))
@@ -98,23 +163,23 @@ def main() -> int:
     )
     errors = validate(
         listed,
-        current,
+        current_inventory(),
         expected_total,
-        text.count("## Appendix A -- current 79-file disposition ledger"),
+        text.count(LEDGER_HEADING),
+        text,
     )
+    errors.extend(validate_caller_edges())
     if errors:
         for error in errors:
             print(f"[check-crate-extraction-roadmap] ERROR: {error}", file=sys.stderr)
         print(
-            "Refresh docs/plans/crate-extraction-execution-roadmap.md from the current source; "
-            "do not copy old line offsets forward.",
+            "Refresh the R1 roadmap from current source; do not carry forward stale line ranges or caller claims.",
             file=sys.stderr,
         )
         return 1
-
     print(
-        f"[check-crate-extraction-roadmap] ok -- {len(current)} files / "
-        f"{sum(current.values()):,} lines match the disposition ledger"
+        "[check-crate-extraction-roadmap] ok -- "
+        f"{len(listed)} files / {sum(listed.values()):,} lines and critical caller edges match"
     )
     return 0
 
