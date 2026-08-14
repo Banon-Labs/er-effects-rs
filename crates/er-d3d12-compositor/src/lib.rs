@@ -240,7 +240,7 @@ unsafe fn install_hooks() -> bool {
         }
     }
 
-    let Some((present_addr, present1_addr)) = (unsafe { resolve_present_addrs() }) else {
+    let Some((present_addr, present1_addr)) = resolve_present_addrs() else {
         log(format_args!(
             "loading-bar-present: could not resolve dummy swapchain Present addrs"
         ));
@@ -351,7 +351,13 @@ unsafe extern "system" fn dummy_wndproc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
+/// Resolve `IDXGISwapChain::Present` and `IDXGISwapChain1::Present1` from a temporary D3D12
+/// swapchain. This is the process-wide deep owner of the dummy window, device, queue, swapchain
+/// descriptor, and vtable walk used by both the standalone compositor and product callers.
+///
+/// The temporary window and class are released before this returns. Only the two function addresses
+/// escape the helper.
+pub fn resolve_present_addrs() -> Option<(usize, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)).ok()?;
         let mut device_opt: Option<ID3D12Device> = None;
@@ -374,7 +380,7 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
             ..Default::default()
         };
         let _ = RegisterClassW(&wc);
-        let hwnd = CreateWindowExW(
+        let hwnd = match CreateWindowExW(
             WINDOW_EX_STYLE(0),
             class_name,
             w!("er-loading-bar-dummy"),
@@ -387,8 +393,13 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
             None,
             Some(hinstance.into()),
             None,
-        )
-        .ok()?;
+        ) {
+            Ok(hwnd) => hwnd,
+            Err(_) => {
+                let _ = UnregisterClassW(class_name, Some(hinstance.into()));
+                return None;
+            }
+        };
         let desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: 64,
             Height: 64,
@@ -405,11 +416,10 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
             AlphaMode: DXGI_ALPHA_MODE_UNSPECIFIED,
             Flags: 0,
         };
-        let swapchain: IDXGISwapChain1 = factory
-            .CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None)
-            .ok()?;
+        let swapchain_result = factory.CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None);
         let _ = DestroyWindow(hwnd);
         let _ = UnregisterClassW(class_name, Some(hinstance.into()));
+        let swapchain: IDXGISwapChain1 = swapchain_result.ok()?;
         let obj = swapchain.as_raw() as *const *const usize;
         let vtable = *obj;
         let present_addr = *vtable.add(PRESENT_VTABLE_INDEX) as usize;
