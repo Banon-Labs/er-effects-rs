@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use er_loading_portrait::TITLE_PROFILE_SLOT_COUNT;
+
 use crate::experiments::trace::native_result_map_hooks::menu_item_action_summary;
 use crate::{
     CAP_APPEND_ONE_ORIG, CAP_BUILDER_ORIG, CAP_CSMENU_CTOR_COUNT, CAP_CSMENU_CTOR_LOG_FIRST,
