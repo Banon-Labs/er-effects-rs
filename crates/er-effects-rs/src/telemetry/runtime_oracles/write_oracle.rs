@@ -120,8 +120,14 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
             None => "null".to_owned(),
         }
     };
+    let global_move_map_tasks_disabled = crate::experiments::game_module_base()
+        .ok()
+        .and_then(|base| unsafe {
+            crate::experiments::safe_read_u8(base + MOVEMAPSTEP_GLOBAL_DISABLE_RVA)
+        })
+        .map_or(-1, i64::from);
     body.push_str(&format!(
-        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n  \"oracle_mms_next_step_4c\": {},\n  \"oracle_mms_done_flag_50\": {},\n  \"oracle_mms_countdown_100\": {},\n  \"oracle_mms_hold_timer_270_bits\": {},\n  \"oracle_mms_advance_gate_lo_4b8\": {},\n  \"oracle_mms_advance_gate_hi_4b9\": {},\n",
+        "  \"oracle_mms_child_ez08_step\": {},\n  \"oracle_mms_child_ez10\": {},\n  \"oracle_mms_child_ez18\": {},\n  \"oracle_mms_child_ez20\": {},\n  \"oracle_mms_child_ez28\": {},\n  \"oracle_mms_child_step10\": {},\n  \"oracle_mms_child_step18\": {},\n  \"oracle_mms_child_step40\": {},\n  \"oracle_mms_child_step48\": {},\n  \"oracle_mms_next_step_4c\": {},\n  \"oracle_mms_done_flag_50\": {},\n  \"oracle_mms_countdown_100\": {},\n  \"oracle_mms_pause_game_128\": {},\n  \"oracle_mms_disable_tasks_348\": {},\n  \"oracle_mms_force_tasks_349\": {},\n  \"oracle_mms_hold_timer_270_bits\": {},\n  \"oracle_mms_task_registration_4b8\": {},\n  \"oracle_mms_advance_gate_lo_4b8\": {},\n  \"oracle_mms_advance_gate_hi_4b9\": {},\n  \"oracle_mms_control_enable_4ba\": {},\n  \"oracle_mms_global_tasks_disabled\": {global_move_map_tasks_disabled},\n",
         cb(0x08),
         cb(0x10),
         cb(0x18),
@@ -134,9 +140,14 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         mms_i32(MOVEMAPSTEP_NEXT_STEP_4C_OFFSET),
         mms_i32(MOVEMAPSTEP_DONE_FLAG_50_OFFSET),
         mms_i32(MOVEMAPSTEP_COUNTDOWN_100_OFFSET),
+        mms_u8(MOVEMAPSTEP_PAUSE_GAME_128_OFFSET),
+        mms_u8(MOVEMAPSTEP_DISABLE_TASKS_348_OFFSET),
+        mms_u8(MOVEMAPSTEP_FORCE_TASKS_349_OFFSET),
         mms_u32_hex(MOVEMAPSTEP_HOLD_TIMER_270_OFFSET),
+        mms_u8(MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET),
         mms_u8(MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET),
         mms_u8(MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET),
+        mms_u8(MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET),
     ));
     // LOAD2 BLOCK-STREAMING discriminator (bd menu-open-works-real-blocker-is-load2-mms18-completion-
     // block-streaming-0x35): the loadlist is POPULATED yet load2 stalls at WorldResWait, so scan the
@@ -357,6 +368,21 @@ fn write_player_presence_oracle(body: &mut String) {
         let bp = player.block_position;
         let chr_model_ins_ptr = player.chr_ins.chr_model_ins.as_ptr() as usize;
         let chr_ctrl_ptr = player.chr_ins.chr_ctrl.as_ptr() as usize;
+        let chr_ctrl_lua_event_flags = unsafe {
+            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET)
+        }
+        .unwrap_or(0);
+        let chr_ctrl_disable_move = unsafe {
+            crate::experiments::safe_read_u8(chr_ctrl_ptr + CHRCTRL_DISABLE_MOVE_E9_OFFSET)
+        }
+        .map(|value| value != 0)
+        .unwrap_or(true);
+        // 1.16.2 `ChrCtrl` movement update (`FUN_1403cbff0`) accepts native movement only when
+        // logic-enable bit 5 and MoveMap control-enable bit 6 are both set and disableMove is false.
+        // This is the direct downstream predicate that distinguishes an ignored full-forward pad
+        // packet from a native-control handoff failure.
+        let native_controls_enabled =
+            chr_ctrl_lua_event_flags & 0x60 == 0x60 && !chr_ctrl_disable_move;
         let chr_draw_group_enabled = player.chr_ins.load_state.draw_group_enabled();
         let chr_render_group_enabled = player.chr_ins.chr_flags1c4.is_render_group_enabled();
         let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
@@ -374,7 +400,7 @@ fn write_player_presence_oracle(body: &mut String) {
             && chr_render_group_enabled
             && chr_enable_render;
         body.push_str(&format!(
-            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n  \"oracle_chr_model_ins_present\": {},\n  \"oracle_chr_ctrl_present\": {},\n  \"oracle_chr_draw_group_enabled\": {},\n  \"oracle_chr_render_group_enabled\": {},\n  \"oracle_chr_onscreen\": {},\n  \"oracle_chr_enable_render\": {},\n  \"oracle_player_render_ready\": {},\n",
+            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n  \"oracle_chr_model_ins_present\": {},\n  \"oracle_chr_ctrl_present\": {},\n  \"oracle_chr_ctrl_lua_event_flags\": {},\n  \"oracle_chr_ctrl_disable_move\": {},\n  \"oracle_native_controls_enabled\": {},\n  \"oracle_chr_draw_group_enabled\": {},\n  \"oracle_chr_render_group_enabled\": {},\n  \"oracle_chr_onscreen\": {},\n  \"oracle_chr_enable_render\": {},\n  \"oracle_player_render_ready\": {},\n",
             pos.0,
             pos.1,
             pos.2,
@@ -386,6 +412,9 @@ fn write_player_presence_oracle(body: &mut String) {
             bp.z,
             chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
             chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
+            chr_ctrl_lua_event_flags,
+            chr_ctrl_disable_move,
+            native_controls_enabled,
             chr_draw_group_enabled,
             chr_render_group_enabled,
             chr_onscreen,
