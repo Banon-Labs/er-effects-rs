@@ -229,22 +229,13 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
 /// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
 /// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
-/// the next switch, not just the last. Fallback: if the load cannot latch within this window (drift /
-/// contention / a genuinely non-movable load) arm anyway on the game-global signature so the sequence
-/// never hangs -- the run then records that load as not-proven rather than stalling.
+/// the next switch, not just the last. Reaching this timeout emits a failed-epoch verdict and leaves the
+/// harness parked; it never advances past an unproven load.
 pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
-/// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
-/// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
-/// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly
-/// the user's "character does not show up + can't move, but the menu still opens" state) and force-
-/// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
-/// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
-/// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
-/// Sized for the can_move (input-registered) gate: a MOVABLE reload must settle in-world (~20s of
-/// SetState5 streaming after WAIT_RELOAD entry) AND then have the move-probe prove 60 frames of injected
-/// motion (~2s) before this deadline, else it is misread as frozen. A FROZEN reload never proves and is
-/// force-advanced here (per parity, the next load recovers it). ~900f (~28s at 32fps) clears a real
-/// reload+prove while staying tight enough that a 3-load chain finishes inside the runtime cap.
+/// FREEZE VERDICT DEADLINE. Frames the WAIT_RELOAD gate allows a reload to prove genuine movement
+/// before emitting a one-shot frozen-epoch verdict. The harness does NOT advance to another switch on
+/// this deadline: doing so overwrote the still-open portrait target and made the failed epoch disappear
+/// under a recovery load. The bounded run's global cap owns teardown if movement never proves.
 pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
 /// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
