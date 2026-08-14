@@ -51,6 +51,11 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# RUNS them on the host.
 	echo "[check-rust-build] cargo xwin check --tests -p er-telemetry --target $target"
 	cargo xwin check --tests -p er-telemetry --manifest-path "$repo_root/Cargo.toml" --target "$target"
+	# The Scaleform hook owner is a library, not a default member and not yet linked by a
+	# product until R24 moves the first hook family. Keep its Windows-only er-hook edge and
+	# test module compiling from the R23 skeleton onward.
+	echo "[check-rust-build] cargo xwin check --tests -p er-scaleform-hooks --target $target"
+	cargo xwin check --tests -p er-scaleform-hooks --manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# Save-picker split crates (docs/plans/save-picker-crate-extraction.md). None is a
 	# default-member, and the two DLL shells are not depended on by anything, so without
 	# this line nothing in any gate would compile them for the shipping target.
