@@ -1,13 +1,14 @@
-//! Standalone ME3-loadable shell for product (B), the customized System>Quit menu.
+//! Optional ME3-loadable harness for product (B), the customized System>Quit menu.
 //!
-//! SCAFFOLDING ONLY (phase 1 of docs/plans/save-picker-crate-extraction.md): the shell
-//! exists, logs its attach, and installs a standalone host seam. It arms nothing yet,
-//! because `er-quit-menu` still has no moved code to arm.
+//! Required product behavior is statically linked into the single shipped
+//! `er_effects_rs.dll`; its product profile never requires this shell. The harness exists
+//! for isolated/coexistence tests, logs its attach, and installs a standalone host seam.
+//! It arms nothing yet because `er-quit-menu` still has no moved code to arm.
 //!
-//! Unlike `er-loading-portrait-dll`, this DLL is meant to be loaded ALONGSIDE the product
-//! and the other companions. It contends on game addresses the product also hooks, so its
-//! detours go through the `er-hook` union -- never a bare `MhHook::new` -- and the union
-//! owner is elected at load time rather than assumed to be `er_effects_rs.dll`.
+//! An explicit coexistence test may load this harness alongside the product or companions.
+//! It contends on game addresses the product also hooks, so its detours go through the
+//! `er-hook` union -- never a bare `MhHook::new` -- and the union owner is elected at load
+//! time rather than assumed to be `er_effects_rs.dll`.
 
 #![allow(non_snake_case)]
 
