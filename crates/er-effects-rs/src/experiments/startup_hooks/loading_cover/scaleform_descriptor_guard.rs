@@ -4,7 +4,7 @@
 //! mechanism. This wrapper owns product logging and remains the attach-time
 //! call target, so startup ordering does not move with the hook implementation.
 
-use super::*;
+use crate::telemetry::append_autoload_debug;
 use er_scaleform_hooks::{
     DescriptorGuardInstall, DescriptorGuardInstallError,
     install_scaleform_descriptor_guard as install_native_scaleform_descriptor_guard,
