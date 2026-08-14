@@ -176,9 +176,6 @@ pub(crate) use system_quit_dialog_handlers::*;
 pub(crate) mod save_flow_boxes;
 pub(crate) use save_flow_boxes::*;
 
-pub(crate) mod save_dest_identity;
-pub(crate) use save_dest_identity::*;
-
 pub(crate) mod save_dest_commit;
 pub(crate) use save_dest_commit::*;
 
@@ -187,9 +184,6 @@ pub(crate) use save_picker_menu::*;
 
 pub(crate) mod save_picker_path_editor;
 pub(crate) use save_picker_path_editor::*;
-
-pub(crate) mod save_picker_dim_overlay;
-pub(crate) use save_picker_dim_overlay::*;
 
 pub(crate) mod save_swap_profile_table;
 pub(crate) use save_swap_profile_table::*;

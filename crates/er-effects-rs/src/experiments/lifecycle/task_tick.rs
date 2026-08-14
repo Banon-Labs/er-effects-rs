@@ -1,6 +1,7 @@
 //! Per-frame experiment and product lifecycle orchestration.
 
 use super::*;
+use er_title_flow::dlc_roots_self_heal_tick;
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // PROFILE-SWITCH RELOAD SOFTLOCK FIX (bd

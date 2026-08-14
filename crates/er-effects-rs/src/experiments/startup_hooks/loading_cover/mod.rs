@@ -184,6 +184,3 @@ pub(crate) use scaleform_descriptor_guard::*;
 
 pub(crate) mod window_reconfig_observer;
 pub(crate) use window_reconfig_observer::*;
-
-pub(crate) mod dlc_roots_self_heal;
-pub(crate) use dlc_roots_self_heal::*;
