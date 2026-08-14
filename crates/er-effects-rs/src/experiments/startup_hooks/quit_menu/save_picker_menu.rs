@@ -125,8 +125,7 @@ pub(crate) unsafe fn save_picker_write_row_records(
         .min(crate::experiments::save_picker::PICKER_ROW_COUNT);
     unsafe {
         for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            let record =
-                summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+            let record = profile_summary_record_address(summary, slot);
             core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
             if slot >= visible {

@@ -44,7 +44,7 @@ pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
     if !valid(summary) {
         return 0;
     }
-    let rec = summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let rec = profile_summary_record_address(summary, slot as usize);
     unsafe { portrait_record_name_hash(rec) }
 }
 
