@@ -124,6 +124,10 @@ Default runtime research mode is telemetry-only/non-fatal diagnostics. Treat del
 
 User steering is not evidence. When the user proposes a concrete technical hypothesis or fallback during RE/runtime work, treat it as a lead to verify, not as ground truth and not as permission to skip research. Before implementing a user-steered objective claim, inspect the current static/runtime evidence that could confirm or falsify it, state the verified delta in the work artifacts/logs, and only then choose the next code change. If the evidence contradicts part of the steering, preserve the valid intent but correct the mechanism instead of reflexively agreeing.
 
+### Prose-to-knowledge gate
+
+If and only if the agent's recent user-facing prose referred to an entity, identifier, plan node, claim, or term as meaningful but the agent did not have enough information to communicate what that prose meant, the agent must say plainly that it does not know what the referenced thing is **before** starting any search, lookup, or inspection to clarify it. The admission must be user-visible in the same turn and precede every relevant tool call. Do not replace it with a tentative definition, a plan built on the unknown term, or search narration. If that admission was not made first, do not perform the clarifying lookup in that turn.
+
 ## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)
 
 `linux-x86-debug` main landed runtime DLL injection support on 2026-06-27. Use it as a sibling toolkit for Wine/Proton Elden Ring runtime inspection when an attach-based path is safer than baking a probe into the chainloader:
