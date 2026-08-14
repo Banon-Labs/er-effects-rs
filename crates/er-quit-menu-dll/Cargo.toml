@@ -1,8 +1,9 @@
-# Thin standalone ME3-loadable shell for the `er-quit-menu` feature crate (product B):
-# own DllMain, own log file, individually shippable.
+# Optional standalone ME3-loadable HARNESS for the `er-quit-menu` feature crate (product B):
+# own DllMain and own log file for isolated/coexistence tests. Required product behavior is
+# statically linked into er_effects_rs.dll; the shipped product profile never lists this DLL.
 #
-# It is designed to COEXIST: a profile may list either new DLL, both, neither, and any
-# combination with the product and the other companions (user requirement 2026-07-30).
+# Harness matrices may explicitly load this DLL alone or alongside companions. That does not
+# make it a second product artifact or a dependency of the supported product profile.
 # This one DOES contend on real game addresses (0x920c90 AddCancelButton, 0x9a4670
 # ProfileLoad activate, 0x875590 the ProfileSelect list builder, 0x7ac720 ~MenuWindowJob,
 # 0xd3ed90 the quit clean-kill, ...), several of which the product DLL also hooks. So every

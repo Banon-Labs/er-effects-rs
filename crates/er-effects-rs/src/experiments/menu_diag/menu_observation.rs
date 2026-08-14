@@ -1,48 +1,21 @@
-use std::{
-    ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+use std::sync::atomic::Ordering;
+
+use crate::{
+    constants::{
+        CONTINUE_CONFIRM_RVA, DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET, DIALOG_SLOT_BOUND_B08_OFFSET,
+        DIALOG_SLOT_CURSOR_B0C_OFFSET, LIVE_DIALOG_FACTORY_RVA, MENU_ITEM_FUNCTOR_A8_OFFSET,
+        MENU_ROUTER_THIS, ROUTER_THIS_VTABLE_RVA, TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+        TITLE_OWNER_MENU_LIST_130_OFFSET, TITLE_OWNER_SCAN_START_ADDRESS,
+        TITLE_OWNER_STATE_COMMITTED_OFFSET, TITLE_STATE_OWNER_GONE, TITLE_TOP_DIALOG_VTABLE_RVA,
+        TRACE_MENU_CONTINUE_WRAPPER_RVA,
     },
-    time::{Duration, Instant},
-};
-
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
+    experiments::{
+        MENU_CONTINUE_DOCALL, MENU_CONTINUE_ENTRY, MENU_CONTINUE_FUNCTOR, MENU_CONTINUE_INDEX,
+        MENU_CONTINUE_ROUTER,
     },
-    core::{BOOL, PCSTR},
+    telemetry::append_autoload_debug,
 };
-
-#[allow(unused_imports)]
-use crate::*;
-#[allow(unused_imports)]
-use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
-
-use super::*;
+use er_game_base::mem::{safe_read_i32, safe_read_usize};
 
 /// Decode one x86-64 jmp-thunk hop. Matches either `add rcx,8 ; jmp rel32` (the MSVC
 /// `std::function` `_Do_call` thunk family the FD4 menu-item action functor routes

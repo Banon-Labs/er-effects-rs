@@ -3060,6 +3060,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-scaleform-hooks"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
+]
+
+[[package]]
 name = "er-shader-viewer"
 version = "0.1.0"
 dependencies = [
