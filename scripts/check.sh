@@ -48,6 +48,10 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# FNV-1a has one zero-dependency owner below every caller. Prove the scanner catches copied
+# implementations before trusting the live ownership check.
+python3 "$repo_root/scripts/check-fnv1a-owner.py" --selftest
+python3 "$repo_root/scripts/check-fnv1a-owner.py"
 # One game address must have exactly ONE literal declaration. Divergent names for one address are
 # divergent CLAIMS about what it is; three turned out to be wrong RE facts shipping in the DLL
 # (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,
@@ -119,6 +123,12 @@ python3 "$repo_root/scripts/er-launch-gate.py" --selftest
 # extraction corpus is absent, so this is safe on a machine without it.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
 
+# Scaleform's native hook owner stays host-testable at its dependency-injection seam even
+# before R24 moves the first hook family. The er-gfx architecture test above enforces the
+# one-way codec dependency; this test proves the narrow callback remains inert-by-default
+# and install-once.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-scaleform-hooks --lib
+
 # er-save-loader's host-portable save decoding: BND4 slot bodies + the PlayerGameData
 # stats/vitals reads the loading-screen stats panel sources pre-mount. Save-byte tests are
 # corpus-gated (skip when local save-files/ fixtures are absent; game-derived bytes are
@@ -166,6 +176,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 # level up. This makes the list's completeness executable.
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
+
+# Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
+# er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
+# the default build, staged product payload, or required ME3 native list.
+python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
+python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
 

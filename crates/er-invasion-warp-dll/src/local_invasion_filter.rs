@@ -65,6 +65,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 use er_invasion_warp::local_invasion::{
     InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, LocationChoice,
     RejectReason, Verdict,
@@ -525,17 +526,6 @@ fn read_std_string(at: usize) -> Option<String> {
     Some(out)
 }
 
-/// FNV-1a, so "did the key change" costs no allocation and no stored string.
-#[cfg(windows)]
-fn hash_of(value: &str) -> usize {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash as usize
-}
-
 /// `BuildLobbyKey(ctx, out)` -- observed, never altered.
 ///
 /// Runs the original first, then reads the string it produced. Reading BEFORE the call would see
@@ -558,7 +548,7 @@ unsafe extern "system" fn build_lobby_key_observer(
 
     LOBBY_KEY_DERIVATIONS.fetch_add(1, Ordering::SeqCst);
     if let Some(key) = read_std_string(out) {
-        let hash = hash_of(&key);
+        let hash = fnv1a64(key.as_bytes()) as usize;
         if LAST_LOBBY_KEY_HASH.swap(hash, Ordering::SeqCst) != hash {
             let changes = LOBBY_KEY_CHANGES.fetch_add(1, Ordering::SeqCst) + 1;
             crate::standalone_log(format_args!(
@@ -993,10 +983,9 @@ pub fn pin_appearance_for(block: Option<u32>) -> PinAppearance {
 /// notice the pins are unclickable by trying them, with the map already in front of you.
 #[must_use]
 pub fn pin_choice_signature() -> usize {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut hash = fnv1a64(b"");
     let mut mix = |value: u64| {
-        hash ^= value;
-        hash = hash.wrapping_mul(0x100_0000_01b3);
+        hash = fnv1a64_mix(hash, value);
     };
     mix(u64::from(
         er_invasion_warp::warp::invasion_attempt_in_flight(),

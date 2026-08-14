@@ -874,12 +874,7 @@ pub(crate) fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, Sys
 }
 
 pub(crate) fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in bytes.iter().copied() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+    er_game_base::fnv1a::fnv1a64(bytes)
 }
 
 pub(crate) fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {

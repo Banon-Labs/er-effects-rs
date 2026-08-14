@@ -2842,6 +2842,7 @@ name = "er-gfx"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
+ "er-game-base",
 ]
 
 [[package]]
@@ -3044,6 +3045,7 @@ dependencies = [
 name = "er-save-redirect"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-hook",
  "er-save-loader",
  "er-telemetry",
@@ -3055,6 +3057,16 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+]
+
+[[package]]
+name = "er-scaleform-hooks"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
 ]
 
 [[package]]

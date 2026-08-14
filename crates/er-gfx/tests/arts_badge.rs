@@ -6,10 +6,10 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::arts_badge::{
     BADGE_ICONIMAGE_INSTANCE_NAME, BADGE_INSTANCE_NAME, TARGETS, arts_badge, target_for_vanilla,
 };
-use er_gfx::title_05_000::fnv1a64;
 use er_gfx::{Movie, Tag};
 
 fn named_child<'t>(tags: &'t [Tag], want: &str) -> Option<&'t Tag> {

@@ -561,6 +561,10 @@ dialog being undimmed is current, intended, user-directed behavior.
 
 ## 6. Decisions that remain user-gated
 
+**Later resolution (roadmap D3):** the product keeps bundling B as the `er-quit-menu` library
+inside the single shipped `er_effects_rs.dll`. `er-quit-menu-dll` is an optional harness only and
+is never a required native in the product ME3 profile. This supersedes open item 2 below.
+
 Everything the user has already settled is folded in above and is **not** re-opened here:
 OS dialog -> A; dim -> B; B -> A one way; the boot dialog is not dimmed; Save Game is in scope
 and `main` is the baseline; every DLL combination must work; the OS-native surface is always
@@ -573,10 +577,9 @@ Still open, and each blocks the slice named:
    runtime; if it is, it needs a seam. Blocks S8. Answerable offline by proving whether the
    native Load Game list can be opened during the boot hold -- but it changes user-visible
    behavior either way, so the user should confirm the intent.
-2. **Does the product keep BUNDLING B, or does B become listed-only?** Bundling means the
-   product depends on `er-quit-menu` (the `er-loading-portrait` precedent) and the
-   feature-ownership election is load-bearing. Listed-only is simpler but changes what a
-   plain product profile does. Blocks S10.
+2. **RESOLVED by roadmap D3:** the product keeps bundling B through its `er-quit-menu`
+   library dependency. The standalone DLL is harness-only; a plain product profile lists only
+   `er_effects_rs.dll`.
 3. **Should the ~1950 lines of System>Quit diagnostics (SS1.4) stay, or be deleted?** They
    are agent-only and gated on the input-harness DLL's presence. Keeping them is free but
    leaves ~1300 lines of autopilot in the product; deleting them removes the ability to

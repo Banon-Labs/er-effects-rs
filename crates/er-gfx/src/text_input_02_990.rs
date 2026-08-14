@@ -7,8 +7,8 @@
 //! text-input movie's own chrome so the existing CurrentPath button remains the sole frame.
 
 use crate::profile_05_010_layout::Profile05_010Layout;
-use crate::title_05_000::fnv1a64;
 use crate::{CxformWithAlpha, GfxError, Movie, TWIPS_PER_PIXEL, Tag};
+use er_game_base::fnv1a::fnv1a64;
 
 pub const VANILLA_LEN: usize = 1141;
 pub const VANILLA_FNV1A64: u64 = 0xe896_37d7_2af0_a2c8;

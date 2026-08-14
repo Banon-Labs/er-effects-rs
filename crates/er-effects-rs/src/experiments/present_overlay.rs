@@ -17,26 +17,9 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain,
-    IDXGISwapChain1,
-};
+use windows::Win32::Graphics::Dxgi::{IDXGISwapChain, IDXGISwapChain1};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
-    UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
-};
-use windows::core::{IUnknown, Interface, w};
+use windows::core::{IUnknown, Interface};
 
 use crate::mh::{MH_Initialize, MH_STATUS};
 
@@ -380,8 +363,9 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
     }
 }
 
-/// Prep the Present overlay ONCE (early): init MinHook + build a throwaway dummy swapchain only to learn
-/// the IDXGISwapChain vtable module (the same-module hint for the runtime swapchain scan). The dummy's own
+/// Prep the Present overlay ONCE (early): init MinHook + ask `er-d3d12-compositor` to build its
+/// throwaway dummy swapchain only to learn the IDXGISwapChain vtable module (the same-module hint for
+/// the runtime swapchain scan). The dummy's own
 /// vtable funcs are NOT hooked -- under vkd3d-proton the game's swapchain is a different object, so the
 /// REAL Present hook is installed later by `try_install_game_present_hook` once the GX device is up.
 pub(crate) fn install_present_overlay_hook() {
@@ -409,7 +393,7 @@ pub(crate) fn install_present_overlay_hook() {
     }
     // Module hint only: the dummy's Present addr identifies which module implements IDXGISwapChain, so the
     // runtime BFS can filter swapchain candidates by vtable-in-that-module.
-    if let Some((present_addr, present1_addr)) = unsafe { resolve_present_addrs() } {
+    if let Some((present_addr, present1_addr)) = er_d3d12_compositor::resolve_present_addrs() {
         PRESENT_RESOLVED_ADDR.store(present_addr, Ordering::SeqCst);
         PRESENT1_RESOLVED_ADDR.store(present1_addr, Ordering::SeqCst);
         append_autoload_debug(format_args!(
@@ -599,133 +583,6 @@ fn boot_present_pump() {
         }
         let _ = tick_rx.recv_timeout(frame);
     }
-}
-
-/// Build a throwaway HWND swapchain (hidden dummy window + `CreateSwapChainForHwnd` -- composition
-/// swapchains are "Not implemented" under vkd3d/Wine) and read its `Present`/`Present1` vtable entries.
-/// All resources are local and dropped at scope end; only the function pointers are kept. NOTE: on
-/// native Windows these are a REFERENCE, not ground truth -- a co-resident overlay may wrap the game's
-/// swapchain (or ours) so the game's vtable slots legitimately differ; `find_game_swapchain` treats a
-/// slot mismatch as a fallback path, not a rejection.
-unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let factory: IDXGIFactory4 = match CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) {
-            Ok(f) => f,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateDXGIFactory2 failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        let mut device_opt: Option<ID3D12Device> = None;
-        if let Err(e) = D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device_opt) {
-            append_autoload_debug(format_args!(
-                "present-overlay: D3D12CreateDevice failed: {e:?}"
-            ));
-            return None;
-        }
-        let device = device_opt?;
-        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            Priority: 0,
-            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
-            NodeMask: 0,
-        };
-        let queue: ID3D12CommandQueue = match device.CreateCommandQueue(&queue_desc) {
-            Ok(q) => q,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateCommandQueue failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        // Hidden dummy window (Wine/vkd3d has no DirectComposition, so we need a real HWND).
-        let hinstance = match GetModuleHandleW(None) {
-            Ok(h) => h,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: GetModuleHandleW failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        let class_name = w!("ErEffectsOverlayDummyWnd");
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(dummy_wndproc),
-            hInstance: hinstance.into(),
-            lpszClassName: class_name,
-            ..Default::default()
-        };
-        let _atom = RegisterClassW(&wc);
-        let hwnd = match CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            w!("er-effects-overlay"),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            64,
-            64,
-            None,
-            None,
-            Some(hinstance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateWindowExW failed: {e:?}"
-                ));
-                let _ = UnregisterClassW(class_name, Some(hinstance.into()));
-                return None;
-            }
-        };
-        let desc = DXGI_SWAP_CHAIN_DESC1 {
-            Width: 64,
-            Height: 64,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            Stereo: false.into(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
-            Scaling: DXGI_SCALING_STRETCH,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            AlphaMode: DXGI_ALPHA_MODE_UNSPECIFIED,
-            Flags: 0,
-        };
-        let swapchain_res = factory.CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None);
-        let _ = DestroyWindow(hwnd);
-        let _ = UnregisterClassW(class_name, Some(hinstance.into()));
-        let swapchain: IDXGISwapChain1 = match swapchain_res {
-            Ok(s) => s,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateSwapChainForHwnd failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        // The COM object's first qword is the vtable pointer; read Present(8) + Present1(22).
-        let obj = swapchain.as_raw() as *const *const usize;
-        let vtable = *obj;
-        let present_addr = *vtable.add(PRESENT_VTABLE_INDEX) as usize;
-        let present1_addr = *vtable.add(PRESENT1_VTABLE_INDEX) as usize;
-        append_autoload_debug(format_args!(
-            "present-overlay: resolved Present=0x{present_addr:x} Present1=0x{present1_addr:x}"
-        ));
-        if present_addr > 0x10000 && present1_addr > 0x10000 {
-            Some((present_addr, present1_addr))
-        } else {
-            None
-        }
-    }))
-    .ok()
-    .flatten()
 }
 
 /// Best-effort log of the swapchain's backbuffer dims/format (separate from the fired-log so a GetDesc1
@@ -1087,13 +944,4 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
         now8 == present_hook as usize,
         now22 == present1_hook as usize,
     ));
-}
-
-unsafe extern "system" fn dummy_wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }

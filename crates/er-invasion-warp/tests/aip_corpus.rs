@@ -18,9 +18,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use er_game_base::fnv1a::fnv1a64;
 use er_invasion_warp::{
-    AIP_FINGERPRINT_BASE, AIP_FINGERPRINT_DLC02, AipContainerFingerprint, BlockKey, fnv1a64,
-    parse_aip,
+    AIP_FINGERPRINT_BASE, AIP_FINGERPRINT_DLC02, AipContainerFingerprint, BlockKey, parse_aip,
 };
 
 const DEFAULT_CORPUS_ROOT: &str =
