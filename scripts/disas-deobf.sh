@@ -5,7 +5,17 @@
 # Set ER_DISAS_COLOR=always to force ANSI escapes through non-TTY capture layers.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMG="$SCRIPT_DIR/../eldenring-deobf.bin"
+IMG="${ER_DEOBF_IMAGE:-$SCRIPT_DIR/../eldenring-deobf.bin}"
+if [[ ! -f "$IMG" ]] && GIT_COMMON_DIR="$(git -C "$SCRIPT_DIR/.." rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+  WORKSPACE_IMAGE="$(dirname "$GIT_COMMON_DIR")/eldenring-deobf.bin"
+  if [[ -f "$WORKSPACE_IMAGE" ]]; then
+    IMG="$WORKSPACE_IMAGE"
+  fi
+fi
+if [[ ! -f "$IMG" ]]; then
+  echo "Missing deobfuscated image: $IMG (set ER_DEOBF_IMAGE to override)" >&2
+  exit 1
+fi
 COLORIZER="$SCRIPT_DIR/colorize-disasm.py"
 COLOR="${ER_DISAS_COLOR:-auto}"
 if [[ "${1:-}" == --color=* ]]; then
