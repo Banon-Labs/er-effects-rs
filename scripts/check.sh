@@ -115,6 +115,12 @@ python3 "$repo_root/scripts/er-launch-gate.py" --selftest
 # extraction corpus is absent, so this is safe on a machine without it.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
 
+# Scaleform's native hook owner stays host-testable at its dependency-injection seam even
+# before R24 moves the first hook family. The er-gfx architecture test above enforces the
+# one-way codec dependency; this test proves the narrow callback remains inert-by-default
+# and install-once.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-scaleform-hooks --lib
+
 # er-save-loader's host-portable save decoding: BND4 slot bodies + the PlayerGameData
 # stats/vitals reads the loading-screen stats panel sources pre-mount. Save-byte tests are
 # corpus-gated (skip when local save-files/ fixtures are absent; game-derived bytes are
