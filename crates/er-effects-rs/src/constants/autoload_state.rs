@@ -17,20 +17,6 @@ pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize =
     ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
 pub(crate) use er_title_flow::MEMBERFUNCJOB_VTABLE_RVA;
 pub(crate) use er_title_flow::DIALOG_ROW_REGISTRY_A48_OFFSET;
-/// NATIVE-LOAD fire latch states (one-shot: fire the Load-Game run exactly once).
-pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
-pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
-pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
-pub(crate) static NATIVE_LOAD_LAST_NODE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_NODE_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_FN: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_ADJUST: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).
@@ -230,10 +216,8 @@ pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
 pub(crate) use er_title_flow::ONLINE_DISABLE_RVA;
-pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
+pub(crate) use er_title_flow::ONLINE_DISABLE_EXPECTED_FIRST;
 pub(crate) use er_title_flow::ONLINE_DISABLE_STUB;
-pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
-pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
 // Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
@@ -771,7 +755,8 @@ pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
 // The Save Game row press opens the shipping `05_010` picker REPURPOSED as a save-destination
-// chooser (row 0 is a pinned `[ new ]`), and the commit writes there instead of the loaded save by
+// chooser (`[ new ]` is the initial selection, below the always-first drive row when present), and
+// the commit writes there instead of the loaded save by
 // diverting the native writer's single container write-open. See `save_dest_commit.rs`. A pick
 // that resolves back to the LOADED save is recognised as such and routed to the sanctioned
 // in-place overwrite -- with the up-front "Overwrite your loaded save?" box gone, that is the ONLY

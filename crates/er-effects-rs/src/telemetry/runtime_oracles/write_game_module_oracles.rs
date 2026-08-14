@@ -1,3 +1,18 @@
+/// A completed self-pump draw can lose the handoff race before it is presented, so successful
+/// draws must be compared with self-attributed full clears rather than submitted self-presents.
+fn boot_view_present_cover_failed(
+    pump_stop_reason: usize,
+    boot_view_stopped: usize,
+    draws: usize,
+    self_full_clears: usize,
+    present_full_clears: usize,
+) -> bool {
+    pump_stop_reason == 1
+        && boot_view_stopped == 0
+        && draws > self_full_clears
+        && present_full_clears == 0
+}
+
 fn write_game_module_oracles(body: &mut String) {
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). Current EMA fps + the
     // per-epoch WORST-frame fps (min), written each game-task frame by lifecycle from delta_time.
@@ -625,6 +640,7 @@ fn write_game_module_oracles(body: &mut String) {
             format_optional_ptr(rend_slot_78),
             format_optional_ptr(csgraphics_field68),
         ));
+        let msgbox_total_builds = MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
             NULL_PTR
@@ -1108,7 +1124,8 @@ fn write_game_module_oracles(body: &mut String) {
             json_escape(&loaded_peak_name)
         ));
         body.push_str(&format!(
-            "  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
+            msgbox_total_builds,
             blocking_modal_present,
             msgbox_dialog,
             msgbox_vtable,
@@ -2074,16 +2091,33 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_winreconfig_early_apply_rect",
             WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
         );
+        let pump_stop_reason = BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst);
+        let boot_view_stopped = BOOT_VIEW_STOPPED.load(Ordering::SeqCst);
+        // A composite attributes its clear before incrementing DRAW_HITS. Read draws first so a
+        // concurrent composite can only make attribution newer than draws, never the reverse tuple
+        // that would latch a false failure while the Present-path clear is still in flight.
+        let draws = BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst);
         let self_presents = BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst);
+        let self_full_clears = BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         let present_full_clears = BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         push_json_usize(body, "oracle_boot_view_self_presents", self_presents);
-        push_json_usize(body, "oracle_boot_view_self_full_clear_hits", BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst));
-        push_json_usize(body, "oracle_boot_view_present_full_clear_hits", present_full_clears);
-        if BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1
-            && BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0
-            && BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) > self_presents
-            && present_full_clears == 0
-        {
+        push_json_usize(
+            body,
+            "oracle_boot_view_self_full_clear_hits",
+            self_full_clears,
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_present_full_clear_hits",
+            present_full_clears,
+        );
+        if boot_view_present_cover_failed(
+            pump_stop_reason,
+            boot_view_stopped,
+            draws,
+            self_full_clears,
+            present_full_clears,
+        ) {
             BOOT_VIEW_PRESENT_COVER_FAILURES.store(1, Ordering::SeqCst);
         }
         let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
@@ -3136,14 +3170,8 @@ fn write_game_module_oracles(body: &mut String) {
             SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
-            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
+            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),
-            NATIVE_LOAD_FIRED.load(Ordering::SeqCst) == NATIVE_LOAD_FIRED_YES,
-            NATIVE_LOAD_LAST_NODE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_NODE_VTABLE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_DIALOG.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_FN.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_ADJUST.load(Ordering::SeqCst),
             title_custom_cover_profile_source_ready,
             TITLE_CUSTOM_COVER_SYSTEX_TARGET,
             TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,

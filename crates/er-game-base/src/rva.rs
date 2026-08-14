@@ -80,3 +80,32 @@ pub const SET_MOVE_MAP_STEP_BLOCK_ID_RVA: usize = 0x67abd0;
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 /// `CSMenuMan` -> `menuData` pointer field offset.
 pub const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+
+/// `CS::GetGR_System_Message(MenuString* rcx, int edx)` -- resolves a `GR_System_Message` FMG id
+/// into a `MenuString`.
+///
+/// Cross-cutting because two DLLs reach it for opposite reasons: `er-effects-rs` hooks it READ-ONLY
+/// to detect corrupted-save popups by message id, and `er-invasion-warp-dll` calls it to build a
+/// `MenuString` for the system-message banner. Declared twice with different names until 2026-08-06,
+/// which is exactly the alias drift this module exists to stop.
+///
+/// CORRECTED HISTORY worth keeping: 0x762e30 is `GetTextEmbedImageName`, NOT this. Hooking that one
+/// is why a corrupted-save oracle once stayed at zero forever.
+pub const GR_SYSTEM_MESSAGE_RVA: usize = 0x762d50;
+
+/// Shared `CS::MessageBoxDialog` function/vtable RVAs.
+///
+/// These are cross-cutting game identities consumed by title flow, telemetry, and the product's
+/// startup/quit paths. Keep the values here so a version correction cannot drift between crates.
+#[repr(usize)]
+pub enum MsgBoxRva {
+    ForceStop = 0x78dfd0,
+    OkHandler = 0x78e030,
+    MultiChoiceGetter = 0x7b0cf0,
+    Builder = 0x9275b0,
+    OnDecide = 0x927ba0,
+    Update = 0x927d30,
+    DialogVtable = 0x2b03550,
+}
+
+pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;

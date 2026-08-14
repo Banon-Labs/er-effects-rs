@@ -1,0 +1,51 @@
+# er-invasion-warp -- "only match other DLL users, anywhere in the world" test config.
+#
+# Drop in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp.toml
+# (overwrite whatever is there -- same schema, just preset for this test)
+#
+# BOTH of you need this file and the SAME DLL. Nothing else has to match:
+#   - your Seamless co-op passwords do NOT need to match (measured: two players with different
+#     passwords invaded each other successfully)
+#   - your locations do NOT need to match (location filtering is off below)
+#   - your character levels and weapon levels DO still need to be in Seamless's normal
+#     matchmaking range -- that is the game's own rule and this mod cannot change it
+#
+# Edits take effect immediately; the file is re-read when the next match arrives. No restart.
+
+[local_invasion]
+
+# OFF for this test. With this off, the mod does no location filtering at all -- every match
+# lands, exactly like playing without the mod. That is deliberate: it makes the test unambiguous,
+# because any invasion that happens is a real match rather than something the filter allowed.
+enabled = false
+
+# Irrelevant while `enabled = false`, left at the default.
+mode = "exact"
+
+# MUST stay false. Hunt narrows the search to a location key, which is a different feature and
+# would confuse this test.
+hunt = false
+
+# THE THING BEING TESTED.
+#
+# Seamless finds worlds using a `lobby_key` that is a fingerprint of your game's params and
+# Seamless build -- it is NOT your co-op password. This rewrites that key into a pool of our own.
+# One value drives both the search and the advertisement, so the effect is symmetric: while this
+# is ON you can only ever meet other people running this DLL with this same option ON, whether you
+# are hosting or invading. Everyone else is invisible to you, and you are invisible to them.
+#
+# So: turn it on, both of you, at the same time. If one of you has it off, you will not find each
+# other -- that is the feature working, not a failure.
+dll_users_only = true
+
+# Puts a short message on screen when a match is refused, e.g. "Rejected m60_42_36_00 (elsewhere)".
+# Harmless here -- with `enabled = false` nothing is refused, so you should never see one. If you
+# DO see one during this test, something is wrong and it is worth reporting.
+reject_notice = true
+
+# Unused for this test; left at defaults so the file is complete.
+allowed_blocks = []
+blocked_blocks = []
+named_location_text_ids = []
+mark_key = "Insert"
+unmark_key = "Delete"

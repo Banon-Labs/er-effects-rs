@@ -5,6 +5,7 @@
 //! hooks apply.
 
 use crate::layout::STATS_ATTR_COUNT;
+use er_gfx::title_05_010::DRIVE_CELL_CAPACITY;
 
 /// Number of ProfileSelect save slots addressed by the stats-panel neutral backgrounds.
 pub const STATS_PANEL_SLOT_COUNT: usize = 10;
@@ -140,7 +141,15 @@ fn build_title_stats_html_utf16_with(
     s.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-/// Which of a ProfileSelect row's native per-slot info fields should be on screen.
+/// Which of a ProfileSelect row's fields should be on screen.
+///
+/// This must name EVERY field any row kind writes, not just the native per-slot ones. The row clips
+/// are recycled between the character-slot list, the file-browse list and the drive list, so a field
+/// that one kind writes and another never mentions keeps the first kind's text. That is not
+/// hypothetical: the attribute line (`ErCharStats`) written on character rows reappeared over the
+/// browse rows, and the drive-letter cells written on drive rows reappeared over the character rows,
+/// both surviving a character load, because this struct covered only `level`/`location`/`play_time`
+/// while five other fields were left unstated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowSlotFieldVisibility {
     /// The `Level` FMG caption and the level value, which live and die together.
@@ -149,24 +158,102 @@ pub struct RowSlotFieldVisibility {
     pub location: bool,
     /// The bottom-right `PlayTime` field.
     pub play_time: bool,
+    /// `ErStats` -- our merged line: the browse rows' "FOLDER / ..." / "N CHAR / ..." text.
+    /// Hidden on a drive row, which has no stats copy of its own, so a recycled parent-row field
+    /// cannot keep showing "PARENT FOLDER / ..." beside the drive cells.
+    pub er_stats: bool,
+    /// `ErCharStats` -- our attribute line, "VIG 50 MND 10 ...". Character rows only.
+    pub char_stats: bool,
+    /// `DriveCell_0..25` and their matching button frames, one visibility bit per possible Windows
+    /// drive letter. Visible only for populated cells on the picker's drive-cycle row, denied
+    /// everywhere else.
+    pub drive_cells: [bool; DRIVE_CELL_CAPACITY],
+    /// Full current-directory text/button pair, visible only beside the populated drive strip.
+    pub current_path: bool,
+    /// Full-width native `Backing`. The drive row hides it because its independent drive buttons
+    /// are the interaction chrome. Native `Cursor` visibility is deliberately not represented here:
+    /// the game's list-selection code owns it, while runtime only changes its drive-row geometry.
+    pub backing: bool,
 }
 
 impl RowSlotFieldVisibility {
-    /// What a row the picker does not own gets: exactly what the game drew.
+    /// What a row the picker does not own gets: the game's own per-slot fields, plus our attribute
+    /// line, and explicitly NOT the browse/drive text.
+    ///
+    /// `er_stats` and `drive_cells` are false here on purpose. They are the fields the file and
+    /// drive lists write, and stating them false is the only thing that stops those lists' text
+    /// surviving onto a character row.
     pub const NATIVE: Self = Self {
         level: true,
         location: true,
         play_time: true,
+        er_stats: false,
+        char_stats: true,
+        drive_cells: [false; DRIVE_CELL_CAPACITY],
+        current_path: false,
+        backing: true,
     };
 
-    /// Browse/file rows are not profile slots; level is hidden, the top-right
-    /// location field is shown only when it carries a staged timestamp, and the
-    /// bottom play-time row is always hidden so file rows collapse to one line.
-    pub const fn browse_row(has_timestamp: bool) -> Self {
+    /// A character row whose header was MERGED: the name, Rune Level and weapon level are one
+    /// string in `PlayerName` (see `profile_row_label`), so the separate `Level` FMG caption and
+    /// level value must go.
+    ///
+    /// This is a DISTINCT constant rather than a change to [`Self::NATIVE`] on purpose. The row
+    /// pass only applies visibility when the wanted state differs from `NATIVE` (or when a row was
+    /// previously hidden), so flipping `NATIVE.level` to false would make the wanted state equal
+    /// `NATIVE` again and skip the very pass that has to hide the fields -- the caption would
+    /// render under the merged label until some other row happened to trigger the pass. Keeping
+    /// them separate means the guard fires on the first merged row, with no change to the guard and
+    /// no visibility work on rows we do not merge.
+    ///
+    /// Every other field matches `NATIVE`: this is a character row, so it still denies the browse
+    /// and drive text that would otherwise survive onto a recycled clip.
+    /// `play_time` is false here for a LAYOUT reason, not a data one (user 2026-08-07): the row's
+    /// bottom-right play-time box overlaps the top-right `Location` box, so as long as it is drawn,
+    /// `Location` cannot be widened past it and long place names clip. Dropping the play-time frees
+    /// that whole band for the location, which is the field the user actually reads. A row that
+    /// fails to merge falls back to `NATIVE` and keeps its play-time, so the vanilla view is intact.
+    pub const NATIVE_MERGED: Self = Self {
+        level: false,
+        play_time: false,
+        ..Self::NATIVE
+    };
+
+    /// [`Self::NATIVE_MERGED`], but able to say the row has no location to show.
+    ///
+    /// The `Location` string is formatted from the `PlaceName` id in that slot's `ProfileSummary`
+    /// record, and in a save assembled outside the game the record can belong to a different
+    /// character than the body in that slot (see `er_save_loader::profile_summary`). The id exists
+    /// nowhere else in the save and the game cannot recompute it from a map, so a row in that state
+    /// has no location available -- and printing the record's anyway is how six of ten rows came to
+    /// claim "Midra's Manse" for characters standing in the Academy (user-reported 2026-08-07).
+    /// Blank is a visible, diagnosable absence; another character's place name is not.
+    pub const fn native_merged(location: bool) -> Self {
+        Self {
+            location,
+            ..Self::NATIVE_MERGED
+        }
+    }
+
+    /// Picker-owned rows are not profile slots; level is hidden, the top-right location field is
+    /// shown only when it carries a staged timestamp, and the bottom play-time row is always hidden
+    /// so file rows collapse to one line.
+    ///
+    /// `char_stats` is false: the attribute line describes a character, and a picker row has none.
+    /// `er_stats` and `drive_cells` are row-kind decisions supplied by the save-picker model. They
+    /// must not be blanket picker-wide `true`: recycled row clips retain fields that the next row
+    /// never writes, which is how the drive strip appeared on every row and the parent-folder copy
+    /// survived onto the drive row.
+    pub fn browse_row(has_timestamp: bool, er_stats: bool, drive_cell_count: usize) -> Self {
         Self {
             level: false,
             location: has_timestamp,
             play_time: false,
+            er_stats,
+            char_stats: false,
+            drive_cells: std::array::from_fn(|index| index < drive_cell_count),
+            current_path: drive_cell_count > 0,
+            backing: drive_cell_count == 0,
         }
     }
 }
@@ -237,19 +324,29 @@ mod tests {
     #[test]
     fn row_visibility_decisions_match_picker_contract() {
         assert_eq!(
-            RowSlotFieldVisibility::browse_row(true),
+            RowSlotFieldVisibility::browse_row(true, true, 0),
             RowSlotFieldVisibility {
                 level: false,
                 location: true,
                 play_time: false,
+                er_stats: true,
+                char_stats: false,
+                drive_cells: [false; DRIVE_CELL_CAPACITY],
+                current_path: false,
+                backing: true,
             }
         );
         assert_eq!(
-            RowSlotFieldVisibility::browse_row(false),
+            RowSlotFieldVisibility::browse_row(false, false, 3),
             RowSlotFieldVisibility {
                 level: false,
                 location: false,
                 play_time: false,
+                er_stats: false,
+                char_stats: false,
+                drive_cells: std::array::from_fn(|index| index < 3),
+                current_path: true,
+                backing: false,
             }
         );
         assert_eq!(
@@ -258,7 +355,69 @@ mod tests {
                 level: true,
                 location: true,
                 play_time: true,
+                er_stats: false,
+                char_stats: true,
+                drive_cells: [false; DRIVE_CELL_CAPACITY],
+                current_path: false,
+                backing: true,
             }
         );
+    }
+
+    #[test]
+    fn drive_visibility_has_one_bit_per_real_button() {
+        let cells = RowSlotFieldVisibility::browse_row(false, false, 2).drive_cells;
+        assert!(cells[..2].iter().all(|visible| *visible));
+        assert!(cells[2..].iter().all(|visible| !*visible));
+    }
+
+    /// Dropping a row's unsourceable location must drop ONLY that field. A merged row still owes the
+    /// same statement about every other field, or the browse/drive text it denies starts surviving
+    /// onto it -- the recycled-clip leak this struct exists to prevent.
+    #[test]
+    fn a_merged_row_without_a_location_still_states_every_other_field() {
+        let with = RowSlotFieldVisibility::native_merged(true);
+        let without = RowSlotFieldVisibility::native_merged(false);
+        assert_eq!(with, RowSlotFieldVisibility::NATIVE_MERGED);
+        assert!(!without.location);
+        assert_eq!(
+            RowSlotFieldVisibility {
+                location: true,
+                ..without
+            },
+            with
+        );
+        // And it is still distinguishable from NATIVE, so the visibility pass fires for it.
+        assert_ne!(without, RowSlotFieldVisibility::NATIVE);
+    }
+
+    /// Every field must be claimed by exactly one row kind and denied by the others, or a recycled
+    /// clip keeps the previous kind's text. The parent/file metadata field and the drive cells are
+    /// separate row kinds as well as being picker-only fields: making both visible picker-wide is
+    /// what put the drive letters on every row and stale parent copy on the drive row.
+    #[test]
+    fn each_row_kind_states_an_answer_for_every_field_and_they_disagree() {
+        let native = RowSlotFieldVisibility::NATIVE;
+        let browse = RowSlotFieldVisibility::browse_row(true, true, 0);
+        let drive = RowSlotFieldVisibility::browse_row(false, false, 3);
+
+        // The character-only field is denied by both picker kinds.
+        assert!(native.char_stats && !browse.char_stats && !drive.char_stats);
+        // The metadata and drive fields are mutually exclusive and both denied by character rows.
+        assert!(!native.er_stats && browse.er_stats && !drive.er_stats);
+        assert_eq!(native.drive_cells, [false; DRIVE_CELL_CAPACITY]);
+        assert_eq!(browse.drive_cells, [false; DRIVE_CELL_CAPACITY]);
+        assert_eq!(drive.drive_cells, std::array::from_fn(|index| index < 3));
+        assert!(!native.current_path && !browse.current_path && drive.current_path);
+        assert!(native.backing && browse.backing && !drive.backing);
+        // The native per-slot fields belong to character rows.
+        assert!(native.level && !browse.level && !drive.level);
+        assert!(native.play_time && !browse.play_time && !drive.play_time);
+
+        // Every picker kind differs from NATIVE, so the visibility pass fires on its first row.
+        assert_ne!(native, browse);
+        assert_ne!(native, drive);
+        assert_ne!(browse, drive);
+        assert_ne!(browse, RowSlotFieldVisibility::browse_row(false, true, 0));
     }
 }

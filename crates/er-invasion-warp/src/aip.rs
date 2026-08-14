@@ -30,6 +30,7 @@
 //! extraction reads it from disk and SKIPs when it is absent.
 
 use crate::invasion_warp::{BlockKey, InvasionWarpTarget};
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_extend};
 
 /// `"FPIA"` -- the four magic bytes at offset 0. As a little-endian `u32` this is the
 /// `0x41495046` the decompile compares against.
@@ -159,18 +160,6 @@ pub fn encode_aip(block: BlockKey, points: &[([f32; 3], f32)]) -> Vec<u8> {
     out
 }
 
-/// FNV-1a 64. The repo's standing fingerprint hash for corpus identity: cheap, dependency
-/// free, and enough to detect a re-extraction drifting from the bytes a claim was made about.
-#[must_use]
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
 /// Digest of a catalog's CONTENT, computable identically from live memory and from disk.
 ///
 /// This exists to answer one question with a measurement instead of an argument: **does a mod
@@ -194,7 +183,7 @@ pub fn catalog_content_digest(targets: &[(BlockKey, [f32; 3], f32)]) -> u64 {
     blocks.sort_unstable_by_key(|block| block.raw());
     blocks.dedup();
 
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = fnv1a64(b"");
     for block in blocks {
         let points: Vec<([f32; 3], f32)> = targets
             .iter()
@@ -202,10 +191,7 @@ pub fn catalog_content_digest(targets: &[(BlockKey, [f32; 3], f32)]) -> u64 {
             .map(|(_, position, yaw)| (*position, *yaw))
             .collect();
         let payload = encode_aip(block, &points);
-        for byte in &payload {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        hash = fnv1a64_extend(hash, &payload);
     }
     hash
 }
@@ -388,15 +374,6 @@ mod tests {
             .to_string()
             .contains("2 points")
         );
-    }
-
-    #[test]
-    fn fnv1a64_matches_the_reference_vectors() {
-        // The canonical FNV-1a 64 test vectors, so a corpus digest can never silently drift
-        // because the hash itself was mis-implemented.
-        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
     }
 
     #[test]

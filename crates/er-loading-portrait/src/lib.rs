@@ -38,6 +38,11 @@ pub mod pgd_layout;
 pub use pgd_layout::*;
 
 #[cfg(windows)]
+pub mod player_identity;
+#[cfg(windows)]
+pub use player_identity::*;
+
+#[cfg(windows)]
 pub mod portrait_lookat;
 #[cfg(windows)]
 pub use portrait_lookat::*;
@@ -113,6 +118,8 @@ pub mod portrait_equip;
 
 pub mod title_stats_text;
 pub use title_stats_text::*;
+
+pub mod profile_row_label;
 
 #[cfg(windows)]
 pub mod stats_loading_text;

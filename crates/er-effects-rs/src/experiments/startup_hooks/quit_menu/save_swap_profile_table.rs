@@ -29,16 +29,13 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
     });
     unsafe {
         for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-            core::ptr::write_bytes(
-                (summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE)
-                    as *mut u8,
-                0,
-                PROFILE_SUMMARY_RECORD_STRIDE,
-            );
+            let record = profile_summary_record_address(summary, slot);
+            core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
             *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
             PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
         }
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     drop(st);
 
     let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
@@ -72,10 +69,14 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                 fallback_slot
             };
             let fallback = fallback_src_slot.and_then(|src_slot| {
-                let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
+                let start = profile_summary_record_offset(src_slot);
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
+            // The place name is NOT in the character body -- the game writes it from the front-end
+            // manager at save time. It IS in the save's own stored summary table, so take it from
+            // there rather than deriving one from the map id.
+            let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
             let face_bytes = slot_body.face_data_buffer_bytes(pgd);
             let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
             if unsafe {
@@ -84,6 +85,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                     summary,
                     slot,
                     saved_map,
+                    place_name_id,
                     playtime_ticks,
                     fallback,
                     face_bytes,
@@ -107,6 +109,21 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             st.candidate_stats_utf16 = preview_stats;
             st.preview_applied = true;
         }
+        // THE ROWS ABOUT TO BE DRAWN DESCRIBE **THIS** SAVE, SO OUR CACHES MUST TOO. The native
+        // ProfileSummary above now holds the previewed save's records, but the name and the whole
+        // attribute line on each row come from `PROFILE_SLOT_*_CACHE`, which was a process-lifetime
+        // latch: without this the picker showed the new save's levels and locations under the old
+        // save's names and stats. `bytes` is the previewed save itself, so this is a parse, not a
+        // second ~26 MB read.
+        let decoded =
+            crate::experiments::startup_hooks::loading_cover::load_profile_slot_caches_from_bytes(
+                bytes,
+                "picker-previewed save",
+            );
+        let reloads = PROFILE_SLOT_CACHE_PREVIEW_RELOADS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: per-slot stats/name caches reloaded from the previewed save ({decoded}/10 slots, reloads={reloads})"
+        ));
         PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
@@ -142,6 +159,19 @@ pub(crate) fn system_quit_save_swap_restore_original_file(
     }
 }
 
+/// Is a FOREIGN save's summary currently on screen (previewed, not yet committed)?
+///
+/// The row presentation needs this to answer one question correctly: whose name belongs on slot 0.
+/// The transient current-player row is built with slot index 0 (`FUN_1408753f0` ->
+/// `FUN_1408759e0(summary, 0, &name, pgd->level)`), so slot 0 normally prefers the LIVE character's
+/// name. While a foreign save is previewed, slot 0 is that save's slot 0 instead, and preferring the
+/// live name puts the loaded character's name on another save's character -- observed 2026-08-07 as
+/// "Maddened Bean, RL 100" where RL 100, the attributes and the location were all angrE's.
+pub(crate) fn system_quit_foreign_preview_active() -> bool {
+    let st = system_quit_save_swap_lock();
+    st.preview_applied && !st.committed
+}
+
 pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
@@ -166,11 +196,17 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
             st.summary_snapshot.len()
         ));
     }
+    // Symmetric with the reload on preview: the summary is the ORIGINAL save's again, so the caches
+    // describing the previewed save must go. Dropped rather than reloaded because the bytes of the
+    // active save are not in hand here -- the next row populate reads them.
+    crate::experiments::startup_hooks::loading_cover::invalidate_profile_slot_caches(reason);
     // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
-    // fingerprints no longer describe any slot.
+    // fingerprints no longer describe any slot, and neither does the preview's record of which slots
+    // it could not source a place name for.
     for slot in 0..TITLE_PROFILE_SLOT_COUNT {
         PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
     }
+    PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     let _ = system_quit_save_swap_restore_original_file(&st, reason);
     *st = SystemQuitSaveSwapState::default();
 }
@@ -450,6 +486,34 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
     patched
 }
 
+fn incoming_portrait_slot_pending(phase: usize, selected: usize, fresh_deser: usize) -> bool {
+    phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        || (selected < TITLE_PROFILE_SLOT_COUNT && fresh_deser == 0)
+}
+
+#[cfg(test)]
+mod portrait_target_pending_tests {
+    use super::*;
+
+    #[test]
+    fn selected_slot_survives_transient_idle_phase_until_deserialize() {
+        assert!(incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            0
+        ));
+    }
+
+    #[test]
+    fn completed_selection_no_longer_overrides_resident_slot() {
+        assert!(!incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            1
+        ));
+    }
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
@@ -502,7 +566,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let mut names: Vec<String> = Vec::with_capacity(TITLE_PROFILE_SLOT_COUNT);
         let mut any_real = false;
         for s in 0..TITLE_PROFILE_SLOT_COUNT {
-            let rec = summary + PROFILE_SUMMARY_RECORD_BASE + s * PROFILE_SUMMARY_RECORD_STRIDE;
+            let rec = profile_summary_record_address(summary, s);
             let (units, len) = unsafe { read_utf16_name_units(rec) };
             let name = if utf16_name_empty_like(&units, len) {
                 "(empty)".to_owned()
@@ -545,8 +609,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // selected incoming row. The 19:54 softlock repro proved the drift: target slot=1 but this path
     // kicked "LOADED slot 2", so the first other-slot load displayed no matching profile render. Use the
     // selected switch target when present, otherwise fall back to the confirmed loaded slot for boot/load1.
-    let target_slot = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let selected_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    let fresh_deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
+    // The phase can transiently return to IDLE during the clean-title handoff, before the selected
+    // slot's deserialize. The old phase-only gate then fell back to ac0 (the outgoing character)
+    // and latched that stale slot for the entire incoming loading window. Keep the explicit selected
+    // slot authoritative until its fresh deserialize completes, regardless of phase churn.
+    let target_slot = if incoming_portrait_slot_pending(quickload_phase, selected_slot, fresh_deser)
     {
         portrait_target_slot()
     } else {
@@ -570,18 +640,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     //   * boot:   c30 is a real saved map (not the m10 new-game default) AND the native slot
     //             request register (`GameMan+0xb78`) is back at its no-request sentinel, i.e. no
     //             load is still in flight.
-    let deserialize_completed = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-    {
-        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
-    } else {
-        let gm = game_man_ptr_or_null();
-        gm != TITLE_OWNER_SCAN_START_ADDRESS
-            && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
-                .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
-            && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
-                .is_some_and(|b78| b78 < 0)
-    };
+    let deserialize_completed =
+        if incoming_portrait_slot_pending(quickload_phase, selected_slot, fresh_deser) {
+            fresh_deser == 1
+        } else {
+            let gm = game_man_ptr_or_null();
+            gm != TITLE_OWNER_SCAN_START_ADDRESS
+                && unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+                    .is_some_and(|c30| c30 != FULLREAD_C30_M10_DEFAULT && c30 != 0)
+                && unsafe { safe_read_i32(gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) }
+                    .is_some_and(|b78| b78 < 0)
+        };
     if deserialize_completed {
         unsafe { portrait_render_slot_semaphore(base, target_slot) };
     }

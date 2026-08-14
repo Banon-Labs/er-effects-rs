@@ -297,14 +297,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // reliable readiness. bd CORRECT-disable-custom-onclick-load-save-set-slot-then-native-continue.
             // Wait for load1 to PROVE movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed
             // genuine injected-stick movement for this epoch) before arming the switch, so load1's
-            // movement is proven -- not just render-ready. Timeout fallback (SQ_REPRO_MOVE_PROOF_TIMEOUT
-            // _TICKS) arms anyway if the load cannot latch, so a drift/contention load never hangs the run.
+            // movement is proven -- not just render-ready. A timeout is a failed boot epoch; it must not
+            // silently arm switch #1 and turn an unproven run into apparent multi-load evidence.
             let move_verdict_proven =
                 crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
-            if in_world
-                && tick >= SQ_REPRO_WORLD_SETTLE_TICKS
-                && (move_verdict_proven || tick >= SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS)
-            {
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS && move_verdict_proven {
                 if sq_repro_pause_at_menu() {
                     // Diagnostic mode: 0 switches, no load. Nothing to drive without the menu-nav.
                     sq_repro_transition(SQ_REPRO_STATE_DONE);
@@ -322,6 +319,10 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             } else if !in_world {
                 // Not in-world yet (boot autoload still loading): hold the settle counter at 0.
                 SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+            } else if tick == SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS {
+                append_autoload_debug(format_args!(
+                    "sq-repro: boot world is rendered but movement did not prove by {SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS}f -- NOT arming switch #1; preserving the failed boot epoch for the oracle"
+                ));
             }
         }
         SQ_REPRO_STATE_WAIT_RELOAD => {
@@ -401,10 +402,10 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == deser;
             // Require the ACTUAL movement proof (verdict==1: the can-move probe confirmed genuine
             // injected-stick movement for THIS reload epoch) before arming the next switch, so each reload
-            // PROVES movement -- not just render-ready (render-group fires ~before the char is controllable,
-            // so the previous gate armed switch #2 while load2 was still finalizing). The existing
-            // freeze-recovery (waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE=900f) is the timeout fallback: a
-            // reload that cannot latch (drift/contention) force-switches rather than hanging.
+            // PROVES movement -- not just render-ready (render-group fires before the char is controllable,
+            // so the previous gate armed switch #2 while load2 was still finalizing). A frozen reload must
+            // remain a failed epoch until the bounded run tears down; force-switching used to overwrite the
+            // portrait target mid-window and made the required per-epoch readiness proof impossible.
             let move_verdict_proven =
                 crate::constants::HARNESS_MOVE_VERDICT.load(Ordering::SeqCst) == 1;
             let move_proven = committed && render_ready && epoch_world_live && move_verdict_proven;
@@ -446,35 +447,15 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     MOVE_PROBE_EPOCH.load(Ordering::SeqCst)
                 ));
             }
-            // FROZEN force-advance: reload committed + present, but current-epoch movement never registered
-            // within the deadline (the user's can't-see/can't-move state). Trigger the NEXT load (the
-            // recovery), exactly as the user re-loads by hand from the still-openable menu. If movement DID
-            // register for this epoch but native settlement is still pending, do not start the next switch;
-            // keep waiting for the mms18/end5e advancer or the global cap so the harness exposes that bug.
-            if committed && !move_proven && waited >= SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
-                let completed = switch_index + 1;
-                SQ_REPRO_SWITCH_INDEX.store(completed, Ordering::SeqCst);
-                if completed >= sq_repro_target_switches() {
-                    append_autoload_debug(format_args!(
-                        "sq-repro: switch #{completed}/{} FROZEN past deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f (fresh_deser={deser}) -- target reached -> DONE",
-                        sq_repro_target_switches(),
-                    ));
-                    sq_repro_transition(SQ_REPRO_STATE_DONE);
-                } else {
-                    sq_repro_begin_switch();
-                    if let Ok(base) = game_rva(0) {
-                        let slot = sq_repro_target_slot();
-                        unsafe { crate::experiments::switch_slot_arm_programmatic(base, slot) };
-                    }
-                    append_autoload_debug(format_args!(
-                        "sq-repro: switch #{completed}/{} FROZEN past deadline (load_done={load_done} fake_cover={fake_cover}) -> PROGRAMMATIC recovery arm switch #{}/{} target_slot={}; WAIT_RELOAD",
-                        sq_repro_target_switches(),
-                        completed + 1,
-                        sq_repro_target_switches(),
-                        sq_repro_target_slot()
-                    ));
-                    sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
-                }
+            // A frozen epoch is evidence, not permission to overwrite it with the next target. Log the
+            // deadline once and keep the state stable until movement proves or the run's global cap tears
+            // down. This makes every requested switch independently accountable.
+            if committed && !move_proven && waited == SQ_REPRO_FREEZE_RECOVERY_DEADLINE {
+                append_autoload_debug(format_args!(
+                    "sq-repro: switch #{}/{} FROZEN at deadline {SQ_REPRO_FREEZE_RECOVERY_DEADLINE}f (fresh_deser={deser} load_done={load_done} fake_cover={fake_cover}) -- NOT arming the next switch; preserving this failed epoch for the oracle",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                ));
             }
             return;
         }

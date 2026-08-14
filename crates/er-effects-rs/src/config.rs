@@ -439,17 +439,17 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                 })?);
             }
             "preferred_save_picker_dir" => {
-                let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
+                let raw = parse_toml_string(value).map_err(|err| {
                     format!(
                         "invalid preferred_save_picker_dir on line {}: {err}",
                         line_no + 1
                     )
-                })?);
-                config.save_picker.preferred_save_picker_dir = Some(if parsed.is_absolute() {
-                    parsed
-                } else {
-                    config_dir.join(parsed)
-                });
+                })?;
+                // The DLL is a Windows target under Wine: PathBuf::from("/home/...") becomes
+                // the current drive's `S:\\home\\...`, which does not name the Linux directory.
+                // Share the save/background path bridge so a TOML Linux absolute becomes `Z:\\home\\...`.
+                config.save_picker.preferred_save_picker_dir =
+                    Some(configured_path_from_toml(&raw, &config_dir));
             }
             "autoupdate_preferred_picker_dir" => {
                 config.save_picker.autoupdate_preferred_picker_dir =
@@ -574,6 +574,21 @@ mod tests {
 
     fn parse(contents: &str) -> Result<RuntimeConfig, String> {
         parse_runtime_config(PathBuf::from("C:\\Game\\er-effects.toml"), contents)
+    }
+
+    #[test]
+    fn linux_absolute_picker_directory_maps_to_wine_z_drive() {
+        let config =
+            parse("preferred_save_picker_dir = '/home/banon/projects/er-effects-rs/save-files'\n")
+                .expect("Linux absolute picker directory must parse");
+        assert_eq!(
+            config
+                .save_picker
+                .preferred_save_picker_dir
+                .expect("configured picker directory")
+                .to_string_lossy(),
+            "Z:\\home\\banon\\projects\\er-effects-rs\\save-files"
+        );
     }
 
     #[test]

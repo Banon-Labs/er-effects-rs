@@ -229,22 +229,13 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
 /// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
 /// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
-/// the next switch, not just the last. Fallback: if the load cannot latch within this window (drift /
-/// contention / a genuinely non-movable load) arm anyway on the game-global signature so the sequence
-/// never hangs -- the run then records that load as not-proven rather than stalling.
+/// the next switch, not just the last. Reaching this timeout emits a failed-epoch verdict and leaves the
+/// harness parked; it never advances past an unproven load.
 pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
-/// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
-/// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
-/// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly
-/// the user's "character does not show up + can't move, but the menu still opens" state) and force-
-/// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
-/// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
-/// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
-/// Sized for the can_move (input-registered) gate: a MOVABLE reload must settle in-world (~20s of
-/// SetState5 streaming after WAIT_RELOAD entry) AND then have the move-probe prove 60 frames of injected
-/// motion (~2s) before this deadline, else it is misread as frozen. A FROZEN reload never proves and is
-/// force-advanced here (per parity, the next load recovers it). ~900f (~28s at 32fps) clears a real
-/// reload+prove while staying tight enough that a 3-load chain finishes inside the runtime cap.
+/// FREEZE VERDICT DEADLINE. Frames the WAIT_RELOAD gate allows a reload to prove genuine movement
+/// before emitting a one-shot frozen-epoch verdict. The harness does NOT advance to another switch on
+/// this deadline: doing so overwrote the still-open portrait target and made the failed epoch disappear
+/// under a recovery load. The bounded run's global cap owns teardown if movement never proves.
 pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
 /// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
@@ -254,19 +245,6 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
-/// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
-/// snapshot the live TitleTopDialog dwords just BEFORE the Down (cursor should read 0) and again
-/// AFTER it settles (cursor should read 1); the dword that goes 0->1 IS the cursor field. This
-/// observes the real offset instead of trusting the unverified +0xb0c guess (which the self-fire
-/// run read as 0). Frames are relative to the first poll after menu-open.
-pub(crate) const CURSOR_PROBE_BASELINE_FRAME: usize = INJECT_NAV_SETTLE_FRAMES - 2;
-pub(crate) const CURSOR_PROBE_POSTDOWN_FRAME: usize = INJECT_NAV_SETTLE_FRAMES + 12;
-/// Dwords to scan from the dialog base (covers 0..0x2400, the known field range).
-pub(crate) const CURSOR_PROBE_SCAN_DWORDS: usize = 0x900;
-/// Only dwords in [0, this) are logged as cursor candidates (a row index is small).
-pub(crate) const CURSOR_PROBE_SMALL_MAX: u32 = 8;
-/// Cap the candidate-dword log per snapshot.
-pub(crate) const CURSOR_PROBE_LOG_CAP: usize = 96;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
 pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
 pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;
@@ -279,7 +257,7 @@ pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;
 /// captured MessageBoxDialog skips ALL of them generically (connection-error, starting-offline, ...)
 /// with no input -- it is exactly what a real OK-press runs. Verified entry: `rex push rbx; ... mov
 /// rbx,rcx` at 0x78e030; only rcx used.
-pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = 0x78e030;
+pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = MsgBoxRva::OkHandler as usize;
 /// CONFIRM latch [dialog+0x1bc0] u8 -- the field a real OK-press sets. The dialog's own per-frame
 /// UPDATE 0x140927d30 reads it -> commit 0x14078ef20 builds the result functor into [dialog+0x10]
 /// -> next UPDATE emits stop via EmitResult (sets the +0x3b0 closing latch) -> the dialog TEARS
@@ -426,8 +404,6 @@ pub(crate) static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOO
 pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static NATIVE_SUBMIT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_EVENT_HANDLER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_ACTION_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);

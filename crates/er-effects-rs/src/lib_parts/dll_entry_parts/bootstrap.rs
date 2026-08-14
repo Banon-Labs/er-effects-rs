@@ -135,8 +135,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         ensure_profile_slot_stats_cached: crate::experiments::ensure_profile_slot_stats_cached,
         profile_slot_attributes: crate::experiments::profile_slot_attributes,
         profile_slot_vitals: crate::experiments::profile_slot_vitals,
+        profile_slot_weapon_level: crate::experiments::profile_slot_weapon_level,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
-        read_utf16_name_units: crate::experiments::read_utf16_name_units,
         boot_view_render_frame: crate::experiments::boot_view_render_frame,
     });
     // Save-picker crate split: wire product (A)'s seam before any hook install or task spawn can
@@ -214,8 +214,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         missing_save_selection_pending: crate::experiments::missing_save_selection_pending,
         save_override_telemetry_only: crate::experiments::save_override_telemetry_only,
         create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
-        apply_xor_ret_stub: crate::experiments::apply_xor_ret_stub,
-        patch_3byte_stub: crate::experiments::patch_3byte_stub,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,
         scan_dialog_for_loadgame: crate::experiments::scan_dialog_for_loadgame,
@@ -298,8 +296,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
     // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
     // opt-in sub-switch. Gated OFF unless ER_EFFECTS_PROFILE=1 / er-effects-profile.txt.
-    if profiler_enabled() {
-        START_BOOT_PROFILER.call_once(spawn_boot_profiler);
+    if er_boot_profiler::profiler_enabled() {
+        START_BOOT_PROFILER
+            .call_once(|| er_boot_profiler::spawn_boot_profiler(append_autoload_debug));
     }
 
     // Install the crash/exit logger first so it can observe an exit or access

@@ -415,6 +415,82 @@ def main() -> int:
             False,
             "manual pgrep is blocked",
         ),
+        # git records the commit MESSAGE, it never executes it. A commit whose
+        # prose describes removing a raw process-name probe is documentation
+        # (2026-08-12 false positive: `git commit -F - <<'EOF' ... EOF` was
+        # denied for the message body, and the agent escape-hatched around the
+        # guard by writing the message to a file). The live engine collapses
+        # heredoc newlines to spaces, so these must run end-to-end here, not
+        # only under `opa test`.
+        PolicyCase(
+            "allow-git-commit-heredoc-message-mentioning-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "preflight: stop probing the process table by name\n\n"
+            "The preflight called pgrep -x steam directly, which false-negatives\n"
+            "on this WSL2 + Windows-Steam box. It now sources\n"
+            "scripts/steam-running.sh and calls steam_running instead.\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-dash-m-message-mentioning-pgrep",
+            'git commit -m "preflight: drop the raw pgrep -x steam probe in'
+            ' favour of scripts/steam-running.sh"',
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-cat-heredoc-substitution-mentioning-pgrep",
+            "git add -A && git commit -m \"$(cat <<'EOF'\n"
+            "guard: stop calling pgrep -x steam in the runtime preflight\n\n"
+            "scripts/steam-running.sh is the sanctioned WSL-aware check.\n"
+            'EOF\n)"',
+            True,
+        ),
+        # ... and the message carve-out must never launder an executing probe.
+        PolicyCase(
+            "deny-git-commit-heredoc-then-chained-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            "pgrep -x steam",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-heredoc-unquoted-tag",
+            "git commit -F - <<EOF\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-bash-c-wrapped-git-commit-heredoc-pgrep",
+            "bash -c \"git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            '"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-message-command-substitution-pgrep",
+            'git commit -m "$(pgrep -x steam)"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-dash-m-then-chained-pgrep",
+            'git commit -m "guard: drop the raw process probe" && pgrep -x steam',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-unquoted-pgrep-token",
+            "git commit -am pgrep",
+            False,
+            "manual pgrep is blocked",
+        ),
         # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
         # command token and must not be denied.
         PolicyCase(
@@ -545,6 +621,50 @@ def main() -> int:
             "                pass\n"
             "PY",
             True,
+        ),
+        # Editing a repo file whose TEXT names the EAC launcher is not a launch
+        # (2026-08-04 false positive: removing one sentence from a module
+        # docstring was denied because the raw marker fallback saw the name plus
+        # the word "python" from the interpreter's own invocation). This repo
+        # deliberately writes refusal logic and safety docs that NAME the
+        # forbidden binary, so that text has to stay editable.
+        PolicyCase(
+            "allow-python-heredoc-editing-docstring-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "p = Path('scripts/frida-dump-module.py')\n"
+            "s = p.read_text(encoding='utf-8')\n"
+            'old = """* Offline `eldenring.exe` ONLY. Refuses'
+            " `start_protected_game.exe` / EAC, like the sibling\n"
+            "  `frida-nudge.py`.\n"
+            '"""\n'
+            "assert old in s\n"
+            "p.write_text(s.replace(old, ''), encoding='utf-8')\n"
+            "PY",
+            True,
+            extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
+        ),
+        # ... but the exemption must not become a launch bypass. A pipe on the
+        # heredoc REDIRECTION LINE feeds the program's OUTPUT to a shell, so a
+        # path the program merely prints really executes.
+        PolicyCase(
+            "deny-python-heredoc-edit-piped-into-shell",
+            "python3 - <<'PY' | bash\n"
+            "print(\"'/opt/er/start_protected_game.exe'\")\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-python-heredoc-edit-plus-subprocess-launch",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "import subprocess\n"
+            "Path('scripts/frida-dump-module.py').write_text('# start_protected_game.exe')\n"
+            "subprocess.run(['wine', '/opt/er/start_protected_game.exe'])\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
         ),
         # ... but the /proc mention must never become a launch bypass.
         PolicyCase(

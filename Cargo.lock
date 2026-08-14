@@ -2754,6 +2754,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-boot-profiler"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-crash-logging"
 version = "0.1.0"
 dependencies = [
@@ -2790,6 +2798,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "eldenring",
+ "er-boot-profiler",
  "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",
@@ -2801,6 +2810,7 @@ dependencies = [
  "er-save-picker",
  "er-save-redirect",
  "er-save-suppress",
+ "er-scaleform-hooks",
  "er-telemetry",
  "er-title-flow",
  "er-tpf",
@@ -2833,6 +2843,7 @@ name = "er-gfx"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
+ "er-game-base",
 ]
 
 [[package]]
@@ -3035,6 +3046,7 @@ dependencies = [
 name = "er-save-redirect"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-hook",
  "er-save-loader",
  "er-telemetry",
@@ -3046,6 +3058,16 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+]
+
+[[package]]
+name = "er-scaleform-hooks"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
 ]
 
 [[package]]

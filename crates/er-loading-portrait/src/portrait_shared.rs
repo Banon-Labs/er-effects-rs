@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_extend};
 
 // Shared portrait helpers used by the capture pipeline and its hosts: the per-window reset,
 // the depth-mask invalidation, and the publish-acceptance classifiers. Relocated out of the
@@ -12,12 +13,9 @@ pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
     if units.is_empty() {
         return 0;
     }
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for u in units {
-        for b in u.to_le_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+    let mut h = fnv1a64(b"");
+    for unit in units {
+        h = fnv1a64_extend(h, &unit.to_le_bytes());
     }
     // Reserve 0 for "unknown" (an actual 0 hash is astronomically unlikely; map it to 1).
     (h as usize).max(1)
@@ -46,7 +44,7 @@ pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
     if !valid(summary) {
         return 0;
     }
-    let rec = summary + PROFILE_SUMMARY_RECORD_BASE + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let rec = profile_summary_record_address(summary, slot as usize);
     unsafe { portrait_record_name_hash(rec) }
 }
 

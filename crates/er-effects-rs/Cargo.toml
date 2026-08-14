@@ -17,10 +17,15 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 # Shared MinHook FFI + hook union (compiles the vendored MinHook C once; this crate defines the
 # `er_effects_union_register` export over `er_hook::register_union_hook`).
 er-hook = { path = "../er-hook" }
+# Native Scaleform hook mechanisms. Product policy/logging remains in this crate.
+er-scaleform-hooks = { path = "../er-scaleform-hooks" }
 # Shared low-level foundation (fault-safe RAM readers, game base/rva, stable
 # singleton RVA table, logger core). Source of truth for primitives previously
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# Diagnostic-only boot CPU/RIP sampler. The product starts it at the existing early attach point;
+# the crate owns its opt-in policy, sampling mechanism, and NDJSON output.
+er-boot-profiler = { path = "../er-boot-profiler" }
 er-save-loader = { path = "../er-save-loader" }
 # Host-runnable save-source/redirect planner. Process-wide hooks stay in this product crate until
 # the later save-redirect owner slice.
@@ -63,16 +68,14 @@ iced-x86 = { version = "1.21", default-features = false, features = [
   "std",
   "decoder",
 ] }
-# Boot profiler, Win32 process/window helpers, and MinHook target resolution.
+# Win32 process/window helpers and MinHook target resolution.
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Threading",
   "Win32_System_Performance",
-  "Win32_System_WindowsProgramming",
   "Win32_System_Kernel",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Diagnostics_Debug",
-  "Win32_System_SystemInformation",
   # SystemTimeToTzSpecificLocalTime: the save picker's file rows show when each file was last
   # written, and a user-facing timestamp is local time. This applies the zone's DST rules for the
   # instant being rendered, so a save from the other side of a boundary keeps the wall-clock time it

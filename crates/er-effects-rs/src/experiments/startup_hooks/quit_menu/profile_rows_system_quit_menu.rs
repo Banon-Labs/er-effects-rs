@@ -1,4 +1,5 @@
 use super::*;
+use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64};
 
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
@@ -97,6 +98,49 @@ pub(crate) fn install_profile_row_populate_hook() {
             }
             Err(status) => append_autoload_debug(format_args!(
                 "stats-text: MhHook::new row-populate failed: {status:?}"
+            )),
+        }
+    }
+    // The row-model BUILDER, hooked separately from the populate above because it is the only place
+    // a slot's ProfileSummary record is still a record: it reads `record[0x34]` and the filler turns
+    // that into the row's `Location` string. A save whose summary table was copied in from another
+    // file needs its place name corrected HERE or not at all.
+    if PROFILE_ROW_MODEL_BUILD_INSTALLED.load(Ordering::SeqCst) == 0 {
+        let Ok(addr) = game_rva(PROFILE_ROW_MODEL_BUILD_RVA as u32) else {
+            append_autoload_debug(format_args!(
+                "stats-text: failed to resolve row-model-build rva 0x{PROFILE_ROW_MODEL_BUILD_RVA:x}"
+            ));
+            return;
+        };
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                profile_row_model_build_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                PROFILE_ROW_MODEL_BUILD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "stats-text: queue_enable row-model-build failed: {status:?}"
+                    ));
+                    return;
+                }
+                match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        std::mem::forget(hook);
+                        PROFILE_ROW_MODEL_BUILD_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "stats-text: hooked ProfileSelect row-model builder FUN_1408752c0 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "stats-text: row-model-build MH_ApplyQueued failed: {status:?}"
+                    )),
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "stats-text: MhHook::new row-model-build failed: {status:?}"
             )),
         }
     }
@@ -731,15 +775,12 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     let real_tab = forced_tab
         .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
         .or(live_tab);
-    if let (Some(tab), true) = (
-        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
-        tab_view >= HEAP_LO,
-    ) {
-        unsafe {
-            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
-        }
-        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
-    }
+    // The forced tab is written only AFTER its backing pane is proven present, further down. Writing
+    // it here (as this did until 2026-08-12) wedges the menu whenever the pane is absent: the tab
+    // strip commits to Quit, the pane reapply below bails, and OptionSetting stays actively_shown
+    // with NO visible pane -- input captured, nothing drawn, no way out. Reproduced by opening the
+    // picker twice: the second close lands on a RECREATED OptionSetting window (composite address
+    // changes) whose cache slots 8/9 were never built, so slot 9 reads null.
     // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
     let mut cache_tab: Option<usize> = None;
     for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
@@ -774,10 +815,23 @@ pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
     }
     .unwrap_or(0);
     if selected < HEAP_LO {
+        // Leave the native tab selection ALONE. Forcing it here would point the tab strip at a tab
+        // with no pane, which reads to the player as a menu that owns input but draws nothing.
         append_autoload_debug(format_args!(
             "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
         ));
         return;
+    }
+    // The backing pane is now proven present, so committing the tab strip to it cannot strand the
+    // menu without a pane. This write is deliberately downstream of the check above.
+    if let (Some(tab), true) = (
+        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
+        tab_view >= HEAP_LO,
+    ) {
+        unsafe {
+            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
+        }
+        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
     }
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
@@ -829,6 +883,10 @@ pub(crate) unsafe fn system_quit_reset_profile_select_state(source: &str) {
     save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    // The 05_010 rows are going away, so the live-layout editor must stop believing it can still
+    // write to their text fields. Only the profile-row surface is dropped: the title-load current
+    // row is owned by the title screen and outlives this teardown.
+    super::forget_profile_editor_field_targets("profile-row-populate");
     // End the profile-load flow so the legit Quit-Game/Return-to-Desktop confirm MessageBox is no longer
     // suppressed once ProfileSelect is gone (the flag was set at the Load-Profile click).
     SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(0, Ordering::SeqCst);
@@ -1345,7 +1403,7 @@ pub(crate) fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
 }
 
 pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
-    let mut hash = 0xcbf2_9ce4_8422_2325usize;
+    let mut hash = FNV1A64_OFFSET_BASIS as usize;
     if label_ptr < TITLE_OWNER_SCAN_START_ADDRESS {
         return hash;
     }
@@ -1353,6 +1411,8 @@ pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
         let Some(unit) = (unsafe { safe_read_u16(label_ptr + idx * 2) }) else {
             break;
         };
+        // Preserve this diagnostic signature's historical non-FNV multiplier exactly. It is not
+        // a content fingerprint and therefore is not routed through the canonical FNV round.
         hash ^= unit as usize;
         hash = hash.wrapping_mul(0x1000_0000_01b3usize);
         if unit == 0 {
@@ -1405,8 +1465,8 @@ pub(crate) unsafe fn sample_optionsetting_active_row_table(
     let mut cloned_mask = 0usize;
     let mut native_save_mask = 0usize;
     let mut quit_label_mask = 0usize;
-    let mut action_hash = 0xcbf2_9ce4_8422_2325usize;
-    let mut label_hash = 0xcbf2_9ce4_8422_2325usize;
+    let mut action_hash = fnv1a64(b"") as usize;
+    let mut label_hash = fnv1a64(b"") as usize;
     for row_idx in 0..count {
         let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_idx);
         let controller =
@@ -1629,6 +1689,34 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
+/// ProfileSelect window whose native `MenuWindowJob` finalizer has completed. The finalizer runs
+/// inside the original `MenuWindowJob::Run`; restoration waits for this post-original hook so no
+/// GFx/menu calls are made from inside native teardown.
+static SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn system_quit_note_profile_select_finalized(window: usize) {
+    if window == 0 {
+        return;
+    }
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+        .compare_exchange(window, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
+        // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
+        // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
+        let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
+            window,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        append_autoload_debug(format_args!(
+            "system-quit-dup: native ProfileSelect finalizer completed window=0x{window:x}; queued post-Run restore and cleared matching stale rebuild"
+        ));
+    }
+}
+
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
 /// real-system-window HIDE, the in-world-load ABORT + return-title submit that actually complete a profile
 /// switch, and save-picker pump maintenance. Extracted from the hook body so the WINNING MenuWindowJob::Run
@@ -1637,10 +1725,48 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
+    let finalized_profile = SYSTEM_QUIT_PROFILE_SELECT_FINALIZED_PENDING.swap(0, Ordering::SeqCst);
+    if finalized_profile != 0
+        && let Ok(base) = game_module_base()
+    {
+        // A PICK owns its own close. Picking a save file closes this window on purpose and queues a
+        // reopen as the slot view (`SAVE_PICKER_OPEN_SLOTS_PENDING`, resubmitted further down this
+        // same function). Restoring the System windows here would be a second owner of the same
+        // close, and it wins simply by running first: `system_quit_restore_real_system_windows`
+        // resets the ProfileSelect state, which clears both the pending flag and the System dialog
+        // the resubmit needs, so the resubmit below then finds nothing pending and never fires. That
+        // is why picking an `.sl2` landed back on the Quit menu instead of the character list -- the
+        // live log shows the finalizer restore at `+161525ms` and NO resubmit line at all after it.
+        //
+        // So the restore runs only for a close nobody claimed: a real backout. Leaving the hide
+        // state up is also what the reopen wants -- the window is coming straight back.
+        if save_picker_resubmit_pending() {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: skipped finalizer restore for window=0x{finalized_profile:x}; a picker resubmit owns this close"
+            ));
+        } else {
+            unsafe {
+                system_quit_restore_real_system_windows(
+                    base,
+                    "restore-real-profile-native-finalizer",
+                )
+            };
+        }
+    }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
-    if crate::experiments::lifecycle::switch_harness_discovery_enabled() {
-        crate::experiments::lifecycle::switch_harness_note_menu_filename(&filename);
+    if filename == "02_990_TextInput_PathEditor" {
+        let owner =
+            unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+        if owner != 0 {
+            let state = unsafe { safe_read_i32(owner + MSGBOX_JOB_RESULT_STATE_1E8_OFFSET) }
+                .unwrap_or_default();
+            if save_picker_note_path_editor_window_state(owner, state)
+                && let Ok(base) = game_module_base()
+            {
+                unsafe { apply_path_editor_window_position(base, owner) };
+            }
+        }
     }
     if matches!(
         filename.as_str(),
@@ -1667,6 +1793,13 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
             }
             "05_010_ProfileSelect" => {
+                // ONE TICK PER RENDERED FRAME OF OUR VIEW. The live editor's safety gate reads this
+                // to answer "is the ProfileSelect view on screen right now", which decides whether a
+                // web-UI edit may be applied from the async FrameBegin path or has to wait for the
+                // in-band row populate. Stamped here because this hook IS the per-frame run of that
+                // window's MenuWindowJob; nothing else in the process is that direct about it.
+                er_telemetry::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
+                    .fetch_add(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
             }
             _ => 0,
@@ -1784,6 +1917,7 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // MENU-PUMP-OWNED save-picker maintenance: drive-cell input, native ScrollBarV sync,
     // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
     // navigation/pick close (same submit-context rule as the return-title chain below).
+    unsafe { save_picker_menu_pump_path_editor() };
     unsafe { save_picker_menu_pump_drive_strip_mouse() };
     unsafe { save_picker_menu_pump_native_scrollbar() };
     unsafe { save_picker_menu_pump_edge_scroll() };

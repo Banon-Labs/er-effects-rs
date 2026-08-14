@@ -48,6 +48,19 @@ pub const PARAM_CLEARED_EVENT_FLAG_OFFSET: usize = 0x18;
 pub const PARAM_ICON_ID_OFFSET: usize = 0x1C;
 /// `+0x1E` -- category bits (u8). Masked with `& 7` into pin `+0x60`.
 pub const PARAM_CATEGORY_BITS_OFFSET: usize = 0x1E;
+/// `+0x10` -- forbidden icon id (u16). Copied to pin `+0x288`.
+pub const PARAM_FORBIDDEN_ICON_ID_OFFSET: usize = 0x10;
+/// `+0xE8` -- ALTERNATE icon id (u16). Copied to pin `+0x2C8`.
+///
+/// `CS::WorldMapWarpPinData::GetIconId` (0x14088bb60) returns this one instead of `+0x1C` whenever
+/// any enabled label carries kind `1` (`NpcName`). Every label this crate writes is kind `0`, so
+/// the alternate is not reached today -- but leaving it zero means a single stray kind byte would
+/// call `gotoAndStop(0)` on a 1-based clip and draw NOTHING, with the row still flagged visible and
+/// every counter green. Mirroring the real icon here costs two bytes and deletes that whole silent
+/// failure mode.
+pub const PARAM_ALT_ICON_ID_OFFSET: usize = 0xE8;
+/// `+0xEA` -- alternate forbidden icon id (u16). Copied to pin `+0x308`.
+pub const PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET: usize = 0xEA;
 /// `+0x30` -- first label text id; label `i` is at `+0x30 + 12*i`.
 pub const PARAM_LABEL_TEXT_ID_BASE: usize = 0x30;
 /// Stride between label text ids.
@@ -90,6 +103,77 @@ pub const fn invasion_pin_icon_id(red_frame_installed: bool) -> u16 {
     }
 }
 
+/// What the map should say about one invasion location, relative to the filter's current rules.
+///
+/// These are not three arbitrary looks -- they are the three answers
+/// [`crate::local_invasion::LocalInvasionConfig::judge`] can give about a destination, so the map
+/// shows what would actually happen if an invasion landed there rather than a separate notion of
+/// "enabled" that could drift away from the filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PinAppearance {
+    /// The user marked this exact location (Insert, or `allowed_blocks` by hand).
+    Chosen,
+    /// Not marked, but the current mode would accept it.
+    #[default]
+    Eligible,
+    /// The current mode would reject it, so an invasion here would be cancelled.
+    Rejected,
+}
+
+/// The icon id for one pin.
+///
+/// Falls back to the single vanilla frame for EVERY appearance when the markers are not installed.
+/// Distinguishing the tiers requires the spare frames to have been populated; without them the
+/// alternative ids point at empty frames and those pins would silently disappear, which is a worse
+/// outcome than every pin looking the same.
+///
+/// # The `dimmed` axis
+///
+/// Orthogonal to the tier. `dimmed` means "an invasion attempt is in flight, so this pin is not
+/// clickable right now" ([`crate::warp::invasion_attempt_in_flight`]); the tier means "here is what
+/// the filter would do with an invasion landing here". Both have to be visible at once, which is
+/// why there are two frames per tier rather than one dim frame shared by all three.
+///
+/// A colour transform is baked into a GFx frame, so it CANNOT be toggled on one icon id -- the
+/// engine's only input is the frame number. Switching the id is the whole mechanism, and it is the
+/// same one the tiers already use.
+#[must_use]
+pub const fn invasion_pin_icon_id_for(
+    appearance: PinAppearance,
+    markers_installed: bool,
+    dimmed: bool,
+) -> u16 {
+    if !markers_installed {
+        return FALLBACK_INVASION_PIN_ICON_ID;
+    }
+    if dimmed {
+        return match appearance {
+            PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME_DIMMED,
+            PinAppearance::Eligible => RED_INVASION_PIN_FRAME_DIMMED,
+            PinAppearance::Rejected => REJECTED_INVASION_PIN_FRAME_DIMMED,
+        };
+    }
+    match appearance {
+        PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME,
+        // The DEFAULT tier keeps the frame invasion pins have always used, so an untouched config
+        // renders exactly the map that existed before tiers. Putting this tier on a new frame is
+        // what blanked a live map: every pin is `Eligible` until the user marks something.
+        PinAppearance::Eligible => RED_INVASION_PIN_FRAME,
+        PinAppearance::Rejected => REJECTED_INVASION_PIN_FRAME,
+    }
+}
+
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_03` (188x190) -- the LARGEST of the family, for a
+/// location the user chose.
+///
+/// The tiers are ranked by size: 188 > 146 > 68. Brightness is not monotonic across this family
+/// (Enemy_03 is the dimmest), and size is the cue that survives at map scale anyway.
+pub const CHOSEN_INVASION_PIN_FRAME: u16 = 303;
+
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_00` (68x72, RGB `187/90/61`) -- the dimmest and
+/// smallest of the hostile-marker family, for a location the filter would reject.
+pub const REJECTED_INVASION_PIN_FRAME: u16 = 302;
+
 /// The spare `Icon_0` frame the DLL installs a red marker on.
 ///
 /// 300 is one of the 230 frames sprite 171 declares but never populates (the populated set is
@@ -99,6 +183,30 @@ pub const fn invasion_pin_icon_id(red_frame_installed: bool) -> u16 {
 /// `234/99/48` against the grace's `170/144/81`) and at 146x146 declared / 73x73 packed is the
 /// same scale as the 156x156 / 78x78 grace icon it replaces.
 pub const RED_INVASION_PIN_FRAME: u16 = 300;
+
+/// The DIMMED counterpart of each tier's frame: same bitmap, same size, same placement scale, plus
+/// a `CXFORMWITHALPHA` that drops it to ~40% opacity.
+///
+/// # Why a second set of frames rather than a flag
+///
+/// The offset is a flat `+10` so the pairing reads at a glance in a log line
+/// (`untouched=300`/`310`). All six sit inside the same unpopulated stretch: a census of vanilla
+/// sprite 171 finds 348 declared frames, 138 populated, and a single empty run of 85 frames from
+/// 263 to 347. None of the six collides with a shipped icon, and each is checked for emptiness
+/// individually before anything is written.
+///
+/// The BRIGHT set is deliberately the original three, carrying their original placement bytes with
+/// no colour transform at all. That makes the idle map -- the state a player is in almost all the
+/// time -- byte-identical to the one already proven to render, and confines every new frame to the
+/// dimmed set, where a failure is bounded to the duration of an invasion attempt and is obvious.
+pub const DIMMED_FRAME_OFFSET: u16 = 10;
+/// Dimmed `MENU_MAP_Enemy_02` -- the default tier while an attempt is in flight.
+pub const RED_INVASION_PIN_FRAME_DIMMED: u16 = RED_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
+/// Dimmed `MENU_MAP_Enemy_03` -- a location the user chose.
+pub const CHOSEN_INVASION_PIN_FRAME_DIMMED: u16 = CHOSEN_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
+/// Dimmed `MENU_MAP_Enemy_00` -- a location the filter would reject.
+pub const REJECTED_INVASION_PIN_FRAME_DIMMED: u16 =
+    REJECTED_INVASION_PIN_FRAME + DIMMED_FRAME_OFFSET;
 
 /// Used when the red frame is not installed: a populated, non-grace frame so the pins are still
 /// visually distinct rather than invisible.
@@ -163,6 +271,41 @@ pub struct SyntheticParamSpec {
     pub place_name_text_id: i32,
 }
 
+/// Write `icon_id` into EVERY icon slot of a synthetic param row.
+///
+/// # Why all four, and why this is a function
+///
+/// A pin row does not hold one icon. `CS::WorldMapWarpPinData`'s constructor (`0x14088b7b0`) seeds
+/// FOUR 0x40-byte icon descriptors from four separate fields of this param row -- byte-verified
+/// against its own loads:
+///
+/// | param offset | row descriptor |
+/// |--------------|----------------|
+/// | `0x1c`       | `0x248`        |
+/// | `0x10`       | `0x288`        |
+/// | `0xe8`       | `0x2c8`        |
+/// | `0xea`       | `0x308`        |
+///
+/// At draw time `SetTo` asks vtable slot `0xc` (`0x14088bb60`) which descriptor to use, and that
+/// choice depends on an event-flag predicate over the param row -- state a synthetic row does not
+/// model. So the only way to be sure the pin draws the intended icon is for all four to agree.
+///
+/// THIS IS A FUNCTION BECAUSE THE TWO CALLERS DRIFTED. `to_row_bytes` set all four; the
+/// re-stamp that runs when the player marks a location set only `0x1c`. The result was the
+/// reported bug: the log showed the tiers changing correctly on every pin, and the map on screen
+/// never changed, because the descriptor the engine actually read still held the icon from the
+/// FIRST build. One entry point makes that divergence impossible.
+pub fn stamp_icon_id(row: &mut [u8; SYNTHETIC_PARAM_ROW_LEN], icon_id: u16) {
+    for at in [
+        PARAM_ICON_ID_OFFSET,
+        PARAM_FORBIDDEN_ICON_ID_OFFSET,
+        PARAM_ALT_ICON_ID_OFFSET,
+        PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+    ] {
+        row[at..at + 2].copy_from_slice(&icon_id.to_le_bytes());
+    }
+}
+
 impl SyntheticParamSpec {
     /// Serialise into the byte layout the engine reads.
     ///
@@ -178,8 +321,7 @@ impl SyntheticParamSpec {
             .copy_from_slice(&self.subcategory_id.to_le_bytes());
         row[PARAM_CLEARED_EVENT_FLAG_OFFSET..PARAM_CLEARED_EVENT_FLAG_OFFSET + 4]
             .copy_from_slice(&(-1_i32).to_le_bytes());
-        row[PARAM_ICON_ID_OFFSET..PARAM_ICON_ID_OFFSET + 2]
-            .copy_from_slice(&self.icon_id.to_le_bytes());
+        stamp_icon_id(&mut row, self.icon_id);
         row[PARAM_CATEGORY_BITS_OFFSET] = self.category_bits & CATEGORY_BITS_MASK;
 
         // Label 0 carries the place name; labels 1..7 are explicitly "none" so the engine
@@ -200,13 +342,97 @@ impl SyntheticParamSpec {
     /// The highest byte the engine reads for this layout, as a bounds assertion for the buffer.
     #[must_use]
     pub const fn highest_read_offset() -> usize {
-        PARAM_LABEL_KIND_BASE + PARAM_LABEL_COUNT - 1
+        // The alternate forbidden icon is the last field, past the label kinds.
+        PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET + 1
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE REGRESSION, and it shipped. A pin row carries FOUR icon descriptors and the engine picks
+    /// one at draw time from state a synthetic param row does not model. A stamper that updates
+    /// only the first leaves the map showing the icon from the first build forever -- the exact
+    /// reported symptom: correct tiers in the log, no change on screen.
+    #[test]
+    fn stamping_an_icon_sets_every_slot_the_row_constructor_reads() {
+        let mut row = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut row, 303);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                u16::from_le_bytes([row[at], row[at + 1]]),
+                303,
+                "slot {at:#x} was not stamped; the engine may read this one"
+            );
+        }
+    }
+
+    /// Re-stamping must REPLACE every slot, not leave a stale one behind -- a mark changes the icon
+    /// of a row that already has one.
+    #[test]
+    fn re_stamping_replaces_every_slot_rather_than_leaving_a_stale_one() {
+        let mut row = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut row, 300);
+        stamp_icon_id(&mut row, 302);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                u16::from_le_bytes([row[at], row[at + 1]]),
+                302,
+                "slot {at:#x} is stale"
+            );
+        }
+    }
+
+    /// The four param offsets are byte-verified against the row constructor's own loads at
+    /// 0x14088b7b0: `MOVZX EAX,word ptr [RAX + 0x1c]` -> `MOV [RSI + 0x248]`, and likewise
+    /// 0x10 -> 0x288, 0xe8 -> 0x2c8, 0xea -> 0x308. If one of these constants is edited, the
+    /// stamper writes somewhere the engine never reads and the map silently stops responding.
+    #[test]
+    fn the_icon_slot_offsets_are_the_ones_the_row_constructor_loads() {
+        assert_eq!(PARAM_ICON_ID_OFFSET, 0x1c);
+        assert_eq!(PARAM_FORBIDDEN_ICON_ID_OFFSET, 0x10);
+        assert_eq!(PARAM_ALT_ICON_ID_OFFSET, 0xe8);
+        assert_eq!(PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET, 0xea);
+    }
+
+    /// A row built from a spec must agree with the stamper -- they are two entry points to the same
+    /// invariant and the bug was precisely that they disagreed.
+    #[test]
+    fn a_freshly_built_row_matches_what_the_stamper_would_write() {
+        let built = SyntheticParamSpec {
+            entity_id: 0x7f00_0000,
+            subcategory_id: 0,
+            icon_id: 303,
+            category_bits: 1,
+            place_name_text_id: 1_234,
+        }
+        .to_row_bytes();
+        let mut stamped = [0_u8; SYNTHETIC_PARAM_ROW_LEN];
+        stamp_icon_id(&mut stamped, 303);
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_eq!(
+                built[at..at + 2],
+                stamped[at..at + 2],
+                "slot {at:#x} disagrees"
+            );
+        }
+    }
 
     fn spec() -> SyntheticParamSpec {
         SyntheticParamSpec {
@@ -258,6 +484,19 @@ mod tests {
     fn label_zero_carries_the_place_name_and_the_rest_are_explicitly_none() {
         let row = spec().to_row_bytes();
         assert_eq!(read_i32(&row, PARAM_LABEL_TEXT_ID_BASE), 1234);
+        // Every icon slot carries the real id, so no GetIconId branch can select a zero.
+        for at in [
+            PARAM_ICON_ID_OFFSET,
+            PARAM_FORBIDDEN_ICON_ID_OFFSET,
+            PARAM_ALT_ICON_ID_OFFSET,
+            PARAM_ALT_FORBIDDEN_ICON_ID_OFFSET,
+        ] {
+            assert_ne!(
+                u16::from_le_bytes(row[at..at + 2].try_into().unwrap()),
+                0,
+                "icon slot {at:#x} left at zero would gotoAndStop(0) and draw nothing"
+            );
+        }
         for index in 1..PARAM_LABEL_COUNT {
             let at = PARAM_LABEL_TEXT_ID_BASE + index * PARAM_LABEL_TEXT_ID_STRIDE;
             assert_eq!(read_i32(&row, at), LABEL_TEXT_ID_NONE, "label {index}");
@@ -274,6 +513,99 @@ mod tests {
                 row[PARAM_LABEL_KIND_BASE + index],
                 LABEL_KIND_PLACE_NAME,
                 "kind {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_three_tiers_map_to_three_distinct_frames_and_collapse_without_the_markers() {
+        use std::collections::BTreeSet;
+        let tiers = [
+            PinAppearance::Chosen,
+            PinAppearance::Eligible,
+            PinAppearance::Rejected,
+        ];
+        // Distinct WITHIN each brightness, and the two brightnesses must not overlap either -- all
+        // six ids are handed to the same `gotoAndStop`, so any collision renders two states or two
+        // tiers identically.
+        for dimmed in [false, true] {
+            let installed: BTreeSet<u16> = tiers
+                .iter()
+                .map(|a| invasion_pin_icon_id_for(*a, true, dimmed))
+                .collect();
+            assert_eq!(
+                installed.len(),
+                tiers.len(),
+                "two tiers sharing a frame would render identically (dimmed={dimmed})"
+            );
+        }
+        let all: BTreeSet<u16> = tiers
+            .iter()
+            .flat_map(|a| {
+                [
+                    invasion_pin_icon_id_for(*a, true, false),
+                    invasion_pin_icon_id_for(*a, true, true),
+                ]
+            })
+            .collect();
+        assert_eq!(
+            all.len(),
+            6,
+            "bright and dimmed must occupy separate frames"
+        );
+        // Without the spare frames populated, every alternative id points at an EMPTY frame and
+        // draws nothing. Falling back to one vanilla frame loses the distinction but keeps the
+        // pins visible, which is the right way round -- and that has to hold in BOTH states, or an
+        // invasion would blank a map that has no markers installed.
+        for tier in tiers {
+            for dimmed in [false, true] {
+                assert_eq!(
+                    invasion_pin_icon_id_for(tier, false, dimmed),
+                    FALLBACK_INVASION_PIN_ICON_ID,
+                    "{tier:?} must not point at an unpopulated frame (dimmed={dimmed})"
+                );
+            }
+        }
+        // The DEFAULT tier must be the frame the single-appearance helper already used. This is the
+        // no-regression guarantee: an untouched config makes every pin `Eligible`, so the map has
+        // to render exactly as it did before tiers existed. Pointing this tier at a NEW frame is
+        // what blanked a live map -- 510 of 512 pins moved onto frames that had never been seen to
+        // draw, all at once, by doing nothing at all.
+        //
+        // Note this pins the UNDIMMED id specifically. Idle is the state a player is in almost all
+        // the time, so it is the one that must be historically exact; the dimmed twin is reached
+        // only while an invasion attempt is running.
+        assert_eq!(
+            invasion_pin_icon_id_for(PinAppearance::Eligible, true, false),
+            invasion_pin_icon_id(true),
+            "the default tier must keep the historical frame while idle"
+        );
+        // The deviations are the only tiers allowed onto new frames.
+        for tier in [PinAppearance::Chosen, PinAppearance::Rejected] {
+            assert_ne!(
+                invasion_pin_icon_id_for(tier, true, false),
+                invasion_pin_icon_id(true)
+            );
+        }
+    }
+
+    #[test]
+    fn dimming_changes_the_frame_without_changing_the_tier() {
+        // The two axes are orthogonal, and the bug this guards is collapsing them: a dimmed map
+        // that shows every pin the same way would still "dim correctly" while destroying the tier
+        // information the filter exists to convey.
+        for tier in [
+            PinAppearance::Chosen,
+            PinAppearance::Eligible,
+            PinAppearance::Rejected,
+        ] {
+            let bright = invasion_pin_icon_id_for(tier, true, false);
+            let dim = invasion_pin_icon_id_for(tier, true, true);
+            assert_ne!(bright, dim, "{tier:?} must have a distinct dimmed frame");
+            assert_eq!(
+                dim,
+                bright + DIMMED_FRAME_OFFSET,
+                "{tier:?}'s pair must stay at the documented offset"
             );
         }
     }

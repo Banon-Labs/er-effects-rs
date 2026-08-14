@@ -4,48 +4,44 @@
 # Icon_0 stays placed and hidden, never unplaced.
 
 [field.PlayerName]
-x = -500
+x = -538
 y = -17
-width = 1200
-# 40, not 30: the Agmena line box at font_height 24 is 34.383 px (ascent 20800 +
-# descent 8540 over EMSQUARE 20480), and FUN_14114bf10 insets the usable area by
-# 2 px per edge, so anything under 38.383 px cannot hold one line. Vanilla's own
-# PlayerName rect is 40 px for exactly this reason. 30 left 26 px usable.
+width = 371
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
-sample_load_character = "Maddened Bean"
+sample_load_character = "Maddened Bean, RL 125 WL 25"
 sample_save_picker = "[..] save-files"
 sample_drive_row = "Save Root"
 
 [field.StaticText_110502]
-x = -325
-y = -17.325
+x = -346
+y = -18.25
 width = 149
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
-sample_load_character = "Level"
+sample_load_character = "RL"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Level]
-x = -282
-y = -16
+x = -300
+y = -19
 width = 52
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "125"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.Location]
-x = 252
+x = 260
 y = -16
-width = 152
+width = 281
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "Midra's Manse"
 sample_save_picker = ""
@@ -56,80 +52,113 @@ x = 326
 y = -16
 width = 200
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "right"
 sample_load_character = "107:49:34"
 sample_save_picker = "2026-07-07"
 sample_drive_row = "2026-07-07"
 
 [field.ErStats]
-x = -324
+x = -100
 y = -16
-width = 587
+width = 670
 clip_height = 40
-font_height = 24
+font_height = 22
 align = "left"
 sample_load_character = ""
 sample_save_picker = "PARENT FOLDER / Go to save-files"
 sample_drive_row = "45-Slots / ER0000.sl2"
 
 [field.ErCharStats]
-x = -185
-y = -14
-width = 470
+x = -200
+y = -13.5
+width = 484
 clip_height = 42
-font_height = 17
+font_height = 20
 align = "center"
 sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
 sample_save_picker = ""
 sample_drive_row = ""
 
 [field.DriveCell_0]
-x = -325
-y = -16
-width = 64
-clip_height = 40
-font_height = 24
-align = "center"
+x = -420
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = "[C:]"
-sample_drive_row = "[C:]"
+sample_save_picker = "C:"
+sample_drive_row = "C:"
 
 [field.DriveCell_1]
-x = -247
-y = -16
-width = 64
-clip_height = 40
-font_height = 24
-align = "center"
+x = -388
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = "[S:]"
-sample_drive_row = "[S:]"
+sample_save_picker = "S:"
+sample_drive_row = "S:"
 
 [field.DriveCell_2]
-x = -166
-y = -16
-width = 64
-clip_height = 40
-font_height = 24
-align = "center"
+x = -356
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
 sample_load_character = ""
-sample_save_picker = ">Z:<"
-sample_drive_row = ">Z:<"
+sample_save_picker = "Z:"
+sample_drive_row = "Z:"
+
+[field.CurrentPath]
+x = -180
+y = -18
+width = 600
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "Z:\\home\\banon\\Elden Ring Saves"
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
+
+[path_editor]
+x = -77
+y = 80
+width = 700
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = ""
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
 
 [row_chrome.backing]
 x = -17.3
 y = 0
 scale_x = 20
 scale_y = 1
+opacity = 1
 editable = true
 source = "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art"
+
+[row_chrome.hit_area]
+x = -17.3
+y = 0
+scale_x = 20
+scale_y = 1
+opacity = 0
+editable = false
+source = "invisible full-row mouse target: HitArea/char54. GridControl's hit resolver (FUN_14074b0d0) prefers a child named HitArea over Cursor, so the row stays hoverable end to end while the drive-row runtime shrinks Cursor onto the focused sub-control"
 
 [row_chrome.cursor]
 x = -17.3
 y = 0
 scale_x = 1
 scale_y = 1
+opacity = 1
 editable = true
 source = "outer highlighted-row cursor wrapper: row sprite 76 named Cursor / char 75; keep identity so CursorBody locks to Backing dimensions"
 
@@ -138,8 +167,27 @@ x = 0
 y = 0
 scale_x = 20
 scale_y = 1
+opacity = 1
 editable = true
 source = "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons"
+
+[row_chrome.drive_button]
+x = -2
+y = 0
+scale_x = 0.991
+scale_y = 1
+opacity = 0.55
+editable = true
+source = "relative offset/scale/opacity shared by every DriveButton_* native frame; x/y nudge button chrome without moving drive-letter text"
+
+[row_chrome.path_button]
+x = -2
+y = 0
+scale_x = 1
+scale_y = 1
+opacity = 0.42
+editable = true
+source = "independent offset/scale/opacity for CurrentPathButton; lower opacity softens the oversized native outline"
 
 [list]
 row_pitch = 48

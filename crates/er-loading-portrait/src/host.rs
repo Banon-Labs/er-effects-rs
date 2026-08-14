@@ -13,8 +13,6 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use crate::layout::STATS_ATTR_COUNT;
-#[cfg(windows)]
-use crate::pgd_layout::PGD_NAME_LEN_U16;
 
 /// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh`
 /// backbuffer. (Moved from er-effects-rs `experiments/gpu_readback/boot_progress.rs`;
@@ -76,11 +74,13 @@ pub struct PortraitHost {
     /// or `None` when the slot is empty/unreadable. Same `.sl2` cache as the
     /// attributes; values are read, never derived (bd er-effects-rs-qic7).
     pub profile_slot_vitals: fn(i32) -> Option<[u32; 3]>,
+    /// The highest weapon upgrade level (`matchmakingWeaponLevel`) of the character in
+    /// save `slot`, or `None` when the slot is empty/unreadable or the byte is
+    /// implausible. Same `.sl2` cache as the attributes and vitals. `Some(0)` is a real
+    /// answer (nothing upgraded) and is distinct from `None` ("we do not know").
+    pub profile_slot_weapon_level: fn(i32) -> Option<u8>,
     /// The `CS::GameDataMan` singleton pointer, or 0.
     pub game_data_man_ptr_or_null: fn() -> usize,
-    /// Guarded UTF-16 name read at `addr` (units, length).
-    #[cfg(windows)]
-    pub read_utf16_name_units: unsafe fn(usize) -> ([u16; PGD_NAME_LEN_U16], usize),
     /// The shared boot/loading-screen rasterizer (bar + picker + portrait + stats in the
     /// product; a portrait+stats-only provider in the standalone DLL host).
     pub boot_view_render_frame: fn(usize, usize) -> BootViewFrame,
@@ -133,12 +133,11 @@ fn default_profile_slot_attributes(_slot: i32) -> Option<[i32; STATS_ATTR_COUNT]
 fn default_profile_slot_vitals(_slot: i32) -> Option<[u32; 3]> {
     None
 }
+fn default_profile_slot_weapon_level(_slot: i32) -> Option<u8> {
+    None
+}
 fn default_game_data_man_ptr_or_null() -> usize {
     0
-}
-#[cfg(windows)]
-unsafe fn default_read_utf16_name_units(_addr: usize) -> ([u16; PGD_NAME_LEN_U16], usize) {
-    ([0u16; PGD_NAME_LEN_U16], 0)
 }
 fn default_boot_view_render_frame(_bw: usize, _bh: usize) -> BootViewFrame {
     BootViewFrame {
@@ -175,9 +174,8 @@ impl PortraitHost {
             ensure_profile_slot_stats_cached: default_ensure_profile_slot_stats_cached,
             profile_slot_attributes: default_profile_slot_attributes,
             profile_slot_vitals: default_profile_slot_vitals,
+            profile_slot_weapon_level: default_profile_slot_weapon_level,
             game_data_man_ptr_or_null: default_game_data_man_ptr_or_null,
-            #[cfg(windows)]
-            read_utf16_name_units: default_read_utf16_name_units,
             boot_view_render_frame: default_boot_view_render_frame,
         }
     }
@@ -267,12 +265,11 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
 pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
     (host().profile_slot_vitals)(slot)
 }
+pub(crate) fn profile_slot_weapon_level(slot: i32) -> Option<u8> {
+    (host().profile_slot_weapon_level)(slot)
+}
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
-}
-#[cfg(windows)]
-pub(crate) unsafe fn read_utf16_name_units(addr: usize) -> ([u16; PGD_NAME_LEN_U16], usize) {
-    unsafe { (host().read_utf16_name_units)(addr) }
 }
 pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     (host().boot_view_render_frame)(bw, bh)

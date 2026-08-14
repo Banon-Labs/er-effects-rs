@@ -30,6 +30,9 @@ AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
+RUNTIME_YK0J_UNRESOLVABLE_PROBE="${RUNTIME_YK0J_UNRESOLVABLE_PROBE:-0}"
+YK0J_SOURCE="${ER_EFFECTS_YK0J_SOURCE:-}"
+RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-world-stable}"
 DRY_RUN=0
 
 VISUAL_RESOURCE_MUTATION_ENVS=(
@@ -107,6 +110,12 @@ drives the Steam compat tool directly with er_effects_rs.dll as an me3 native) a
 .auto/runtime_probe.sh as the bounded readiness watcher. By default this uses the same
 real/default APPDATA save source as ~/Elden/launch.sh; the old staged-save/ER_EFFECTS_SAVE_FILE
 probe path is deprecated and requires ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
+
+YK0J targeted proof:
+  RUNTIME_YK0J_UNRESOLVABLE_PROBE=1 ER_EFFECTS_YK0J_SOURCE=/read-only/ER0000.sl2 \\
+    $0 [--dry-run]
+  This keeps the source read-only, forces exactly one Rust-side own-load rejection while the native
+  game reads the private active stage, targets player-load, and validates the structured oracle.
 EOF
 }
 
@@ -121,7 +130,6 @@ done
 
 fatal() { echo "run-product-continue-direct-probe: $*" >&2; exit 2; }
 require_file() { [[ -f "$1" ]] || fatal "missing file: $1"; }
-require_executable() { [[ -x "$1" ]] || fatal "missing executable: $1"; }
 
 runtime_pids() {
   local proc pid comm cmdline
@@ -197,10 +205,29 @@ preflight() {
   steam_running || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
+  if [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
+    [[ "$RUNTIME_TELEMETRY_ONLY" == "0" ]] || fatal "YK0J unresolvable-save proof cannot run telemetry-only"
+    [[ "$RUNTIME_EXPECTED_MODE" == "vanilla" ]] || fatal "YK0J unresolvable-save proof currently requires RUNTIME_EXPECTED_MODE=vanilla"
+    [[ -n "$YK0J_SOURCE" ]] || fatal "YK0J unresolvable-save proof requires ER_EFFECTS_YK0J_SOURCE"
+    [[ -f "$YK0J_SOURCE" ]] || fatal "YK0J source not found: $YK0J_SOURCE"
+    YK0J_SOURCE=$(realpath -e "$YK0J_SOURCE")
+    local yk0j_bytes yk0j_mode
+    yk0j_bytes=$(stat -c '%s' "$YK0J_SOURCE" 2>/dev/null || echo 0)
+    (( yk0j_bytes == 28967888 )) || fatal "YK0J source must be an exact Elden Ring container (28967888 bytes), got $yk0j_bytes: $YK0J_SOURCE"
+    yk0j_mode=$(stat -c '%a' "$YK0J_SOURCE" 2>/dev/null || echo 777)
+    (( (8#$yk0j_mode & 8#222) == 0 )) || fatal "YK0J source must be read-only (no write bits), got mode $yk0j_mode: $YK0J_SOURCE"
+    case "$YK0J_SOURCE" in
+      "$APPDATA_ER_ROOT"/*) fatal "YK0J source must be outside the game-owned active APPDATA tree: $YK0J_SOURCE" ;;
+    esac
+    RUNTIME_WATCH_TARGET="player-load"
+  fi
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
     fatal "deprecated staged-save/ER_EFFECTS_SAVE_FILE probe path is disabled for release/autoload validation; use ~/Elden/launch.sh or default-save mode (RUNTIME_USE_DEFAULT_SAVE=1). Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
   fi
-  me3_preflight || fatal "me3 preflight failed (see guidance above)"
+  # This probe exercises default/staged save resolution, native Continue, and own-load. It cannot
+  # exercise System->Quit reload, world-map markers, Seamless session tracing, or invasion hunt.
+  # The named gate scope still requires every registered save/load/Continue predicate.
+  me3_preflight save-load-continue || fatal "me3 preflight failed (see guidance above)"
   me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
@@ -218,7 +245,9 @@ preflight() {
   # SAVE-PRESENCE CHECK: telemetry-only needs no save; default-save mode reports (but tolerates)
   # a missing default save because the DLL's missing-save picker covers it; staged mode still
   # fails closed on a missing/implausible configured gold save.
-  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
+  if [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
+    echo "save-source: YK0J probe preflight source=$YK0J_SOURCE (read-only, exact container, outside active APPDATA); watcher target=$RUNTIME_WATCH_TARGET"
+  elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
     local default_count
     default_count=$(python3 - "$APPDATA_ER_ROOT" "$GOLD_SAVE_MIN_BYTES" <<'PY'
 from pathlib import Path
@@ -251,6 +280,33 @@ PY
   fi
 }
 
+write_yk0j_probe_contract() {
+  [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]] || return 0
+  python3 - "$ARTIFACT_DIR/yk0j-probe-contract.json" "$YK0J_SOURCE" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+contract_path = Path(sys.argv[1])
+source = Path(sys.argv[2])
+identity = f"{source}|ER0000.sl2".encode()
+fingerprint = 0xCBF29CE484222325
+for byte in identity:
+    fingerprint ^= byte
+    fingerprint = (fingerprint * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+contract_path.write_text(json.dumps({
+    "probe": "yk0j-unresolvable-save",
+    "source_path": str(source),
+    "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    "expected_fingerprint": max(fingerprint, 1),
+    "expected_candidates": ["ER0000.sl2"],
+    "watch_target": "player-load",
+}, indent=2) + "\n")
+PY
+  echo "yk0j-proof: armed contract -> $ARTIFACT_DIR/yk0j-probe-contract.json"
+}
+
 write_autoload_request() {
   if [[ -n "$AUTOLOAD_REQUEST" ]]; then
     require_file "$AUTOLOAD_REQUEST"
@@ -259,6 +315,7 @@ write_autoload_request() {
   fi
 }
 
+# shellcheck disable=SC2329 # Called from the EXIT/INT/TERM/HUP trap callback below.
 terminate_runtime_pids() {
   local pid
   local -a pids=()
@@ -282,6 +339,7 @@ terminate_runtime_pids() {
   done
 }
 
+# shellcheck disable=SC2329 # Registered with trap rather than invoked by a normal call site.
 cleanup() {
   local pid
   # No teardown screenshot: teardown already proves the world-stable end state, not the logo
@@ -320,6 +378,7 @@ mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
   write_autoload_request
+  write_yk0j_probe_contract
   if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
     cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
 {"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":null,"no_teardown":true,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
@@ -327,9 +386,9 @@ EOF
     echo "dry-run ok: would launch eldenring.exe through me3 (DLL as me3 native) with RUNTIME_NO_TEARDOWN=1; no readiness watcher and no agent-owned teardown"
   else
     cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
+{"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE","watch_target":"$RUNTIME_WATCH_TARGET","yk0j_unresolvable_probe":$([[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]] && echo true || echo false)}
 EOF
-    echo "dry-run ok: would start .auto/runtime_probe.sh, launch eldenring.exe through me3 (DLL as me3 native), wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
+    echo "dry-run ok: would start .auto/runtime_probe.sh target=$RUNTIME_WATCH_TARGET, launch eldenring.exe through me3 (DLL as me3 native), wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
   fi
   exit 0
 fi
@@ -346,6 +405,7 @@ rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PA
 # writes it at the exact portrait-cover/loading-screen-portrait oracle transition, not at teardown.
 rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
 write_autoload_request
+write_yk0j_probe_contract
 
 # STAGE THE FRESH me3 PAYLOAD BEFORE any launch branch (after the auth gates so --dry-run/-h stay
 # read-only, before both the RUNTIME_NO_TEARDOWN exec path and the gamescope/watcher path) so EVERY
@@ -357,6 +417,11 @@ stage_me3_payload
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   export ER_EFFECTS_TELEMETRY_ONLY=1
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
+elif [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
+  export ER_EFFECTS_SAVE_FILE="$YK0J_SOURCE"
+  export ER_EFFECTS_PROBE_OWN_LOAD_UNRESOLVABLE=1
+  unset ER_EFFECTS_AUTOLOAD_SLOT ER_EFFECTS_TELEMETRY_ONLY
+  echo "save-source: YK0J read-only source -> $ER_EFFECTS_SAVE_FILE; DLL private stage remains the active native target; structured one-rejection proof armed"
 elif [[ "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
   unset ER_EFFECTS_SAVE_FILE ER_EFFECTS_AUTOLOAD_SLOT ER_EFFECTS_TELEMETRY_ONLY
   echo "save-source: DEFAULT USER SAVE (no ER_EFFECTS_SAVE_FILE, no configured slot; DLL will use active Steam default ER0000.sl2 and best active profile slot)"
@@ -534,6 +599,7 @@ DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
   BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
   RUNTIME_EXPECTED_MODE="$RUNTIME_EXPECTED_MODE" \
+  RUNTIME_WATCH_TARGET="$RUNTIME_WATCH_TARGET" \
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
   RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS}" \
@@ -541,4 +607,11 @@ DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
 ) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
 watcher_pid=$!
 
+set +e
 wait "$watcher_pid"
+watcher_status=$?
+set -e
+if [[ "$RUNTIME_YK0J_UNRESOLVABLE_PROBE" == "1" ]]; then
+  python3 "$REPO_ROOT/scripts/check-yk0j-runtime-proof.py" --artifact-dir "$ARTIFACT_DIR"
+fi
+exit "$watcher_status"

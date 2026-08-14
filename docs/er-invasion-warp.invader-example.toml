@@ -1,0 +1,62 @@
+# er-invasion-warp -- invade only where YOU are standing.
+#
+# Drop this in as:  ...\steamapps\common\ELDEN RING\Game\er-invasion-warp.toml
+# (overwrite the file the DLL wrote on first run -- it is the same schema, just longer)
+#
+# Edits take effect immediately. The file is re-read when the next match arrives; no restart.
+#
+# HOW TO USE IT, in game:
+#   1. Walk to the place you want to invade. Where you stand IS the target -- nothing to type.
+#   2. Open your world map ONCE per session (mode = "area" reads place names off the map's rows;
+#      before you open it nothing has a name and name matching fails closed).
+#   3. Search for invasions the normal Seamless way.
+#   4. Let it grind. Every match somewhere else is cancelled and the search restarts by itself.
+#      A proven run took five matches: four elsewhere refused, then the right one. The log line
+#      saying a match was cancelled IS the feature working.
+#   5. To stop, use Seamless's own "Cancel search". Your cancel beats the loop.
+#
+# WHAT IT GUARANTEES: the PLACE, not the PERSON. If a stranger is standing where your friend is,
+# you invade the stranger and the result is identical.
+
+[local_invasion]
+
+# Master switch. Off by default because this cancels real matches; on is what you want.
+enabled = true
+
+# "exact" -- only the exact location you are standing in.
+# "area"  -- that location, or anywhere sharing one of its place names. Recommended: a large area
+#            split across several blocks would otherwise reject someone standing right next to you.
+# "named" -- ignore where you are, accept only listed locations. Do NOT use this unless you have
+#            filled in named_location_text_ids, or EVERY match is rejected.
+mode = "area"
+
+# LEAVE THIS FALSE to invade people who do NOT have this DLL.
+#
+# hunt = true narrows the Steam query so the right host arrives on the first try instead of the
+# fifth -- but it filters on a key only this DLL publishes, so it shows you ONLY hosts who are
+# also running it. For invading ordinary Seamless players that is the exact opposite of what you
+# want. It is off here on purpose, not by oversight.
+hunt = false
+
+# Places you have marked with the keys below. Both WIDEN what `mode` allows -- a marked place is
+# accepted from anywhere, so you can collect spots as you visit them and leave mode alone.
+# Empty is correct for "just wherever I am standing right now".
+allowed_blocks = []
+
+# Places you have excluded. An exclusion beats everything, including a mode that would accept it.
+blocked_blocks = []
+
+# Raw PlaceName text ids, written by Shift+mark_key ("accept every place sharing this name").
+named_location_text_ids = []
+
+# The two mark keys, by name. Recognised: Insert Delete Home End PageUp PageDown Backspace Tab
+# Enter Escape Space Left Up Right Down PrintScreen ScrollLock Pause CapsLock, F1..F24, any single
+# letter or digit ("K", "7"), punctuation by symbol or name, keypad KP_0..KP_9 and friends.
+# A name that is not recognised is reported in the log and the previous key stays in force.
+#
+#   mark_key         "invade here"  -> allowed_blocks
+#   unmark_key       "not here"     -> blocked_blocks
+#   Shift+mark_key   accept every place sharing this one's name
+#   Shift+unmark_key undo that
+mark_key = "Insert"
+unmark_key = "Delete"

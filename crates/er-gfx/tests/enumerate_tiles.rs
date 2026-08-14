@@ -9,6 +9,7 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::{Movie, Tag};
 
 fn mtx(m: &Option<er_gfx::Matrix>) -> String {
@@ -163,7 +164,7 @@ fn sweep_corpus_for_badgeable_tiles() {
             println!(
                 "  {name}  len={}  fnv=0x{:016x}  tiles={tiles:?}",
                 bytes.len(),
-                er_gfx::title_05_000::fnv1a64(&bytes)
+                fnv1a64(&bytes)
             );
         }
     }

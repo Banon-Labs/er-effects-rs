@@ -323,6 +323,11 @@ pub const ONLINE_DISABLE_RVA: usize = 0x67a030;
 
 /// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
 /// bytes followed by the next function, so a 3-byte stub is self-contained).
+/// First byte of the IsOnlineMode getter's prologue (`0x48`, a REX.W prefix). Validated before the
+/// stub is written so a drifted image aborts the patch instead of corrupting an unrelated function.
+/// Moved here from the product's `constants/autoload_state.rs` with the code-patch primitives (S5):
+/// this crate now calls `er_hook::apply_xor_ret_stub` directly and must supply the byte itself.
+pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
@@ -370,7 +375,7 @@ pub const MENU_ONLINE_MODE_DISABLE_RVA: usize = 0xe56310;
 
 pub const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
 
-pub const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+pub use er_game_base::rva::{MSGBOX_DIALOG_VTABLE_RVA, MsgBoxRva};
 
 /// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
 /// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
@@ -603,7 +608,7 @@ pub const OBSERVE_INTERVAL: u64 = 10;
 
 /// Observe change-detection: log a snapshot only when the packed signature changes
 /// (full granularity, minimal file I/O). Multiplier for the rolling signature.
-pub const OBSERVE_SIG_MULT: i64 = 0x100000001b3;
+pub const OBSERVE_SIG_MULT: i64 = er_game_base::fnv1a::FNV1A64_PRIME as i64;
 
 pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(i64::MIN);
@@ -1106,8 +1111,10 @@ pub const DIALOG_SLOT_BOUND_B08_OFFSET: usize =
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
-/// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
+/// One-shot latch, claimed with `swap`. It named the zero-input title-confirm fire
+/// (`fire_titletop_load_entry`) until that route was deleted as disproven; the remaining claimants
+/// use it to make a once-per-run announcement at the parked open menu rather than to suppress a
+/// re-fire. Readers still treat "not `TITLE_NATIVE_JOB_NOT_CALLED`" as "the menu stage has run".
 pub static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 
 // ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_background.rs =====
@@ -1761,23 +1768,6 @@ pub struct GameManAutoloadFlagCluster {
     pub probe_b73: u8,
     pub probe_b74: u8,
     pub probe_b75: u8,
-}
-
-/// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
-/// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
-/// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0
-/// (`cmp [rcx+0x25e8],2; setge al; ret`, rcx=dialog) and, for the MessageBoxDialog vtable only,
-/// write the result fields (button=OK, state=decided) and return "finished" -- exactly as if OK
-/// were pressed. Scoped by vtable + pre-in-world so in-game dialogs + the load flow are untouched.
-/// Verified self-disasm (online-disable RE 2026-06-17 + local disasm).
-#[repr(usize)]
-pub enum MsgBoxRva {
-    ForceStop = 0x78dfd0,
-    MultiChoiceGetter = 0x7b0cf0,
-    Builder = 0x9275b0,
-    OnDecide = 0x927ba0,
-    Update = 0x927d30,
-    DialogVtable = 0x2b03550,
 }
 
 #[repr(C)]

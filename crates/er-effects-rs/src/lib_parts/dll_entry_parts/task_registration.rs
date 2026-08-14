@@ -120,7 +120,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         );
         // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
         // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
-        if profiler_enabled() {
+        if er_boot_profiler::profiler_enabled() {
             append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
         }
 
@@ -134,7 +134,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // across a dialog that blocked for half a minute.
                 er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
-                if profiler_enabled()
+                if er_boot_profiler::profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == 0
@@ -303,19 +303,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // Corrected play-game submit: on the live FE-host at state 10,
-                    // SetState(5) with a packed map (not raw state/slot like the old
-                    // force_play_game) so the existing pump builds CSFeMan + loads.
-                    if submit_play_game_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe {
-                                submit_play_game_once(base, slot, state.game_task_ticks, task_data)
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
                     // Per-frame native arm: re-set the slot each frame + latch so
                     // the save-mgr update can arm before the title resets the slot.
                     if native_arm_loop_enabled() {
@@ -336,29 +323,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // Recipe B (flagless): drive the outer IngameInit once + pump
-                    // the InGameStep. Self-contained -- skips the other autoload
-                    // branches to avoid double-submit. Needs the live FD4TaskData.
-                    if ingameinit_drive_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe {
-                                ingameinit_drive_tick(base, slot, state.game_task_ticks, task_data)
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
-                    // Direct-drive the orphaned InGameStep load once force_play_game
-                    // has reached GameStepWait (run 305: hooking the step pump froze
-                    // the title, so we call its Execute directly with the live ctx).
-                    if ingamestep_pump_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe { ingamestep_pump_tick(base, task_data) };
-                        }
-                    }
                     write_telemetry_throttled(&mut state, false);
                     return;
                 };

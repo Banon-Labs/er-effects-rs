@@ -111,7 +111,6 @@ pub static PRESENT_FIND_LAST_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_ACCEPT_PATH: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_BACKBUFFER_FORMAT: AtomicUsize = AtomicUsize::new(0);
 pub static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
-pub static FACTORY2_ORIG: AtomicUsize = AtomicUsize::new(0);
 
 // ---- migrated group: portrait_lookat, portrait_semaphores, return_title, anti_debug, stats_panel_text, stats_panel_background, tpf_textures, portrait_camera, gaitem_restore, loading_cover, switch_liveness, player_correctness, software_breakpoints (399 counters) ----
 pub static PROFILE_LOOKAT_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -132,13 +131,14 @@ pub static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
-/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the one
-/// the user picked, and we redirected it to the pick. Nonzero means the save container's stored
-/// last-used slot (`CSMenuSystemSaveLoad+0x1200`) disagreed with the click and the click won --
-/// i.e. the wrong character would have loaded. Was 1 in the 2026-08-03 repro (stored 2 vs pick 0).
+/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the
+/// explicit boot selection (user pick first, configured autoload slot second), and we redirected
+/// it to that selection. Nonzero means the save container's persisted last-used slot
+/// (`CSMenuSystemSaveLoad+0x1200`) would have loaded the wrong character. Was 1 in the 2026-08-03
+/// picker repro (stored 2 vs pick 0) and the 2026-08-13 configured-slot repro (stored 9 vs config 0).
 pub static LOADGAME_BUILDER_SLOT_OVERRIDES: AtomicUsize = AtomicUsize::new(0);
-/// The native slot the last override replaced, u32-packed. Together with the pick this identifies
-/// exactly which character the game was about to load instead.
+/// The native slot the last override replaced, u32-packed. Together with the explicit boot slot
+/// this identifies exactly which character the game was about to load instead.
 pub static LOADGAME_BUILDER_LAST_NATIVE_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// The slot THIS loading-screen window committed its portrait to, +1 (0 == not yet committed).
 /// Latched at the window's first slot resolution and held until the window closes, so the face on
@@ -1155,17 +1155,6 @@ pub static BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0
 // skipped on the exact frame the native loading screen first appears.
 pub static BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
-pub static EFFECT_SELECTOR_VIEW_BUSY: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_FENCE: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_QUEUE: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_UPLOAD: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
-pub static EFFECT_SELECTOR_VIEW_W: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_H: AtomicUsize = AtomicUsize::new(0);
-pub static EFFECT_SELECTOR_VIEW_HASH: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static EFFECT_SELECTOR_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_RT_PIN: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_RT_PIN_SWITCHES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
@@ -1366,6 +1355,13 @@ pub static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_NO_STEAMID_HITS: AtomicU64 = AtomicU64::new(0);
+/// Containers this staging pass wrote from the configured source (every name, every case dir).
+pub static SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN: AtomicU64 = AtomicU64::new(0);
+/// Leftover save artifacts from an EARLIER run that staging deleted so they cannot be served.
+pub static SAVE_DIRECT_STAGE_STALE_REMOVED: AtomicU64 = AtomicU64::new(0);
+/// THE stale-serve semaphore. Nonzero means a leftover container survived the staging sweep and
+/// the game may open it INSTEAD of the configured source -- the silent soft lock of 2026-08-11.
+pub static SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_REDIRECT_SHGFP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
@@ -1479,7 +1475,6 @@ pub const SWITCH_RELOAD_FD4IO_COMMIT: usize = 2;
 /// the exact race (fd4io non-IDLE inside the guard's active window) that produced the black-screen
 /// softlock. Published as `oracle_switch_b78_guard_standdowns`.
 pub static SWITCH_RELOAD_B78_GUARD_STANDDOWNS: AtomicUsize = AtomicUsize::new(0);
-pub static COLDBUILD_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
 pub static WARM_KICK_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static ORIG_PAD_POLL: AtomicUsize = AtomicUsize::new(0);
@@ -1491,8 +1486,6 @@ pub static OFF_TAIL_MOVED: AtomicUsize = AtomicUsize::new(0);
 pub static NATIVE_OVERLAY_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static NATIVE_OVERLAY_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static NATIVE_OVERLAY_STAGE: AtomicUsize = AtomicUsize::new(0);
-pub static HARNESS_DISC_STABLE: AtomicUsize = AtomicUsize::new(0);
-pub static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_LOADSCREEN_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADSCREEN_GRACE: AtomicUsize = AtomicUsize::new(0);
 pub static NATIVE_PROFILE_READ_PHASE: AtomicUsize = AtomicUsize::new(0);
@@ -1503,8 +1496,6 @@ pub static LOADLIST_INIT_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_CHILD_CLEANUP_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_STEP_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static MMS_STEP_FINISH_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub static STEP3_INIT_REBUILD_FIRED: AtomicUsize = AtomicUsize::new(0);
-pub static STEP3_INIT_REBUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static POPULATE_BLOCKS_LISTS_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static POPULATE_BLOCKS_LISTS_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WORLDRES_ENTRY_CTOR_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -1866,6 +1857,33 @@ pub static PROFILE_ROW_SLOT_INFO_SHOWN_ROWS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_SLOT_INFO_VIS_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Per-field visibility calls whose resolved GFx value was not a display object (setter no-ops).
 pub static PROFILE_ROW_SLOT_INFO_NON_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates left ALONE because the row proxy belongs to a movie this mod never edited --
+/// the game's own System>Quit `GameEnd` panel is the one that matters. `CS::MenuSaveDataSummary`'s
+/// populate is a SHARED template, so every surface that shows a character summary arrives at the
+/// same hook; this counts the ones handed straight back to the game untouched.
+pub static PROFILE_FOREIGN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Summary populates recognised as OUR edited `05_010_ProfileSelect` row template (the probe field
+/// resolved to a real GFx value). Pair with `PROFILE_FOREIGN_SUMMARY_ROWS`: the split is the whole
+/// decoupling claim, and a zero here with a live ProfileSelect list means the probe is wrong.
+pub static PROFILE_OWN_SUMMARY_ROWS: AtomicUsize = AtomicUsize::new(0);
+/// Text pushes REFUSED because the named child does not exist on that movie (the resolve came back
+/// undefined). Before this existed those pushes were counted as successes -- SetText was called on a
+/// self-linked empty proxy and reported 109k "successful" writes to a field the movie did not have.
+pub static PROFILE_STATS_PUSH_MISSING_FIELD: AtomicUsize = AtomicUsize::new(0);
+/// `MenuWindowJob::Run` passes observed for `05_010_ProfileSelect`. It ticks once per FRAME while
+/// that window exists, so a rise between two samples means the view is on screen RIGHT NOW -- which
+/// is the only question the live editor's safety gate needs answered.
+pub static PROFILE_SELECT_WINDOW_RUN_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Live-editor commands NOT applied from the asynchronous `FrameBegin` path because the ProfileSelect
+/// view was rendering. They are left un-acked so the in-band row-populate path applies them instead.
+/// Non-zero is the guard working, not an error.
+pub static PROFILE_EDITOR_DEFERRED_APPLIES: AtomicUsize = AtomicUsize::new(0);
+/// Times the per-slot stats/name caches were dropped because the save they described stopped being
+/// the save on screen. They used to be a process-lifetime latch with no invalidation at all, so a
+/// session's first save described every ProfileSelect row forever; non-zero means a swap was noticed.
+pub static PROFILE_SLOT_CACHE_INVALIDATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Times those caches were refilled straight from bytes the picker already held (no second read).
+pub static PROFILE_SLOT_CACHE_PREVIEW_RELOADS: AtomicUsize = AtomicUsize::new(0);
 /// Last GFx value type seen by the row-field visibility path.
 pub static PROFILE_ROW_SLOT_INFO_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Browse rows whose `PlayTime` was replaced with the file's last-saved timestamp.

@@ -16,9 +16,14 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::constants::{
-    CAN_MOVE_CONFIRMED, DID_MOVE_FRAMES, HARNESS_MOVE_VERDICT, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH,
-    MOVE_PROBE_MOVED_FRAMES, MOVE_PROBE_PER_FRAME_THRESHOLD, SUPPLIED_MOVEMENT_INPUT_FRAMES,
-    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+    CAN_MOVE_CONFIRMED, DID_MOVE_FRAMES, HARNESS_MOVE_VERDICT, IN_GAME_STEP_REQUEST_CODE_D8_OFFSET,
+    INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET, INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING,
+    INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH,
+    MOVE_PROBE_MOVED_FRAMES, MOVE_PROBE_PER_FRAME_THRESHOLD, MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET,
+    MOVEMAPSTEP_COUNTDOWN_100_OFFSET, MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET,
+    MOVEMAPSTEP_RESIDENT_UPDATE_STATE, MOVEMAPSTEP_STATE_48_RE_OFFSET,
+    MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET, ORACLE_RELIABLE_INGAME_PTR,
+    SUPPLIED_MOVEMENT_INPUT_FRAMES, SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
 };
 
 /// DLUID (input-device manager) singleton RVA + its input-accept-while-unfocused flag offset. Holding
@@ -30,6 +35,40 @@ use crate::constants::{
 const DLUID_SINGLETON_RVA: u32 = 0x485dc18;
 const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
 const HEAP_LO: usize = 0x1_0000;
+
+fn movement_input_ready() -> bool {
+    let ingame = ORACLE_RELIABLE_INGAME_PTR.load(Ordering::SeqCst);
+    if ingame < HEAP_LO {
+        return false;
+    }
+    let request_code =
+        unsafe { crate::experiments::safe_read_i32(ingame + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) };
+    let move_map =
+        unsafe { crate::experiments::safe_read_usize(ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) };
+
+    // Keep the ordinary teardown-complete path, but do not require it: 1.16.2 intentionally remains
+    // in requestCode=1 / STEP_MoveMap=18 while the resident world is playable. requestCode=2 and a
+    // null MoveMap child belong to ending/Cleanup/Finish teardown, not normal movement readiness.
+    if request_code == Some(INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD) && move_map == Some(0) {
+        return true;
+    }
+    let Some(mms) = move_map.filter(|m| *m >= HEAP_LO) else {
+        return false;
+    };
+    request_code == Some(INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING)
+        && unsafe {
+            crate::experiments::safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET)
+                == Some(MOVEMAPSTEP_RESIDENT_UPDATE_STATE)
+                && crate::experiments::safe_read_u8(mms + MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET)
+                    == Some(0)
+                && crate::experiments::safe_read_i32(mms + MOVEMAPSTEP_COUNTDOWN_100_OFFSET)
+                    == Some(0)
+                && crate::experiments::safe_read_u8(mms + MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET)
+                    == Some(1)
+                && crate::experiments::safe_read_u8(mms + MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET)
+                    == Some(1)
+        }
+}
 
 fn hold_input_active() {
     let Ok(slot) = crate::game_rva(DLUID_SINGLETON_RVA) else {
@@ -261,8 +300,9 @@ fn lock_prev() -> std::sync::MutexGuard<'static, Option<(f32, f32, f32)>> {
 /// Drive one frame of the can-move probe. Proves HARNESS-driven movement with USER contamination
 /// EXCLUDED (user 2026-07-20). It alternates INJECT-ON windows (write the forward stick + hold
 /// input-active so it applies unfocused) with INJECT-OFF windows (release the stick), and requires the
-/// char to move WHILE WE inject AND to stop in the OFF tail when we release. A user moving the char
-/// shows movement during OFF windows -> read as CONTAMINATED, never proof. Sets HARNESS_MOVE_VERDICT
+/// char to move WHILE WE inject. OFF-tail displacement is retained as diagnostic momentum evidence,
+/// not misclassified as foreign input; the proof checker requires the device-boundary suppression
+/// oracle to show zero unsuppressed foreign events. Sets HARNESS_MOVE_VERDICT
 /// (0 pending / 1 proven / 2 disproven / 3 contaminated) so the watcher tears down the instant the
 /// answer is known -- no waiting for an fps/stall window (bd
 /// collect-decisive-info-teardown-immediately, canmove-contaminated-user-moved-harness-never-supplied).
@@ -312,6 +352,15 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         OFF_TAIL_MOVED.store(0, Ordering::Relaxed);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         *lock_prev() = None;
+    }
+
+    // Do not spend the run's one movement interval during the rendered-but-not-controllable ramp.
+    // Arm only after STEP_MoveMap's native resident path has enabled its task group and control bit.
+    if !movement_input_ready() {
+        MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
+        crate::experiments::move_probe_drive_key_foreground_only(0);
+        *lock_prev() = None;
+        return;
     }
 
     // Verdict already reached for this load -> stop injecting.
@@ -384,12 +433,12 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         let fm = OFF_TAIL_MOVED.load(Ordering::Relaxed);
         // The single interval is complete once one full ON+OFF cycle has elapsed (this is its last frame).
         let interval_done = pf + 1 >= CYCLE;
-        let verdict = if ft >= OFF_TAIL && fm * 100 > 40 * ft {
-            3 // CONTAMINATED: char moved while we were NOT injecting -> external input present
-        } else if interval_done {
-            // Terminal decision after the one interval: PROVEN if the char moved under our stick for most
-            // of the ON burst with a clean OFF tail, else DISPROVEN. Either way this interval is over.
-            if ot > 0 && om * 100 >= 70 * ot && (ft == 0 || fm * 100 <= 15 * ft) {
+        let verdict = if interval_done {
+            // Terminal decision after the one interval. OFF-tail displacement can be ordinary momentum
+            // after releasing a proven-forward burst (the resident-gate proof moved on 27/30 ON frames,
+            // then continued falling); it cannot identify foreign input. The replay gate separately
+            // requires a live device-boundary suppression oracle with zero unsuppressed events.
+            if ot > 0 && om * 100 >= 70 * ot {
                 1 // PROVEN
             } else {
                 2 // DISPROVEN (injection ineffective / char did not clearly move this interval)

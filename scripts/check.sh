@@ -5,6 +5,8 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 bash "$repo_root/scripts/check-no-local-main-commits.sh"
 python3 "$repo_root/scripts/check-no-timeouts.py"
+python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
+python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
@@ -21,6 +23,11 @@ python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
+# An unresolvable staged save is terminal for the process. Pin the caller-side state transitions and
+# the nonzero recurrence semaphore so the 120,959-call identical-rejection loop cannot return.
+python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py" --selftest
+python3 "$repo_root/scripts/check-own-load-save-rejection-guard.py"
+python3 "$repo_root/scripts/check-yk0j-runtime-proof.py" --selftest
 python3 "$repo_root/scripts/check-user-release-package.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
 python3 "$repo_root/scripts/check-menu-constructor-static.py"
@@ -41,10 +48,15 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
-command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego"
+python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# FNV-1a has one zero-dependency owner below every caller. Prove the scanner catches copied
+# implementations before trusting the live ownership check.
+python3 "$repo_root/scripts/check-fnv1a-owner.py" --selftest
+python3 "$repo_root/scripts/check-fnv1a-owner.py"
 # One game address must have exactly ONE literal declaration. Divergent names for one address are
 # divergent CLAIMS about what it is; three turned out to be wrong RE facts shipping in the DLL
 # (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,
@@ -52,12 +64,22 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-rva-alias-drift.py" --selftest
 python3 "$repo_root/scripts/check-rva-alias-drift.py"
+# The in-memory CS::ProfileSummary record layout is cross-cutting RAM ABI, not feature-owned data.
+# Keep its typed definition in er-game-base and reject copied numeric offsets/formulas elsewhere.
+python3 "$repo_root/scripts/check-profile-summary-layout.py" --selftest
+python3 "$repo_root/scripts/check-profile-summary-layout.py"
 # A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
 # twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
 # appending opener must route through er-game-base's one-shot truncation. Selftest first, so the
 # gate is never trusted on its own say-so.
 python3 "$repo_root/scripts/check-fresh-run-logs.py" --selftest
 python3 "$repo_root/scripts/check-fresh-run-logs.py"
+# The refactor/move DLL byte-identity gate (.github/workflows/refactor-byte-identical.yml) has two
+# halves that can each rot silently: the trigger (which PRs it applies to) and the comparator (what
+# counts as a difference). Both are tested here -- a gate whose scope and whose normalizer are
+# untested is decorative.
+bash "$repo_root/scripts/test-pr-refactor-scope.sh"
+python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
@@ -66,6 +88,9 @@ shellcheck "$repo_root/.githooks/pre-push"
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
+shellcheck "$repo_root/scripts/pr-refactor-scope.sh"
+shellcheck "$repo_root/scripts/test-pr-refactor-scope.sh"
+shellcheck "$repo_root/scripts/probe-dll-build-determinism.sh"
 shellcheck "$repo_root/scripts/hooks/pre-push"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
@@ -75,12 +100,19 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/er-stale-run-sentinel.sh"
+shellcheck "$repo_root/scripts/test-er-stale-run-sentinel-e2e.sh"
 
-# The stale-run sentinel kills a live game when a tracked file is edited, so its process matching is
-# load-bearing: a name it cannot match is a run it cannot stop. `/proc/<pid>/comm` is capped at 15
-# characters by the kernel, which made the verbatim `start_protected_game.exe` entry unmatchable
-# against any process that has ever existed. The selftest proves the truncation handling end to end
-# against a real process, so that class of silent no-op cannot come back.
+# The stale-run sentinel kills a live game when an edit feeds a DLL that run loaded, so BOTH
+# directions are load-bearing: a name it cannot match is a run it cannot stop, and a path it
+# misclassifies is either contaminated evidence or a run killed mid-measurement. The selftest proves
+# the classifier in both directions (a crate feeding a loaded DLL and its transitive dependencies
+# tear down; host-side scripts, policy, docs and crates building UNLOADED DLLs do not), plus the
+# `/proc/<pid>/comm` 15-character truncation handling end to end against a real process.
+#
+# It deliberately never calls `teardown` -- a real game may be live while this gate runs. The other
+# half (/proc profile discovery + the kill itself) is proven by
+# scripts/test-er-stale-run-sentinel-e2e.sh, which is NOT run here because it is destructive by
+# design; run it by hand, and it refuses if a real run is live.
 bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
 
 # LAUNCH REACHABILITY GATE (2026-08-04). A launch takes the user's screen and yields one recording;
@@ -96,11 +128,21 @@ python3 "$repo_root/scripts/er-launch-gate.py" --selftest
 # extraction corpus is absent, so this is safe on a machine without it.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-gfx
 
+# Scaleform's native hook owner stays host-testable at its dependency-injection seam even
+# before R24 moves the first hook family. The er-gfx architecture test above enforces the
+# one-way codec dependency; this test proves the narrow callback remains inert-by-default
+# and install-once.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-scaleform-hooks --lib
+
 # er-save-loader's host-portable save decoding: BND4 slot bodies + the PlayerGameData
 # stats/vitals reads the loading-screen stats panel sources pre-mount. Save-byte tests are
 # corpus-gated (skip when local save-files/ fixtures are absent; game-derived bytes are
 # never versioned).
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-loader
+
+# Host simulation for the own-load terminal-rejection state machine. It drives the preserved
+# 120,959-tick churn shape and requires exactly one resolver call plus zero repeated rejections.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-save-redirect --lib
 
 # er-loading-portrait's host-portable stats-line layer: proves the UNIFIED loading-screen
 # stats layout (one five-line panel whether the values came from the save slot or live
@@ -143,6 +185,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 # level up. This makes the list's completeness executable.
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
+
+# Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
+# er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
+# the default build, staged product payload, or required ME3 native list.
+python3 "$repo_root/scripts/check-single-dll-product-contract.py" --selftest
+python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 
 bash "$repo_root/scripts/check-rust-build.sh"
 

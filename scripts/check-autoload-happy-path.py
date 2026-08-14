@@ -94,6 +94,13 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def calls_in_order(source: str, first: str, second: str) -> bool:
+    """Whether two exact call sites exist in this order in one runtime function body."""
+    first_at = source.find(first)
+    second_at = source.find(second)
+    return first_at >= 0 and second_at >= 0 and first_at < second_at
+
+
 READINESS_HELPERS = {
     "product_core_autoload_ready",
     "product_continue_action_ready",
@@ -121,11 +128,51 @@ def fixed_wait_gates_absent(experiments: str, lib: str) -> bool:
     return not any(re.search(rf"\b{re.escape(name)}\b", combined) for name in FORBIDDEN_FIXED_WAIT_TOKENS)
 
 
+def optional_rust_fn_body(source: str, name: str) -> str:
+    """Body of `name`, or "" when the function no longer exists.
+
+    This guard asserts that a path which EXISTS uses semantic readiness instead of
+    frame counts. A path that has been DELETED cannot regress, so its assertion is
+    vacuous rather than failed -- returning "" would wrongly fail a `token in body`
+    check, so callers must guard on presence (see product_path_uses_semantic_readiness).
+
+    Only use this for paths whose deletion is a deliberate, reviewed decision. Anything
+    the product actually reaches must keep using the strict rust_fn_body above.
+    """
+    return rust_fn_body(source, name) if f"fn {name}(" in source else ""
+
+
+def rust_macro_body(source: str, name: str) -> str:
+    marker = f"macro_rules! {name}"
+    start = source.find(marker)
+    if start < 0:
+        raise AssertionError(f"missing macro {name}")
+    brace = source.find("{", start)
+    if brace < 0:
+        raise AssertionError(f"missing macro body for {name}")
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace + 1 : index]
+    raise AssertionError(f"unterminated macro body for {name}")
+
+
 def product_path_uses_semantic_readiness(experiments: str) -> bool:
     product_core = rust_fn_body(experiments, "product_core_autoload_tick")
-    own_stepper = rust_fn_body(experiments, "own_stepper_idx10")
-    live_dialog = rust_fn_body(experiments, "own_stepper_live_dialog_fire")
-    native_load = rust_fn_body(experiments, "native_load_tick")
+    own_stepper = "\n".join(
+        [rust_fn_body(experiments, "own_stepper_idx10"), rust_macro_body(experiments, "own_stepper_idx10_fallbacks")]
+    )
+    # own_stepper_live_dialog_fire / native_load_tick were deleted as unreachable: each was
+    # called from exactly one site, behind a gate whose whole body is the literal `false`
+    # (live_dialog_enabled, native_load_enabled). Kept as optional lookups so the semantic
+    # readiness assertion still bites the moment either path is reintroduced.
+    live_dialog = optional_rust_fn_body(experiments, "own_stepper_live_dialog_fire")
+    native_load = optional_rust_fn_body(experiments, "native_load_tick")
     stage2 = rust_fn_body(experiments, "own_stepper_stage2")
     return (
         "product_core_autoload_ready" in product_core
@@ -139,8 +186,8 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
         and "cold_char_mount_drive" in stage2
         and "title_boot_ready" in own_stepper
         and "startup_modal_blocking_state" in own_stepper
-        and "title_live_dialog_fire_ready" in live_dialog
-        and "title_menu_action_ready" in native_load
+        and (not live_dialog or "title_live_dialog_fire_ready" in live_dialog)
+        and (not native_load or "title_menu_action_ready" in native_load)
         and "profile_load_dialog_ready" in stage2
     )
 
@@ -283,6 +330,7 @@ def main() -> int:
 
     title_cover_gate = rust_fn_body(experiments, "title_native_menu_visual_suppression_enabled")
     title_cover_hook = rust_fn_body(experiments, "title_native_menu_visual_begin_title_hook")
+    dll_main = rust_fn_body(lib, "DllMain")
     require(
         "!save_override_telemetry_only()" in title_cover_gate
         and "autoload_disabled()" in title_cover_gate
@@ -294,7 +342,11 @@ def main() -> int:
     require(
         "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in runtime_source
         and "install_title_native_menu_visual_suppression_hook" in runtime_source
-        and runtime_source.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < runtime_source.find("START_MENU_WINDOW_LATCH.call_once"),
+        and calls_in_order(
+            dll_main,
+            "install_title_visual_startup_hooks();",
+            "install_boot_diagnostics_and_trace_hooks();",
+        ),
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )

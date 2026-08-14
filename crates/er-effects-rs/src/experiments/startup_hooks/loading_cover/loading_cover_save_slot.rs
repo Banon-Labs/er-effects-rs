@@ -377,8 +377,8 @@ pub(crate) unsafe fn kick_target_profile_slot(
         unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_754_RVA) };
     let set_req_755: unsafe extern "system" fn(usize) =
         unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_755_RVA) };
-    let b290 = unsafe { safe_read_u8(record + 0x290) }.unwrap_or(0);
-    let b294 = unsafe { safe_read_u8(record + 0x294) }.unwrap_or(0);
+    let b290 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_GENDER_OFFSET) }.unwrap_or(0);
+    let b294 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_FIELD_294_OFFSET) }.unwrap_or(0);
     // LATCH SEMANTICS (static RE 2026-07-03): the state machine is Wait_Request --754--> build
     // pipeline --> Wait_Play (live), and Wait_Play routes 755/756 to STEP_Finish_Play = a 6-tick
     // TEARDOWN (unregisters the offscreen scene, destroys the model, clears 755+756). So 754+755
@@ -398,8 +398,8 @@ pub(crate) unsafe fn kick_target_profile_slot(
         // ChrAsm already carries the character's own protector param ids, and the render path resolves
         // armor from those ids alone (see `runtime_chr_asm_image`). What the resulting live ChrAsm
         // actually resolves to is measured per frame by `portrait_equip_oracle_sample`.
-        set_model_source(renderer, record + 0x1a8);
-        let fd = facedata_buffer(record + 0x38, 1);
+        set_model_source(renderer, record + PROFILE_SUMMARY_CHR_ASM_OFFSET);
+        let fd = facedata_buffer(record + PROFILE_SUMMARY_FACE_DATA_OFFSET, 1);
         set_facedata(renderer, fd);
         set_byte290(renderer, b290);
         set_flag_one(renderer, 1);
@@ -618,11 +618,6 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     // The new-game / not-yet-resolved saved-map sentinel and the "is this a real packed BlockId"
     // predicate both live in er-loading-portrait, where they are host-tested.
     use er_loading_portrait::portrait_identity::{DEFAULT_MAP_C30, packed_maps_disagree};
-    // ProfileSummary record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe-2026):
-    // records start at summary+0x18, stride 0x2a0; NAME at record+0, saved MAP at record+0x30.
-    const PROFILE_RECORD_BASE: usize = 0x18;
-    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
-    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
 
     // GAME side: require a REAL loaded character before asserting anything.
@@ -655,13 +650,12 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     if profile_summary == null {
         return;
     }
-    let rec =
-        profile_summary + PROFILE_RECORD_BASE + render_target_slot as usize * PROFILE_RECORD_STRIDE;
+    let rec = profile_summary_record_address(profile_summary, render_target_slot as usize);
     let (our_name, our_len) = unsafe { read_utf16_name_units(rec) };
     if utf16_name_empty_like(&our_name, our_len) {
         return; // our target slot stores no real character -- nothing meaningful to compare.
     }
-    let our_map = unsafe { safe_read_i32(rec + PROFILE_RECORD_MAP_OFFSET) }.unwrap_or(-1);
+    let our_map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(-1);
 
     // Compare RAM identities. NAME is the character identity and carries the check on its own.
     let name_match = our_len == live_len && our_name[..our_len] == live_name[..live_len];
@@ -731,18 +725,6 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     }
 }
 
-pub(crate) const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
-pub(crate) const PROFILE_SUMMARY_TOTAL_BYTES: usize =
-    PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
-pub(crate) const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
-pub(crate) const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
-pub(crate) const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
-pub(crate) const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
-pub(crate) const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
-pub(crate) const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
-pub(crate) const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
-pub(crate) const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
-pub(crate) const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
 /// Body-relative offset of the slot's saved `BlockId`. NOT a literal here on purpose -- the single
 /// declaration lives in `er_save_loader::bnd4`, next to the Ghidra proof and the corpus test that
 /// pins it, so this cannot silently drift back to the `0x14` that read a `CSRandXorshift` dword
@@ -759,6 +741,16 @@ pub(crate) const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 /// itself instead of relying on human review of RT dumps).
 pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_COUNT] =
     [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
+
+/// Bit per slot: the preview rebuilt this slot's record but could NOT source a place name for it.
+///
+/// The rebuild copies a STRUCTURAL template from the original save's record before overwriting the
+/// fields it can supply (see `write_profile_summary_record`), so a slot whose place name the previewed
+/// save cannot supply keeps the TEMPLATE character's -- and the map field, which is written from the
+/// body, then agrees with the body and makes the record look self-consistent. The map comparison that
+/// catches a stale record on a normally-loaded save therefore cannot catch this one; this mask is the
+/// record of the fact, set where the failure to source actually happens.
+pub(crate) static PROFILE_PREVIEW_PLACE_NAME_UNSOURCED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_CHECKS;
 pub(crate) use er_telemetry::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
 pub(crate) const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
@@ -863,9 +855,7 @@ pub(crate) unsafe fn profile_slot_has_character(slot: i32) -> bool {
     if profile_summary == null {
         return false;
     }
-    let rec = profile_summary
-        + PROFILE_SUMMARY_RECORD_BASE
-        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let rec = profile_summary_record_address(profile_summary, slot as usize);
     let (name, len) = unsafe { read_utf16_name_units(rec) };
     !utf16_name_empty_like(&name, len)
 }
@@ -884,12 +874,7 @@ pub(crate) fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, Sys
 }
 
 pub(crate) fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in bytes.iter().copied() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
+    er_game_base::fnv1a::fnv1a64(bytes)
 }
 
 pub(crate) fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
@@ -1316,6 +1301,7 @@ impl<'a> SerializedPlayerGameData<'a> {
         profile_summary: usize,
         slot: usize,
         saved_map: i32,
+        place_name_id: Option<u32>,
         playtime_ticks: u32,
         fallback_record: Option<&[u8]>,
         face_bytes: Option<&[u8]>,
@@ -1324,8 +1310,7 @@ impl<'a> SerializedPlayerGameData<'a> {
         let Some(name_bytes) = self.name_bytes() else {
             return false;
         };
-        let slot_data =
-            profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+        let slot_data = profile_summary_record_address(profile_summary, slot);
         unsafe {
             if let Some(record) = fallback_record {
                 core::ptr::copy_nonoverlapping(
@@ -1348,6 +1333,21 @@ impl<'a> SerializedPlayerGameData<'a> {
             *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
                 self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
             *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
+            // Location. Without this the row keeps whichever place name the PREVIOUS save left in
+            // the record, so a swap updated the name, level, play time and stats while the location
+            // stayed put -- user-reported 2026-08-07. `None` leaves the field alone rather than
+            // writing a zero that would render as an empty Location, and records that the row must
+            // not SHOW it: the value still sitting there is the template character's, and the field
+            // is unrecoverable otherwise (it is in no character body and the game cannot recompute
+            // it from a map), so the row hides it rather than printing somebody else's place.
+            let slot_bit = 1usize << slot;
+            if let Some(place_name_id) = place_name_id {
+                *(slot_data.wrapping_add(PROFILE_SUMMARY_PLACE_NAME_OFFSET) as *mut u32) =
+                    place_name_id;
+                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_and(!slot_bit, Ordering::SeqCst);
+            } else {
+                PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.fetch_or(slot_bit, Ordering::SeqCst);
+            }
             // VISUAL IDENTITY (second-load wrong-head ROOT fix, user-identified 2026-07-06: "Banon in
             // all three windows"). The fallback record above is a STRUCTURAL template cloned from the
             // ORIGINAL save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe

@@ -624,6 +624,45 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
         .map(|s| s.attributes)
 }
 
+/// The Rune Level of the character in save `slot`, from the SAME cached `.sl2` parse the attributes
+/// come from.
+///
+/// The native `Level` field reads the row model's own level word (`rowModel + 0x88`), which is why
+/// the unmerged row could show a per-slot level without us sourcing one. The MERGED header is a
+/// string we compose, so it needs the value in our own hands -- and taking it from the save keeps
+/// the header's level and its attribute line describing the same decode of the same slot, rather
+/// than pairing a native number with our attributes.
+pub(crate) fn profile_slot_level(slot: i32) -> Option<i32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_STATS_CACHE.lock().ok()?;
+    guard
+        .as_ref()?
+        .get(slot as usize)
+        .copied()
+        .flatten()
+        .map(|s| s.level)
+}
+
+/// The highest weapon upgrade level of the character in save `slot`, from the same cached `.sl2`
+/// parse as the attributes and level.
+pub(crate) fn profile_slot_weapon_level(slot: i32) -> Option<u8> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_STATS_CACHE.lock().ok()?;
+    guard
+        .as_ref()?
+        .get(slot as usize)
+        .copied()
+        .flatten()?
+        .matchmaking_weapon_level
+}
+
+/// The merged row header's value bag (see `er_loading_portrait::profile_row_label`).
+pub(crate) use er_loading_portrait::profile_row_label::RowHeaderValues as ProfileRowHeaderValues;
+
 /// The character name of save `slot`, or `None` when the slot is empty or the save is unreadable.
 /// This is cached from the same `.sl2` read as [`profile_slot_attributes`]. Native ProfileSelect
 /// normally owns `PlayerName`, but the compact row/editor path proved the field can be live while
@@ -670,6 +709,30 @@ pub(crate) fn build_loaded_char_name() -> Option<String> {
     String::from_utf16(units.get(..len)?)
         .ok()
         .filter(|s| !s.trim().is_empty())
+}
+
+/// The LOADED character's Rune Level, read off live `PlayerGameData` -- the same object
+/// [`build_loaded_char_name`] takes the name from.
+///
+/// The title Load Game row describes the CURRENT character (`FUN_140951220` builds a transient
+/// current-player `MenuSaveDataSummary` for it), which is not necessarily save slot 0. Taking the
+/// name from live PGD and the level from `profile_slot_level(0)` would render one character's name
+/// beside another's level for anyone whose loaded character is not in slot 0 -- a confident wrong
+/// number, which is the one failure mode this feature must not have. So the two are sourced
+/// together or not at all.
+pub(crate) fn build_loaded_char_level() -> Option<i32> {
+    let pgd = loaded_player_game_data_ptr()?;
+    unsafe { safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_LEVEL_68_OFFSET) }
+}
+
+/// The LOADED character's highest weapon upgrade level, off the same live `PlayerGameData` the name
+/// and level come from. Sourced together with them so the row cannot mix characters.
+pub(crate) fn build_loaded_char_weapon_level() -> Option<u8> {
+    let pgd = loaded_player_game_data_ptr()?;
+    let word = unsafe {
+        safe_read_i32(pgd + er_loading_portrait::pgd_layout::PGD_MATCHING_WEAPON_LEVEL_E2_OFFSET)
+    }?;
+    u8::try_from(word & 0xff).ok()
 }
 
 pub(crate) unsafe extern "system" fn player_game_data_name_getter_hook(pgd: usize) -> *const u16 {
@@ -739,6 +802,41 @@ fn profile_editor_live_layout() -> Option<er_gfx::profile_05_010_layout::Profile
     Some(command.layout)
 }
 
+/// Cap a live-edited `font_height` at whatever the field's BAKED box can actually render.
+///
+/// `font_height` hot-reloads instantly (it is just the `<font size>` on the text we push), but
+/// `clip_height` does not exist on the live path at all -- the box comes from the movie, and the
+/// movie only changes when the asset is rebuilt and the screen reopened. So raising the font in the
+/// editor used to overflow a box that could not grow, re-creating the original truncated-name bug
+/// with a schema that still validated and a preview that still said "ok". The ceiling is the
+/// inverse of the same line-box arithmetic the schema floor uses: 25 for the 40 px fields, 26 for
+/// ErCharStats at 42 px. Clamping here means the rendered text can never exceed its box, whatever
+/// the control file asks for; the editor still stores the larger value, and it takes effect once
+/// the rebuilt movie is loaded.
+fn clamp_live_font_height_to_baked_box(field_name: &str, requested: i32) -> i32 {
+    let shipped = er_gfx::profile_05_010_layout::shipped();
+    let Some(baked) = shipped.fields.get(field_name) else {
+        return requested;
+    };
+    let ceiling = er_gfx::profile_05_010_layout::max_font_height_px(baked.clip_height);
+    if ceiling <= 0 || requested <= ceiling {
+        return requested;
+    }
+    if PROFILE_LIVE_FONT_CLAMP_LOGGED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        append_autoload_debug(format_args!(
+            "stats-text: live font_height {requested} for {field_name} exceeds what its baked {}px box can render; clamped to {ceiling}. Rebuild the asset and reopen the screen to use the larger size.",
+            baked.clip_height
+        ));
+    }
+    ceiling
+}
+
+/// One-shot latch so the clamp above logs once rather than once per SetText.
+static PROFILE_LIVE_FONT_CLAMP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn profile_editor_live_text_for_field<'a>(
     field_name_nul: &str,
     text: &'a [u16],
@@ -756,7 +854,7 @@ pub(crate) fn profile_editor_live_text_for_field<'a>(
     let Some(decoded) = decode_scaleform_html_line(text) else {
         return std::borrow::Cow::Borrowed(text);
     };
-    let size = field.font_height.max(1);
+    let size = clamp_live_font_height_to_baked_box(field_name, field.font_height.max(1));
     let (body, already_html) = scaleform_html_body(&decoded);
     let body = if already_html {
         scaleform_html_size_existing_font_tags(body, size)
@@ -916,18 +1014,201 @@ pub(crate) static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<
 pub(crate) static PROFILE_SLOT_NAMES_CACHE: std::sync::Mutex<Option<[Option<String>; 10]>> =
     std::sync::Mutex::new(None);
 
+/// Per-slot saved map (`USER_DATA00N + 0x04`), from the same `.sl2` parse as the names and stats.
+///
+/// This is the only field a character body and its `ProfileSummary` record share, which makes it the
+/// one way to ask whether the record on screen belongs to the character it is drawn beside. See
+/// [`profile_slot_location_is_this_characters`].
+pub(crate) static PROFILE_SLOT_SAVED_MAP_CACHE: std::sync::Mutex<Option<[Option<i32>; 10]>> =
+    std::sync::Mutex::new(None);
+
+/// The saved map of the character in save `slot`, or `None` when the slot is empty or unread.
+pub(crate) fn profile_slot_saved_map(slot: i32) -> Option<i32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_SAVED_MAP_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize).copied().flatten()
+}
+
+/// Per-slot `PlaceName` id resolved from the save itself -- the slot's own record when it describes
+/// that slot's body, else the id the save pairs with that body's map in a record that IS consistent
+/// (`er_save_loader::profile_summary::slot_place_name_ids`).
+pub(crate) static PROFILE_SLOT_PLACE_NAME_CACHE: std::sync::Mutex<Option<[Option<u32>; 10]>> =
+    std::sync::Mutex::new(None);
+
+/// The resolved `PlaceName` id for save `slot`, or `None` when the save cannot evidence one.
+pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_PLACE_NAME_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize).copied().flatten()
+}
+
+/// Point slot `slot`'s LIVE `ProfileSummary` record at `place_name_id` for the duration of one native
+/// row populate, returning the id it displaced.
+///
+/// The row's `Location` string is built by the game from this one `u32` (`FUN_1408752c0` loads
+/// `record[0x34]` into the row-model builder, which formats it through
+/// `MsgRepository::GetAndFormat(id, "PlaceName", "PN")`), so lending the field our resolved id makes
+/// the game's own writer render the right place -- the same borrow-then-restore the merged
+/// `PlayerName` uses, and nothing is left behind.
+///
+/// # Safety
+/// Game thread, around a single populate call. Fault-guarded read; the write only happens once the
+/// record has been read back successfully.
+pub(crate) unsafe fn stage_profile_record_place_name(slot: i32, place_name_id: u32) -> Option<u32> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return None;
+    }
+    let field =
+        profile_summary_record_address(summary, slot as usize) + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    let displaced = unsafe { safe_read_i32(field) }? as u32;
+    if displaced == place_name_id {
+        return None;
+    }
+    unsafe { core::ptr::write_volatile(field as *mut u32, place_name_id) };
+    Some(displaced)
+}
+
+/// Hook of the ProfileSelect row-model BUILDER `FUN_1408752c0(rowModel, slot)`.
+///
+/// This is where a slot's `ProfileSummary` record becomes a row: the builder reads `record[0x34]`
+/// and the field filler turns it into the row model's `Location` string. So a slot whose record was
+/// copied in from another save is lent the id this save evidences for that body's map, for the
+/// duration of this one call, and the game's own formatter renders it. The record is put back before
+/// returning -- it is the game's, and the save-swap snapshot and portrait identity checks read it.
+///
+/// The correction cannot happen at the populate hook: by then `Location` is a formatted string and
+/// the record is never read again.
+pub(crate) unsafe extern "system" fn profile_row_model_build_hook(
+    row_model: usize,
+    slot: i32,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PROFILE_ROW_MODEL_BUILD_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return row_model;
+    }
+    let f: unsafe extern "system" fn(usize, i32) -> usize = unsafe { std::mem::transmute(orig) };
+    let staged = if stats_panel_enabled()
+        && !unsafe { profile_slot_location_is_this_characters(slot) }
+        && let Some(id) = profile_slot_place_name_id(slot)
+    {
+        unsafe { stage_profile_record_place_name(slot, id) }.map(|displaced| {
+            let n = PROFILE_ROW_PLACE_NAME_REPAIRS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 10 || n.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "stats-text: slot {slot} Location REPAIRED -- its record is another character's (record place {displaced}); lent it PlaceName {id}, which this save pairs with body map 0x{:08x} in a record the game DID write (repairs={n})",
+                    profile_slot_saved_map(slot).unwrap_or(0)
+                ));
+            }
+            displaced
+        })
+    } else {
+        None
+    };
+    let ret = unsafe { f(row_model, slot) };
+    if let Some(displaced) = staged {
+        unsafe { restore_profile_record_place_name(slot, displaced) };
+    }
+    ret
+}
+
+/// Give slot `slot`'s record back the `PlaceName` id [`stage_profile_record_place_name`] displaced.
+///
+/// # Safety
+/// Game thread, immediately after the call that borrowed the field.
+pub(crate) unsafe fn restore_profile_record_place_name(slot: i32, displaced: u32) {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return;
+    }
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return;
+    }
+    let field =
+        profile_summary_record_address(summary, slot as usize) + PROFILE_SUMMARY_PLACE_NAME_OFFSET;
+    unsafe { core::ptr::write_volatile(field as *mut u32, displaced) };
+}
+
+/// Does the LIVE `ProfileSummary` record for `slot` describe the character whose body sits in that
+/// slot of the save we parsed?
+///
+/// The row's `Location` is formatted from that record's `PlaceName` id and from nothing else. In a
+/// save the game wrote, the record and the body were written together and always agree; in a save
+/// ASSEMBLED by a manager that copies `USER_DATA00N` bodies between files, `USER_DATA010` is left
+/// behind and the record describes whoever used to hold the slot. `save-files/100-Lilbro` is that
+/// case, and it is why six Load Game rows read "Midra's Manse" for characters saved in the Academy
+/// (user-reported 2026-08-07).
+///
+/// The comparison is against the LIVE record rather than the file's, and that is load-bearing: the
+/// game rewrites a slot's record whenever it saves that character, so after a switch-and-quit the
+/// loaded slot's record is correct while the file's copy is still the stale one. Reading the file
+/// would blank the one row that had just become right.
+///
+/// `true` whenever the question cannot be answered (no cached map, no readable summary). Hiding a
+/// field needs positive evidence; absence of evidence is not it.
+///
+/// # Safety
+/// Game thread; every read is fault-guarded.
+pub(crate) unsafe fn profile_slot_location_is_this_characters(slot: i32) -> bool {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return true;
+    }
+    // A previewed record whose place name could not be sourced still holds the TEMPLATE character's,
+    // and its map was written from the body -- so it passes the comparison below while being exactly
+    // the case that comparison is for. The preview says so directly instead.
+    if PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.load(Ordering::SeqCst) & (1usize << slot as usize) != 0
+    {
+        return false;
+    }
+    let Some(body_map) = profile_slot_saved_map(slot) else {
+        return true;
+    };
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == TITLE_OWNER_SCAN_START_ADDRESS || summary == 0 {
+        return true;
+    }
+    let record = profile_summary_record_address(summary, slot as usize);
+    let Some(record_map) = (unsafe { safe_read_i32(record + PROFILE_SUMMARY_MAP_OFFSET) }) else {
+        return true;
+    };
+    record_map == body_map
+}
+
+/// Rows whose `Location` was withheld because the record behind it names another character.
+static PROFILE_ROW_FOREIGN_LOCATION_ROWS: AtomicUsize = AtomicUsize::new(0);
+
 /// Populate the per-slot stats cache from the live save file if not already loaded. Reads the on-disk
 /// `.sl2` (the exact file the game loads) via the native save-dir builder path (`own_load_read_sl2_bytes`),
 /// then parses each `USER_DATA` slot's `PlayerGameData` attributes with `er_save_loader::stats`. Heavy
 /// work (a ~26 MB read + parse) happens at most once per session; subsequent rows hit the cache.
 /// Returns whether the cache is loaded (true even if some/all slots are empty).
 pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
-    let mut guard = match PROFILE_SLOT_STATS_CACHE.lock() {
-        Ok(g) => g,
-        Err(poison) => poison.into_inner(),
-    };
-    if guard.is_some() {
-        return true;
+    {
+        let guard = match PROFILE_SLOT_STATS_CACHE.lock() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
+        if guard.is_some() {
+            return true;
+        }
+    }
+    // State 2 is a consumed failure, not "try again next row". Also honor the shared own-load
+    // terminal transition before calling the resolver: either condition makes this cache fail closed
+    // without adding to the repeated-rejection semaphore. Cache invalidation may retry an ordinary
+    // cache failure, but cannot override the process-terminal staged-source rejection.
+    if PROFILE_SLOT_STATS_CACHE_STATE.load(Ordering::SeqCst) == 2
+        || crate::experiments::own_load_save_rejection_terminal()
+    {
+        PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
+        return false;
     }
     let Some(sl2) = (unsafe { crate::experiments::own_load_read_sl2_bytes(base) }) else {
         PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
@@ -936,27 +1217,89 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
         ));
         return false;
     };
-    let all = er_save_loader::stats::all_slot_stats(&sl2);
-    let mut names = er_save_loader::stats::all_slot_names(&sl2);
-    for slot in er_save_loader::bnd4::active_character_slots(&sl2).unwrap_or_default() {
+    load_profile_slot_caches_from_bytes(&sl2, "live .sl2");
+    true
+}
+
+/// Fill both per-slot caches from `sl2`, replacing whatever they held.
+///
+/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker ALREADY HAS the
+/// bytes of the save it is previewing: reloading from them costs a parse instead of another ~26 MB
+/// read, and it makes the caches describe the save whose slots are on screen.
+pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> usize {
+    let all = er_save_loader::stats::all_slot_stats(sl2);
+    let mut names = er_save_loader::stats::all_slot_names(sl2);
+    for slot in er_save_loader::bnd4::active_character_slots(sl2).unwrap_or_default() {
         if slot.slot < names.len() && names[slot.slot].is_none() {
             names[slot.slot] = Some(slot.name);
         }
     }
+    // Read straight off each body: the map is the only field the body and its ProfileSummary record
+    // both carry, so it is what lets a row ask whether its record is really its own.
+    let maps: [Option<i32>; 10] = core::array::from_fn(|slot| {
+        er_save_loader::bnd4::slot_body(sl2, slot)
+            .ok()
+            .and_then(er_save_loader::bnd4::slot_saved_map)
+    });
+    // What each slot's Location should say, resolved from the save's own consistent records.
+    let place_names = er_save_loader::profile_summary::slot_place_name_ids(sl2);
     let decoded = all.iter().flatten().count();
     let named = names.iter().flatten().count();
-    *guard = Some(all);
+    match PROFILE_SLOT_STATS_CACHE.lock() {
+        Ok(mut guard) => *guard = Some(all),
+        Err(poison) => *poison.into_inner() = Some(all),
+    }
     if let Ok(mut name_guard) = PROFILE_SLOT_NAMES_CACHE.lock() {
         *name_guard = Some(names);
+    }
+    if let Ok(mut map_guard) = PROFILE_SLOT_SAVED_MAP_CACHE.lock() {
+        *map_guard = Some(maps);
+    }
+    if let Ok(mut place_guard) = PROFILE_SLOT_PLACE_NAME_CACHE.lock() {
+        *place_guard = Some(place_names);
     }
     PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
     PROFILE_SLOT_NAMES_DECODED.store(named, Ordering::SeqCst);
     PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "stats-text: per-slot cache loaded from .sl2 ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
+        "stats-text: per-slot cache loaded from {source} ({decoded}/10 slots decoded, {named}/10 names decoded, {} bytes)",
         sl2.len()
     ));
-    true
+    decoded
+}
+
+/// Drop both per-slot caches so the next row populate re-reads the save that is actually active.
+///
+/// THE CACHES USED TO BE A PROCESS-LIFETIME LATCH. `ensure_profile_slot_stats_cached` returned early
+/// whenever they held anything, and nothing in the workspace ever put `None` back -- so the FIRST
+/// save read in a session described every ProfileSelect row for the rest of that session. Pick a
+/// different save file and the rows mixed two characters: `Location` and the level come off the
+/// game's own row model and followed the new save, while the name and the whole attribute line came
+/// from here and stayed on the old one. (`WL` merely vanished, because it is dropped when the cached
+/// slot's level disagrees with the row's -- the one field whose guard accidentally covered this.)
+pub(crate) fn invalidate_profile_slot_caches(reason: &str) {
+    let had = match PROFILE_SLOT_STATS_CACHE.lock() {
+        Ok(mut guard) => guard.take().is_some(),
+        Err(poison) => poison.into_inner().take().is_some(),
+    };
+    if let Ok(mut name_guard) = PROFILE_SLOT_NAMES_CACHE.lock() {
+        *name_guard = None;
+    }
+    if let Ok(mut map_guard) = PROFILE_SLOT_SAVED_MAP_CACHE.lock() {
+        *map_guard = None;
+    }
+    if let Ok(mut place_guard) = PROFILE_SLOT_PLACE_NAME_CACHE.lock() {
+        *place_guard = None;
+    }
+    PROFILE_SLOT_STATS_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_NAMES_DECODED.store(0, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_CACHE_STATE.store(0, Ordering::SeqCst);
+    if had {
+        let n = PROFILE_SLOT_CACHE_INVALIDATIONS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "stats-text: per-slot cache dropped ({reason}); the next row populate re-reads the active save (invalidations={n})"
+        ));
+    }
 }
 
 /// Push `utf16` onto the row's `ErStats` field with the game's own machinery, exactly as the native
@@ -974,6 +1317,78 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
 /// menu-arena object with a garbage heap vtable, and that dispatch jumped into `.rdata` (hard
 /// crash). Validate component -> vtable -> slot target are all game-image-plausible before letting
 /// the wrapper dispatch; otherwise skip fail-closed with full diagnostics.
+/// GFx value type of the child `name` on `row_proxy`, or `None` when the resolve itself could not be
+/// run. `Some(0)` means the resolve RAN and found nothing -- see [`gfx_value_type_is_resolved`].
+///
+/// Callers get the type rather than a bool because the type is the only honest answer: the resolve
+/// always hands back a constructed out proxy whose component slot points at itself, so a movie
+/// without the child is indistinguishable from one with it on every other observable.
+unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) -> Option<usize> {
+    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if row_proxy == 0 || row_proxy == null {
+        return None;
+    }
+    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+    };
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
+    };
+    if out == 0 || out == null {
+        return None;
+    }
+    let datatype = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize);
+    // Release exactly what the resolve constructed, exactly as the native populate does per field.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+    datatype
+}
+
+/// Is this summary row one of OUR edited `05_010_ProfileSelect` rows?
+///
+/// `CS::MenuSaveDataSummary`'s populate (vtable slot 1, `0x8757e0`) is a SHARED template: every
+/// surface that renders a character summary reaches it, including the game's own System>Quit
+/// `GameEnd` panel in `02_040_OptionSetting`, which owns its own `PlayerName` / `Level` /
+/// `StaticText_110502` / `Location` / `PlayTime` fields with its own geometry. Applying this mod's
+/// row presentation to whatever proxy arrives therefore edits the game's menu as well as ours --
+/// observed as the Quit Game panel losing its level caption, level and play time, since those hides
+/// DO land while the merged-header SetText silently does not.
+///
+/// The probe is `ErCharStats`, a field this mod adds to the ProfileSelect row template and that
+/// exists in no vanilla movie, so the test is self-identifying: no address, no dialog identity, and
+/// nothing to re-derive when the game updates. A row that fails it is handed back untouched.
+pub(crate) unsafe fn row_is_stats_panel_template(base: usize, row_proxy: usize) -> bool {
+    let ours =
+        unsafe { row_child_gfx_value_type(base, row_proxy, PROFILE_ROW_CHAR_STATS_FIELD_NAME) }
+            .is_some_and(gfx_value_type_is_resolved);
+    if ours {
+        PROFILE_OWN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst);
+    } else {
+        let n = PROFILE_FOREIGN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: summary row=0x{row_proxy:x} has no ErCharStats child -- not our ProfileSelect movie; left native (foreign_rows={n})"
+            ));
+        }
+    }
+    ours
+}
+
 pub(crate) unsafe fn push_stats_text_on_row(
     base: usize,
     row_proxy: usize,
@@ -1019,8 +1434,38 @@ pub(crate) unsafe fn push_stats_text_on_row(
     } else {
         0
     };
-    let component_live =
-        comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base);
+    // DID THE NAME ACTUALLY RESOLVE? The component-pointer checks below cannot answer that: on a
+    // miss the named-child ctor leaves the out proxy's component slot pointing at ITSELF, so `comp`
+    // is non-null and `comp_vt` is the game's own `CS::SceneObjProxy` vtable -- game-image-live by
+    // every test here. Only the GFx value TYPE separates a hit from a miss, and without this check
+    // every push reported success on every movie: 109,035 "successful" `ErCharStats` writes were
+    // logged against the System>Quit panel, which has no such field, while the visibility hides that
+    // travelled with them landed for real. Telemetry that cannot be wrong about this is the point.
+    let resolved = unsafe {
+        safe_read_i32(
+            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize)
+    .is_some_and(gfx_value_type_is_resolved);
+    if !resolved {
+        let n = PROFILE_STATS_PUSH_MISSING_FIELD.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: push REFUSED -- movie has no child '{}' on row=0x{row_proxy:x} (missing_field={n})",
+                name.trim_end_matches('\0')
+            ));
+        }
+        unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
+        return false;
+    }
+    // `dispatch_target_is_purecall`: a destructed component keeps a vtable full of `_purecall`,
+    // which lives in the game image and so passes `vtable_in_game_image`. Calling it is a
+    // write-to-NULL abort, not a soft failure.
+    let component_live = comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base);
     let accepted = if component_live {
         // The wrapper copies the UTF-16 into a DLString synchronously. In live editor mode,
         // font/align hot-reload rides this same safe SetText path by wrapping the text in
@@ -1074,7 +1519,26 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     } else {
         0
     };
-    if comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base) {
+    // Same hit-vs-miss test as `push_stats_text_on_row`: a proxy whose named-child resolve missed
+    // still carries a game-image vtable, so the type word is what says a field is really there.
+    let resolved = unsafe {
+        safe_read_i32(
+            field_proxy
+                + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET
+                + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
+        )
+    }
+    .map(|raw| (raw as u32 & 0x8f) as usize)
+    .is_some_and(gfx_value_type_is_resolved);
+    if !resolved {
+        PROFILE_STATS_PUSH_MISSING_FIELD.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+    if comp_vt != 0
+        && vtable_in_game_image(comp_vt, base)
+        && vtable_in_game_image(slot_fn, base)
+        && !dispatch_target_is_purecall(slot_fn, base)
+    {
         let live_text = profile_editor_live_text_for_field(label, utf16);
         unsafe { settext(component_slot, live_text.as_ref().as_ptr() as usize) };
         crate::experiments::startup_hooks::remember_profile_editor_field_target(
@@ -1192,16 +1656,36 @@ pub(crate) use er_loading_portrait::RowSlotFieldVisibility;
 /// the seven native row clips are REUSED -- a clip that showed `[ up .. ]` renders a save file two
 /// scrolls later, and the same movie can outlive the picker window -- so every row states the full
 /// answer for all three fields rather than only touching the ones it wants gone.
+/// Apply `want` to every row field and return `(hidden, shown)` -- the number of fields the setter
+/// ACTUALLY changed, not the number we asked it to.
+///
+/// The counts are returned rather than swallowed because `set_row_field_visible` fails soft: per
+/// `GFX_VALUE_TYPE_DISPLAY_OBJECT`, the native setter returns without doing anything unless the
+/// resolved value is a display object, so a hide can silently no-op. A caller that logs "I called
+/// the hide" is therefore reporting intent, not effect, and will claim success while the screen
+/// still shows the field. That exact false positive was reported as working twice before the user's
+/// own eyes settled it (2026-08-07). Callers must log the returned counts.
+#[must_use]
 pub(crate) unsafe fn apply_row_slot_info_visibility(
     base: usize,
     row_proxy: usize,
     want: RowSlotFieldVisibility,
-) {
+) -> (usize, usize) {
+    // EVERY field any row kind writes must appear here. The four native ones were stated and the
+    // injected fields were not, so the unstated ones inherited the previous kind's content on a
+    // recycled clip: the attribute line bled onto browse rows, then the drive labels bled onto
+    // character rows. Each drive button frame is paired with its text bit here for the same reason:
+    // hiding only the label would leave an empty clickable-looking button behind.
     let fields = [
         (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
         (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
         (PROFILE_ROW_LOCATION_FIELD_NAME, want.location),
         (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
+        (PROFILE_ROW_ER_STATS_FIELD_NAME, want.er_stats),
+        (PROFILE_ROW_CHAR_STATS_FIELD_NAME, want.char_stats),
+        (PROFILE_ROW_BACKING_FIELD_NAME, want.backing),
+        (PROFILE_ROW_CURRENT_PATH_FIELD_NAME, want.current_path),
+        (PROFILE_ROW_CURRENT_PATH_BUTTON_NAME, want.current_path),
     ];
     let (mut hidden, mut shown) = (0usize, 0usize);
     for (name, visible) in fields {
@@ -1213,18 +1697,40 @@ pub(crate) unsafe fn apply_row_slot_info_visibility(
             }
         }
     }
+    for (index, visible) in want.drive_cells.into_iter().enumerate() {
+        for name in [
+            PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES[index],
+            PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[index],
+        ] {
+            if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
+                if visible {
+                    shown += 1;
+                } else {
+                    hidden += 1;
+                }
+            }
+        }
+    }
     if hidden > 0 {
         let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
         if rows <= 4 || rows.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "save-picker: hid {hidden} per-slot field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} rows={rows})",
-                want.level, want.location, want.play_time
+                "save-picker: hid {hidden} row field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} er_stats={} char_stats={} backing={} current_path={} visible_drive_cells={} rows={rows})",
+                want.level,
+                want.location,
+                want.play_time,
+                want.er_stats,
+                want.char_stats,
+                want.backing,
+                want.current_path,
+                want.drive_cells.iter().filter(|visible| **visible).count()
             ));
         }
     }
     if shown > 0 {
         PROFILE_ROW_SLOT_INFO_SHOWN_ROWS.fetch_add(1, Ordering::SeqCst);
     }
+    (hidden, shown)
 }
 
 /// Point the row model's `PlayTime` `CS::MenuString` at `text` and return the pointer it displaced,
@@ -1331,6 +1837,29 @@ unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
     Some(build_stats_compact_html_utf16(&attrs))
 }
 
+thread_local! {
+    /// Non-zero while this thread is inside the CURRENT-PLAYER summary builder
+    /// (`PROFILE_CURRENT_ROW_POPULATE_RVA`), which calls the per-slot row populate we also hook.
+    ///
+    /// This exists because the slot index cannot answer "whose character is this row". The builder
+    /// composes its transient summary as `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
+    /// index 0 with the LIVE player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
+    /// both that row and save slot 0's real row. Guessing "0 means the live character" put the
+    /// loaded character's NAME on save slot 0's row, level, attributes and location: with slot 3 of
+    /// `100-Lilbro` loaded, the Load Game list read "Vagabond, RL 100 WL 20" -- Vagabond is the RL 9
+    /// character that was loaded, everything else on the row is angrE's (user-reported 2026-08-07).
+    /// Being inside the builder is the fact itself rather than a proxy for it, and it is per-thread
+    /// because the row populate is called from other threads' menu work too.
+    static IN_CURRENT_PLAYER_ROW_BUILD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Is the row being populated right now the transient CURRENT-PLAYER summary rather than a save slot?
+fn building_current_player_row() -> bool {
+    IN_CURRENT_PLAYER_ROW_BUILD
+        .try_with(|depth| depth.get() != 0)
+        .unwrap_or(false)
+}
+
 pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     param_1: usize,
     row_proxy: usize,
@@ -1341,32 +1870,96 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         return;
     }
     let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+    // Marked across the original because the per-slot row populate runs INSIDE it (the builder ends
+    // `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and that nested call
+    // is the one that has to know this row is the live character's.
+    let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get() + 1));
     unsafe { f(param_1, row_proxy) };
+    let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get().saturating_sub(1)));
     if !stats_panel_enabled() || row_proxy == 0 || row_proxy == null {
         return;
     }
     let Ok(base) = game_module_base() else {
         return;
     };
+    // THE GAME'S OWN SUMMARY PANELS ARE NOT OURS TO DRAW. This hook is on the CURRENT-PLAYER summary
+    // builder, which the System>Quit `GameEnd` panel uses as much as the ProfileSelect current row --
+    // and that panel is where the user watched the level caption, level and play time disappear.
+    if !unsafe { row_is_stats_panel_template(base, row_proxy) } {
+        return;
+    }
     let Some(stats) = (unsafe { title_load_row_stats_text() }) else {
         return;
     };
     let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
-    if let Some(name) = build_loaded_char_name().or_else(|| {
-        if cache_loaded {
-            profile_slot_name(0)
-        } else {
-            None
+    // Name AND level from ONE character. This row is the CURRENT player, so live PGD is the truth;
+    // slot 0 is only a fallback for when there is no live PGD yet, and then BOTH values come from
+    // slot 0. Mixing the two sources renders one character's name beside another's level.
+    // WHOSE CHARACTER IS THIS ROW? Normally the live one -- this hook builds the current-player
+    // summary. But while a foreign save is previewed, the rows describe THAT save, and stamping the
+    // loaded character's identity here puts their name (and level, and weapon level) on somebody
+    // else's row. Slot 0 of the previewed save is the honest answer then, which is what the cache
+    // now holds.
+    let foreign_preview = crate::experiments::startup_hooks::system_quit_foreign_preview_active();
+    let identity = match build_loaded_char_name() {
+        Some(name) if !foreign_preview => Some((
+            name,
+            build_loaded_char_level(),
+            build_loaded_char_weapon_level(),
+        )),
+        _ if cache_loaded => profile_slot_name(0)
+            .map(|name| (name, profile_slot_level(0), profile_slot_weapon_level(0))),
+        _ => None,
+    };
+    if let Some((name, level, weapon_level)) = identity {
+        // MERGED ROW HEADER -- the SECOND populate path. This hook, not the row-model one, is what
+        // draws the title Load Game / current ProfileSelect row (proved by telemetry: the row-model
+        // path logged zero PlayerName stagings while this one logged thousands). Both paths have to
+        // compose the same header or the screen the user is actually looking at keeps the old
+        // three-element layout while the other one merges.
+        //
+        let mut values = ProfileRowHeaderValues::from_name(name);
+        if let Some(level) = level {
+            values = values.with_rune_level(level);
         }
-    }) {
-        let name = nul_terminated_utf16(&name);
+        if let Some(wl) = weapon_level {
+            values = values.with_weapon_level(i32::from(wl));
+        }
+        let header = er_loading_portrait::profile_row_label::row_header_label(&values);
+        let merged = values.rune_level.is_some();
+        let header_utf16 = nul_terminated_utf16(&header);
         PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-        let pushed = unsafe { push_stats_text_on_row(base, row_proxy, "PlayerName\0", &name) };
+        let pushed =
+            unsafe { push_stats_text_on_row(base, row_proxy, "PlayerName\0", &header_utf16) };
         if pushed {
-            PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "stats-text: pushed title-load PlayerName on row=0x{row_proxy:x}"
-            ));
+            let subs = PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+            // Only hide the separate caption/value once the merged string actually carries the
+            // level: hiding them for a header that degraded to the bare name would delete the
+            // level from the row instead of moving it.
+            let (hidden, shown) = if merged {
+                unsafe {
+                    apply_row_slot_info_visibility(
+                        base,
+                        row_proxy,
+                        RowSlotFieldVisibility::NATIVE_MERGED,
+                    )
+                }
+            } else {
+                (0, 0)
+            };
+            // This hook fires every frame the row is on screen; the un-throttled line here wrote
+            // 11.5k log entries in one sitting. Same first-few-then-powers-of-two shape the other
+            // row logs use.
+            //
+            // `hidden` is the load-bearing number, not `merged`: `merged` only says the string
+            // carried a level, while `hidden` says the caption and value actually went away.
+            // `hidden=0` with `merged=true` means the row still shows "Level N" beside the merged
+            // header -- report the effect, never the intent.
+            if subs <= 4 || subs.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "stats-text: pushed title-load PlayerName header='{header}' merged={merged} hidden={hidden} shown={shown} on row=0x{row_proxy:x} (subs={subs})"
+                ));
+            }
         } else {
             PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
         }
@@ -1401,6 +1994,12 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     };
 }
 
+/// Rows the PER-ROW path composed a merged header for. Local to the log throttle; the product
+/// oracle is the `hidden`/`shown` pair on the line itself, not this count.
+static PROFILE_ROW_MERGED_HEADER_ROWS: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_DRIVE_NATIVE_CURSOR_APPLIES: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_DRIVE_NATIVE_CURSOR_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     row_model: usize,
     row_proxy: usize,
@@ -1422,6 +2021,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // one visual line.
     let mut staged_player_name: Option<(usize, Vec<u16>)> = None;
     let mut staged_location: Option<(usize, Vec<u16>)> = None;
+    let mut drive_strip_focus: Option<er_save_picker::DriveStripFocus> = None;
     if row_model != 0
         && row_model != null
         && row_proxy != 0
@@ -1429,9 +2029,16 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
         && PROFILE_STATS_PUSH_IN_PROGRESS.swap(1, Ordering::SeqCst) == 0
     {
         let base = game_module_base().unwrap_or(null);
-        if base != null {
+        // Same gate as the current-row hook: this template populates every character-summary surface
+        // in the game, so a row that is not one of our edited ProfileSelect rows gets nothing from us
+        // -- no merged header, no visibility statement, no pushes -- and reaches the original exactly
+        // as the game built it.
+        if base != null && unsafe { row_is_stats_panel_template(base, row_proxy) } {
             let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
                 .unwrap_or(-1);
+            // Read once, before anything keys on the slot index: it is the difference between save
+            // slot 0's row and the transient current-player row, which share that index.
+            let current_player_row = building_current_player_row();
             let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)
                 .contains(&slot)
                 .then_some(slot as usize);
@@ -1448,17 +2055,130 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // means "exactly what the game drew", and until a row was actually hidden the re-assert
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
+            drive_strip_focus = slot_info.as_ref().and_then(|info| info.drive_strip_focus);
+            // MERGED ROW HEADER (user request 2026-08-06/07): the name, `RL <level>` and (once
+            // sourced) `WL <max weapon level>` render as ONE string in `PlayerName` instead of
+            // three separately-placed fields. Composed HERE, before the visibility statement,
+            // because the statement has to say whether the separate `Level` caption and value
+            // survive -- and they must survive on any row we could not compose a header for, or
+            // that row loses its level entirely. Character rows only: a browse/drive row has no
+            // character to describe, and `slot_info` being `Some` is exactly "the picker owns
+            // this row".
+            // GATE ON `slot_info`, NOT ON `picker_row`. `picker_row` only says the slot index falls
+            // in 0..10, which is true of every ordinary character row -- gating on it disabled the
+            // merge on exactly the rows it exists for, and the screen showed the old three-element
+            // layout while the telemetry claimed success. `slot_info` is the real "the picker owns
+            // this row" answer, and it is what the visibility match below already keys on.
+            let merged_header = if slot_info.is_none() && stats_panel_enabled() {
+                // Latched; the first caller pays the .sl2 read and the rest hit the cache.
+                unsafe { ensure_profile_slot_stats_cached(base) };
+                // WHOSE NAME BELONGS ON THIS ROW. The live character's only on the transient
+                // current-player row, which `building_current_player_row` identifies by the call
+                // stack it is on. It used to be identified by `slot == 0`, which is also every save
+                // slot 0 row: with another slot's character loaded, that put the loaded name on save
+                // slot 0's row beside save slot 0's level, attributes and location.
+                let name = if current_player_row {
+                    build_loaded_char_name().or_else(|| profile_slot_name(slot))
+                } else {
+                    profile_slot_name(slot)
+                };
+                name.map(|name| {
+                    let mut values = ProfileRowHeaderValues::from_name(name);
+                    // The row model's level word is the one the native `Level` field formats
+                    // (`rowModel + 0x88`), taken from that slot's ProfileSummary record. On the
+                    // transient current-player row it is the LIVE character's level and is the only
+                    // source; on a save slot it is the RECORD's, which describes the record's
+                    // character -- not necessarily the body that will load. So a save slot takes its
+                    // level from the same decode of the same body the name and the attribute line
+                    // came from, and falls back to the record only when the body did not decode.
+                    //
+                    // This is not hypothetical tidiness: on `100-Lilbro`, whose summary table is
+                    // another save's, slot 1 rendered "Dark Moon Bean, RL 7" -- the body's name
+                    // beside the stale record's level, for a character who is RL 90 (observed
+                    // 2026-08-07, +54146ms).
+                    let row_level =
+                        unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_LEVEL_88_OFFSET) };
+                    let level = if current_player_row {
+                        row_level
+                    } else {
+                        profile_slot_level(slot).or(row_level)
+                    };
+                    if let Some(level) = level {
+                        values = values.with_rune_level(level);
+                    }
+                    // WL has no native field at all, so it comes from the same body decode as the
+                    // level above -- keeping every number on the row a statement about one
+                    // character. The current-player row reads it off live `PlayerGameData` for the
+                    // same reason.
+                    let weapon_level = if current_player_row {
+                        build_loaded_char_weapon_level()
+                    } else {
+                        profile_slot_weapon_level(slot)
+                    };
+                    if let Some(wl) = weapon_level {
+                        values = values.with_weapon_level(i32::from(wl));
+                    }
+                    er_loading_portrait::profile_row_label::row_header_label(&values)
+                })
+            } else {
+                None
+            };
+            // A character row's `Location` is formatted from that slot's ProfileSummary record, so
+            // it is only this character's location when the record is this character's. When it is
+            // not, LEND the record the id the save itself evidences for this body's map and let the
+            // game's own writer render it -- restored right after the populate. The field is only
+            // hidden when even that has no answer, because the remaining alternative is printing the
+            // place of whoever used to occupy the slot.
+            //
+            // The transient current-player row is exempt: it is not save slot 0, so the slot-0
+            // record it would be compared against is somebody else's by construction, and its
+            // location comes from the live player either way.
+            let record_is_this_characters = current_player_row
+                || slot_info.is_some()
+                || unsafe { profile_slot_location_is_this_characters(slot) };
+            let repair_place_name = if record_is_this_characters {
+                None
+            } else {
+                profile_slot_place_name_id(slot)
+            };
+            let location_available = record_is_this_characters || repair_place_name.is_some();
             let (want_visibility, last_saved) = match slot_info {
                 Some(info) => (
-                    RowSlotFieldVisibility::browse_row(info.location.is_some()),
+                    RowSlotFieldVisibility::browse_row(
+                        info.location.is_some(),
+                        info.er_stats,
+                        info.drive_cell_count,
+                    ),
                     info.location,
+                ),
+                None if merged_header.is_some() => (
+                    RowSlotFieldVisibility::native_merged(location_available),
+                    None,
                 ),
                 None => (RowSlotFieldVisibility::NATIVE, None),
             };
+            if !location_available && merged_header.is_some() {
+                let rows = PROFILE_ROW_FOREIGN_LOCATION_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+                if rows <= 10 || rows.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}) and no consistent record in this save covers that map, so there is no place name to show (rows={rows})",
+                        profile_slot_saved_map(slot).unwrap_or(0)
+                    ));
+                }
+            }
             if want_visibility != RowSlotFieldVisibility::NATIVE
                 || PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.load(Ordering::SeqCst) != 0
             {
-                unsafe { apply_row_slot_info_visibility(base, row_proxy, want_visibility) };
+                let (hidden, shown) =
+                    unsafe { apply_row_slot_info_visibility(base, row_proxy, want_visibility) };
+                if merged_header.is_some() {
+                    let rows = PROFILE_ROW_MERGED_HEADER_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if rows <= 4 || rows.is_power_of_two() {
+                        append_autoload_debug(format_args!(
+                            "stats-text: per-row merged header slot={slot} hidden={hidden} shown={shown} on row=0x{row_proxy:x} (rows={rows})"
+                        ));
+                    }
+                }
             }
             if let Some(text) = last_saved {
                 // NUL-terminated UTF-16 for the native SetText, kept alive past the populate call.
@@ -1487,9 +2207,10 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             }
             // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
             // title, `ErStats` carries file details/navigation copy, `Location` carries timestamps,
-            // and drive rows draw their actual cells through separate `DriveCell_*` row children.
-            // Blank every synthetic drive child on every picker-owned row first so recycled row clips
-            // cannot leak a previous drive strip into file/directory rows.
+            // and only the drive row exposes its actual cells through separate `DriveCell_*` row
+            // children. Blank every synthetic drive child on every picker-owned row as content
+            // hygiene in addition to the row-kind visibility decision above; either layer then stops
+            // a recycled drive strip leaking into file/directory rows.
             if let Some(row) = picker_row {
                 let blank = [0u16];
                 let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErCharStats\0", &blank) };
@@ -1512,6 +2233,15 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                         }
                     }
                 }
+                let path = save_picker_current_path_text(row).unwrap_or_else(|| vec![0]);
+                let _ = unsafe {
+                    push_stats_text_on_row(
+                        base,
+                        row_proxy,
+                        PROFILE_ROW_CURRENT_PATH_FIELD_NAME,
+                        &path,
+                    )
+                };
             }
             let browse_lines = picker_row.and_then(save_picker_browse_stats_lines);
             if let Some((top, bottom)) = browse_lines {
@@ -1545,34 +2275,35 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                         build_loaded_char_attributes()
                     }
                 });
+                // The merged header describes the row's IDENTITY, not its attributes, so it is
+                // staged whether or not the attribute line decoded. Staging it inside the `attrs`
+                // block (where the bare name used to live) would leave a row whose `Level` caption
+                // is hidden by `NATIVE_MERGED` with no merged label to replace it -- a row that
+                // silently lost its level.
+                if let Some(header) = merged_header.as_deref() {
+                    let header_utf16 = nul_terminated_utf16(header);
+                    PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+                    match unsafe { stage_row_model_player_name(row_model, header_utf16.as_ptr()) } {
+                        Some(displaced) => {
+                            let subs =
+                                PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                            if subs <= 4 {
+                                append_autoload_debug(format_args!(
+                                    "stats-text: staged merged PlayerName slot={slot} header='{header}' on row_model=0x{row_model:x} row=0x{row_proxy:x}"
+                                ));
+                            }
+                            staged_player_name = Some((displaced, header_utf16));
+                        }
+                        None => {
+                            PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
                 if let Some(attrs) = attrs {
                     let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
                     // Normal character rows share the compact row stack with the save-file picker,
                     // so all eight colored attributes fit on one compact line.
                     let stats = build_stats_compact_html_utf16(&attrs);
-                    if let Some(name) = if slot == 0 {
-                        build_loaded_char_name().or_else(|| profile_slot_name(slot))
-                    } else {
-                        profile_slot_name(slot)
-                    } {
-                        let name_utf16 = nul_terminated_utf16(&name);
-                        PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-                        match unsafe { stage_row_model_player_name(row_model, name_utf16.as_ptr()) }
-                        {
-                            Some(displaced) => {
-                                PROFILE_PLAYER_NAME_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst);
-                                if seen <= 4 {
-                                    append_autoload_debug(format_args!(
-                                        "stats-text: staged native PlayerName slot={slot} name='{name}' on row_model=0x{row_model:x} row=0x{row_proxy:x}"
-                                    ));
-                                }
-                                staged_player_name = Some((displaced, name_utf16));
-                            }
-                            None => {
-                                PROFILE_PLAYER_NAME_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst);
-                            }
-                        }
-                    }
                     let blank = [0u16];
                     let _ = unsafe { push_stats_text_on_row(base, row_proxy, "ErStats\0", &blank) };
                     let pushed =
@@ -1607,6 +2338,35 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             };
         }
         PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
+    }
+    // The row proxy is setter-valid only while this hook owns the populate call. Applying after the
+    // original returned failed on every row because native teardown had already invalidated the
+    // setter path. Constrain the row's own animated Cursor now; native hover later changes only its
+    // visibility, preserving this cell-sized geometry.
+    if let Some(focus) = drive_strip_focus {
+        if let Ok(base) = game_module_base() {
+            if unsafe {
+                crate::experiments::startup_hooks::apply_drive_row_native_cursor(
+                    base, row_proxy, focus,
+                )
+            } {
+                let applies =
+                    PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
+                if applies <= 4 || applies.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
+                    ));
+                }
+            } else {
+                let failures =
+                    PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                if failures <= 4 || failures.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
+                    ));
+                }
+            }
+        }
     }
     let ret = unsafe { f(row_model, row_proxy, arg3, arg4) };
     // The populate has read the strings; give the row model its own pointers back so our borrows do

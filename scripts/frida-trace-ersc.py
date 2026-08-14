@@ -160,6 +160,13 @@ def main() -> int:
     if not args.hooks and not args.stalker:
         parser.error("one of --hooks or --stalker is required")
 
+    # Detached, python block-buffers stdout, so a run that is working looks identical to one that
+    # hung: nothing appears until it exits. Line buffering makes progress visible while it traces.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):
+        pass
+
     try:
         agent_js = AGENT_JS_PATH.read_text(encoding="utf-8")
     except OSError as exc:
@@ -247,17 +254,25 @@ def main() -> int:
         print("=" * 72)
         print()
 
-        # Stay resident on OBSERVABLE events only: the gadget script being destroyed (the game
-        # is gone) or stdin reaching EOF (the operator is done). No timer and no poll -- a trace
-        # window is exactly as long as the human needs to use the item and get a match, which is
-        # not a number this script can know.
+        # Stay resident on OBSERVABLE events only -- the gadget script being destroyed (the game
+        # is gone), or the operator finishing. No timer and no poll: a trace window is exactly as
+        # long as it takes a human to use the item and get a match, which is not a number this
+        # script can know.
         detached = threading.Event()
         script.on("destroyed", detached.set)
-        try:
-            sys.stdin.read()
-        except KeyboardInterrupt:
-            pass
-        detached.set()
+        if sys.stdin.isatty():
+            # Interactive: Ctrl-D ends it.
+            try:
+                sys.stdin.read()
+            except KeyboardInterrupt:
+                pass
+        else:
+            # Detached (nohup/&). Reading stdin here is not just useless but harmful -- pointed
+            # at /dev/zero it would consume an endless stream of NULs into memory forever, and
+            # pointed at /dev/null it would exit instantly and record nothing. Wait for the game
+            # instead, and let a signal end it early.
+            print("detached: no tty, tracing until the game exits (or this process is killed)")
+            detached.wait()
 
         if args.stalker:
             try:

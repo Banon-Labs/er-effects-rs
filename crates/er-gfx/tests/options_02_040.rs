@@ -7,12 +7,12 @@
 
 mod common;
 
+use er_game_base::fnv1a::fnv1a64;
 use er_gfx::options_02_040::{
     QUIT4_GRID_CELL_NAMES, QUIT4_WIN_FNV1A64, QUIT4_WIN_LEN, Quit4Error, VANILLA_WIN_FNV1A64,
     VANILLA_WIN_LEN, grid_horizontal_axis_enabled, grid_item_index, grid_vertical_axis_enabled,
     is_known_vanilla_win, measure_grid, quit4,
 };
-use er_gfx::title_05_000::fnv1a64;
 use er_gfx::{Movie, Tag};
 
 /// The `MENU_FL_QuitGame` sprite the Quit tab's `GridControl` measures its geometry from.

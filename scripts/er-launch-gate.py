@@ -19,15 +19,18 @@ WHAT IT CHECKS
 --------------
 1. STALENESS -- every built DLL is newer than the sources it was built from. A launch that validates
    a DLL older than the tree is measuring a build that no longer exists.
-2. REACHABILITY -- every registered predicate below was OBSERVED true in a recorded run. A predicate
-   nobody has ever seen fire blocks the launch and names itself in the failure.
+2. REACHABILITY -- every registered predicate relevant to the selected named probe scope was
+   OBSERVED true in a recorded run. A relevant predicate nobody has ever seen fire becomes an
+   explicit obligation; a relevant predicate contradicted by a current run blocks the launch.
 
 Registering a predicate is the point of contact: when you write a new release/disarm/gate condition,
-add it here with the oracle field or log pattern that proves it fired. If you cannot name evidence
-for it, that is the gate telling you the run you are about to start cannot validate it either.
+add it here with the feature it protects and the oracle field or log pattern that proves it fired.
+Named scopes select whole features, never hand-written predicate exclusion lists, so a scope cannot
+silently omit one predicate while retaining another predicate for the same feature.
 
 USAGE
-  python3 scripts/er-launch-gate.py                      # gate the launch (exit 1 = do not launch)
+  python3 scripts/er-launch-gate.py                      # full-product gate (fail-closed default)
+  python3 scripts/er-launch-gate.py --scope save-load-continue
   python3 scripts/er-launch-gate.py --run <dir>          # score a specific recorded run
   python3 scripts/er-launch-gate.py --selftest           # prove the gate itself works
 """
@@ -55,6 +58,30 @@ DEBUG_LOG_NAMES = (
     "er-effects-autoload-debug.log",
     "er-invasion-warp-dll.log",
 )
+
+# Evidence a run produces OUTSIDE the game directory. Frida-gadget traces are driven from the
+# host and write where they are told, which is deliberately not the repo and not next to the
+# executable -- so without this the gate is blind to them exactly as it was blind to
+# er-invasion-warp-dll.log, and any predicate they own would read NEVER OBSERVED forever.
+# Missing files are skipped silently: absence is what "no run has looked yet" looks like.
+EXTRA_EVIDENCE_PATHS = (
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
+    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl",
+)
+
+def _extra_evidence_paths() -> tuple[str, ...]:
+    """Host-side evidence files, indirected so the selftest can switch them off.
+
+    Reading them directly meant the selftest's synthetic fixtures absorbed whatever the last LIVE
+    run had written, so a genuine runtime contradiction could fail a test about fixture logic.
+    A test that depends on the machine's current state is not a test.
+    """
+    return EXTRA_EVIDENCE_PATHS
+
 
 # Where a live run drops its artifacts, and where this session archives them.
 DEFAULT_RUN_DIRS = [
@@ -84,13 +111,27 @@ class Predicate:
     name: str
     why: str
     owner: str
+    feature: str
     oracle_all: dict[str, object] = field(default_factory=dict)
     log_any: tuple[str, ...] = ()
     informative_if: tuple[str, ...] = ()
+    informative_oracle: dict[str, object] = field(default_factory=dict)
 
     def is_informative(self, telemetry: dict, log_text: str) -> bool:
-        """Whether this run reached the state the predicate is about."""
-        if not self.informative_if:
+        """Whether this run reached the state the predicate is about.
+
+        `informative_oracle` exists because a LOG regex is a poor precondition for a state the
+        telemetry names exactly. `epoch [1-9]` matched somewhere in a combined multi-DLL log on a
+        BOOT-ONLY run, so three reload predicates read that run as a contradiction and refused
+        every launch -- the precondition has to be the field that actually says a reload
+        happened, not a substring that can appear anywhere.
+        """
+        if not self.informative_if and not self.informative_oracle:
+            return True
+        for key, want in self.informative_oracle.items():
+            if key not in telemetry or not _values_agree(telemetry[key], want):
+                return False
+        if self.informative_oracle and not self.informative_if:
             return True
         return any(re.search(pattern, log_text) for pattern in self.informative_if)
 
@@ -144,11 +185,13 @@ PREDICATES: tuple[Predicate, ...] = (
             "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
+        feature="reload-system-quit",
         oracle_all={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
         log_any=(r"cvar10-warp-clear: load2 epoch [1-9]\d* mms=1[3-8] fin=[0-4]",),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="case7_gate_clear_at_release",
@@ -165,6 +208,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "(case7-savedrain-satisfy) / crates/er-title-flow/src/title_tick_cover.rs "
             "(reload-drain-b80)"
         ),
+        feature="reload-system-quit",
         # Satisfied either by the gate demonstrably not being blocked, or by a satisfier having been
         # OBSERVED to run at a reload epoch. Both are recorded facts, not predictions.
         oracle_all={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
@@ -173,8 +217,9 @@ PREDICATES: tuple[Predicate, ...] = (
             r"reload-drain-b80",
         ),
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="warp_clear_release_world_live",
@@ -186,6 +231,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
+        feature="reload-system-quit",
         oracle_all={
             # The latch itself, and that it named a RELOAD epoch rather than the boot epoch --
             # epoch 0 is never touched by the clear, so a boot-only observation proves nothing.
@@ -195,8 +241,9 @@ PREDICATES: tuple[Predicate, ...] = (
             "oracle_player_present": True,
         },
         # A boot-only run never reloaded, so it has nothing to say about a reload-time clear.
-        # Without this it reads as a contradiction and blocks every launch.
-        informative_if=(r"epoch=[1-9]", r"epoch [1-9]"),
+        # Keyed on the telemetry field rather than a log substring: `epoch [1-9]` matched inside
+        # an unrelated DLL's log on an epoch-0 run and turned a silence into a refusal.
+        informative_oracle={"oracle_current_load_epoch": lambda v: isinstance(v, int) and v >= 1},
     ),
     Predicate(
         name="legacy_converter_tree_readable",
@@ -212,6 +259,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "crates/er-invasion-warp/src/legacy_map_regions.rs (walk_tree) / "
             "crates/er-invasion-warp-dll/src/map_hooks.rs (legacy_map_regions_for_view)"
         ),
+        feature="world-map-markers",
         # A non-zero block count is the only reading that proves the walk reached real nodes.
         # Deliberately NOT satisfied by the marker count: a save that has visited every dungeon
         # legitimately yields zero markers while the walk is working perfectly.
@@ -221,7 +269,227 @@ PREDICATES: tuple[Predicate, ...] = (
         # Only a run that actually built a world-map ViewModel has an opinion on the tree walk.
         informative_if=(r"map-inject:",),
     ),
+    # RETIRED: steam_matchmaking_reached. It was ANSWERED, in the negative, and a predicate whose
+    # question is settled must not sit here refusing launches forever. Measured 2026-08-04: 33
+    # steam_api64 flat exports hooked at BOOT -- 18 ISteamMatchmaking, 10 ISteamNetworking*, 5
+    # ISteamFriends rich presence -- and a complete invasion produced ZERO calls. Seamless does
+    # not reach Steam through the flat C API. That is why the predicate below exists instead.
+    Predicate(
+        name="steam_vtable_call_observed",
+        why=(
+            "THE ONLY REMAINING ROUTE TO SEAMLESS TARGETING. Static reading is out -- the "
+            "deciding functions (ersc 0x18006a2d0, 0x18006a1e0) are Themida-VIRTUALIZED, proven "
+            "by a live dump whose jump targets are themselves chains of `e9` jumps, so no dump "
+            "recovers them. The flat Steam C API is out -- 33 exports hooked at boot, zero calls "
+            "across a full invasion. What is left is the interface VTABLE: a C++ mod fetches the "
+            "pointer once and calls slots directly. If a vtable call is never observed either, "
+            "Steam is not the layer at all and the next one is ERSC's own sockets -- and a run "
+            "that cannot tell those apart is a run wasted, which is what this gate is for."
+        ),
+        owner="scripts/frida-steam-vtable-trace.py",
+        feature="seamless-session-tracing",
+        # A vtable CALL, not merely an interface handed out. Capturing the pointer proves the
+        # accessor fired; it says nothing about whether Seamless ever calls through it, and
+        # conflating the two is the same "hooked is not called" error the retired predicate hit.
+        log_any=(r'"type":\s*"vcall"',),
+        # Only a run whose vtable trace produced SOMETHING has an opinion. An empty file means
+        # the tracer never attached or attached too late, which is a silence, not a refutation.
+        informative_if=(r'"type":\s*"(vcall|iface)"',),
+    ),
+    Predicate(
+        name="steam_interface_version_resolved",
+        why=(
+            "WITHOUT THIS THE 10068 RECORDED VTABLE CALLS ARE ANONYMOUS. All 5 interfaces came "
+            "back through SteamInternal_FindOrCreateUserInterface with version=None, because the "
+            "capture used a prefix allowlist that matched nothing -- so every interface was "
+            "labelled by its accessor and none could be told from another. Slot indices without "
+            "an interface identity name no mechanism: slot[29] firing 6908 times is a transport, "
+            "and the targeting call is one of the slots that fired twice. The filter is now any "
+            "'<Name><3 digits>' string, and this run has to show it resolving."
+        ),
+        owner="scripts/frida-steam-vtable-trace.py",
+        feature="seamless-session-tracing",
+        # A non-null version on an iface record. NOT satisfied by vcalls: those were already
+        # plentiful while every interface stayed unidentified, which is the exact failure here.
+        # Satisfied by an interface being IDENTIFIABLE, which is the actual requirement -- either
+        # the decoded version field, or the raw argument bytes carrying one. The bytes route is
+        # not a loophole: 'Steam'/'STEAM' in hex at the head of an accessor argument decoded
+        # offline to SteamUser021 and STEAMUSERSTATS_INTERFACE_VERSION, which answered the
+        # question the field was only ever a convenience for. Testing for the FIELD when the
+        # requirement is the ANSWER is how a gate refuses a launch over settled ground.
+        log_any=(
+            r'"version":\s*"[A-Za-z][A-Za-z0-9_]{4,40}\d{3}"',
+            r'"bytes":\s*"5374 ?65 ?61 ?6d'.replace(' ', ''),
+            r'"bytes":\s*"535445414d',
+        ),
+        informative_if=(r'"type":\s*"iface"',),
+    ),
+    Predicate(
+        name="ersc_session_state_observed",
+        why=(
+            "THE LAST UNREAD LINK. What sets session state 0x15 -- the only state offering 'Seek "
+            "opponent' -- and what consumes the opponent handle that option latches at S+0x1F0 "
+            "both live inside the Themida-virtualized seamless_session_manager dispatcher and "
+            "CANNOT be read. They can only be watched. If OSM is never captured, the tracer saw "
+            "nothing and the run proves nothing about the state machine; that must not be "
+            "mistaken for 'the state never changed'."
+        ),
+        owner="scripts/frida-ersc-session-trace.py",
+        feature="seamless-session-tracing",
+        # A real session reading. NOT satisfied by an 'osm' capture alone: capturing the object
+        # proves a hook fired, not that S+0x110 was ever readable through it -- the same
+        # hooked-is-not-called conflation that made two earlier predicates look promising.
+        log_any=(r'"type":\s*"session"',),
+        informative_if=(r'"type":\s*"(session|osm|menu-open|action)"',),
+    ),
+    Predicate(
+        name="hunt_hook_lands_on_steamclient",
+        why=(
+            "THE ONE FACT ABOUT HUNT MODE NO OFFLINE WORK CAN ESTABLISH. Every other detour this "
+            "repo installs targets the game image or ersc; hunt's goes onto vtable slot 4 of "
+            "ISteamMatchmaking, which lives in steamclient64.dll -- a different module, loaded by "
+            "Steam, with its own page protections. Whether the union dispatcher can take that "
+            "target is answerable only in a live process. If it cannot, hunt is INERT: every query "
+            "goes out unfiltered and the player sees a perfectly ordinary search, which is exactly "
+            "what 'the filter is working and nobody is there' looks like. The DLL logs the failure "
+            "and the oracle carries it, so a run that comes back with this false has told us "
+            "something; a run that never looks has not."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (install_hunt_hook)",
+        feature="invasion-hunt",
+        oracle_all={"oracle_invasion_warp_hunt_hooked": True},
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        # A run with hunt off, or one that never reached a lobby query, has no opinion about
+        # whether the hook can land. Only a run where the DLL published its oracle document at all
+        # counts -- absence of the field means the feature never got that far.
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: isinstance(v, bool),
+        },
+    ),
+    Predicate(
+        name="hunt_filter_reaches_the_wire",
+        why=(
+            "Installing the detour is NOT the same as narrowing a query. `hunt_target` declines "
+            "whenever hunt is off, the player's block is unreadable, or several locations are "
+            "marked -- a Steam string filter is one equality test with no OR, so the multi-mark "
+            "case refuses on purpose. All three declines leave a hooked, silent run that looks "
+            "identical to a working one from outside. Only a non-zero filter count says Seamless's "
+            "own outgoing search actually carried our key."
+        ),
+        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (request_lobby_list_hook)",
+        feature="invasion-hunt",
+        oracle_all={
+            "oracle_invasion_warp_hunt_filters": lambda v: isinstance(v, int) and v >= 1
+        },
+        log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
+        informative_oracle={
+            "oracle_invasion_warp_hunt_hooked": lambda v: v is True,
+        },
+    ),
+    Predicate(
+        name="own_load_save_rejection_bounded",
+        why=(
+            "a save/load/Continue probe must publish the terminal-rejection guard and must never "
+            "repeat an identical unresolvable staged-source decision; zero means either no "
+            "rejection occurred or the first rejection stayed terminal instead of becoming the "
+            "YK0J per-frame loop"
+        ),
+        owner=(
+            "crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs "
+            "(OWN_LOAD_SAVE_REJECTION) / experiments/own_load/drive.rs"
+        ),
+        feature="save-load-continue",
+        oracle_all={
+            "oracle_own_load_save_rejection_state": lambda v: isinstance(v, int) and v in (0, 1),
+            "oracle_own_load_save_repeated_identical_rejections": 0,
+        },
+        # Old builds do not publish this field and therefore have no opinion. A run from the new
+        # build does, including the ordinary state=0 path where no rejection was needed.
+        informative_oracle={
+            "oracle_own_load_save_rejection_state": lambda v: isinstance(v, int) and v in (0, 1),
+        },
+    ),
 )
+
+
+@dataclass(frozen=True)
+class ProbeScope:
+    """A named launch contract expressed as whole product features."""
+
+    name: str
+    features: frozenset[str] | None
+
+
+FULL_PRODUCT_SCOPE = "full-product"
+SAVE_LOAD_CONTINUE_SCOPE = "save-load-continue"
+PROBE_SCOPES: dict[str, ProbeScope] = {
+    # None means every registered predicate. This is deliberately the default and stays fail-closed
+    # as new features and predicates are registered.
+    FULL_PRODUCT_SCOPE: ProbeScope(FULL_PRODUCT_SCOPE, None),
+    SAVE_LOAD_CONTINUE_SCOPE: ProbeScope(
+        SAVE_LOAD_CONTINUE_SCOPE, frozenset({"save-load-continue"})
+    ),
+}
+# Keep the minimum contract independent of the selector definition. If a future edit accidentally
+# removes a required feature from a named scope, resolution fails rather than silently weakening it.
+REQUIRED_SCOPE_FEATURES: dict[str, frozenset[str]] = {
+    SAVE_LOAD_CONTINUE_SCOPE: frozenset({"save-load-continue"}),
+}
+
+
+def predicates_for_scope(
+    scope_name: str,
+    predicates: tuple[Predicate, ...] | None = None,
+    scopes: dict[str, ProbeScope] | None = None,
+) -> tuple[Predicate, ...]:
+    """Resolve a named scope, rejecting typo, empty, and underdeclared contracts."""
+    registered = PREDICATES if predicates is None else predicates
+    available_scopes = PROBE_SCOPES if scopes is None else scopes
+    if not scope_name or scope_name != scope_name.strip():
+        raise ValueError("probe scope must be a non-empty exact name")
+    scope = available_scopes.get(scope_name)
+    if scope is None:
+        known = ", ".join(sorted(available_scopes))
+        raise ValueError(f"unknown probe scope {scope_name!r}; known scopes: {known}")
+    if scope.name != scope_name:
+        raise ValueError(
+            f"scope registry key {scope_name!r} does not match declaration {scope.name!r}"
+        )
+    if scope.features is None:
+        if scope.name != FULL_PRODUCT_SCOPE:
+            raise ValueError(f"scope {scope.name!r} may not use the full-product wildcard")
+        if not registered:
+            raise ValueError("full-product scope has no registered predicates")
+        return registered
+    if not scope.features:
+        raise ValueError(f"scope {scope.name!r} declares no product features")
+    missing_required = REQUIRED_SCOPE_FEATURES.get(scope.name, frozenset()) - scope.features
+    if missing_required:
+        raise ValueError(
+            f"scope {scope.name!r} is underdeclared; missing required feature(s): "
+            + ", ".join(sorted(missing_required))
+        )
+    known_features = {predicate.feature for predicate in registered}
+    unknown_features = scope.features - known_features
+    if unknown_features:
+        raise ValueError(
+            f"scope {scope.name!r} declares feature(s) with no predicates: "
+            + ", ".join(sorted(unknown_features))
+        )
+    selected = tuple(
+        predicate for predicate in registered if predicate.feature in scope.features
+    )
+    if not selected:
+        raise ValueError(f"scope {scope.name!r} selects no predicates")
+    # Selection is feature-derived rather than a predicate allowlist. This assertion makes a future
+    # edit that accidentally drops one same-feature predicate fail closed.
+    expected_names = {
+        predicate.name for predicate in registered if predicate.feature in scope.features
+    }
+    selected_names = {predicate.name for predicate in selected}
+    if selected_names != expected_names:
+        raise ValueError(f"scope {scope.name!r} is underdeclared")
+    return selected
 
 
 @dataclass
@@ -253,8 +521,9 @@ def load_run(directory: str) -> RunEvidence | None:
     except (OSError, ValueError):
         return None
     chunks = []
-    for name in DEBUG_LOG_NAMES:
-        path = os.path.join(directory, name)
+    paths = [os.path.join(directory, name) for name in DEBUG_LOG_NAMES]
+    paths.extend(_extra_evidence_paths())
+    for path in paths:
         if not os.path.exists(path):
             continue
         try:
@@ -323,18 +592,21 @@ def stale_dlls() -> list[str]:
 
 
 def evaluate(
-    runs: list[RunEvidence], source_mtime: float = 0.0
+    runs: list[RunEvidence],
+    source_mtime: float = 0.0,
+    predicates: tuple[Predicate, ...] | None = None,
 ) -> tuple[bool, list[str], list[str]]:
-    """Score every predicate against every recorded run.
+    """Score every selected predicate against every recorded run.
 
     Returns `(ok, refusals, obligations)`. A predicate becomes a REFUSAL only when some run got
     far enough to have an opinion and disagreed -- that is a code path a run has actually shown
     cannot execute. A predicate no run has an opinion on is an OBLIGATION: the launch proceeds,
     and this is what it has to come back having shown.
     """
+    selected = PREDICATES if predicates is None else predicates
     refusals: list[str] = []
     obligations: list[str] = []
-    for predicate in PREDICATES:
+    for predicate in selected:
         if not predicate.oracle_all and not predicate.log_any:
             refusals.append(f"{predicate.name}: registered with no evidence to check")
             continue
@@ -368,8 +640,15 @@ def evaluate(
     return (not refusals), refusals, obligations
 
 
-def gate(run_dirs: list[str]) -> int:
+def gate(run_dirs: list[str], scope_name: str = FULL_PRODUCT_SCOPE) -> int:
+    try:
+        selected = predicates_for_scope(scope_name)
+    except ValueError as error:
+        print(f"[launch-gate] REFUSED -- {error}", file=sys.stderr)
+        return 1
+
     runs = [run for run in (load_run(d) for d in run_dirs) if run is not None]
+    print(f"[launch-gate] probe scope: {scope_name} ({len(selected)} predicate(s))")
     print(f"[launch-gate] recorded runs found: {len(runs)}")
     for run in runs:
         print(f"[launch-gate]   {run.directory}")
@@ -388,7 +667,9 @@ def gate(run_dirs: list[str]) -> int:
             "offline, so this launch cannot validate anything it claims to."
         )
     else:
-        ok, problems, obligations = evaluate(runs, newest_source_mtime()[0])
+        ok, problems, obligations = evaluate(
+            runs, newest_source_mtime()[0], predicates=selected
+        )
         if not ok:
             failures.append("unreachable predicate(s) -- the code path cannot execute:")
             failures.extend(f"      {item}" for item in problems)
@@ -407,17 +688,17 @@ def gate(run_dirs: list[str]) -> int:
         )
         return 1
 
-    proven = len(PREDICATES) - len(obligations) if runs else 0
+    proven = len(selected) - len(obligations) if runs else 0
     if obligations:
         print(
-            f"[launch-gate] OK -- build is current; {proven}/{len(PREDICATES)} predicate(s) "
+            f"[launch-gate] OK -- build is current; {proven}/{len(selected)} predicate(s) "
             f"already observed true, {len(obligations)} unproven and listed above. Nothing "
             f"CONTRADICTS them, so the launch proceeds -- but it is only worth taking the screen "
             f"if it comes back having shown them."
         )
     else:
         print(
-            f"[launch-gate] OK -- {len(PREDICATES)} predicate(s) observed true, build is current"
+            f"[launch-gate] OK -- {len(selected)} predicate(s) observed true, build is current"
         )
     return 0
 
@@ -425,6 +706,8 @@ def gate(run_dirs: list[str]) -> int:
 def selftest() -> int:
     """The gate must FAIL on an unreachable predicate; a gate that only ever passes is decoration."""
     fails = 0
+    # Fixtures only. See _extra_evidence_paths.
+    globals()["_extra_evidence_paths"] = lambda: ()
 
     def report(ok: bool, label: str) -> None:
         nonlocal fails
@@ -476,18 +759,91 @@ def selftest() -> int:
         with open(os.path.join(parked, DEBUG_LOG_NAMES[0]), "w", encoding="utf-8") as handle:
             handle.write("cvar10-warp-clear: load2 epoch 1 mms=13 fin=0 warpRequested was set\n")
 
+        # Exact YK0J dry-run shape: the save rejection is terminal and non-repeating, while the
+        # latest general game-dir recording still contradicts unrelated reload predicates. The
+        # focused gate must pass this; full-product must keep refusing it.
+        yk0j = os.path.join(tmp, "yk0j-dry-run")
+        os.makedirs(yk0j)
+        with open(os.path.join(yk0j, TELEMETRY_NAME), "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "oracle_current_load_epoch": 1,
+                    "oracle_play_time_live": False,
+                    "oracle_boot_view_epoch_live": 0,
+                    "oracle_player_present": False,
+                    "oracle_own_load_save_rejection_state": 1,
+                    "oracle_own_load_save_repeated_identical_rejections": 0,
+                },
+                handle,
+            )
+        with open(os.path.join(yk0j, DEBUG_LOG_NAMES[0]), "w", encoding="utf-8") as handle:
+            handle.write(
+                "cvar10-warp-clear: load2 epoch 1 mms=13 fin=0 warpRequested was set\n"
+                "own-load: TERMINAL fail-closed rejection observation=First -- no retry\n"
+            )
+
         good_run = load_run(good)
         parked_run = load_run(parked)
-        report(good_run is not None and parked_run is not None, "recorded runs load")
+        yk0j_run = load_run(yk0j)
+        report(
+            good_run is not None and parked_run is not None and yk0j_run is not None,
+            "recorded runs load",
+        )
 
         ok, _, _ = evaluate([good_run])
         report(ok, "a run where the predicate held passes")
+
+        focused = predicates_for_scope(SAVE_LOAD_CONTINUE_SCOPE)
+        report(
+            {predicate.name for predicate in focused}
+            == {"own_load_save_rejection_bounded"},
+            "save/load/Continue scope contains its complete relevant predicate set",
+        )
+        report(
+            predicates_for_scope(FULL_PRODUCT_SCOPE) == PREDICATES,
+            "default full-product scope contains every registered predicate",
+        )
+        focused_ok, focused_refusals, _ = evaluate([yk0j_run], predicates=focused)
+        full_ok, full_refusals, _ = evaluate(
+            [yk0j_run], predicates=predicates_for_scope(FULL_PRODUCT_SCOPE)
+        )
+        report(
+            focused_ok and not focused_refusals,
+            "exact YK0J dry-run fixture passes the save/load/Continue scope",
+        )
+        report(
+            not full_ok
+            and any("case7_gate_clear_at_release" in item for item in full_refusals)
+            and any("warp_clear_release_world_live" in item for item in full_refusals),
+            "exact YK0J fixture still fails closed under full-product scope",
+        )
+        for bad_scope in ("", "save-load-contine"):
+            try:
+                predicates_for_scope(bad_scope)
+            except ValueError:
+                rejected = True
+            else:
+                rejected = False
+            report(rejected, f"unknown/empty scope {bad_scope!r} is refused")
+        underdeclared = {
+            SAVE_LOAD_CONTINUE_SCOPE: ProbeScope(
+                SAVE_LOAD_CONTINUE_SCOPE, frozenset({"world-map-markers"})
+            ),
+        }
+        try:
+            predicates_for_scope(SAVE_LOAD_CONTINUE_SCOPE, scopes=underdeclared)
+        except ValueError:
+            rejected_underdeclared = True
+        else:
+            rejected_underdeclared = False
+        report(rejected_underdeclared, "underdeclared named scope is refused")
 
         # THE REGRESSION THIS GATE EXISTS FOR: the terminator that shipped and could not fire.
         unreachable = Predicate(
             name="disarm_on_request_code_latched_done",
             why="the shipped-and-failed terminator: disarm when the world load latches requestCode 2",
             owner="system_quit_hooks.rs",
+            feature="reload-system-quit",
             oracle_all={"oracle_stepfinish_request_code": 2},
         )
         proven, reason = unreachable.check(parked_run.telemetry, parked_run.log_text)
@@ -497,7 +853,7 @@ def selftest() -> int:
         )
 
         # An empty evidence set must not silently pass.
-        empty = Predicate(name="no_evidence", why="x", owner="y")
+        empty = Predicate(name="no_evidence", why="x", owner="y", feature="test")
         ok_empty, problems, _ = evaluate([good_run])
         report(ok_empty, "register with evidence still passes")
         saved = globals()["PREDICATES"]
@@ -516,6 +872,27 @@ def selftest() -> int:
         # rather than from scoring -- which is exactly what `gate()` does.
         report(gate([]) != 0, "no recorded run refuses rather than passes")
 
+        # THE STEAM-TRACE DISTINCTION: hooks INSTALLING is not calls HAPPENING. A trace that
+        # attached to every export and then recorded nothing during an invasion means the
+        # approach is dead, and it must not read as proof.
+        steam_pred = [p for p in PREDICATES if p.name == "steam_vtable_call_observed"][0]
+        called = '{"type": "vcall", "iface": "SteamMatchMaking009", "slot": 12}'
+        ok_called, _ = steam_pred.check({}, called)
+        report(ok_called, "a recorded vtable call proves the interface route")
+
+        # THE DISTINCTION THAT RETIRED THE PREVIOUS PREDICATE: capturing an interface pointer
+        # proves the accessor fired, NOT that anything is ever called through it.
+        iface_only = '{"type": "iface", "version": "SteamMatchMaking009", "slotsHooked": 20}'
+        ok_iface, _ = steam_pred.check({}, iface_only)
+        report(
+            not ok_iface and steam_pred.is_informative({}, iface_only),
+            "an interface captured but never called is informative and NOT satisfied",
+        )
+        report(
+            not steam_pred.is_informative({}, "nothing here"),
+            "no vtable trace at all is a silence, not a contradiction",
+        )
+
         # A run from BEFORE the current sources is a silence, not a disagreement. Without this
         # every bug fix is unprovable: the recorded run still shows the old failure, so the gate
         # refuses the launch that would demonstrate the fix, forever.
@@ -523,6 +900,7 @@ def selftest() -> int:
             name="fixed_since_that_run",
             why="a predicate whose code was corrected after the recorded run",
             owner="x",
+            feature="test",
             log_any=(r"evidence-only-the-new-build-emits",),
         )
         saved_stale = globals()["PREDICATES"]
@@ -549,6 +927,7 @@ def selftest() -> int:
             name="state_no_run_reached",
             why="a brand-new path",
             owner="x",
+            feature="test",
             log_any=(r"brand-new-marker",),
             informative_if=(r"a-line-no-run-has",),
         )
@@ -556,6 +935,7 @@ def selftest() -> int:
             name="state_a_run_reached",
             why="a path a run actually exercised",
             owner="x",
+            feature="test",
             log_any=(r"brand-new-marker",),
             # The good run's log DOES contain this, so that run has an opinion -- and disagrees.
             informative_if=(r"cvar10-warp-clear",),
@@ -587,12 +967,17 @@ def selftest() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="append", default=[], help="recorded run directory")
+    parser.add_argument(
+        "--scope",
+        default=FULL_PRODUCT_SCOPE,
+        help="named probe scope (default: full-product)",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
         return selftest()
     run_dirs = args.run or DEFAULT_RUN_DIRS
-    return gate([d for d in run_dirs if os.path.isdir(d)])
+    return gate([d for d in run_dirs if os.path.isdir(d)], scope_name=args.scope)
 
 
 if __name__ == "__main__":

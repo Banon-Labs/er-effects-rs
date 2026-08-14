@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -54,10 +54,6 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-/// Render-thread liveness + bootstrap probe. Runs from an optional render callback (a
-/// separate thread from the game-task scheduler), so it keeps reporting after the
-/// title->menu phase transition stops the title CSTask. Distinguishes "the title
-/// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
 #[allow(dead_code)]
 /// When set, foreign KEYBOARD + GAMEPAD game input is blocked at the API layer (see
 /// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) AND XInput
@@ -103,15 +99,59 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_BEST_HWND;
 
 pub(crate) const SAVE_PICKER_NAV_LEFT_MASK: usize = 1 << 0;
 pub(crate) const SAVE_PICKER_NAV_RIGHT_MASK: usize = 1 << 1;
+/// Up/down edges exist so a list longer than the ten native rows scrolls on an explicit PRESS at
+/// the edge row. The picker previously slid the window from a pointer DWELL on the edge, which
+/// moved the list under a player who was only resting there.
+pub(crate) const SAVE_PICKER_NAV_UP_MASK: usize = 1 << 2;
+pub(crate) const SAVE_PICKER_NAV_DOWN_MASK: usize = 1 << 3;
+/// Wheel detents are latched SEPARATELY from key/pad directions because the native list treats them
+/// differently: a key or pad press at an extreme row makes the list wrap, and the picker rides that
+/// wrap as the step signal -- but a wheel detent there moves nothing at all, so a wheel edge that
+/// waited for a wrap would wait forever and the wheel would appear dead at exactly the top and
+/// bottom rows (reported 2026-08-12). Same directions, different arrival contract.
+pub(crate) const SAVE_PICKER_NAV_WHEEL_UP_MASK: usize = 1 << 4;
+pub(crate) const SAVE_PICKER_NAV_WHEEL_DOWN_MASK: usize = 1 << 5;
+const SAVE_PICKER_NAV_ALL_MASK: usize = SAVE_PICKER_NAV_LEFT_MASK
+    | SAVE_PICKER_NAV_RIGHT_MASK
+    | SAVE_PICKER_NAV_UP_MASK
+    | SAVE_PICKER_NAV_DOWN_MASK
+    | SAVE_PICKER_NAV_WHEEL_UP_MASK
+    | SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
 const VK_LEFT: u16 = 0x25;
 const VK_RIGHT: u16 = 0x27;
+const VK_UP: u16 = 0x26;
+const VK_DOWN: u16 = 0x28;
 static SAVE_PICKER_USER_NAV_LATCH: AtomicUsize = AtomicUsize::new(0);
-static SAVE_PICKER_XINPUT_DPAD_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+static SAVE_PICKER_XINPUT_NAV_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_DINPUT_ARROW_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 
+/// Drain EVERY pending nav edge. Used on the paths that discard input wholesale (picker not live,
+/// native text editor owns the screen) so a press made elsewhere cannot replay later.
 pub(crate) fn save_picker_take_user_nav_edges() -> usize {
-    SAVE_PICKER_USER_NAV_LATCH.swap(0, Ordering::SeqCst)
-        & (SAVE_PICKER_NAV_LEFT_MASK | SAVE_PICKER_NAV_RIGHT_MASK)
+    SAVE_PICKER_USER_NAV_LATCH.swap(0, Ordering::SeqCst) & SAVE_PICKER_NAV_ALL_MASK
+}
+
+/// Directions currently HELD on a real device, without consuming anything.
+///
+/// Distinct from the edge latch on purpose. Elden Ring's menus auto-repeat while a direction is
+/// held, and each repeat moves the native list cursor -- but only the FIRST press produces an edge.
+/// A consumer that reacts to edges alone therefore handles one step of a held press and lets the
+/// native list do whatever it likes for the rest, which at the last row means wrapping to the top.
+/// Read from the DInput/XInput device state the game itself polls, so it reflects the real device.
+pub(crate) fn save_picker_user_nav_held() -> usize {
+    (SAVE_PICKER_DINPUT_ARROW_DOWN_MASK.load(Ordering::SeqCst)
+        | SAVE_PICKER_XINPUT_NAV_DOWN_MASK.load(Ordering::SeqCst))
+        & SAVE_PICKER_NAV_ALL_MASK
+}
+
+/// Drain only the requested directions, leaving the others latched for their own consumer.
+///
+/// Left/right (drive strip) and up/down (edge scroll) are consumed by two different pumps in the
+/// same maintenance tick. A shared consume-everything take would let whichever ran first swallow
+/// the other's edges, which is a race by construction rather than an ordering detail to get right.
+pub(crate) fn save_picker_take_user_nav_edges_for(mask: usize) -> usize {
+    let mask = mask & SAVE_PICKER_NAV_ALL_MASK;
+    SAVE_PICKER_USER_NAV_LATCH.fetch_and(!mask, Ordering::SeqCst) & mask
 }
 
 fn save_picker_latch_keyboard_nav(vkey: u16) {
@@ -128,15 +168,30 @@ fn save_picker_latch_keyboard_nav(vkey: u16) {
                 "save-picker-nav: rawinput arrow right edge vkey=0x{vkey:x}"
             ));
         }
+        VK_UP => {
+            SAVE_PICKER_USER_NAV_LATCH.fetch_or(SAVE_PICKER_NAV_UP_MASK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-nav: rawinput arrow up edge vkey=0x{vkey:x}"
+            ));
+        }
+        VK_DOWN => {
+            SAVE_PICKER_USER_NAV_LATCH.fetch_or(SAVE_PICKER_NAV_DOWN_MASK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-nav: rawinput arrow down edge vkey=0x{vkey:x}"
+            ));
+        }
         _ => {}
     }
 }
 
 pub(crate) fn save_picker_latch_dinput_keyboard_state(data: *const u8, size: usize) {
+    const DIK_UP: usize = 0xc8;
     const DIK_LEFT: usize = 0xcb;
     const DIK_RIGHT: usize = 0xcd;
+    const DIK_DOWN: usize = 0xd0;
     const DIK_PRESSED: u8 = 0x80;
-    if data.is_null() || size <= DIK_RIGHT {
+    // DIK_DOWN is the highest scancode read here, so it sets the buffer-length floor.
+    if data.is_null() || size <= DIK_DOWN {
         return;
     }
     let mut down = 0usize;
@@ -145,6 +200,12 @@ pub(crate) fn save_picker_latch_dinput_keyboard_state(data: *const u8, size: usi
     }
     if unsafe { *data.add(DIK_RIGHT) } & DIK_PRESSED != 0 {
         down |= SAVE_PICKER_NAV_RIGHT_MASK;
+    }
+    if unsafe { *data.add(DIK_UP) } & DIK_PRESSED != 0 {
+        down |= SAVE_PICKER_NAV_UP_MASK;
+    }
+    if unsafe { *data.add(DIK_DOWN) } & DIK_PRESSED != 0 {
+        down |= SAVE_PICKER_NAV_DOWN_MASK;
     }
     let prev = SAVE_PICKER_DINPUT_ARROW_DOWN_MASK.swap(down, Ordering::SeqCst);
     let edges = down & !prev;
@@ -156,7 +217,119 @@ pub(crate) fn save_picker_latch_dinput_keyboard_state(data: *const u8, size: usi
     }
 }
 
-fn save_picker_latch_xinput_nav_buttons(buttons: u16) {
+/// Deflection at which a left-stick axis counts as a directional press, and the smaller value it
+/// must fall back under before it can press again.
+///
+/// TWO thresholds, not one: a stick held near a single threshold jitters across it and would latch
+/// a stream of phantom edges from one deliberate push. The press value is ~50% deflection, well
+/// above XInput's 7849 rest deadzone, so stick drift never navigates on its own.
+const XINPUT_STICK_NAV_PRESS: i32 = 16384;
+const XINPUT_STICK_NAV_RELEASE: i32 = 8192;
+
+/// Directions the left stick is currently pushed, with the hysteresis above applied against the
+/// previously-held mask.
+fn xinput_stick_nav_mask(prev: usize, thumb_lx: i16, thumb_ly: i16) -> usize {
+    let mut down = 0usize;
+    for (mask, value) in [
+        (SAVE_PICKER_NAV_LEFT_MASK, -i32::from(thumb_lx)),
+        (SAVE_PICKER_NAV_RIGHT_MASK, i32::from(thumb_lx)),
+        // XInput reports +Y as UP, which is the opposite of the list's row order.
+        (SAVE_PICKER_NAV_UP_MASK, i32::from(thumb_ly)),
+        (SAVE_PICKER_NAV_DOWN_MASK, -i32::from(thumb_ly)),
+    ] {
+        let held = prev & mask != 0;
+        let threshold = if held {
+            XINPUT_STICK_NAV_RELEASE
+        } else {
+            XINPUT_STICK_NAV_PRESS
+        };
+        if value >= threshold {
+            down |= mask;
+        }
+    }
+    down
+}
+
+/// `RAWMOUSE.usButtonFlags` bit set when this event carries a wheel delta.
+const RI_MOUSE_WHEEL: u16 = 0x0400;
+/// Wheel units per detent (`WHEEL_DELTA`). One detent is one row, matching one arrow press.
+const WHEEL_DELTA: i32 = 120;
+/// Accumulates sub-detent wheel motion so a high-resolution/free-spin wheel steps whole rows
+/// instead of either flooding the list or dropping every partial notch on the floor.
+static SAVE_PICKER_WHEEL_ACCUM: AtomicIsize = AtomicIsize::new(0);
+
+/// Fold one raw wheel delta into the accumulator: returns the nav mask to latch (0 when this delta
+/// did not complete a detent) and the sub-detent remainder to carry forward.
+///
+/// Pure so it can be tested without the process-wide latch: two tests that both drain that latch
+/// race each other and report an empty mask, which looks exactly like a broken wheel.
+fn wheel_nav_step(accum: isize, delta: i16) -> (usize, isize) {
+    let total = accum + isize::from(delta);
+    let detents = total / WHEEL_DELTA as isize;
+    if detents == 0 {
+        return (0, total);
+    }
+    let mask = if detents > 0 {
+        SAVE_PICKER_NAV_WHEEL_UP_MASK
+    } else {
+        SAVE_PICKER_NAV_WHEEL_DOWN_MASK
+    };
+    (mask, total - detents * WHEEL_DELTA as isize)
+}
+
+/// `HRAWINPUT` of the last WM_INPUT message a wheel detent was taken from, and how many repeat
+/// reads of that same message were ignored.
+static SAVE_PICKER_WHEEL_LAST_MESSAGE: AtomicIsize = AtomicIsize::new(0);
+static SAVE_PICKER_WHEEL_DUPLICATE_READS: AtomicUsize = AtomicUsize::new(0);
+
+/// Latch a wheel detent ONCE PER WM_INPUT MESSAGE.
+///
+/// `GetRawInputData` is a READ of a message, not the message itself, and the same `HRAWINPUT` can
+/// legitimately be read more than once (the size-then-data pattern, and any second consumer in the
+/// chain). Counting reads instead of messages multiplied every physical detent: the live log shows
+/// five `delta=120` reads inside 10ms, which no hand can spin, and on screen one notch of the wheel
+/// moved the selection two rows (reported 2026-08-12).
+fn save_picker_latch_wheel_nav_for_message(message: isize, delta: i16) {
+    if delta == 0 {
+        return;
+    }
+    if SAVE_PICKER_WHEEL_LAST_MESSAGE.swap(message, Ordering::SeqCst) == message {
+        let n = SAVE_PICKER_WHEEL_DUPLICATE_READS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 || n % 50 == 0 {
+            append_autoload_debug(format_args!(
+                "save-picker-nav: ignored repeat read #{n} of wheel message 0x{message:x} delta={delta}"
+            ));
+        }
+        return;
+    }
+    save_picker_latch_wheel_nav(delta);
+}
+
+/// Latch nav edges from mouse-wheel detents. Wheel UP is toward the top of the list.
+pub(crate) fn save_picker_latch_wheel_nav(delta: i16) {
+    if delta == 0 {
+        return;
+    }
+    let (mask, remainder) = wheel_nav_step(SAVE_PICKER_WHEEL_ACCUM.load(Ordering::SeqCst), delta);
+    SAVE_PICKER_WHEEL_ACCUM.store(remainder, Ordering::SeqCst);
+    if mask == 0 {
+        return;
+    }
+    SAVE_PICKER_USER_NAV_LATCH.fetch_or(mask, Ordering::SeqCst);
+    let dups = SAVE_PICKER_WHEEL_DUPLICATE_READS.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-picker-nav: wheel edge mask=0x{mask:x} delta={delta} duplicate_reads_so_far={dups}"
+    ));
+}
+
+/// Latch nav edges from the real slot-0 pad: D-pad buttons AND the left stick.
+///
+/// The stick is not a nicety. Elden Ring navigates menus with either, so a pad player who flicks
+/// the stick produced NO latched edge at all -- the picker's edge handling (scroll at a window
+/// edge, hold at the listing's end) never ran, and the native list wrapped from the last row to the
+/// top exactly as if the feature did not exist. Keyboard-only coverage made the fix look complete
+/// while the pad was still broken (2026-08-12).
+fn save_picker_latch_xinput_nav_state(buttons: u16, thumb_lx: i16, thumb_ly: i16) {
     let mut down = 0usize;
     if buttons & XINPUT_GAMEPAD_DPAD_LEFT != 0 {
         down |= SAVE_PICKER_NAV_LEFT_MASK;
@@ -164,12 +337,20 @@ fn save_picker_latch_xinput_nav_buttons(buttons: u16) {
     if buttons & XINPUT_GAMEPAD_DPAD_RIGHT != 0 {
         down |= SAVE_PICKER_NAV_RIGHT_MASK;
     }
-    let prev = SAVE_PICKER_XINPUT_DPAD_DOWN_MASK.swap(down, Ordering::SeqCst);
+    if buttons & XINPUT_GAMEPAD_DPAD_UP != 0 {
+        down |= SAVE_PICKER_NAV_UP_MASK;
+    }
+    if buttons & XINPUT_GAMEPAD_DPAD_DOWN != 0 {
+        down |= SAVE_PICKER_NAV_DOWN_MASK;
+    }
+    let prev = SAVE_PICKER_XINPUT_NAV_DOWN_MASK.load(Ordering::SeqCst);
+    down |= xinput_stick_nav_mask(prev, thumb_lx, thumb_ly);
+    SAVE_PICKER_XINPUT_NAV_DOWN_MASK.store(down, Ordering::SeqCst);
     let edges = down & !prev;
     if edges != 0 {
         SAVE_PICKER_USER_NAV_LATCH.fetch_or(edges, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "save-picker-nav: xinput dpad edge mask=0x{edges:x} buttons=0x{buttons:x}"
+            "save-picker-nav: xinput pad edge mask=0x{edges:x} buttons=0x{buttons:x} lx={thumb_lx} ly={thumb_ly}"
         ));
     }
 }
@@ -579,7 +760,9 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     const XINPUT_PACKET_OFFSET: usize = 0;
     const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
     // sThumbLY within XINPUT_GAMEPAD: wButtons(u16)@0, bLeftTrigger@2, bRightTrigger@3, sThumbLX@4,
-    // sThumbLY@6. Used by the can-move probe lane to walk the character forward and measure motion.
+    // sThumbLY@6. Used by the can-move probe lane to walk the character forward and measure motion,
+    // and by the picker's nav latch to read stick-driven menu navigation.
+    const XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD: usize = 4;
     const XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD: usize = 6;
     // CAN-MOVE PROBE lane (2026-07-18): when the readiness verifier is testing input-causes-movement,
     // present a connected slot-0 pad with ONLY the left stick set (no buttons) so the game walks the
@@ -611,10 +794,16 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         let buttons = unsafe {
             *(state.add(XINPUT_GAMEPAD_OFFSET + WBUTTONS_OFFSET_IN_GAMEPAD) as *const u16)
         };
-        save_picker_latch_xinput_nav_buttons(buttons);
+        let thumb_lx = unsafe {
+            *(state.add(XINPUT_GAMEPAD_OFFSET + XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD) as *const i16)
+        };
+        let thumb_ly = unsafe {
+            *(state.add(XINPUT_GAMEPAD_OFFSET + XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD) as *const i16)
+        };
+        save_picker_latch_xinput_nav_state(buttons, thumb_lx, thumb_ly);
         input_trace_record_real_poll(state as *const u8);
     } else if user_index == XINPUT_PRIMARY_USER_INDEX {
-        save_picker_latch_xinput_nav_buttons(0);
+        save_picker_latch_xinput_nav_state(0, 0, 0);
     }
     // KEEP SLOT 0 "CONNECTED" while the harness is ACTIVELY INJECTING (only) -- when no physical pad
     // exists, present a connected idle pad with a fresh packet so ER keeps polling slot 0 and the
@@ -953,6 +1142,14 @@ unsafe extern "system" fn get_raw_input_data_hook(
                 if btn != 0 {
                     RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
                 }
+                // RI_MOUSE_WHEEL: usButtonData @ +0x06 carries the SIGNED notch delta for this
+                // event. Latched as a nav edge so the wheel reaches the picker through the same
+                // path as the arrow keys and obeys the same edge/limit rules, instead of being a
+                // second, differently-behaved way to move the list.
+                if btn & RI_MOUSE_WHEEL != 0 {
+                    let delta = unsafe { ((d + 0x06) as *const i16).read_unaligned() };
+                    save_picker_latch_wheel_nav_for_message(h_raw_input, delta);
+                }
             } else if dwtype == 1 {
                 // RIM_TYPEKEYBOARD: MakeCode @ +0x00, VKey @ +0x06, Message @ +0x08 (WM_KEYDOWN 0x100).
                 // Count the user's key as received (contamination oracle) and pass it through untouched.
@@ -1083,20 +1280,142 @@ pub(crate) fn enforce_input_block_now() {
 // driven ONLY by enforce_input_block_now()/release_input_block_now() (boot/reload driving windows), which
 // release the block on world entry -- so the dwell keeps full keyboard control.
 
-pub(crate) fn render_liveness_probe() {
-    if !title_accept_enabled() {
-        return;
+#[cfg(test)]
+mod save_picker_stick_nav_tests {
+    use super::*;
+
+    const AT_REST: i16 = 0;
+    /// Inside XInput's 7849 rest deadzone: what a worn stick reports when nobody is touching it.
+    const DRIFT: i16 = 6000;
+    const FLICK: i16 = 20000;
+
+    #[test]
+    fn stick_drift_never_navigates() {
+        assert_eq!(xinput_stick_nav_mask(0, DRIFT, DRIFT), 0);
+        assert_eq!(xinput_stick_nav_mask(0, -DRIFT, -DRIFT), 0);
     }
-    let frame = RENDER_FRAME_COUNT.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst);
-    if frame % RENDER_PROBE_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS {
-        return;
+
+    /// A deliberate push down registers, and -- the point of the two thresholds -- a stick RELAXING
+    /// through the press threshold does not re-register. One push must be one row, not a burst.
+    #[test]
+    fn one_push_is_one_edge_even_while_the_stick_relaxes() {
+        let pushed = xinput_stick_nav_mask(0, AT_REST, -FLICK);
+        assert_eq!(pushed, SAVE_PICKER_NAV_DOWN_MASK);
+
+        // Still held past the release threshold: stays down, so `down & !prev` yields no new edge.
+        let held = xinput_stick_nav_mask(pushed, AT_REST, -12000);
+        assert_eq!(held, SAVE_PICKER_NAV_DOWN_MASK);
+        assert_eq!(held & !pushed, 0, "a held stick must not re-edge");
+
+        // Below release: clears, so the next push is a fresh edge.
+        let released = xinput_stick_nav_mask(held, AT_REST, -4000);
+        assert_eq!(released, 0);
+        assert_eq!(
+            xinput_stick_nav_mask(released, AT_REST, -FLICK),
+            SAVE_PICKER_NAV_DOWN_MASK
+        );
     }
-    let Ok(base) = game_module_base() else {
-        return;
-    };
-    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    let latch = unsafe { *((base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
-    append_autoload_debug(format_args!(
-        "render_probe: frame={frame} csfeman=0x{csfeman:x} latch={latch}"
-    ));
+
+    /// XInput reports +Y as UP while list rows count downward; a sign slip here would scroll the
+    /// list the wrong way on a pad and be invisible on a keyboard.
+    #[test]
+    fn stick_axes_map_to_the_directions_the_list_uses() {
+        assert_eq!(
+            xinput_stick_nav_mask(0, AT_REST, FLICK),
+            SAVE_PICKER_NAV_UP_MASK
+        );
+        assert_eq!(
+            xinput_stick_nav_mask(0, AT_REST, -FLICK),
+            SAVE_PICKER_NAV_DOWN_MASK
+        );
+        assert_eq!(
+            xinput_stick_nav_mask(0, -FLICK, AT_REST),
+            SAVE_PICKER_NAV_LEFT_MASK
+        );
+        assert_eq!(
+            xinput_stick_nav_mask(0, FLICK, AT_REST),
+            SAVE_PICKER_NAV_RIGHT_MASK
+        );
+    }
+}
+
+#[cfg(test)]
+mod save_picker_wheel_nav_tests {
+    use super::*;
+
+    /// Wheel detents must latch their OWN masks, never the key/pad direction masks.
+    ///
+    /// The distinction is behavioural, not cosmetic: the picker rides the native list's wrap as the
+    /// step signal for a key or pad press at an extreme row, but the native list does not wrap for
+    /// the wheel. A wheel edge wearing a key mask therefore waits for a wrap that never comes, which
+    /// is exactly how the wheel came to do nothing at the top and bottom rows.
+    #[test]
+    fn a_detent_yields_the_wheel_mask_not_the_key_mask() {
+        let (down, _) = wheel_nav_step(0, -(WHEEL_DELTA as i16));
+        assert_eq!(down, SAVE_PICKER_NAV_WHEEL_DOWN_MASK);
+        assert_eq!(down & SAVE_PICKER_NAV_DOWN_MASK, 0);
+
+        let (up, _) = wheel_nav_step(0, WHEEL_DELTA as i16);
+        assert_eq!(up, SAVE_PICKER_NAV_WHEEL_UP_MASK);
+        assert_eq!(up & SAVE_PICKER_NAV_UP_MASK, 0);
+    }
+
+    /// Sub-detent motion accumulates into whole rows rather than being dropped or flooding the list:
+    /// a high-resolution wheel reports many small deltas for one physical notch.
+    #[test]
+    fn partial_detents_accumulate_into_exactly_one_row() {
+        let third = (WHEEL_DELTA / 3) as i16;
+        let (first, accum) = wheel_nav_step(0, third);
+        assert_eq!(first, 0, "a third of a detent is not a row");
+        let (second, accum) = wheel_nav_step(accum, third);
+        assert_eq!(second, 0, "two thirds of a detent is not a row");
+        let (third_step, accum) = wheel_nav_step(accum, third);
+        assert_eq!(third_step, SAVE_PICKER_NAV_WHEEL_UP_MASK);
+        assert_eq!(accum, 0, "a completed detent leaves no remainder");
+    }
+
+    /// One spin must not be spent twice: the remainder carried forward is strictly sub-detent.
+    #[test]
+    fn a_completed_detent_is_not_left_in_the_accumulator() {
+        let (mask, accum) = wheel_nav_step(0, (WHEEL_DELTA + WHEEL_DELTA / 2) as i16);
+        assert_eq!(mask, SAVE_PICKER_NAV_WHEEL_UP_MASK);
+        assert_eq!(accum, (WHEEL_DELTA / 2) as isize);
+        assert!(accum.abs() < WHEEL_DELTA as isize);
+    }
+}
+
+#[cfg(test)]
+mod save_picker_wheel_message_tests {
+    use super::*;
+
+    /// A repeat READ of the same WM_INPUT message is not a second detent.
+    ///
+    /// `GetRawInputData` can be called more than once for one message, so counting reads rather than
+    /// messages turns one notch of the wheel into several rows of movement. Verified through the
+    /// dedupe state directly: the first read of a message latches, an immediate repeat does not, and
+    /// a genuinely different message latches again.
+    #[test]
+    fn a_repeat_read_of_one_message_is_not_a_second_detent() {
+        const FIRST: isize = 0x1111;
+        const SECOND: isize = 0x2222;
+        let detent = WHEEL_DELTA as i16;
+
+        SAVE_PICKER_WHEEL_LAST_MESSAGE.store(0, Ordering::SeqCst);
+        let before = SAVE_PICKER_WHEEL_DUPLICATE_READS.load(Ordering::SeqCst);
+
+        save_picker_latch_wheel_nav_for_message(FIRST, detent);
+        save_picker_latch_wheel_nav_for_message(FIRST, detent);
+        assert_eq!(
+            SAVE_PICKER_WHEEL_DUPLICATE_READS.load(Ordering::SeqCst),
+            before + 1,
+            "the repeat read must be counted and dropped"
+        );
+
+        save_picker_latch_wheel_nav_for_message(SECOND, detent);
+        assert_eq!(
+            SAVE_PICKER_WHEEL_DUPLICATE_READS.load(Ordering::SeqCst),
+            before + 1,
+            "a different message is a real detent, not a duplicate"
+        );
+    }
 }

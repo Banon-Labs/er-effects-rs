@@ -122,10 +122,35 @@ pub(crate) const EZ_CHILDSTEP_WRAPPER_STEPPER_08_OFFSET: usize = 0x08;
 /// `MoveMapStep+0x48` -- child step state (== 3 at STEP_WorldResWait). (Also in other modules.)
 #[allow(dead_code)]
 pub(crate) const MOVEMAPSTEP_STATE_48_RE_OFFSET: usize = 0x48;
+/// Resident-world `STEP_MoveMap` update state. This state is intentionally long-lived while the world
+/// is playable; leaving it belongs to session teardown.
+pub(crate) const MOVEMAPSTEP_RESIDENT_UPDATE_STATE: i32 = 18;
 /// `MoveMapStep+0xb0` -- STEP_Finish 2-tick warmup counter (must reach >= 2). REGION/needs-confirm on
 /// the exact field; used read-only for diagnosis first.
 #[allow(dead_code)]
 pub(crate) const MOVEMAPSTEP_FINISH_WARMUP_B0_OFFSET: usize = 0xb0;
+/// `MoveMapStep+0x128` -- `pauseGame?`; when true, `STEP_MoveMap` disables normal task registration
+/// unless the debug-pause input path overrides it.
+pub(crate) const MOVEMAPSTEP_PAUSE_GAME_128_OFFSET: usize = 0x128;
+/// `MoveMapStep+0x348` -- one of the native task-registration suppressors evaluated by
+/// `STEP_MoveMap` after the WorldChrMan predicate.
+pub(crate) const MOVEMAPSTEP_DISABLE_TASKS_348_OFFSET: usize = 0x348;
+/// `MoveMapStep+0x349` -- one-shot task-registration override consumed by `STEP_MoveMap`.
+pub(crate) const MOVEMAPSTEP_FORCE_TASKS_349_OFFSET: usize = 0x349;
+/// `MoveMapStep+0x4b8` -- final per-frame input to the native task-registration path. If false,
+/// WorldChrMan's movement/physics tasks are not registered for the frame.
+pub(crate) const MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET: usize = 0x4b8;
+/// `MoveMapStep+0x4ba` -- copied into `ChrCtrl.luaEventFlags` bit 6 by STEP_MoveMap's native
+/// WorldChrMan task-registration path. It becomes 1 after the +0x100 countdown reaches zero.
+pub(crate) const MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET: usize = 0x4ba;
+/// `DAT_143d70847` -- one-shot global suppressor consumed by `STEP_MoveMap`; it clears both +0x4b8
+/// task registration and +0x4ba control enable for the frame.
+pub(crate) const MOVEMAPSTEP_GLOBAL_DISABLE_RVA: usize = 0x3d7_0847;
+/// `ChrCtrl+0xe8` -- native movement logic requires bits 5 (logic enabled) and 6 (MoveMap control
+/// enabled) together. 1.16.2 `FUN_1403cbff0` checks `(luaEventFlags & 0x60) == 0x60`.
+pub(crate) const CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET: usize = 0xe8;
+/// `ChrCtrl+0xe9` -- native `disableMove`; the same movement gate requires it to be false.
+pub(crate) const CHRCTRL_DISABLE_MOVE_E9_OFFSET: usize = 0xe9;
 /// `CSMenuMan+0x798` -- NowLoading cover MenuJob slot (the STABLE-session marker; != 0 is HEALTHY).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;

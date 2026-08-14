@@ -26,6 +26,7 @@ ME3_LOG_DIR="${ME3_LOG_DIR:-$HOME/.local/share/me3/logs}"
 # crates/mod-protocol/src/game.rs); there is NO me3-side override. Returns non-zero
 # with guidance on stderr instead of burning a launch.
 me3_preflight() {
+  local launch_scope="${1:-full-product}"
   [[ -x "$ME3_BIN" ]] || { echo "me3-launch-lib: missing me3 binary: $ME3_BIN" >&2; return 2; }
   [[ -f "$ME3_WINDOWS_BIN_DIR/me3-launcher.exe" ]] || { echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3-launcher.exe" >&2; return 2; }
   [[ -f "$ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" ]] || { echo "me3-launch-lib: missing $ME3_WINDOWS_BIN_DIR/me3_mod_host.dll" >&2; return 2; }
@@ -60,7 +61,7 @@ print(
 )
 sys.exit(1)
 PY
-  me3_launch_gate || return 2
+  me3_launch_gate "$launch_scope" || return 2
 }
 
 # Refuse a launch whose changed code path has never been shown to execute.
@@ -80,6 +81,7 @@ PY
 # not a way to launch a fix you have not shown can run -- the skip is logged so a run that used it
 # can never later be cited as proof.
 me3_launch_gate() {
+  local launch_scope="${1:-full-product}"
   if [[ "${ER_LAUNCH_GATE_SKIP:-0}" == "1" ]]; then
     echo "me3-launch-lib: launch gate SKIPPED by ER_LAUNCH_GATE_SKIP=1 -- this run is not validation evidence" >&2
     return 0
@@ -91,7 +93,7 @@ me3_launch_gate() {
     echo "me3-launch-lib: launch gate missing at $gate -- refusing to launch" >&2
     return 2
   fi
-  python3 "$gate" || return 2
+  python3 "$gate" --scope "$launch_scope" || return 2
 }
 
 # me3_write_profile PROFILE_PATH DLL_PATH [EXTRA_NATIVE_PATH]

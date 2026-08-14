@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 
 /// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- NO pop) to detect
 /// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
@@ -154,12 +155,11 @@ pub unsafe fn profile_lookat_rt_sample(base: usize) {
         }
     }
     // Cheap strided FNV-1a hash of the RT to detect frame-to-frame content change without storing pixels.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut hash = fnv1a64(b"");
     let step = (px.len() / 4096).max(1);
     let mut i = 0;
     while i < px.len() {
-        hash ^= px[i] as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash = fnv1a64_mix(hash, u64::from(px[i]));
         i += step;
     }
     let h32 = (hash as usize) & 0xffff_ffff;

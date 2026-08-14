@@ -36,7 +36,7 @@ use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_
 /// 1.16.2 dump -- the builder `FUN_1409275b0` writes `*obj =
 /// CS::MessageBoxDialog::vftable` at this RVA (dump 0x142b03550, xref from
 /// 0x140927601/0x140927608).
-const MSGBOX_DIALOG_VTABLE_RVA: usize = 0x2b03550;
+use er_game_base::rva::MSGBOX_DIALOG_VTABLE_RVA;
 /// `CS::SaveRetryDialog` vftable RVA -- a MessageBoxDialog SUBCLASS whose wrapper
 /// overrides the base vtable AFTER the builder runs; it is the offline title flow's
 /// "save/load failed -- Retry?" boot prompt. Source: product

@@ -1,0 +1,17 @@
+[package]
+name = "er-scaleform-hooks"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Native Elden Ring Scaleform hook plumbing."
+
+[lib]
+name = "er_scaleform_hooks"
+
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+er-gfx = { path = "../er-gfx" }
+er-telemetry = { path = "../er-telemetry" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
