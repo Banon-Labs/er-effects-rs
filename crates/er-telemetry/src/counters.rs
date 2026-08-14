@@ -131,13 +131,14 @@ pub static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
-/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the one
-/// the user picked, and we redirected it to the pick. Nonzero means the save container's stored
-/// last-used slot (`CSMenuSystemSaveLoad+0x1200`) disagreed with the click and the click won --
-/// i.e. the wrong character would have loaded. Was 1 in the 2026-08-03 repro (stored 2 vs pick 0).
+/// Times the LoadGame job builder (0x140826510) was asked to build for a slot other than the
+/// explicit boot selection (user pick first, configured autoload slot second), and we redirected
+/// it to that selection. Nonzero means the save container's persisted last-used slot
+/// (`CSMenuSystemSaveLoad+0x1200`) would have loaded the wrong character. Was 1 in the 2026-08-03
+/// picker repro (stored 2 vs pick 0) and the 2026-08-13 configured-slot repro (stored 9 vs config 0).
 pub static LOADGAME_BUILDER_SLOT_OVERRIDES: AtomicUsize = AtomicUsize::new(0);
-/// The native slot the last override replaced, u32-packed. Together with the pick this identifies
-/// exactly which character the game was about to load instead.
+/// The native slot the last override replaced, u32-packed. Together with the explicit boot slot
+/// this identifies exactly which character the game was about to load instead.
 pub static LOADGAME_BUILDER_LAST_NATIVE_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// The slot THIS loading-screen window committed its portrait to, +1 (0 == not yet committed).
 /// Latched at the window's first slot resolution and held until the window closes, so the face on
