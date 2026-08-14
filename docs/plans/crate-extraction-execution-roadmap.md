@@ -1,7 +1,7 @@
 # Crate-extraction execution roadmap
 
-**Current baseline:** `ddac122d` (`main`, 2026-08-13)  
-**Parent planning PR:** [#193](https://github.com/Banon-Labs/er-effects-rs/pull/193)  
+**Current baseline:** `466c2896` (`origin/main`, 2026-08-14)
+**Parent planning PR:** [#193](https://github.com/Banon-Labs/er-effects-rs/pull/193)
 **Scope:** finish the ownership cleanup begun in `crates/er-effects-rs/src/experiments/**`, including `startup_hooks/**`, without changing product behavior merely to make extraction easier.
 
 This is the current execution map. The two older analyses remain the evidence books:
@@ -15,9 +15,9 @@ Their source-level findings still matter, but their old line coordinates and sta
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 79 | 50,576 |
-| excluding `startup_hooks/**` | 44 | 25,054 |
-| `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,522 |
+| all `experiments/**` | 79 | 50,691 |
+| excluding `startup_hooks/**` | 44 | 25,245 |
+| `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 
 Largest remaining non-startup clusters:
 
@@ -240,20 +240,20 @@ This avoids the two worst failure modes in the old plan: creating shallow callba
 
 ## Appendix A -- current 79-file disposition ledger
 
-Generated against `ddac122d` by tracked-file line count. R0 must replace every **UNCLASSIFIED** entry with exact function-level partitions before extraction begins.
+Generated against `466c2896` by tracked-file line count. R0 must replace every **UNCLASSIFIED** entry with exact function-level partitions before extraction begins.
 
 | Current file | Lines | Disposition at this baseline |
 |---|---:|---|
-| `can_move_probe.rs` | 418 | **STAY** (rule 4) -- **the conversion template** |
+| `can_move_probe.rs` | 467 | **STAY** (rule 4) -- **the conversion template** |
 | `continue_load.rs` | 11 | **STAY** as re-export shim |
-| `continue_load/product_continue.rs` | 698 | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) |
-| `continue_load/slot_resolution.rs` | 748 | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) |
+| `continue_load/product_continue.rs` | 683 | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) |
+| `continue_load/slot_resolution.rs` | 738 | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) |
 | `gating.rs` | 11 | **STAY** unless D1 approves `er-gates`; then rewrite as its re-export shim |
 | `gating/env_flags.rs` | 684 | D1 decision: approved live subset - `er-gates`, rejected/dead subset - DELETE, otherwise **STAY** |
 | `gating/runtime_modes.rs` | 141 | D1 decision: approved live subset - `er-gates`, rejected/dead subset - DELETE, otherwise **STAY** |
 | `gpu_frame_timing.rs` | 424 | **STAY** (rule 4: control-file gated, device-removed the game) |
 | `gpu_readback.rs` | 70 | **STAY** until subtree moves, then delete |
-| `gpu_readback/boot_progress.rs` | 2,603 | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) |
+| `gpu_readback/boot_progress.rs` | 2,599 | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) |
 | `gpu_readback/gpu_draw_shared.rs` | 476 | er-boot-cover (whole) |
 | `gpu_readback/save_picker_overlay.rs` | 23 | **STAY** -- re-home as a sibling of `experiments/` |
 | `input_block.rs` | 1,421 | **STAY** (996) / **DELETE** (17) |
@@ -265,24 +265,24 @@ Generated against `ddac122d` by tracked-file line count. R0 must replace every *
 | `lifecycle/title_visual_startup.rs` | 185 | STAY product startup arming/order; title implementation moves by family |
 | `mem.rs` | 67 | er-game-base (36) / **er-hook** (109) / **STAY** (61, the er-game-base re-export shim) |
 | `menu_diag.rs` | 8 | **DELETE** when children move |
-| `menu_diag/menu_observation.rs` | 641 | er-menu-trace (629) / **DELETE** (226) |
+| `menu_diag/menu_observation.rs` | 614 | er-menu-trace (629) / **DELETE** (226) |
 | `mod.rs` | 113 | **STAY** -- 20 `mod` + 2 `#[path]`, 21 globs, 1,414 items |
 | `mod/own_stepper_idx6_memory.rs` | 112 | er-load-drive (~102) / er-loading-portrait (10) |
 | `mod/product_core_own_stepper.rs` | 627 | er-load-drive (634) / **STAY** (694, unreachable tail) |
 | `mod/product_core_own_stepper/fallback_drives.rs` | 641 | STAY diagnostic/fallback tail; reassess only after load-drive decision |
 | `own_load.rs` | 11 | **STAY** as re-export shim |
-| `own_load/drive.rs` | 1,703 | er-load-drive (~1,040) / **STAY** (~662, rule-4 gated) |
+| `own_load/drive.rs` | 1,750 | er-load-drive (~1,040) / **STAY** (~662, rule-4 gated) |
 | `own_load/loaders.rs` | 7 | er-load-drive (590) / **STAY** (550) |
-| `own_load/loaders/load_drive.rs` | 656 | er-load-drive only if D5 interface-depth re-cost passes; otherwise STAY |
-| `own_load/loaders/switch_reload.rs` | 490 | mixed load-drive/product reload adapter; classify in R0 before D5 |
+| `own_load/loaders/load_drive.rs` | 667 | er-load-drive only if D5 interface-depth re-cost passes; otherwise STAY |
+| `own_load/loaders/switch_reload.rs` | 497 | mixed load-drive/product reload adapter; classify in R0 before D5 |
 | `own_stepper.rs` | 11 | **STAY** as re-export shim |
 | `own_stepper/bootstrap_drive.rs` | 909 | er-load-drive (51) / **STAY** (851) / **DELETE** (48) |
 | `own_stepper/load_steps.rs` | 741 | er-load-drive (420) / **STAY** (388) / **DELETE** (36) |
-| `present_overlay.rs` | 1,099 | STAY (mechanism) / er-d3d12-compositor (128) / er-hook (34) / **DELETE** (66) |
+| `present_overlay.rs` | 947 | STAY (mechanism) / er-d3d12-compositor (128) / er-hook (34) / **DELETE** (66) |
 | `save_picker.rs` | 3 | **STAY** |
 | `save_redirect.rs` | 11 | **DELETE** when children move |
 | `save_redirect/file_ops.rs` | 352 | er-save-redirect (whole) -- **cannot move without path_hooks.rs** |
-| `save_redirect/path_hooks.rs` | 1,944 | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) |
+| `save_redirect/path_hooks.rs` | 2,026 | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) |
 | `startup_hooks.rs` | 197 | STAY product startup module root/arming facade |
 | `startup_hooks/diagnostics/dlc_roots_trace.rs` | 169 | STAY 162 |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 383 | er-title-flow 160 / er-quit-menu 112 / STAY 105 / DELETE 55 |
@@ -290,29 +290,29 @@ Generated against `ddac122d` by tracked-file line count. R0 must replace every *
 | `startup_hooks/diagnostics/mod.rs` | 174 | STAY 172 |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | STAY 136 |
 | `startup_hooks/loading_cover/dlc_roots_self_heal.rs` | 2 | DELETE 2 |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,587 | er-save-loader 557 / er-loading-portrait 458 / er-quit-menu 208 / STAY 173 / er-telemetry 10 / DELETE 1 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,550 | er-save-loader 557 / er-loading-portrait 458 / er-quit-menu 208 / STAY 173 / er-telemetry 10 / DELETE 1 |
 | `startup_hooks/loading_cover/mod.rs` | 189 | STAY 188 |
-| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 277 | er-loading-portrait 220 / DELETE 51 |
+| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 276 | er-loading-portrait 220 / DELETE 51 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 898 | NEW:er-scaleform-hooks 653 / er-quit-menu 51 / er-loading-portrait 51 / DELETE 43 |
-| `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 95 | NEW:er-scaleform-hooks 94 |
+| `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | NEW:er-scaleform-hooks 94 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,075 | er-title-flow 879 / STAY 185 / DELETE 52 / er-telemetry 9 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,402 | NEW:er-scaleform-hooks 648 / er-title-flow 320 / STAY 100 / DELETE 1 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,407 | NEW:er-scaleform-hooks 648 / er-title-flow 320 / STAY 100 / DELETE 1 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 868 | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 471 | NEW:er-boot-window 461 |
 | `startup_hooks/quit_menu/mod.rs` | 204 | STAY 196 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | R12B1 editor control/status transport (56-183, 277-508); R12B2 ProfileSelect field text/size application (184-276, 1271-1463, 1555-1653); R12B3 drive-row/chrome/cursor geometry (509-970); R12B4 path-window/caret (972-1164); R12B5 Scaleform proxy/value/binder primitives (1165-1270, 1464-1554, 1654-1677); product arming **STAY** |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,954 | STAY 902 / er-quit-menu 875 / DELETE 51 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,957 | STAY 902 / er-quit-menu 875 / DELETE 51 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,243 | er-quit-menu 1026 / DELETE 206 |
 | `startup_hooks/quit_menu/save_dest_identity.rs` | 7 | DELETE 5 |
-| `startup_hooks/quit_menu/save_flow_boxes.rs` | 655 | er-quit-menu 628 / DELETE 7 |
+| `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | er-quit-menu 628 / DELETE 7 |
 | `startup_hooks/quit_menu/save_picker_dim_overlay.rs` | 6 | DELETE 5 |
-| `startup_hooks/quit_menu/save_picker_menu.rs` | 2,895 | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 |
+| `startup_hooks/quit_menu/save_picker_menu.rs` | 2,894 | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 758 | R13B1 pure outcome/text model (120-133, 312-340, 374-377, 579-621); R13B2 SoftwareKeyboard recipe/result hooks (1-119, 209-432); R13B3 native job construction/submission (433-578); R13B4 lifecycle/menu-pump adapter (134-208, 622-704); residual product scheduling **STAY** |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,163 | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,192 | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,459 | er-quit-menu 1395 / er-save-picker 66 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 682 | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,407 | er-quit-menu 988 / er-telemetry 347 / DELETE 83 / er-loading-portrait 32 / STAY 7 |
-| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,181 | DELETE 903 / STAY 452 / er-quit-menu 396 / er-title-flow 221 / er-loading-portrait 67 -- **DELETE row largely already landed** |
+| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,162 | DELETE 903 / STAY 452 / er-quit-menu 396 / er-title-flow 221 / er-loading-portrait 67 -- **DELETE row largely already landed** |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 289 | er-quit-menu 263 / DELETE 19 |
 | `startup_hooks/save_picker/mod.rs` | 171 | STAY 169 |
 | `startup_hooks/save_picker/save_picker_boot.rs` | 469 | er-save-picker 387 / DELETE 64 / STAY 1 |
@@ -320,6 +320,6 @@ Generated against `ddac122d` by tracked-file line count. R0 must replace every *
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | er-quit-menu 53 / STAY 32 / er-save-picker 23 / DELETE 10 |
 | `title.rs` | 7 | **STAY** -- removing it is a constants-cluster job |
 | `trace.rs` | 14 | **DELETE** when children move |
-| `trace/menu_constructor_capture.rs` | 1,227 | er-menu-trace (whole) |
-| `trace/menu_trace_hooks.rs` | 2,028 | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) |
-| `trace/native_result_map_hooks.rs` | 676 | er-menu-trace (677) / **DELETE** (25) |
+| `trace/menu_constructor_capture.rs` | 1,336 | er-menu-trace (whole) |
+| `trace/menu_trace_hooks.rs` | 2,059 | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) |
+| `trace/native_result_map_hooks.rs` | 739 | er-menu-trace (677) / **DELETE** (25) |
