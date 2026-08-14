@@ -26,15 +26,15 @@ use er_save_redirect::{
     SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth, SaveHookInstallState, SavePathKind,
-    SavePathTelemetryBucket, StagedEntryFate, classify_copyfile_endpoint, classify_save_query_path,
-    createfile_diag_hit_should_log, dedupe_dirs_by_identity, default_save_file_path,
-    direct_stage_case_dirs, is_inside_direct_stage_root, is_save_file_or_backup_path,
-    is_staged_save_container_name, plan_create_file_open, plan_direct_stage_request,
-    plan_save_path_telemetry, plan_save_query_path, plausible_steam_id64,
-    probe_direct_stage_file_status, redirect_wide_save_path_with_side_effects,
-    save_detour_disk_io_allowed, save_file_is_readonly, staged_entry_fate,
-    steam_id64_from_dir_name, steam_id64_from_wide_save_path, wide_contains_ci_ascii,
-    wide_ends_with_ci_ascii,
+    SavePathTelemetryBucket, StagedEntryFate, TerminalRejectionGuard, TerminalRejectionObservation,
+    classify_copyfile_endpoint, classify_save_query_path, createfile_diag_hit_should_log,
+    dedupe_dirs_by_identity, default_save_file_path, direct_stage_case_dirs,
+    is_inside_direct_stage_root, is_save_file_or_backup_path, is_staged_save_container_name,
+    plan_create_file_open, plan_direct_stage_request, plan_save_path_telemetry,
+    plan_save_query_path, plausible_steam_id64, probe_direct_stage_file_status,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
+    staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
+    wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
@@ -358,6 +358,75 @@ const SAVE_REDIRECT_MODE_STAGED_ROOT: usize = 1;
 const SAVE_REDIRECT_MODE_DIRECT_FILE: usize = 2;
 const SAVE_REDIRECT_MODE_DEFAULT_USER: usize = 3;
 
+/// Terminal own-load save-resolution rejection. Once the picker gate has released, a missing active
+/// container cannot become valid without replacing the staged source, which this process cannot do
+/// (`SAVE_DIRECT_SOURCE_FILE` is deliberately write-once). The first rejection therefore fails
+/// closed; a second identical observation is a recurrence bug and sets a nonzero semaphore.
+static OWN_LOAD_SAVE_REJECTION: TerminalRejectionGuard = TerminalRejectionGuard::new();
+static OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS: AtomicU64 = AtomicU64::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_ARMED: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_FIRED: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
+const OWN_LOAD_UNRESOLVABLE_PROBE_ENV: &str = "ER_EFFECTS_PROBE_OWN_LOAD_UNRESOLVABLE";
+
+pub(crate) fn own_load_save_rejection_terminal() -> bool {
+    OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS.fetch_add(1, Ordering::SeqCst);
+    OWN_LOAD_SAVE_REJECTION.is_terminal()
+}
+
+pub(crate) fn own_load_save_rejection_fingerprint() -> u64 {
+    OWN_LOAD_SAVE_REJECTION.fingerprint()
+}
+
+pub(crate) fn own_load_save_repeated_identical_rejections() -> u64 {
+    OWN_LOAD_SAVE_REJECTION.repeated_identical()
+}
+
+pub(crate) fn record_own_load_save_rejection(fingerprint: u64) -> TerminalRejectionObservation {
+    OWN_LOAD_SAVE_REJECTION.record(fingerprint)
+}
+
+pub(crate) fn own_load_save_rejection_signature(dir: &Path, candidates: &[&str]) -> u64 {
+    let mut identity = dir.as_os_str().to_string_lossy().into_owned();
+    for candidate in candidates {
+        identity.push('|');
+        identity.push_str(candidate);
+    }
+    fnv1a64(identity.as_bytes()).max(1)
+}
+
+/// Arm and fire the deterministic YK0J runtime proof seam exactly once.
+///
+/// This is diagnostic-only: it makes the Rust-side own-load resolver reject the configured source
+/// while the game's native save path continues reading the private staged copy. The configured/user
+/// source remains read-only, the active target remains the only write target, and the run can still
+/// prove a live player after exercising the fail-closed transition.
+pub(crate) fn own_load_save_rejection_probe(
+    source: &Path,
+    candidates: &[&str],
+) -> Option<(u64, TerminalRejectionObservation)> {
+    // ENV-GATE RATIONALE: targeted runtime proof must deterministically exercise the otherwise
+    // invariant-violation-only rejection without corrupting/removing a real save or adding sleeps.
+    if !matches!(
+        std::env::var(OWN_LOAD_UNRESOLVABLE_PROBE_ENV).as_deref(),
+        Ok("1")
+    ) || !direct_save_file_source_active()
+        || missing_save_selection_pending()
+    {
+        return None;
+    }
+    let fingerprint = own_load_save_rejection_signature(source, candidates);
+    OWN_LOAD_SAVE_REJECTION_PROBE_ARMED.store(1, Ordering::SeqCst);
+    OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT.store(fingerprint, Ordering::SeqCst);
+    if OWN_LOAD_SAVE_REJECTION_PROBE_FIRED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return None;
+    }
+    Some((fingerprint, record_own_load_save_rejection(fingerprint)))
+}
+
 pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let mode = match SAVE_REDIRECT_MODE.load(Ordering::SeqCst) {
         SAVE_REDIRECT_MODE_STAGED_ROOT => "staged_root",
@@ -396,7 +465,7 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let last_save_like_kind =
         save_path_kind_label(SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst));
     body.push_str(&format!(
-        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_max_depth\": {},\n  \"oracle_save_redirect_createfilew_reentrant_passthroughs\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n  \"oracle_save_redirect_direct_stage_containers_written\": {},\n  \"oracle_save_redirect_direct_stage_stale_removed\": {},\n  \"oracle_save_redirect_direct_stage_stale_remove_failed\": {},\n",
+        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_max_depth\": {},\n  \"oracle_save_redirect_createfilew_reentrant_passthroughs\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n  \"oracle_save_redirect_direct_stage_containers_written\": {},\n  \"oracle_save_redirect_direct_stage_stale_removed\": {},\n  \"oracle_save_redirect_direct_stage_stale_remove_failed\": {},\n  \"oracle_own_load_save_rejection_state\": {},\n  \"oracle_own_load_save_rejection_fingerprint\": {},\n  \"oracle_own_load_save_rejection_attempts\": {},\n  \"oracle_own_load_save_rejection_guard_checks\": {},\n  \"oracle_own_load_save_rejection_probe_armed\": {},\n  \"oracle_own_load_save_rejection_probe_fired\": {},\n  \"oracle_own_load_save_rejection_probe_expected_fingerprint\": {},\n  \"oracle_own_load_save_repeated_identical_rejections\": {},\n  \"oracle_own_load_save_repeated_different_rejections\": {},\n",
         SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst),
         SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_CALLS.load(Ordering::SeqCst),
@@ -423,7 +492,19 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
         SAVE_DIRECT_STAGE_STALE_REMOVED.load(Ordering::SeqCst),
         // THE stale-serve semaphore: nonzero means a leftover container survived the sweep and the
         // game may open it instead of the configured source.
-        SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.load(Ordering::SeqCst)
+        SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.load(Ordering::SeqCst),
+        usize::from(OWN_LOAD_SAVE_REJECTION.is_terminal()),
+        OWN_LOAD_SAVE_REJECTION.fingerprint(),
+        OWN_LOAD_SAVE_REJECTION.attempts(),
+        OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_ARMED.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_FIRED.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT.load(Ordering::SeqCst),
+        // Both recurrence fields MUST remain zero. The first valid fail-closed transition publishes
+        // state=1, a nonzero fingerprint and attempts=1; any later resolver entry makes the defect
+        // machine-readable instead of silently churning.
+        OWN_LOAD_SAVE_REJECTION.repeated_identical(),
+        OWN_LOAD_SAVE_REJECTION.repeated_different()
     ));
 }
 

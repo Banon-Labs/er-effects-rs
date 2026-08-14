@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Once,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -23,6 +23,85 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 /// These files use a fixed BND4 layout: ten `USER_DATA00N` character slots, `USER_DATA010`, and
 /// `USER_DATA011`. A different length is not a valid Elden Ring save container for this loader.
 pub const EXPECTED_SAVE_FILE_BYTES: u64 = 0x1ba03d0;
+
+/// Result of recording a deterministic failure in [`TerminalRejectionGuard`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalRejectionObservation {
+    First,
+    RepeatedIdentical,
+    RepeatedDifferent,
+}
+
+/// Fail-closed process-local latch for a rejection that cannot become resolvable without an explicit
+/// state transition.
+///
+/// The first rejection publishes a nonzero fingerprint and consumes the attempt. Any caller that
+/// reaches the same resolver again can record the attempt: an identical fingerprint increments the
+/// recurrence semaphore instead of disguising a deterministic failure as another retry.
+pub struct TerminalRejectionGuard {
+    fingerprint: AtomicU64,
+    attempts: AtomicU64,
+    repeated_identical: AtomicU64,
+    repeated_different: AtomicU64,
+}
+
+impl TerminalRejectionGuard {
+    pub const fn new() -> Self {
+        Self {
+            fingerprint: AtomicU64::new(0),
+            attempts: AtomicU64::new(0),
+            repeated_identical: AtomicU64::new(0),
+            repeated_different: AtomicU64::new(0),
+        }
+    }
+
+    pub fn record(&self, fingerprint: u64) -> TerminalRejectionObservation {
+        // Zero means "no rejection" in telemetry. Preserve that invariant even for the vanishingly
+        // unlikely input whose hash is zero.
+        let fingerprint = fingerprint.max(1);
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        match self
+            .fingerprint
+            .compare_exchange(0, fingerprint, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => TerminalRejectionObservation::First,
+            Err(current) if current == fingerprint => {
+                self.repeated_identical.fetch_add(1, Ordering::SeqCst);
+                TerminalRejectionObservation::RepeatedIdentical
+            }
+            Err(_) => {
+                self.repeated_different.fetch_add(1, Ordering::SeqCst);
+                TerminalRejectionObservation::RepeatedDifferent
+            }
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.fingerprint() != 0
+    }
+
+    pub fn fingerprint(&self) -> u64 {
+        self.fingerprint.load(Ordering::SeqCst)
+    }
+
+    pub fn attempts(&self) -> u64 {
+        self.attempts.load(Ordering::SeqCst)
+    }
+
+    pub fn repeated_identical(&self) -> u64 {
+        self.repeated_identical.load(Ordering::SeqCst)
+    }
+
+    pub fn repeated_different(&self) -> u64 {
+        self.repeated_different.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for TerminalRejectionGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Missing-save gate state shared by picker, redirect activation, and boot hold owners inside one
 /// DLL image.
@@ -1596,6 +1675,47 @@ mod tests {
     const HEADER_LEN: usize = 0x40;
     const ENTRY_STRIDE: usize = 0x20;
     const MD5_LEN: usize = 0x10;
+
+    #[test]
+    fn terminal_rejection_simulation_resolves_once_across_recorded_runtime_churn() {
+        let guard = TerminalRejectionGuard::new();
+        let signature = er_game_base::fnv1a::fnv1a64(b"missing:ER0000.co2,ER0000.sl2");
+        let mut resolver_calls = 0_u64;
+        let mut fail_closed_ticks = 0_u64;
+
+        // The preserved failure made 120,959 CreateFileW calls while the same save rejection was
+        // reconsidered. Model that many driver ticks: only the first may reach the resolver.
+        for _ in 0..120_959 {
+            if guard.is_terminal() {
+                fail_closed_ticks += 1;
+                continue;
+            }
+            resolver_calls += 1;
+            assert_eq!(guard.record(signature), TerminalRejectionObservation::First);
+        }
+
+        assert_eq!(resolver_calls, 1);
+        assert_eq!(fail_closed_ticks, 120_958);
+        assert!(guard.is_terminal());
+        assert_ne!(guard.fingerprint(), 0);
+        assert_eq!(guard.attempts(), 1);
+        assert_eq!(guard.repeated_identical(), 0);
+        assert_eq!(guard.repeated_different(), 0);
+    }
+
+    #[test]
+    fn repeated_identical_rejection_sets_a_nonzero_recurrence_semaphore() {
+        let guard = TerminalRejectionGuard::new();
+        let signature = er_game_base::fnv1a::fnv1a64(b"missing:ER0000.sl2");
+        assert_eq!(guard.record(signature), TerminalRejectionObservation::First);
+        assert_eq!(
+            guard.record(signature),
+            TerminalRejectionObservation::RepeatedIdentical
+        );
+        assert_eq!(guard.attempts(), 2);
+        assert_eq!(guard.repeated_identical(), 1);
+        assert_eq!(guard.repeated_different(), 0);
+    }
 
     fn synthetic_bnd4_container() -> Vec<u8> {
         let body = vec![0_u8; 0x20];

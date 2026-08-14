@@ -1000,6 +1000,36 @@ fn switch_save_file_override() -> Option<String> {
 pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // A staged-source rejection is terminal for this process: the source and stage root are
+    // write-once, so retrying the same resolver cannot change its answer. Correct callers check the
+    // terminal latch before entering. Reaching this branch means a caller regressed; record the
+    // identical recurrence semaphore and do no disk/native-builder work.
+    if own_load_save_rejection_terminal() {
+        let fingerprint = own_load_save_rejection_fingerprint();
+        let observation = record_own_load_save_rejection(fingerprint);
+        let repeats = own_load_save_repeated_identical_rejections();
+        if repeats <= 8 || repeats.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "own-load: TERMINAL save rejection re-entered fingerprint=0x{fingerprint:016x} observation={observation:?} repeated_identical={repeats} -- fail-closed; resolver not retried"
+            ));
+        }
+        return None;
+    }
+    // Deterministic runtime proof for YK0J: reject this Rust-side resolution exactly once while the
+    // native game load continues from its already-populated private stage. No file is removed or
+    // renamed, so the read-only configured source and game-owned active write target stay intact.
+    if let Some(source) = configured_save_file() {
+        let candidates = active_default_save_file_names();
+        if let Some((fingerprint, observation)) = own_load_save_rejection_probe(&source, candidates)
+        {
+            append_autoload_debug(format_args!(
+                "own-load: YK0J PROBE armed source='{}' candidates={:?} fingerprint=0x{fingerprint:016x}; forced one terminal unresolvable-save verdict observation={observation:?} (native staged load remains intact)",
+                source.display(),
+                candidates
+            ));
+            return None;
+        }
+    }
     // STAGED-SAVE DIRECT READ (feed-deserialize softlock fix, er-effects-rs, 2026-07-03). When a
     // save is staged/redirected via DLL config / `ER_EFFECTS_SAVE_FILE`, read THAT file directly instead of the
     // native-builder + `fs::read_dir` path below. Reasons this is the correct + robust source:
@@ -1203,8 +1233,25 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
                 .unwrap_or(false)
         })
     else {
+        if missing_save_selection_pending() {
+            append_autoload_debug(format_args!(
+                "own-load: no loadable save under dir=\"{}\" while the missing-save picker is pending -- deferred without consuming the terminal rejection",
+                dir_path.display()
+            ));
+            return None;
+        }
+        if !direct_save_file_source_active() {
+            append_autoload_debug(format_args!(
+                "own-load: no loadable default-user save under dir=\"{}\" -- tried {:?}; no staged source is active, so this ordinary absence is not a terminal staged-source rejection",
+                dir_path.display(),
+                candidates
+            ));
+            return None;
+        }
+        let fingerprint = own_load_save_rejection_signature(&dir_path, candidates);
+        let observation = record_own_load_save_rejection(fingerprint);
         append_autoload_debug(format_args!(
-            "own-load: no loadable save under dir=\"{}\" -- tried {:?} for the active mode",
+            "own-load: no loadable save under dir=\"{}\" -- tried {:?} for the active mode; TERMINAL fail-closed rejection fingerprint=0x{fingerprint:016x} observation={observation:?} (no retry; restart/picker-source replacement required)",
             dir_path.display(),
             candidates
         ));

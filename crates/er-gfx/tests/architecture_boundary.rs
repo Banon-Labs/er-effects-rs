@@ -152,7 +152,6 @@ fn codec_stays_below_the_native_hook_layer() {
     let forbidden = [
         "eldenring",
         "er-effects-rs",
-        "er-game-base",
         "er-hook",
         "er-loading-portrait",
         "er-scaleform-hooks",

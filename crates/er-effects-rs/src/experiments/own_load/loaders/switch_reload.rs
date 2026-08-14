@@ -92,6 +92,13 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
         ));
         return false;
     }
+    if own_load_save_rejection_terminal() {
+        append_autoload_debug(format_args!(
+            "own-load-feed: terminal save rejection already published (fingerprint=0x{:016x}) -- switch remains fail-closed without a resolver retry",
+            own_load_save_rejection_fingerprint()
+        ));
+        return false;
+    }
     let Some(sl2_bytes) = (unsafe { own_load_read_sl2_bytes(base) }) else {
         return false;
     };

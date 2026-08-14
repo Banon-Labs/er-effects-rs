@@ -28,6 +28,17 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     }
     // (1) Read + slice the plaintext slot body. er_save_loader::bnd4 is the only glue: the engine's
     // read path is FSM-gated, so OWN-LOAD must hand it the buffer itself (bd reuse-native-fns).
+    // A prior unresolvable staged-source verdict is terminal for the process. Consume this driver's
+    // phase exactly once instead of calling the resolver again and recreating the per-frame loop.
+    if own_load_save_rejection_terminal() {
+        append_autoload_debug(format_args!(
+            "own-load: terminal save rejection already published (fingerprint=0x{:016x}) -- probe transitions to PHASE_DONE without a resolver retry",
+            own_load_save_rejection_fingerprint()
+        ));
+        OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
+        return;
+    }
     let Some(sl2_bytes) = (unsafe { own_load_read_sl2_bytes(base) }) else {
         OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
         return;
