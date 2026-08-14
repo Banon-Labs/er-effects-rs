@@ -12,6 +12,7 @@ publish = false
 name = "er_save_redirect"
 
 [dependencies]
+er-game-base = { path = "../er-game-base" }
 er-hook = { path = "../er-hook" }
 er-save-loader = { path = "../er-save-loader" }
 er-telemetry = { path = "../er-telemetry" }

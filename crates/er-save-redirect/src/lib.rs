@@ -24,15 +24,6 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 /// `USER_DATA011`. A different length is not a valid Elden Ring save container for this loader.
 pub const EXPECTED_SAVE_FILE_BYTES: u64 = 0x1ba03d0;
 
-pub fn save_normalize_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in bytes.iter().copied() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
 /// Missing-save gate state shared by picker, redirect activation, and boot hold owners inside one
 /// DLL image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1605,12 +1596,6 @@ mod tests {
     const HEADER_LEN: usize = 0x40;
     const ENTRY_STRIDE: usize = 0x20;
     const MD5_LEN: usize = 0x10;
-
-    #[test]
-    fn save_normalize_hash_uses_fnv1a64() {
-        assert_eq!(save_normalize_hash_bytes(b""), 0xcbf29ce484222325);
-        assert_eq!(save_normalize_hash_bytes(b"hello"), 0xa430d84680aabd0b);
-    }
 
     fn synthetic_bnd4_container() -> Vec<u8> {
         let body = vec![0_u8; 0x20];

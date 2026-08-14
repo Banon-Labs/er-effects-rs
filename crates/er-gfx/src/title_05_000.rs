@@ -16,6 +16,7 @@
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
 use crate::{GfxError, Movie};
+pub use er_game_base::fnv1a::fnv1a64;
 
 include!("title_05_000_edits.rs");
 
@@ -28,16 +29,6 @@ pub const VANILLA_FNV1A64: u64 = 0x3b97_2bcf_60d0_44ff;
 pub const STRIPPED_LEN: usize = 11707;
 /// [`fnv1a64`] of the stripped output for the known vanilla input.
 pub const STRIPPED_FNV1A64: u64 = 0x1790_6a0e_91ce_5374;
-
-/// FNV-1a 64-bit content fingerprint (telemetry/identity checks, not crypto).
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
 
 /// True iff `bytes` is the known vanilla movie the edit table was derived from
 /// (and for which the output is proven byte-identical to the validated asset).

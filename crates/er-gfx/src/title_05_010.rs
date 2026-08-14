@@ -29,8 +29,8 @@
 //! cleanly in full or the caller serves its input untouched.
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
-use crate::title_05_000::fnv1a64;
 use crate::{GfxError, Movie};
+use er_game_base::fnv1a::fnv1a64;
 
 include!("title_05_010_edits.rs");
 

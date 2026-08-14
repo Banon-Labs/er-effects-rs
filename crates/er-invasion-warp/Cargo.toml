@@ -26,11 +26,11 @@ name = "er_invasion_warp"
 [dependencies]
 # Shared cross-platform telemetry counters (the oracle_* fields the feature will write).
 er-telemetry = { path = "../er-telemetry" }
+# Shared zero-dependency content fingerprint owner.
+er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
-# Tier A only (zero external deps): the repo's fault-tolerant `ReadProcessMemory` primitive,
-# which is what makes the live `CSAutoInvadePoint` walk fail closed instead of faulting inside
-# the user's game. Windows-only, so the host `cargo test` never links kernel32.
-er-game-base = { path = "../er-game-base" }
+# `er-game-base` remains Tier A only (zero external deps): on Windows this also supplies the
+# fault-tolerant `ReadProcessMemory` primitive used by the live `CSAutoInvadePoint` walk.

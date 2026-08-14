@@ -48,6 +48,10 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# FNV-1a has one zero-dependency owner below every caller. Prove the scanner catches copied
+# implementations before trusting the live ownership check.
+python3 "$repo_root/scripts/check-fnv1a-owner.py" --selftest
+python3 "$repo_root/scripts/check-fnv1a-owner.py"
 # One game address must have exactly ONE literal declaration. Divergent names for one address are
 # divergent CLAIMS about what it is; three turned out to be wrong RE facts shipping in the DLL
 # (bd rva-67b750-is-save-write-not-continue-load-2026-08-01,

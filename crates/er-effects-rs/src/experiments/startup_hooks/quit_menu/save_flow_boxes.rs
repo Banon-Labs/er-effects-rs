@@ -1,4 +1,5 @@
 use super::*;
+use er_game_base::fnv1a::fnv1a64_mix;
 
 // The Save Game flow's ONE native confirm box (save-game-flow WP2; reduced to one 2026-07-31).
 //
@@ -511,7 +512,7 @@ pub(crate) fn save_flow_box_poll_fingerprint(
         snapshot.emit_state as usize,
     ] {
         // FNV-1a-ish mix; any change in any field changes the fingerprint.
-        hash = (hash ^ value).wrapping_mul(0x0100_0000_01b3);
+        hash = fnv1a64_mix(hash as u64, value as u64) as usize;
     }
     // 0 is the "nothing logged yet" sentinel.
     hash | 1
