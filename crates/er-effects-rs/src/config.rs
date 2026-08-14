@@ -237,8 +237,13 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
 # er-effects-rs runtime config (auto-created next to the game executable).
 # All keys are optional; uncomment and edit as needed.
 #
-# save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit save to load (skips default-save detection and the picker)
-# slot = 0                               # character slot the autoload selects
+# With no save_file, autoload uses the active Steam user's valid default container:
+# %APPDATA%\\EldenRing\\<SteamID64>\\ER0000.sl2 (vanilla) or the configured Seamless container.
+# save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit read-only source; staged privately, never written in place
+# slot = 0                               # character slot the autoload selects (default: 0 when unset)
+# A slot only names a target inside a resolved save; it does not prove that source or character exists.
+# The picker opens only when neither source is valid. There is no require_save_picker key yet.
+# os_native_save_picker = false          # when a picker opens: false=in-game browser, true=OS file dialog
 # method = \"...\"                         # autoload method override
 # boot_background_image = 'C:\\path\\to\\background.png'
 # save_suppression_enabled = false        # opt-in only: suppresses native saves except the Save Game one-shot bypass
@@ -681,6 +686,14 @@ mod tests {
             assert!(
                 generated.contains(SAVE_SUPPRESSION_ENABLED_KEY),
                 "the {label} boilerplate must document {SAVE_SUPPRESSION_ENABLED_KEY}"
+            );
+            assert!(
+                generated.contains("active Steam user's valid default container"),
+                "the {label} boilerplate must document default-save resolution"
+            );
+            assert!(
+                generated.contains("There is no require_save_picker key yet."),
+                "the {label} boilerplate must not imply that a picker can be forced"
             );
             assert_eq!(
                 parse(&generated)
