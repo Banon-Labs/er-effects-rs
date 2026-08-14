@@ -74,3 +74,9 @@ A sibling crate adds one explicit interface only for consumers that install nati
 - No shipped DLL topology changes here. The new crate is a library linked by its consumers, not another required ME3 native entry.
 
 `crates/er-gfx/tests/architecture_boundary.rs` makes the dependency facts and the one-way boundary executable. Cargo continues to prove the realized workspace graph is acyclic when R23 adds the package.
+
+## R23 boundary realization
+
+R23 realizes the sibling as a normal library with direct edges to `er-gfx`, `er-game-base`, `er-telemetry`, and (on Windows) `er-hook`. It deliberately has no dependency on `er-effects-rs`, `er-title-flow`, or `er-loading-portrait`.
+
+The named-child bind seam uses one post-bind `NamedChildBindEvent` callback installed through `ScaleformHooksHost`. The hook owner reports the native parent, output proxy, name pointer, and original return value; title/ProfileSelect feature code retains the policy applied to those facts. This avoids both the `er-title-flow -> er-loading-portrait -> er-gfx` cycle risk and a broad host structure that mirrors product globals. No descriptor, resource, or message callback is added speculatively; the R24 slice that first proves another host-owned concern must add its own narrow input.

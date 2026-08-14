@@ -21,6 +21,7 @@ members = [
   "crates/mushroom-man-runtime",
   "crates/effects-data",
   "crates/er-gfx",
+  "crates/er-scaleform-hooks",
   "crates/er-loading-bar",
   "crates/er-d3d12-compositor",
   "crates/er-loading-bar-dll",
