@@ -200,7 +200,10 @@ preflight() {
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
     fatal "deprecated staged-save/ER_EFFECTS_SAVE_FILE probe path is disabled for release/autoload validation; use ~/Elden/launch.sh or default-save mode (RUNTIME_USE_DEFAULT_SAVE=1). Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
   fi
-  me3_preflight || fatal "me3 preflight failed (see guidance above)"
+  # This probe exercises default/staged save resolution, native Continue, and own-load. It cannot
+  # exercise System->Quit reload, world-map markers, Seamless session tracing, or invasion hunt.
+  # The named gate scope still requires every registered save/load/Continue predicate.
+  me3_preflight save-load-continue || fatal "me3 preflight failed (see guidance above)"
   me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
