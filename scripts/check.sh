@@ -68,6 +68,10 @@ python3 "$repo_root/scripts/check-rva-alias-drift.py"
 # Keep its typed definition in er-game-base and reject copied numeric offsets/formulas elsewhere.
 python3 "$repo_root/scripts/check-profile-summary-layout.py" --selftest
 python3 "$repo_root/scripts/check-profile-summary-layout.py"
+# PR #193's roadmap carries a current 79-file ownership ledger. Prove the checker first, then fail
+# when source files or line counts drift so future agents must refresh rather than execute stale cuts.
+python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
+python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 # A log describes exactly ONE process run. er-invasion-warp-dll appended to a fixed filename, so
 # twelve launches became one 565KB file and a count over it read as one run's behaviour. Every
 # appending opener must route through er-game-base's one-shot truncation. Selftest first, so the

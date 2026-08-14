@@ -1,4 +1,6 @@
-# `startup_hooks/` crate targets -- plan of record
+# `startup_hooks/` crate targets -- supporting analysis
+
+> **Execution status moved:** use [`crate-extraction-execution-roadmap.md`](crate-extraction-execution-roadmap.md) for the current baseline, sequence, dependencies, gates, decisions, and completion criteria. This file preserves the original partition evidence. Its frozen totals and line coordinates must not drive edits without the roadmap's R1 reclassification.
 
 **Analysis baseline: `f15cce1a` (main, 2026-08-02).** Every line number was measured against the
 source at that commit, not inherited from an earlier plan. Produced by two parallel sweeps

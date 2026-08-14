@@ -1,4 +1,6 @@
-# experiments/ crate targets -- plan of record
+# experiments/ crate targets -- supporting analysis
+
+> **Execution status moved:** use [`crate-extraction-execution-roadmap.md`](crate-extraction-execution-roadmap.md) for the current baseline, sequence, dependencies, gates, decisions, and completion criteria. This file preserves the measured analysis and proof history behind that roadmap. Its old coordinates and `OPEN` labels are not current task state.
 
 **Analysis baseline: `b49dd5e2` (2026-08-02).** Every line number below was measured against that
 commit, not inherited. The working tree was clean when measured.
