@@ -17,6 +17,8 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 # Shared MinHook FFI + hook union (compiles the vendored MinHook C once; this crate defines the
 # `er_effects_union_register` export over `er_hook::register_union_hook`).
 er-hook = { path = "../er-hook" }
+# Native Scaleform hook mechanisms. Product policy/logging remains in this crate.
+er-scaleform-hooks = { path = "../er-scaleform-hooks" }
 # Shared low-level foundation (fault-safe RAM readers, game base/rva, stable
 # singleton RVA table, logger core). Source of truth for primitives previously
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
