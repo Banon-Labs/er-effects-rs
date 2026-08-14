@@ -37,6 +37,7 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use er_game_base::fnv1a::fnv1a64;
 #[cfg(windows)]
 use er_game_base::mem::{read_bytes, safe_read_i32, safe_read_u8, safe_read_usize};
 
@@ -117,16 +118,6 @@ pub fn gfx_tallies() -> (usize, usize, usize, usize) {
         SWAPS_SERVED.load(Ordering::SeqCst),
         DERIVE_FAILURES.load(Ordering::SeqCst),
     )
-}
-
-/// FNV-1a-64, matching the fingerprint the offline tests pin.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
 }
 
 /// Parse a space-separated hex AOB with `??` wildcards into (bytes, mask).
@@ -415,14 +406,6 @@ mod tests {
         // decline to swap a movie the offline test happily edits -- a silent no-op feature.
         assert_eq!(WORLD_MAP_VANILLA_LEN, 68_763);
         assert_eq!(WORLD_MAP_VANILLA_FNV1A64, 0xed66_8483_91a2_d273);
-    }
-
-    #[test]
-    fn the_fingerprint_function_agrees_with_the_known_answer() {
-        // A wrong FNV prime silently makes every movie unrecognised, so the swap never fires
-        // and the only symptom is "the icon did not change".
-        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 
     #[test]

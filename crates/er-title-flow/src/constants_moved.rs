@@ -608,7 +608,7 @@ pub const OBSERVE_INTERVAL: u64 = 10;
 
 /// Observe change-detection: log a snapshot only when the packed signature changes
 /// (full granularity, minimal file I/O). Multiplier for the rolling signature.
-pub const OBSERVE_SIG_MULT: i64 = 0x100000001b3;
+pub const OBSERVE_SIG_MULT: i64 = er_game_base::fnv1a::FNV1A64_PRIME as i64;
 
 pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(i64::MIN);

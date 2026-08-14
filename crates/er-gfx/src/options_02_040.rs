@@ -49,8 +49,8 @@
 //! placements are what makes the 2x2 measure work.
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
-use crate::title_05_000::fnv1a64;
 use crate::{GfxError, Movie};
+use er_game_base::fnv1a::fnv1a64;
 
 include!("options_02_040_quit4_edits.rs");
 

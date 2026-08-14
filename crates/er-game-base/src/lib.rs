@@ -1,14 +1,15 @@
 //! er-game-base: shared low-level foundation below the product DLL, the
 //! telemetry crate/DLL, and the zero-dep mini-DLLs.
 //!
-//! Tier A (default, zero external deps): fault-safe RAM readers, game
-//! base/rva resolution, the stable singleton RVA/offset table, and a
-//! parameterized append-only file logger.
+//! Tier A (default, zero external deps): FNV-1a fingerprints, fault-safe RAM readers,
+//! game base/rva resolution, the stable singleton RVA/offset table, and a parameterized
+//! append-only file logger.
 //!
 //! Tier B (`game-types` feature, cfg(windows)-gated): a re-export facade over
 //! the typed eldenring / fromsoftware-shared accessors so the heavy consumers
 //! share one import surface. The mini-DLLs enable tier A only.
 
+pub mod fnv1a;
 pub mod log;
 pub mod mem;
 #[cfg(all(windows, feature = "game-types"))]
