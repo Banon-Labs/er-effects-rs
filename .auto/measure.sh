@@ -14,34 +14,39 @@ root = Path.cwd()
 bd = Path(os.environ.get("BD_REAL_BIN", str(Path.home() / ".local/bin/bd")))
 roadmap = (root / "docs/plans/crate-extraction-execution-roadmap.md").read_text(encoding="utf-8")
 
-# Stable work-package IDs written in the roadmap. Plus-suffixed umbrellas remain nodes until R0
-# expands them into child labels such as roadmap-r12b1; those children are added below from Beads.
+# Parse only authoritative work-package cells/bullets, not incidental cross-references in prose.
+# Plus-suffixed umbrellas remain nodes until R0 expands them into child labels such as R12B1.
+package_specs: set[str] = set()
+for line in roadmap.splitlines():
+    match = re.match(r"^\|\s*([RD]\d+[a-z]?(?:-[RD]?\d+[a-z]?)?\+?)\s*\|", line, re.I)
+    if match is None:
+        match = re.match(r"^- \*\*([RD]\d+[a-z]?(?:-[RD]?\d+[a-z]?)?\+?):\*\*", line, re.I)
+    if match is not None:
+        package_specs.add(match.group(1).upper())
+
 base_ids: set[str] = set()
-for match in re.finditer(r"\b([RD]\d+[a-z]?)(\+)?(?:-([RD]?)(\d+)([a-z]?))?\b", roadmap, re.I):
-    start, plus, end_prefix, end_num, end_suffix = match.groups()
-    start = start.upper()
-    prefix = start[0]
-    start_num_match = re.fullmatch(r"[RD](\d+)([A-Z]?)", start)
-    if not start_num_match:
-        continue
-    start_num = int(start_num_match.group(1))
-    start_suffix = start_num_match.group(2).lower()
-    if end_num:
-        end_prefix = (end_prefix or prefix).upper()
-        if end_prefix != prefix:
-            continue
-        end_num_i = int(end_num)
-        end_suffix = end_suffix.lower()
-        if start_num == end_num_i and start_suffix and end_suffix:
+umbrella_ids: set[str] = set()
+for spec in package_specs:
+    plus = spec.endswith("+")
+    spec = spec.removesuffix("+")
+    range_match = re.fullmatch(r"([RD])(\d+)([A-Z]?)-(?:[RD])?(\d+)([A-Z]?)", spec)
+    if range_match:
+        prefix, start_num_raw, start_suffix, end_num_raw, end_suffix = range_match.groups()
+        start_num, end_num = int(start_num_raw), int(end_num_raw)
+        if start_num == end_num and start_suffix and end_suffix:
             for code in range(ord(start_suffix), ord(end_suffix) + 1):
                 base_ids.add(f"{prefix}{start_num}{chr(code)}")
         elif not start_suffix and not end_suffix:
-            for number in range(start_num, end_num_i + 1):
+            for number in range(start_num, end_num + 1):
                 base_ids.add(f"{prefix}{number}")
-        else:
-            base_ids.add(start)
-    else:
-        base_ids.add(start)
+        continue
+    base_ids.add(spec)
+    if plus:
+        umbrella_ids.add(spec)
+
+# R0 scouts expanded these broad roadmap rows into exact child PR nodes even though the original
+# table did not carry a `+` suffix.
+umbrella_ids.update({"R0A", "R0B", "R22"})
 
 issues = json.loads(subprocess.check_output(
     [str(bd), "list", "--all", "-n", "0", "--json"], text=True
@@ -56,7 +61,11 @@ for issue in roadmap_issues:
             plan_id = match.group(1).upper()
             plan_to_issue.setdefault(plan_id, []).append(issue)
 
-planned_ids = base_ids | set(plan_to_issue)
+expanded_umbrellas = {
+    umbrella for umbrella in umbrella_ids
+    if any(plan_id.startswith(umbrella) and plan_id != umbrella for plan_id in plan_to_issue)
+}
+planned_ids = (base_ids - expanded_umbrellas) | set(plan_to_issue)
 
 prs = json.loads(subprocess.check_output([
     "gh", "pr", "list", "--state", "all", "--limit", "1000",

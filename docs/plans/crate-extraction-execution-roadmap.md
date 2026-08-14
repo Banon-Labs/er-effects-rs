@@ -71,7 +71,25 @@ Completion does **not** require an empty `experiments/` directory. Product orche
 
 ## 4. Execution sequence
 
-The sequence below replaces the old S13+ ordering where current evidence has changed it. `R` numbers are stable work packages, not a promise of exactly 58 PRs: umbrella rows must be expanded into child issues/PRs by R0 before implementation.
+The sequence below replaces the old S13+ ordering where current evidence has changed it. `R` numbers are stable work packages, not a promise of exactly 58 PRs.
+
+R0 expanded the umbrella rows into **101 single-PR/decision nodes** in Beads. The machine DAG is authoritative there: every node has labels `pr193-roadmap` and `roadmap-<normalized-id>`, is parented under `er-effects-rs-q4oh`, and has explicit blocking edges. Existing exact-scope issues were reused for R0, R0A3, R2, R11, R15, and R31 instead of duplicated. The expansions are:
+
+| roadmap umbrella | executable child IDs |
+|---|---|
+| R0a | R0A1 load identity gate; R0A2 loading/render oracle gate; R0A3 picker correctness |
+| R0b | R0B1 FNV-1a owner; R0B2 ProfileSummary owner |
+| R6a-R6d | R6A native-result map; R6B constructor capture; R6C trace hooks; R6D observation |
+| R12b+ | R12B1-R12B5 editor transport, field application, geometry, path-window/caret, Scaleform primitives |
+| R13b+ | R13B1-R13B4 path model, terminal hooks, job submission, lifecycle adapter |
+| R17a+ | R17A-R17G picker model, boot surface, editor adapter, keyboard, cursor, mouse/scroll, list builder |
+| R19a+ | R19A-R19F quit routing, finish/confirm, activation, ownership/pump, latches, repro/input guards |
+| R22 | R22A-R22C title arming, resources, named-child/value hooks |
+| R24a+ | R24A-R24H descriptor, resource, named-child, ProfileSelect, text-input, quit-menu, policy/message-box, status/spec hooks |
+| R27-R30 | R27-R30 model, CPU raster, D3D12 adapter, runtime owner |
+| R38-R54 | one node per numbered optional extraction, blocked by D1/D4/D5 |
+
+The R0 proof is reproducible with `$HOME/.local/bin/bd list --all -n 0 --label pr193-roadmap --json` (101 unique roadmap labels) and `$HOME/.local/bin/bd dep cycles` (no cycles). A ticket or branch without a real qualifying PR does not count as plan translation.
 
 ### Phase 0 -- make the roadmap executable
 
@@ -231,8 +249,8 @@ Generated against `ddac122d` by tracked-file line count. R0 must replace every *
 | `continue_load/product_continue.rs` | 698 | er-load-drive (~435) / **STAY** (~449) / **DELETE** (62) |
 | `continue_load/slot_resolution.rs` | 748 | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) |
 | `gating.rs` | 11 | **STAY** unless D1 approves `er-gates`; then rewrite as its re-export shim |
-| `gating/env_flags.rs` | 684 | D1 decision: approved live subset → `er-gates`, rejected/dead subset → DELETE, otherwise **STAY** |
-| `gating/runtime_modes.rs` | 141 | D1 decision: approved live subset → `er-gates`, rejected/dead subset → DELETE, otherwise **STAY** |
+| `gating/env_flags.rs` | 684 | D1 decision: approved live subset - `er-gates`, rejected/dead subset - DELETE, otherwise **STAY** |
+| `gating/runtime_modes.rs` | 141 | D1 decision: approved live subset - `er-gates`, rejected/dead subset - DELETE, otherwise **STAY** |
 | `gpu_frame_timing.rs` | 424 | **STAY** (rule 4: control-file gated, device-removed the game) |
 | `gpu_readback.rs` | 70 | **STAY** until subtree moves, then delete |
 | `gpu_readback/boot_progress.rs` | 2,603 | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) |
@@ -282,14 +300,14 @@ Generated against `ddac122d` by tracked-file line count. R0 must replace every *
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 868 | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 471 | NEW:er-boot-window 461 |
 | `startup_hooks/quit_menu/mod.rs` | 204 | STAY 196 |
-| `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | **UNANALYSED** -- new since baseline |
+| `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | R12B1 editor control/status transport (56-183, 277-508); R12B2 ProfileSelect field text/size application (184-276, 1271-1463, 1555-1653); R12B3 drive-row/chrome/cursor geometry (509-970); R12B4 path-window/caret (972-1164); R12B5 Scaleform proxy/value/binder primitives (1165-1270, 1464-1554, 1654-1677); product arming **STAY** |
 | `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,954 | STAY 902 / er-quit-menu 875 / DELETE 51 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,243 | er-quit-menu 1026 / DELETE 206 |
 | `startup_hooks/quit_menu/save_dest_identity.rs` | 7 | DELETE 5 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 655 | er-quit-menu 628 / DELETE 7 |
 | `startup_hooks/quit_menu/save_picker_dim_overlay.rs` | 6 | DELETE 5 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,895 | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 |
-| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 758 | **UNANALYSED** -- new since baseline (#226) |
+| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 758 | R13B1 pure outcome/text model (120-133, 312-340, 374-377, 579-621); R13B2 SoftwareKeyboard recipe/result hooks (1-119, 209-432); R13B3 native job construction/submission (433-578); R13B4 lifecycle/menu-pump adapter (134-208, 622-704); residual product scheduling **STAY** |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,163 | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,459 | er-quit-menu 1395 / er-save-picker 66 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 682 | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** |
