@@ -188,6 +188,26 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 
+# Knowing every shell exists is not knowing which of them can share a process. Five pairs
+# corrupt each other -- two MinHook instances on one prologue, two D3D12 Present compositors,
+# a harness that drives input every frame -- and that knowledge used to live only as prose in
+# a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
+# generated profile may load, so the table must stay complete: a new cdylib that nobody has
+# classified is exactly the one a dependency-closure walk auto-includes.
+python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
+python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
+# selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with
+# no decoded identity, a block printed without the DLL's testimony.
+python3 "$repo_root/scripts/er_run_lib.py"
+python3 "$repo_root/scripts/er-dll-closure.py" --selftest
+python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
+python3 "$repo_root/scripts/er-pick-save.py" --selftest
+python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
+python3 "$repo_root/scripts/er-run-reaper.py" --selftest
+python3 "$repo_root/scripts/er-run-branch.py" --selftest
+
 # Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
 # er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
 # the default build, staged product payload, or required ME3 native list.
