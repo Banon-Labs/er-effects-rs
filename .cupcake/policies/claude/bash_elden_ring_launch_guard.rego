@@ -244,8 +244,18 @@ start_protected_launch_detected if {
 # ---------------------------------------------------------------------------
 
 # (a) copy/archive command word + unquoted path operand.
+#
+# False positive fixed 2026-08-15: neither alternative here was anchored to a
+# WORD boundary after the verb, so `[^;|&()]*` let the match start partway
+# through an unrelated command word whose PREFIX happened to equal one of
+# these tokens. `zipinfo ersc.dll` (a read-only listing, not `zip`) and even
+# nonsense like `ddrescue ersc.dll` / `lnstat ersc.dll` denied on that basis.
+# A real invocation always has whitespace between the command word and its
+# first operand, so requiring `[[:space:]]` immediately after the verb keeps
+# every genuine `cp`/`mv`/`tar`/... shape denied while a same-prefix word in
+# command position no longer counts as the verb.
 ersc_bundle_detected if {
-	regex.match(`(?i)(^|[[:space:];|&()])(cp|copy|mv|move|install|rsync|scp|ln|dd|tee|zip|unzip|tar|7z|7za|rar|unrar|cpio|gzip|xz|xcopy|robocopy)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+	regex.match(`(?i)(^|[[:space:];|&()])(cp|copy|mv|move|install|rsync|scp|ln|dd|tee|zip|unzip|tar|7z|7za|rar|unrar|cpio|gzip|xz|xcopy|robocopy)[[:space:]][^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
 }
 
 # (a') interpreter command word + unquoted path operand. An interpreter can
@@ -253,8 +263,20 @@ ersc_bundle_detected if {
 # every ersc.dll mention is an absolute drive-mount (game-install) operand
 # path is exempt -- see ersc_interpreter_gameinstall_scan_only below. All
 # other interpreter + operand shapes deny exactly as before.
+#
+# False positive fixed 2026-08-15: same missing-word-boundary defect as (a)
+# above, but worse here because `sh` is a two-letter prefix of many common
+# read-only tool names. `sha256sum "$staged" /path/ersc.dll | sed '...'`
+# denied a plain hash-compare of two files -- `[^;|&()]*` let the match start
+# on the "sh" INSIDE "sha256sum" (also matches shasum, sha1sum, shred, and
+# any other word merely starting with "sh"), not on a real `sh` invocation.
+# Requiring `[[:space:]]` right after the interpreter token, and folding
+# `python`/`python3` into `python3?` so the boundary applies to both, closes
+# that gap the same way (a) does; a real `sh -c ...` / `python3 ...` /
+# `bash script.sh ...` invocation always has whitespace after the interpreter
+# word, so this only removes prefix-substring false matches, not real ones.
 ersc_bundle_detected if {
-	regex.match(`(?i)(^|[[:space:];|&()])(python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
+	regex.match(`(?i)(^|[[:space:];|&()])(python3?|bash|sh)[[:space:]][^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
 	not ersc_interpreter_gameinstall_scan_only
 	not ersc_live_module_name_only
 }
