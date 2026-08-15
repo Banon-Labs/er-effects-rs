@@ -84,6 +84,10 @@ S10 and S11 are complete in-place module splits. R1 does not reopen their correc
 | R32-R37 | move save redirect path/detour implementation only through the existing owner | interface depth review, host tests, redirected-save proof | R1 |
 | D1/D2/D4/D5 | accept or reject optional crate extractions from evidence | interface and dependency review | affected current ledger rows |
 
+### R24A decision -- descriptor guard collapsed into R8
+
+Reject a duplicate descriptor-guard extraction. Merged PR #272 already moved the descriptor-advance detour, byte-verified RVA/offset identities, and trampoline state into `er-scaleform-hooks`; its fresh-title proof recorded `oracle_scaleform_desc_guard_installed = 1`. The remaining `scaleform_descriptor_guard.rs` root wrapper is product policy: it retains attach-time ordering and turns the hook crate's installation result into product diagnostic logging. Moving that wrapper would be a different startup-policy change, not R24A's native mechanism move. The remaining R24 resource/message families stay independently executable.
+
 ## Appendix A -- R1 current 79-file partition and caller ledger
 
 Every row below is a current source file. `Current partition` is the exact present owner/disposition; `Next node` is a future decision or implementation node and does not change present ownership.
