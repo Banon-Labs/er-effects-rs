@@ -936,16 +936,21 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
-        # AskUserQuestion (the multiple-choice questionnaire tool) is HARD-BLOCKED
-        # unconditionally (block_askuserquestion): the user does not want
-        # questionnaire prompts surfaced during /goal work -- the agent must
-        # proceed autonomously and state blockers/recommendations in prose. There
-        # is no reliable goal-active signal to gate on, so the block is always-on.
+        # AskUserQuestion (the multiple-choice questionnaire tool). CORRECTED 2026-08-15: the prior
+        # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
+        # design-interview question from the `grilling` skill was blocked while NOT in any /goal work.
+        # User verdict: "That cupcake policy is not triggered correctly." Re-investigation found no
+        # reliable goal-active signal to gate a conditional deny on, and PreToolUse cannot carry a
+        # non-blocking advisory in this build either (empirically confirmed: add_context/ask both no-op
+        # to Allow on PreToolUse), so the deny is removed outright. AskUserQuestion now proceeds
+        # unconditionally through this file; the advisory reminder lives in the companion
+        # block_askuserquestion_reminder.rego (UserPromptSubmit/add_context, exercised via opa test, not
+        # this live-engine harness).
         PolicyCase(
-            "deny-askuserquestion-questionnaire",
+            "allow-askuserquestion-questionnaire",
             "",
-            False,
-            "blocked the AskUserQuestion questionnaire tool",
+            True,
+            None,
             {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
             include_timeout=False,
             tool_name="AskUserQuestion",
