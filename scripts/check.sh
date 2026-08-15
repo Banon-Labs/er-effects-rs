@@ -82,6 +82,8 @@ bash "$repo_root/scripts/test-pr-refactor-scope.sh"
 python3 "$repo_root/scripts/test-dll-byte-identical.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
+python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest
+python3 "$repo_root/scripts/check-crate-extraction-roadmap.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"

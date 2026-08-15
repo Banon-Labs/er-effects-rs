@@ -174,25 +174,42 @@ loading portrait is intentionally not a supported feature.
 
 ## Save-source behavior
 
-The product path can use either an explicit save source or the active user's
-normal save:
+The DLL resolves its autoload source once, at attach, in this order:
 
-1. Explicit source via `ER_EFFECTS_SAVE_FILE` or `er-effects.toml`:
+1. `ER_EFFECTS_SAVE_FILE` (probe-only override), then `save_file` in the
+   game-directory `er-effects.toml`.
+2. Otherwise, the active Steam user's valid default container:
+   `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2` for vanilla, or the configured
+   Seamless container when Seamless is active.
+3. If neither source has a readable character, the DLL opens the missing-save
+   picker and refuses world entry until the user selects a valid save.
+
+An explicit source is read-only: the DLL stages it into a private native save
+root, so it never writes back to the selected file. Configure an explicit save
+and character slot in `er-effects.toml`:
 
 <!-- md-test: parse-toml -->
 ```toml
-save_file = "/path/to/ER0000.sl2"
+save_file = "C:/path/to/ER0000.sl2"
+slot = 1
 ```
 
-2. Default fallback:
+`ER_EFFECTS_AUTOLOAD_SLOT` overrides `slot` for probes. With neither set, the
+full-read path selects slot `0`. A picker-selected character overrides both. A
+configured slot names only a target inside a resolved source; it is not proof
+that the default save exists, that its slot is occupied, or that it was loaded
+in a prior run.
 
-```text
-%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2
-```
+There is **no** `require_save_picker` setting. `os_native_save_picker = true`
+only chooses the OS dialog instead of the in-game browser *after* the picker
+has already been triggered; it does not force a picker. Do not point `save_file`
+at an invalid path to force one. A deliberate `require_save_picker` config key
+is the missing product feature.
 
-The redirect layer hooks save-file opens at the Win32 file API boundary, so the
-game's native save-discovery shape remains intact while reads/writes target the
-configured source/staged tree. `.sl2` and Seamless `.co2` paths are compatibility
+Before an autoload launch, read `er-effects.toml` and the prior DLL log's
+`runtime-config` / `save-override` lines. They identify the configured slot and
+whether the resolved source was `DEFAULT-USER-SAVE`, an explicit staged file, or
+a missing-save picker. `.sl2` and Seamless `.co2` paths are compatibility
 targets; this repo does **not** bundle Seamless Co-op's `ersc.dll`.
 
 ## Build and validation
