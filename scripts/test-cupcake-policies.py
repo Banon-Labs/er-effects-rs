@@ -809,6 +809,50 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
+        # False positive fixed 2026-08-15 (arm (a')): neither the copy/archive
+        # verb list (a) nor the interpreter word list (a') required a WORD
+        # boundary after the matched token, so `[^;|&()]*` let the match start
+        # partway through an unrelated word whose PREFIX happened to equal one
+        # of those tokens. `sha256sum` starts with `sh` (an (a') interpreter
+        # token), so a read-only hash compare of two files -- one path staged
+        # inside quotes, the other an unquoted game-install operand, piped
+        # through `sed` to redact the home directory -- denied as if it were a
+        # bundling command. It copies, moves, and writes nothing.
+        PolicyCase(
+            "allow-sha256sum-compare-staged-and-gameinstall-ersc-dll",
+            'G="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop"\n'
+            'sha256sum "$G/ersc.dll.er-effects-staged" /home/banon/Elden/ersc.dll'
+            " | sed 's|/home/banon|~|'",
+            True,
+        ),
+        # A bare read-only stat/listing of an ersc.dll path (no copy/archive
+        # verb, no interpreter, no redirect) must always allow.
+        PolicyCase(
+            "allow-stat-gameinstall-ersc-dll",
+            'stat "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"',
+            True,
+        ),
+        PolicyCase(
+            "allow-ls-la-gameinstall-ersc-dll",
+            "ls -la /home/banon/Elden/ersc.dll",
+            True,
+        ),
+        # Chaining a second command onto the restore-rename deliberately
+        # forfeits the same-path user-restore exemption -- the exemption's
+        # fail-closed shape requires the WHOLE command to be a single `mv`
+        # with exactly two quoted operands, so anything appended (even a
+        # read-only `ls -la`) drops back to the plain file-moving arms, which
+        # deny with no destination scoping. This is intentional and must not
+        # regress: an exempted restore command is not a place to smuggle a
+        # second statement.
+        PolicyCase(
+            "deny-mv-restore-staged-ersc-dll-chained-with-ls",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'"
+            " && ls -la '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
         PolicyCase(
             "allow-quoted-forbidden-launch-note",
             "echo 'do not run steam -applaunch 1245620'",
