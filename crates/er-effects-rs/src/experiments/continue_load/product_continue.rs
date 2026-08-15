@@ -53,7 +53,7 @@ pub(crate) unsafe fn product_continue_action_ready(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if slot < OWN_STEPPER_SLOT_ZERO
         || gm == null
-        || ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+        || OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
     {
         return false;
     }
