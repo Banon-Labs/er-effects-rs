@@ -49,3 +49,23 @@ pub unsafe extern "system" fn er_effects_union_register(
         Err(status) => status as i32,
     }
 }
+
+/// C-ABI export: the live `CS::LoadingScreenData*`, or 0 when no loading screen is up.
+///
+/// Published for the standalone `er-crash-logging-dll` hang watchdog, which needs this object to
+/// detect a stuck LOAD -- a failure its frame counter structurally cannot see, because frames keep
+/// advancing through a loading screen (measured on a Seamless invasion-load softlock, 2026-08-15:
+/// eleven minutes at 12% with the frame counter ticking throughout).
+///
+/// It is an EXPORT rather than a second hook for the same reason `er_effects_union_register` exists.
+/// This DLL already detours the loading-screen update (`er-loading-portrait`, RVA 0x90a6b0) and
+/// records the object there; a companion installing its own MinHook on that same prologue would
+/// corrupt trampolines, which is the conflict class tracked in `scripts/me3-dll-conflicts.toml`. So
+/// the companion polls this instead, on the thread it already runs.
+///
+/// Returns 0 before the first loading screen (the underlying cell starts at `usize::MIN`), which
+/// callers must treat as "no data" rather than as an address.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_effects_loading_screen_data() -> usize {
+    er_loading_portrait::layout::LOADING_SCREEN_LAST_DATA.load(std::sync::atomic::Ordering::SeqCst)
+}
