@@ -17,14 +17,31 @@ use windows::Win32::{
 use crate::telemetry::{append_autoload_debug, game_directory_path};
 
 const CONFIG_FILE_NAME: &str = "er-effects.toml";
-const SAVE_FILE_ENV: &str = "ER_EFFECTS_SAVE_FILE";
-const SLOT_ENV: &str = "ER_EFFECTS_AUTOLOAD_SLOT";
 const METHOD_ENV: &str = "ER_EFFECTS_AUTOLOAD_METHOD";
+
+// REMOVED, NOT DEPRECATED: `ER_EFFECTS_SAVE_FILE` and `ER_EFFECTS_AUTOLOAD_SLOT`.
+//
+// They were a second way to name the autoload save source, sitting in front of the config
+// file. `save_redirect/path_hooks.rs` treated the env form and the file form as one class
+// ("an explicit loose save source"), so the two routes could disagree while the debug log
+// reported only one of them -- and env state is invisible to anyone reading the config
+// afterwards, which makes a run impossible to reconstruct.
+//
+// The config file is now the only way to name a save source. A per-run override goes in the
+// DLL-adjacent sidecar (see `sidecar_config_path`), which is a FILE, so it can be read back.
 const SAVE_SUPPRESSION_ENABLED_KEY: &str = "save_suppression_enabled";
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeConfig {
     pub path: PathBuf,
+    /// The DLL-adjacent per-run overlay, when one was found and parsed. Recorded so the
+    /// `runtime-config: loaded` line names it: that line is what a launcher reads back to
+    /// prove THIS build loaded ITS config, and a run that cannot name its overlay cannot
+    /// prove that.
+    pub sidecar: Option<PathBuf>,
     pub save_file: Option<PathBuf>,
+    /// Sidecar-only: `true` clears any inherited `save_file`, selecting the active Steam
+    /// user's default container. See the `save_file_default` arm in `parse_runtime_config`.
+    pub save_file_default: Option<bool>,
     pub slot: Option<i32>,
     pub method: Option<String>,
     pub boot_background_image: Option<PathBuf>,
@@ -46,8 +63,13 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     );
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} {SAVE_SUPPRESSION_ENABLED_KEY}={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
+            "runtime-config: loaded '{}' sidecar={} save_file={} slot={} method={} boot_background_image={} {SAVE_SUPPRESSION_ENABLED_KEY}={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={} {OS_NATIVE_SAVE_PICKER_KEY}={}",
             config.path.display(),
+            config
+                .sidecar
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".to_owned()),
             config
                 .save_file
                 .as_ref()
@@ -102,12 +124,6 @@ pub(crate) fn configured_save_file() -> Option<PathBuf> {
 }
 
 pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var(SAVE_FILE_ENV) {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
-    }
     runtime_config().and_then(|config| config.save_file.clone())
 }
 
@@ -269,19 +285,12 @@ pub(crate) fn save_suppression_enabled() -> bool {
 }
 
 pub(crate) fn configured_autoload_slot() -> Option<i32> {
-    if let Ok(value) = std::env::var(SLOT_ENV) {
-        if let Ok(slot) = value.trim().parse() {
-            return Some(slot);
-        }
-    }
     runtime_config().and_then(|config| config.slot)
 }
 
 pub(crate) fn configured_save_load_request() -> SaveLoadRequest {
     let mut request = SaveLoadRequest::from_env();
-    if std::env::var(SLOT_ENV).is_err()
-        && let Some(slot) = runtime_config().and_then(|config| config.slot)
-    {
+    if let Some(slot) = runtime_config().and_then(|config| config.slot) {
         request.slot = Some(slot);
     }
     if std::env::var(METHOD_ENV).is_err()
@@ -313,18 +322,18 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             match std::fs::read_to_string(&legacy_dll_path) {
                 Ok(contents) if legacy_dll_path != path => {
-                    match std::fs::write(&path, &contents) {
-                        Ok(()) => append_autoload_debug(format_args!(
-                            "runtime-config: migrated legacy DLL-adjacent config '{}' to game-directory config '{}'",
-                            legacy_dll_path.display(),
-                            path.display()
-                        )),
-                        Err(write_err) => append_autoload_debug(format_args!(
-                            "runtime-config: loaded legacy DLL-adjacent config '{}' because game-directory config '{}' could not be created: {write_err}",
-                            legacy_dll_path.display(),
-                            path.display()
-                        )),
-                    }
+                    // Read it, do NOT copy it into the game directory. The migration write
+                    // that used to live here turned a per-build config into permanent shared
+                    // state: a DLL-adjacent file staged for one run silently became the
+                    // game-wide default for every later launch, including the user's own.
+                    // Sixteen such stale files exist under target/ and .worktrees/ in this
+                    // tree alone -- one of them pins a PR #116 repro save and an OS-picker
+                    // flag from 2026-08-01.
+                    append_autoload_debug(format_args!(
+                        "runtime-config: read legacy DLL-adjacent config '{}' because game-directory config '{}' does not exist; NOT copying it there",
+                        legacy_dll_path.display(),
+                        path.display()
+                    ));
                     contents
                 }
                 Ok(contents) => contents,
@@ -375,7 +384,137 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
             return Err(format!("config '{}' is unreadable: {err}", path.display()));
         }
     };
-    parse_runtime_config(path, &contents)
+    let base = parse_runtime_config(path, &contents)?;
+    Ok(apply_sidecar_overlay(base, &dll_path))
+}
+
+/// Per-run config overlay: `<dll-file-stem>.toml` beside the loaded module.
+///
+/// A launcher that stages one build of this DLL for one run needs to say which save that run
+/// loads, without writing the game directory -- which is shared, hand-edited, and outlives
+/// every run. The module's own path is the natural per-run channel: me3 already decides which
+/// DLL to load, so a file next to it is scoped to exactly that build, needs no environment
+/// variable, and can be read back afterwards to reconstruct what the run was configured with.
+///
+/// The name is derived from the DLL (`er_effects_rs.dll` -> `er_effects_rs.toml`) rather than
+/// being `er-effects.toml`, so it cannot collide with the legacy DLL-adjacent config above.
+/// That matters: stale `er-effects.toml` files are strewn through `target/` and worktree build
+/// dirs, and a scheme that gave them new authority would silently arm them.
+fn sidecar_config_path(dll_path: &std::path::Path) -> Option<PathBuf> {
+    let stem = dll_path.file_stem()?;
+    Some(dll_path.with_file_name(stem).with_extension("toml"))
+}
+
+/// Overlay `sidecar` onto `base` KEY BY KEY -- not wholesale replacement.
+///
+/// The game-directory config holds settings that belong to the user rather than to the run:
+/// `os_native_save_picker`, `preferred_save_picker_dir`, `boot_background_image`. Replacing it
+/// entirely would mean every per-run launch silently dropped them. So only keys the sidecar
+/// actually sets take effect, and each override is named in the debug log -- with two files
+/// feeding one config, a run that cannot say where a value came from is not diagnosable.
+fn apply_sidecar_overlay(mut base: RuntimeConfig, dll_path: &std::path::Path) -> RuntimeConfig {
+    let Some(sidecar_path) = sidecar_config_path(dll_path) else {
+        append_autoload_debug(format_args!(
+            "runtime-config: no sidecar candidate -- module path '{}' has no file stem",
+            dll_path.display()
+        ));
+        return base;
+    };
+    let contents = match std::fs::read_to_string(&sidecar_path) {
+        Ok(contents) => contents,
+        // Logged rather than silent. A launcher stages this file and then waits for the DLL to
+        // confirm it read it; when that confirmation never comes, the ONLY question worth
+        // answering is "which path did the DLL actually look at" -- and the module path under
+        // Wine is not something to infer from the Linux side.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            append_autoload_debug(format_args!(
+                "runtime-config: no sidecar at '{}' (module '{}') -- game-directory config used alone",
+                sidecar_path.display(),
+                dll_path.display()
+            ));
+            return base;
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "runtime-config: sidecar '{}' is unreadable: {err}; using the game-directory config alone",
+                sidecar_path.display()
+            ));
+            return base;
+        }
+    };
+
+    let overlay = match parse_runtime_config(sidecar_path.clone(), &contents) {
+        Ok(overlay) => overlay,
+        Err(err) => {
+            // A malformed sidecar must not silently fall back to the game-directory save: the
+            // run would load a DIFFERENT character than the launcher reported, which is worse
+            // than not running at all. Say so loudly and leave the base config in place; the
+            // launcher's identity check is what turns this into a visible failure.
+            append_autoload_debug(format_args!(
+                "runtime-config: sidecar '{}' is INVALID ({err}); ignoring it -- this run does NOT use the per-run overlay",
+                sidecar_path.display()
+            ));
+            return base;
+        }
+    };
+
+    let mut overridden: Vec<&str> = Vec::new();
+    // Checked before `save_file` so a sidecar carrying both is unambiguous: an explicit
+    // request for the default container wins over any inherited or co-listed path.
+    if overlay.save_file_default == Some(true) {
+        base.save_file = None;
+        base.slot = None;
+        overridden.push("save_file_default (cleared save_file + slot)");
+    } else if overlay.save_file.is_some() {
+        base.save_file = overlay.save_file;
+        overridden.push("save_file");
+    }
+    if overlay.slot.is_some() {
+        base.slot = overlay.slot;
+        overridden.push("slot");
+    }
+    if overlay.method.is_some() {
+        base.method = overlay.method;
+        overridden.push("method");
+    }
+    if overlay.boot_background_image.is_some() {
+        base.boot_background_image = overlay.boot_background_image;
+        overridden.push("boot_background_image");
+    }
+    if overlay.save_suppression_enabled.is_some() {
+        base.save_suppression_enabled = overlay.save_suppression_enabled;
+        overridden.push(SAVE_SUPPRESSION_ENABLED_KEY);
+    }
+    if overlay.save_picker.preferred_save_picker_dir.is_some() {
+        base.save_picker.preferred_save_picker_dir = overlay.save_picker.preferred_save_picker_dir;
+        overridden.push(PREFERRED_PICKER_DIR_KEY);
+    }
+    if overlay
+        .save_picker
+        .autoupdate_preferred_picker_dir
+        .is_some()
+    {
+        base.save_picker.autoupdate_preferred_picker_dir =
+            overlay.save_picker.autoupdate_preferred_picker_dir;
+        overridden.push(AUTOUPDATE_PICKER_DIR_KEY);
+    }
+    if overlay.save_picker.os_native_save_picker.is_some() {
+        base.save_picker.os_native_save_picker = overlay.save_picker.os_native_save_picker;
+        overridden.push(OS_NATIVE_SAVE_PICKER_KEY);
+    }
+
+    append_autoload_debug(format_args!(
+        "runtime-config: sidecar '{}' overlaid {} key(s): {}",
+        sidecar_path.display(),
+        overridden.len(),
+        if overridden.is_empty() {
+            "<none>".to_owned()
+        } else {
+            overridden.join(", ")
+        }
+    ));
+    base.sidecar = Some(sidecar_path);
+    base
 }
 
 fn dll_path(hmodule: HINSTANCE) -> Result<PathBuf, String> {
@@ -408,6 +547,15 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                 let raw = parse_toml_string(value)
                     .map_err(|err| format!("invalid save_file on line {}: {err}", line_no + 1))?;
                 config.save_file = Some(configured_path_from_toml(&raw, &config_dir));
+            }
+            // Overlay-only: an overlay can SET a key but has no way to UNSET one, so a per-run
+            // sidecar could never ask for "the active Steam default save" once the game-directory
+            // config named a `save_file`. This key says that explicitly. It is meaningless in the
+            // base config (leave `save_file` out instead) and is ignored there.
+            "save_file_default" => {
+                config.save_file_default = Some(parse_toml_bool(value).map_err(|err| {
+                    format!("invalid save_file_default on line {}: {err}", line_no + 1)
+                })?);
             }
             "slot" | "autoload.slot" => {
                 config.slot = Some(

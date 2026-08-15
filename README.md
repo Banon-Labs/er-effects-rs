@@ -176,8 +176,8 @@ loading portrait is intentionally not a supported feature.
 
 The DLL resolves its autoload source once, at attach, in this order:
 
-1. `ER_EFFECTS_SAVE_FILE` (probe-only override), then `save_file` in the
-   game-directory `er-effects.toml`.
+1. `save_file` from the DLL-adjacent sidecar `<dll-name>.toml` (per-run overlay,
+   see below), else `save_file` in the game-directory `er-effects.toml`.
 2. Otherwise, the active Steam user's valid default container:
    `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2` for vanilla, or the configured
    Seamless container when Seamless is active.
@@ -194,11 +194,39 @@ save_file = "C:/path/to/ER0000.sl2"
 slot = 1
 ```
 
-`ER_EFFECTS_AUTOLOAD_SLOT` overrides `slot` for probes. With neither set, the
-full-read path selects slot `0`. A picker-selected character overrides both. A
-configured slot names only a target inside a resolved source; it is not proof
-that the default save exists, that its slot is occupied, or that it was loaded
-in a prior run.
+With no `slot` set, the full-read path selects slot `0`. A picker-selected
+character overrides it. A configured slot names only a target inside a resolved
+source; it is not proof that the default save exists, that its slot is occupied,
+or that it was loaded in a prior run.
+
+There is no environment-variable route. `ER_EFFECTS_SAVE_FILE` and
+`ER_EFFECTS_AUTOLOAD_SLOT` were **removed**, not deprecated: they were a second
+way to name the same thing, sitting in front of the config file, and
+`save_redirect/path_hooks.rs` treated both as one class ("an explicit loose save
+source"). The two could disagree while the debug log named only one of them, and
+environment state is invisible to anyone reading the config afterwards, so a run
+could not be reconstructed from what it left on disk.
+
+### Per-run overlay (`<dll-name>.toml`)
+
+A launcher staging one build for one run needs to name that run's save without
+writing the game directory -- which is shared, hand-edited, and outlives every
+run. So the DLL also reads a sidecar beside the loaded module: `er_effects_rs.dll`
+loads `er_effects_rs.toml` from the same directory.
+
+It is an **overlay, not a replacement**. Only the keys it sets are overridden;
+`os_native_save_picker`, `preferred_save_picker_dir` and `boot_background_image`
+in your game-directory config are left exactly as you set them. Every override is
+named in `er-effects-autoload-debug.log`, alongside which file each value came
+from -- with two files feeding one config, a run that cannot say where a value
+came from is not diagnosable.
+
+An overlay can set a key but not unset one, so `save_file_default = true` clears
+any inherited `save_file` and selects the active Steam user's own container.
+
+`scripts/er-run-branch.py` writes this sidecar automatically. The distinct
+filename matters: stale `er-effects.toml` files are strewn through `target/` and
+worktree build dirs, and reusing that name would silently arm them.
 
 There is **no** `require_save_picker` setting. `os_native_save_picker = true`
 only chooses the OS dialog instead of the in-game browser *after* the picker
