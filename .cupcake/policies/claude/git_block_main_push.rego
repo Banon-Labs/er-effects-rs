@@ -23,8 +23,14 @@ import rego.v1
 # current_branch signal reads the session checkout's branch, so a push issued as
 # `git -C <worktree> push` from a session whose primary checkout sits on main was
 # denied even when the worktree is on a feature branch. Such a push is allowed
-# when every push invocation targets a registered non-main worktree. Explicit
-# main refspecs (push_targets_main) stay denied unconditionally.
+# when every push invocation targets a registered non-main worktree.
+#
+# Explicit-refspec exception (2026-08-15): the same stale signal can report main
+# when this session itself is rooted in a non-main worktree. A command that names
+# a non-main upstream destination (`git push -u origin feature/name`) is safe to
+# permit: it cannot update remote main. Bare pushes and unparsed options remain
+# fail-closed. Explicit main refspecs (push_targets_main) stay denied
+# unconditionally.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
@@ -42,11 +48,13 @@ deny contains decision if {
 blocked_push_context(cmd) if {
 	current_branch == "main"
 	not pushes_target_only_nonmain_worktrees(cmd)
+	not pushes_target_only_explicit_nonmain_branches(cmd)
 }
 
 blocked_push_context(cmd) if {
 	current_branch == ""
 	not pushes_target_only_nonmain_worktrees(cmd)
+	not pushes_target_only_explicit_nonmain_branches(cmd)
 }
 
 blocked_push_context(cmd) if {
@@ -138,4 +146,31 @@ worktree_branches_signal := out if {
 	out := input.signals.worktree_branches.output
 } else := "" if {
 	true
+}
+
+# --- Explicit non-main destination exception ---------------------------------
+
+# Deliberately narrow: this only recognizes the conventional explicit-upstream
+# form used to publish a feature branch. Other push option arrangements fail
+# closed until they have their own parser and regression coverage.
+git_push_explicit_branch_extract_pattern := `(?i)(^|[;&|(\n])\s*(?:command\s+)?git\s+push\s+(?:-u|--set-upstream)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|()\n]+)\s+("[^"\n]*"|'[^'\n]*'|[^\s;&|()\n]+)(?:\s|$|[;&|)\n])`
+
+# A stale/missing branch signal must not block a command when every push in it
+# has the explicit, non-main destination form above. The independent
+# push_targets_main rule still denies `main`, `HEAD:main`, and
+# `feature:refs/heads/main` unconditionally.
+pushes_target_only_explicit_nonmain_branches(cmd) if {
+	general := regex.find_all_string_submatch_n(git_push_findall_pattern, cmd, -1)
+	explicit := regex.find_all_string_submatch_n(git_push_explicit_branch_extract_pattern, cmd, -1)
+	count(general) > 0
+	count(explicit) == count(general)
+	every m in explicit {
+		explicit_nonmain_destination(m[3])
+	}
+}
+
+explicit_nonmain_destination(token) if {
+	destination := trim(token, "\"'")
+	destination != ""
+	not startswith(destination, "-")
 }
