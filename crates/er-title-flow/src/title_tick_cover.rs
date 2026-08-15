@@ -2277,6 +2277,10 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
+        // Deliver the product accept latch in the same TitleTopDialog::update frame that consumes
+        // it. The game-task write can be cleared by other menu handlers before update reaches its
+        // tail, leaving a40 at zero indefinitely despite a core-ready title.
+        unsafe { install_title_update_hook(module_base) };
         unsafe { maybe_hide_title_press_start(module_base, &ready) };
         unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
