@@ -12,6 +12,12 @@ const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_PROCESS_DETACH: u32 = 0;
 const DLL_MAIN_SUCCESS: i32 = 1;
 
+/// Main-thread stall window before the hang watchdog reports a freeze.
+///
+/// A lockup produces no exception at all, so without this the standalone DLL is silent through the
+/// exact failure it was added beside `ersc.dll` to capture.
+const HANG_STALL_SECONDS: u64 = 30;
+
 static START: Once = Once::new();
 
 #[unsafe(no_mangle)]
@@ -32,6 +38,9 @@ pub unsafe extern "system" fn DllMain(
                     breadcrumb_file_name: "er-crash-breadcrumb-latest.txt",
                     modules_file_name: "er-crash-modules.txt",
                     minidump_file_name: "er-crash-minidump.dmp",
+                    hang_report_file_name: "er-crash-hang-latest.txt",
+                    hang_minidump_file_name: "er-crash-hang-minidump.dmp",
+                    hang_stall_seconds: HANG_STALL_SECONDS,
                     module_label: "er-crash-logging-dll",
                 },
                 module as usize,
