@@ -82,6 +82,42 @@ test_allow_git_push_head_to_feature_branch if {
 	count(denials) == 0
 }
 
+# current_branch can describe the parent checkout rather than this session's
+# worktree. The explicit non-main upstream destination must therefore override
+# that stale main signal, including when followed by harmless status inspection.
+test_allow_explicit_nonmain_upstream_when_branch_signal_stale_main if {
+	denials := guard.deny with input as bash_event(
+		"git push -u origin fix/title-accept-in-update && git status --short --branch",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_explicit_nonmain_upstream_when_branch_signal_missing if {
+	denials := guard.deny with input as bash_event_no_branch_signal(
+		"git push --set-upstream origin feature/no-direct-main-push",
+	)
+	count(denials) == 0
+}
+
+test_deny_explicit_main_upstream_when_branch_signal_stale_main if {
+	denials := guard.deny with input as bash_event("git push -u origin main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_explicit_head_to_main_upstream_when_branch_signal_stale_main if {
+	denials := guard.deny with input as bash_event("git push -u origin HEAD:main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_explicit_nonmain_upstream_chained_with_bare_push_when_branch_signal_stale_main if {
+	denials := guard.deny with input as bash_event(
+		"git push -u origin feature/no-direct-main-push && git push",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
 test_allow_non_push_git_on_main if {
 	denials := guard.deny with input as bash_event("git status --short && git log --oneline -3", "main\n")
 	count(denials) == 0
