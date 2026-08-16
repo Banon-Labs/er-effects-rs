@@ -245,7 +245,13 @@ def running_block(context: dict) -> str:
             f"  save          {save['save_file']}",
             f"  container     .{save['container']}"
             + ("   SOURCE WRITABLE" if save.get("source_writable") else "   source read-only"),
-            f"  seed          {save['seed']}   (rerun: --seed {save['seed']})",
+            # An explicit --save has no seed, and "--seed None" is not a command anyone can run.
+            # The rerun hint has to name whatever actually determined this character.
+            (
+                f"  seed          {save['seed']}   (rerun: --seed {save['seed']})"
+                if save.get("seed") is not None
+                else f"  chosen by     --save (rerun: --save '{save['save_file']}:{save['slot']}')"
+            ),
         ]
     else:
         lines.append("  character     <active Steam user's default save>")
@@ -327,8 +333,50 @@ def preflight(args) -> tuple[dict, dict | None]:
         if code != 0:
             raise RuntimeError(f"no save could be picked: {err.strip() or out.strip()}")
         save = json.loads(out)
+    elif args.save != "default":
+        save = decode_explicit_save(args.save)
 
     return closure, save
+
+
+def decode_explicit_save(spec: str) -> dict:
+    """Resolve `PATH[:SLOT]` into the same decoded shape a random pick produces.
+
+    The decode is NOT optional. AGENTS.md's Autoload Identity Launch Gate requires the character
+    and slot to be known from current save evidence before a launch that will autoload -- and
+    naming a file proves neither. A path whose named slot holds no character is refused here
+    rather than discovered on a loading screen.
+    """
+    path, _, slot_text = spec.rpartition(":")
+    if not path:
+        path, slot_text = spec, ""
+    slot = None
+    if slot_text:
+        try:
+            slot = int(slot_text)
+        except ValueError as err:
+            raise RuntimeError(f"bad slot in --save {spec!r}: {err}") from err
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise RuntimeError(f"--save names a file that does not exist: {source}")
+
+    code, out, err = run_script(
+        "er-pick-save.py", "--json", "--all", "--root", str(source.parent)
+    )
+    if code != 0:
+        raise RuntimeError(f"could not decode {source}: {err.strip() or out.strip()}")
+    targets = [t for t in json.loads(out)["targets"] if Path(t["save_file"]) == source]
+    if slot is not None:
+        targets = [t for t in targets if t["slot"] == slot]
+    if not targets:
+        where = f"{source} slot {slot}" if slot is not None else str(source)
+        raise RuntimeError(
+            f"no occupied character at {where}. Nothing will autoload, so this launch is refused."
+        )
+    chosen = targets[0]
+    return {**chosen, "seed": None, "draws": 0, "eligible_files": 1,
+            "occupied_slots_in_file": len(targets), "corpus_root": str(source.parent)}
 
 
 def launch(args) -> int:
@@ -700,7 +748,14 @@ def selftest() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--save", choices=("random", "default"), default="random")
+    parser.add_argument(
+        "--save",
+        default="random",
+        metavar="random|default|PATH[:SLOT]",
+        help="random (default), default (the active Steam user's own container), or an explicit "
+        "save path with an optional :SLOT. An explicit save is still DECODED and reported before "
+        "launch -- naming a file is not the same as knowing which character is in it.",
+    )
     parser.add_argument("--seed", type=int, help="reproduce an exact save pick")
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
