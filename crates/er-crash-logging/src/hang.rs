@@ -1,15 +1,29 @@
-//! Main-thread hang watchdog.
+//! Watchdogs for the failures a crash logger cannot see.
 //!
-//! A crash logger only sees a process that faults. A process that *freezes* raises no exception at
-//! all, so an in-game lockup leaves the crash log completely empty and the only record of it is
-//! whatever the exit path happens to crash on afterwards -- evidence about shutdown, not about the
-//! bug. This module closes that blind spot.
+//! A crash logger only sees a process that faults. Three common failures raise no exception at all,
+//! and each is invisible to the detector built for the others:
 //!
-//! The signal is the game's own per-frame counter: `MainUpdate` increments a single dword once per
-//! main-loop tick, so that dword advancing *is* the definition of "the main thread is alive". When
-//! it stops advancing for longer than the configured window, the watchdog snapshots every thread in
-//! the process -- instruction pointer, stack pointer, and a raw stack scan resolved against the
+//! | detector | question it answers | what it watches |
+//! |---|---|---|
+//! | stall | did the main loop STOP? | the per-frame counter not advancing |
+//! | frame drop | did the main loop MISS a lot of frames without stopping? | frames owed vs delivered in a sliding window |
+//! | loading screen | did a LOAD stop progressing while the game stayed healthy? | `CS::LoadingScreenData` target frozen while its own clock runs |
+//!
+//! The three are genuinely independent, and each exists because the others are blind to its case.
+//! The frame counter keeps ticking through a stuck load, so the stall watchdog cannot see one. A
+//! hitch delivers frames, just too few, so it never looks like a stall. And a hard freeze stops
+//! everything, which is the stall watchdog's job and deliberately not re-reported by the others.
+//!
+//! The stall signal is the game's own per-frame counter: `MainUpdate` increments a single dword once
+//! per main-loop tick, so that dword advancing *is* the definition of "the main thread is alive".
+//! When it stops for longer than the configured window, the watchdog snapshots every thread in the
+//! process -- instruction pointer, stack pointer, and a raw stack scan resolved against the
 //! loaded-module table -- and writes it out the same way a fault record is written.
+//!
+//! The frame-drop path reports differently on purpose. A hitch is not a freeze, so dumping 128
+//! thread stacks would both drown the answer and deepen the stall being measured; instead it takes
+//! two cheap CPU-time snapshots around the hitch, ranks threads by what they actually consumed, and
+//! captures stacks for only the busiest few. "What is occupied" is a measurement, not a dump.
 //!
 //! Two properties matter more than the detection itself:
 //!
@@ -51,7 +65,39 @@ const GAME_MODULE_NAME: &str = "eldenring.exe";
 /// module may touch the game until `DllMain` has long returned.
 const STARTUP_DELAY_MS: u32 = 5_000;
 
-const SAMPLE_INTERVAL_MS: u32 = 1_000;
+/// Poll interval for every detector in this module.
+///
+/// 50ms, not 1s, and the reason is the frame-drop detector rather than the stall one. A hitch
+/// worth reporting is ~1 second of lost frames, so a 1-second sampler would notice only after
+/// it ended -- and a stack captured then shows the RECOVERY, not the cause. Polling 20x faster
+/// than the threshold means the capture lands while the hitch is still in progress.
+///
+/// The cost is one `u32` read per tick. The stall and loading-screen detectors are unaffected
+/// because both measure elapsed TIME, not tick counts.
+const SAMPLE_INTERVAL_MS: u32 = 50;
+
+/// Frames of deficit that constitute a reportable hitch: ~1 second of lost time at 60fps.
+const FRAMEDROP_THRESHOLD_FRAMES: f64 = 60.0;
+
+/// Plausible frame rates. A measured baseline outside this range means the counter is not a
+/// per-frame counter on this build, so frame-drop detection disarms rather than reporting noise.
+const FRAMEDROP_MIN_FPS: f64 = 20.0;
+const FRAMEDROP_MAX_FPS: f64 = 360.0;
+
+/// How long to watch the counter to learn the game's frame rate before arming.
+const FRAMEDROP_CALIBRATION_MS: u64 = 2_000;
+
+/// Gap between the two CPU snapshots used to attribute a hitch.
+const FRAMEDROP_ATTRIBUTION_MS: u32 = 250;
+
+/// Threads named in a hitch report, ranked by CPU consumed during the hitch.
+const FRAMEDROP_TOP_THREADS: usize = 5;
+
+/// Hitches are common enough that an unbounded report would fill the log; a stall is not.
+const MAX_FRAMEDROP_REPORTS: usize = 5;
+
+/// Minimum gap between hitch reports, so one bad streak cannot spend the whole budget at once.
+const FRAMEDROP_REPORT_COOLDOWN_SECS: u64 = 30;
 
 /// How many distinct increments must be observed before the watchdog trusts the address.
 const ARM_ADVANCES_REQUIRED: u32 = 3;
@@ -85,6 +131,146 @@ const CONTEXT_SIZE: usize = 0x4d0;
 const CONTEXT_FLAGS_OFFSET: usize = 0x30;
 #[cfg(windows)]
 const CONTEXT_AMD64_CONTROL_INTEGER: u32 = 0x0010_0000 | 0x0000_0001 | 0x0000_0002;
+
+/// Frame-drop detection: a leaky bucket of frames owed against frames delivered.
+///
+/// A stall watchdog answers "did the main loop stop". This answers a different question -- "did
+/// the main loop miss a lot of frames without stopping" -- which is the one behind every report
+/// of a hitch, a stutter, or a second-long freeze that resolves itself.
+///
+/// The measure is frames owed WITHIN A SLIDING WINDOW, not since the session began.
+///
+/// A running total was the first attempt and it is wrong: delivering exactly the baseline rate
+/// repays nothing, so every isolated stutter is remembered forever and a long healthy session
+/// eventually crosses any threshold. "60 frames dropped" means 60 lost in a burst -- a hitch --
+/// so old deficits have to leave the measurement entirely.
+///
+/// `expected` comes from a frame rate MEASURED at arming rather than an assumed 60: a 30fps cap
+/// would otherwise read as a permanent 50% deficit, and an uncapped build would never trip.
+pub mod framedrop {
+    /// Samples retained. At the module's 50ms tick this covers well over the window; the window
+    /// is enforced by accumulated TIME, so a caller ticking at a different rate is still correct.
+    const CAPACITY: usize = 128;
+
+    /// How recent a deficit has to be to count toward a hitch.
+    pub const WINDOW_SECONDS: f64 = 2.0;
+
+    /// Frames owed inside the window, and the rate the debt is measured against.
+    #[derive(Debug, Clone, Copy)]
+    pub struct Detector {
+        baseline_fps: f64,
+        threshold: f64,
+        /// (deficit frames, seconds) per observation, oldest first. Fixed storage: a watchdog
+        /// must not allocate while diagnosing a process that may be sick.
+        samples: [(f64, f64); CAPACITY],
+        len: usize,
+    }
+
+    /// What a crossing looked like, carried into the report.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Hitch {
+        pub deficit_frames: f64,
+        pub baseline_fps: f64,
+        /// Frames actually delivered in the tick that crossed the threshold.
+        pub observed_frames: u32,
+        /// Wall seconds that tick covered.
+        pub window_seconds: f64,
+    }
+
+    impl Detector {
+        /// `None` when the measured rate is not a plausible frame rate -- see the FPS bounds.
+        #[must_use]
+        pub fn new(baseline_fps: f64, threshold: f64, min_fps: f64, max_fps: f64) -> Option<Self> {
+            if !baseline_fps.is_finite() || baseline_fps < min_fps || baseline_fps > max_fps {
+                return None;
+            }
+            Some(Self {
+                baseline_fps,
+                threshold,
+                samples: [(0.0, 0.0); CAPACITY],
+                len: 0,
+            })
+        }
+
+        #[must_use]
+        pub fn baseline_fps(&self) -> f64 {
+            self.baseline_fps
+        }
+
+        /// Frames owed inside the current window.
+        #[must_use]
+        pub fn deficit(&self) -> f64 {
+            self.samples[..self.len]
+                .iter()
+                .map(|(deficit, _)| *deficit)
+                .sum::<f64>()
+                .max(0.0)
+        }
+
+        /// Feed one observation. Returns a `Hitch` when the windowed deficit crosses the threshold.
+        ///
+        /// A surplus tick is recorded as a NEGATIVE deficit so a burst that is partly recovered
+        /// inside the window reads as the net loss -- but the reported total floors at zero, since
+        /// "owed -12 frames" is not a thing.
+        pub fn observe(&mut self, frames_advanced: u32, window_seconds: f64) -> Option<Hitch> {
+            if !(window_seconds > 0.0) || !window_seconds.is_finite() {
+                return None;
+            }
+            let expected = self.baseline_fps * window_seconds;
+            self.push((expected - f64::from(frames_advanced), window_seconds));
+            self.evict_older_than(WINDOW_SECONDS);
+
+            let deficit = self.deficit();
+            if deficit < self.threshold {
+                return None;
+            }
+            let hitch = Hitch {
+                deficit_frames: deficit,
+                baseline_fps: self.baseline_fps,
+                observed_frames: frames_advanced,
+                window_seconds,
+            };
+            // Clear after reporting: otherwise the window stays over threshold and every
+            // subsequent tick re-fires the same hitch.
+            self.reset();
+            Some(hitch)
+        }
+
+        /// Forget the window -- used after a report, and when the counter is known to have
+        /// legitimately stopped (a stall the other watchdog owns) so recovery is not billed here.
+        pub fn reset(&mut self) {
+            self.len = 0;
+        }
+
+        fn push(&mut self, sample: (f64, f64)) {
+            if self.len == CAPACITY {
+                self.samples.copy_within(1.., 0);
+                self.len -= 1;
+            }
+            self.samples[self.len] = sample;
+            self.len += 1;
+        }
+
+        fn evict_older_than(&mut self, window: f64) {
+            // Keep the newest samples whose accumulated time fits the window. Walk from the end
+            // so the most recent observation is always retained even if it alone exceeds it.
+            let mut total = 0.0;
+            let mut keep = 0usize;
+            for (_, seconds) in self.samples[..self.len].iter().rev() {
+                total += *seconds;
+                keep += 1;
+                if total >= window {
+                    break;
+                }
+            }
+            if keep < self.len {
+                let start = self.len - keep;
+                self.samples.copy_within(start..self.len, 0);
+                self.len = keep;
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // CS::LoadingScreenData -- the oracle a frame counter cannot be
@@ -413,10 +599,49 @@ unsafe extern "system" fn watchdog_thread(_parameter: *mut c_void) -> u32 {
          frame_counter={last_value} stall_seconds={stall}"
     ));
 
+    // Learn the frame rate before judging any deficit against it. Done after the stall watchdog
+    // has already proven the counter advances, so this only measures how fast.
+    let mut framedrop_detector = match calibrate_frame_rate(counter) {
+        Some(fps) => match framedrop::Detector::new(
+            fps,
+            FRAMEDROP_THRESHOLD_FRAMES,
+            FRAMEDROP_MIN_FPS,
+            FRAMEDROP_MAX_FPS,
+        ) {
+            Some(detector) => {
+                append_log(format_args!(
+                    "hang watchdog framedrop detector ARMED baseline={fps:.1}fps \
+                     threshold={FRAMEDROP_THRESHOLD_FRAMES:.0} frames"
+                ));
+                Some(detector)
+            }
+            None => {
+                append_log(format_args!(
+                    "hang watchdog framedrop detector INERT -- measured {fps:.1}fps is outside \
+                     {FRAMEDROP_MIN_FPS:.0}..{FRAMEDROP_MAX_FPS:.0}, so this counter is probably \
+                     not per-frame on this build"
+                ));
+                None
+            }
+        },
+        None => {
+            append_log(format_args!(
+                "hang watchdog framedrop detector INERT -- frame rate could not be measured"
+            ));
+            None
+        }
+    };
+
     let mut last_change = std::time::Instant::now();
     let mut reported_this_stall = false;
     let mut loading_witness = loading_screen::Witness::default();
     let mut loading_reported = false;
+    let mut framedrop_reports = 0usize;
+    let mut last_framedrop_report: Option<std::time::Instant> = None;
+    let mut last_tick = std::time::Instant::now();
+    // Re-read here so the counter delta below starts from the value AFTER calibration, not the
+    // pre-calibration one -- otherwise the first tick would see two seconds of frames at once.
+    last_value = unsafe { safe_read_u32(counter) }.unwrap_or(last_value);
 
     loop {
         unsafe { Sleep(SAMPLE_INTERVAL_MS) };
@@ -438,6 +663,34 @@ unsafe extern "system" fn watchdog_thread(_parameter: *mut c_void) -> u32 {
             // The exe unmapping means the process is going away; nothing left to watch.
             return 0;
         };
+
+        // Frame-drop accounting runs on EVERY tick, before the stall logic, because a hitch is
+        // defined by frames arriving too slowly rather than not at all.
+        let window_seconds = last_tick.elapsed().as_secs_f64();
+        last_tick = std::time::Instant::now();
+        if let Some(detector) = framedrop_detector.as_mut() {
+            let advanced = value.wrapping_sub(last_value);
+            let cooling = last_framedrop_report
+                .is_some_and(|at| at.elapsed().as_secs() < FRAMEDROP_REPORT_COOLDOWN_SECS);
+            match detector.observe(advanced, window_seconds) {
+                Some(hitch) if !cooling && framedrop_reports < MAX_FRAMEDROP_REPORTS => {
+                    framedrop_reports += 1;
+                    last_framedrop_report = Some(std::time::Instant::now());
+                    report_framedrop(hitch);
+                    // Attribution slept; the next window would otherwise bill that sleep as
+                    // missing frames and immediately re-fire.
+                    last_tick = std::time::Instant::now();
+                    last_value = unsafe { safe_read_u32(counter) }.unwrap_or(value);
+                    detector.reset();
+                    continue;
+                }
+                // Over budget or inside the cooldown: the debt is still cleared by `observe`, so
+                // the next hitch is measured fresh instead of firing the instant cooldown ends.
+                Some(_) => {}
+                None => {}
+            }
+        }
+
         if value != last_value {
             last_value = value;
             last_change = std::time::Instant::now();
@@ -497,6 +750,128 @@ fn read_loading_screen_sample() -> Option<loading_screen::Sample> {
 #[cfg(not(windows))]
 fn read_loading_screen_sample() -> Option<loading_screen::Sample> {
     None
+}
+
+/// Total CPU (kernel + user) each thread has consumed, in 100ns units.
+///
+/// Cheap enough to call twice around a hitch: it opens a handle per thread and reads a counter,
+/// suspending nothing. This is deliberately NOT the stack-capture path -- attribution has to be
+/// affordable during a hitch, and suspending 128 threads to answer "who is busy" would deepen
+/// the very stall being measured.
+#[cfg(windows)]
+fn thread_cpu_times() -> Vec<(u32, u64)> {
+    let mut out = Vec::new();
+    for thread_id in enumerate_threads() {
+        let thread = unsafe { OpenThread(THREAD_QUERY_INFORMATION, 0, thread_id) };
+        if thread == 0 {
+            continue;
+        }
+        let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+        let ok =
+            unsafe { GetThreadTimes(thread, &mut creation, &mut exit, &mut kernel, &mut user) };
+        unsafe { CloseHandle(thread) };
+        if ok != 0 {
+            out.push((thread_id, kernel.saturating_add(user)));
+        }
+    }
+    out
+}
+
+/// Rank threads by CPU consumed between two snapshots, busiest first.
+///
+/// Pure so it can be tested without a process: the ordering is the whole product here, and an
+/// attribution that ranks wrongly is worse than none because it points the reader at an idle
+/// thread with total confidence.
+fn rank_cpu_consumers(before: &[(u32, u64)], after: &[(u32, u64)]) -> Vec<(u32, u64)> {
+    let mut deltas: Vec<(u32, u64)> = after
+        .iter()
+        .filter_map(|(thread_id, later)| {
+            let earlier = before
+                .iter()
+                .find(|(candidate, _)| candidate == thread_id)
+                .map(|(_, value)| *value)?;
+            Some((*thread_id, later.saturating_sub(earlier)))
+        })
+        .filter(|(_, delta)| *delta > 0)
+        .collect();
+    // Tie-break on thread id so the same situation always reports the same order.
+    deltas.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    deltas
+}
+
+/// Report a hitch, naming the threads that actually consumed the time.
+///
+/// Attribution happens HERE rather than from a background sampler: the two CPU snapshots
+/// straddle a short window taken at detection, so what they measure is who is busy *while the
+/// hitch is still happening*. Only the busiest few get their stacks captured, because that
+/// capture suspends threads and doing it to everything would make the hitch worse.
+#[cfg(windows)]
+fn report_framedrop(hitch: framedrop::Hitch) {
+    let before = thread_cpu_times();
+    unsafe { Sleep(FRAMEDROP_ATTRIBUTION_MS) };
+    let after = thread_cpu_times();
+    let ranked = rank_cpu_consumers(&before, &after);
+
+    let window_ms = f64::from(FRAMEDROP_ATTRIBUTION_MS);
+    let total: u64 = ranked.iter().map(|(_, delta)| *delta).sum();
+    append_log(format_args!(
+        "hang watchdog FRAMEDROP -- {:.0} frames owed at a measured {:.1} fps baseline \
+         ({} frame(s) delivered in {:.0}ms). Attributing over the next {:.0}ms: {} thread(s) \
+         consumed CPU, {:.1}ms total.",
+        hitch.deficit_frames,
+        hitch.baseline_fps,
+        hitch.observed_frames,
+        hitch.window_seconds * 1000.0,
+        window_ms,
+        ranked.len(),
+        total as f64 / 10_000.0,
+    ));
+
+    let modules = loaded_modules();
+    for (thread_id, delta) in ranked.iter().take(FRAMEDROP_TOP_THREADS) {
+        let cpu_ms = *delta as f64 / 10_000.0;
+        let share = if total > 0 {
+            (*delta as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
+        match sample_thread(*thread_id) {
+            Some(sampled) => append_log(format_args!(
+                "  framedrop thread {thread_id}: {cpu_ms:.1}ms CPU ({share:.0}% of measured) {}",
+                sampled.format_stack(&modules)
+            )),
+            None => append_log(format_args!(
+                "  framedrop thread {thread_id}: {cpu_ms:.1}ms CPU ({share:.0}% of measured) \
+                 <stack unavailable>"
+            )),
+        }
+    }
+}
+
+/// Measure the game's frame rate so the deficit is judged against reality, not an assumed 60.
+#[cfg(windows)]
+fn calibrate_frame_rate(counter: usize) -> Option<f64> {
+    let start = std::time::Instant::now();
+    let first = unsafe { safe_read_u32(counter) }?;
+    let mut last = first;
+    let mut wrapped = 0u64;
+    while start.elapsed().as_millis() < u128::from(FRAMEDROP_CALIBRATION_MS) {
+        unsafe { Sleep(SAMPLE_INTERVAL_MS) };
+        let current = unsafe { safe_read_u32(counter) }?;
+        if current < last {
+            // The counter is a u32 and will wrap eventually; account for it rather than
+            // measuring a huge negative rate and disarming on a healthy game.
+            wrapped += 1;
+        }
+        last = current;
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    if elapsed <= 0.0 {
+        return None;
+    }
+    let advanced =
+        (u64::from(last) + wrapped * (u64::from(u32::MAX) + 1)).saturating_sub(u64::from(first));
+    Some(advanced as f64 / elapsed)
 }
 
 /// Report a load that stopped progressing while its own clock kept running.
@@ -773,6 +1148,175 @@ mod tests {
     use super::*;
 
     #[test]
+    /// A steady 60fps must never accumulate a deficit, however long it runs.
+    #[test]
+    fn framedrop_stays_quiet_at_a_steady_baseline() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).expect("60fps is plausible");
+        // 20 ticks/sec for 5 minutes: 3 frames per 50ms window.
+        for _ in 0..(20 * 300) {
+            assert_eq!(detector.observe(3, 0.05), None);
+        }
+        assert_eq!(
+            detector.deficit(),
+            0.0,
+            "a healthy run must not drift upward"
+        );
+    }
+
+    /// A full stop crosses 60 owed frames after about a second, not before.
+    #[test]
+    fn framedrop_fires_after_roughly_one_second_of_lost_frames() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).unwrap();
+        let mut ticks = 0;
+        let hitch = loop {
+            ticks += 1;
+            assert!(ticks < 100, "must fire well within 5s of a total stop");
+            if let Some(hitch) = detector.observe(0, 0.05) {
+                break hitch;
+            }
+        };
+        // 60 frames owed at 60fps = 1s = 20 ticks of 50ms.
+        assert_eq!(ticks, 20, "fired after {ticks} ticks of 50ms");
+        assert!(hitch.deficit_frames >= 60.0);
+        assert_eq!(hitch.observed_frames, 0);
+    }
+
+    /// Half rate is a real hitch, just a slower-accumulating one -- and it must still fire.
+    #[test]
+    fn framedrop_fires_on_sustained_half_rate() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).unwrap();
+        let mut fired = None;
+        for tick in 1..=200 {
+            if let Some(hitch) = detector.observe(1, 0.05) {
+                fired = Some((tick, hitch));
+                break;
+            }
+        }
+        let (tick, hitch) = fired.expect("20fps against a 60fps baseline owes 40 frames/sec");
+        assert_eq!(
+            tick, 30,
+            "2 owed per 50ms tick = 40/sec; 60 owed reached at tick 30"
+        );
+        assert!(hitch.deficit_frames >= 60.0);
+    }
+
+    /// Isolated stutters must drain, or a long session would eventually false-fire on noise.
+    #[test]
+    fn framedrop_drains_isolated_stutters() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).unwrap();
+        let mut peak: f64 = 0.0;
+        for _ in 0..500 {
+            // One dropped tick, then healthy frames -- a stutter every 0.55s for four minutes.
+            assert_eq!(detector.observe(0, 0.05), None);
+            for _ in 0..10 {
+                assert_eq!(detector.observe(3, 0.05), None);
+            }
+            peak = peak.max(detector.deficit());
+        }
+        // The window holds the three or four stutters that genuinely happened in the last 2s --
+        // that is the point of a window, not a defect. What must NOT happen is unbounded creep:
+        // a running total would have reached 1500 here and fired 25 times.
+        assert!(
+            peak < 20.0,
+            "isolated stutters must stay far below the 60-frame threshold (peaked at {peak})"
+        );
+    }
+
+    /// Credit must not bank: a fast stretch cannot pay for a later hitch.
+    #[test]
+    fn framedrop_does_not_bank_credit_from_a_fast_stretch() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).unwrap();
+        for _ in 0..200 {
+            assert_eq!(detector.observe(30, 0.05), None, "way above baseline");
+        }
+        assert_eq!(
+            detector.deficit(),
+            0.0,
+            "surplus never reads as a negative debt"
+        );
+        let mut ticks = 0;
+        while detector.observe(0, 0.05).is_none() {
+            ticks += 1;
+            assert!(ticks < 80, "a hitch after a fast stretch must still fire");
+        }
+        // The window still holds some surplus ticks, so the hitch takes slightly longer than a
+        // cold 20 ticks -- but it must fire, and well inside the 2s window.
+        assert!(
+            (20..=60).contains(&(ticks + 1)),
+            "fired after {} ticks",
+            ticks + 1
+        );
+    }
+
+    /// An implausible measured rate disarms rather than reporting noise forever.
+    #[test]
+    fn framedrop_refuses_an_implausible_baseline() {
+        use super::framedrop::Detector;
+        assert!(
+            Detector::new(4.0, 60.0, 20.0, 360.0).is_none(),
+            "4fps is not a frame rate"
+        );
+        assert!(
+            Detector::new(5000.0, 60.0, 20.0, 360.0).is_none(),
+            "5000fps is not either"
+        );
+        assert!(
+            Detector::new(f64::NAN, 60.0, 20.0, 360.0).is_none(),
+            "NaN must not arm"
+        );
+        assert!(Detector::new(60.0, 60.0, 20.0, 360.0).is_some());
+        assert!(
+            Detector::new(30.0, 60.0, 20.0, 360.0).is_some(),
+            "a 30fps cap is legitimate"
+        );
+    }
+
+    /// A zero or negative window must be ignored, not divided by.
+    #[test]
+    fn framedrop_ignores_a_degenerate_window() {
+        use super::framedrop::Detector;
+        let mut detector = Detector::new(60.0, 60.0, 20.0, 360.0).unwrap();
+        assert_eq!(detector.observe(0, 0.0), None);
+        assert_eq!(detector.observe(0, -1.0), None);
+        assert_eq!(detector.observe(0, f64::NAN), None);
+        assert_eq!(detector.deficit(), 0.0);
+    }
+
+    /// Attribution is the product here; ranking the wrong thread is worse than saying nothing.
+    #[test]
+    fn cpu_ranking_orders_by_consumption_and_drops_idle_threads() {
+        use super::rank_cpu_consumers;
+        let before = [(10u32, 1_000u64), (11, 5_000), (12, 0), (13, 700)];
+        let after = [(10u32, 1_100u64), (11, 45_000), (12, 0), (13, 700)];
+        let ranked = rank_cpu_consumers(&before, &after);
+        assert_eq!(
+            ranked,
+            vec![(11, 40_000), (10, 100)],
+            "busiest first; threads that burned nothing are omitted entirely"
+        );
+    }
+
+    /// Threads that appear or vanish mid-hitch must not produce bogus deltas.
+    #[test]
+    fn cpu_ranking_handles_threads_appearing_and_vanishing() {
+        use super::rank_cpu_consumers;
+        let before = [(10u32, 500u64), (11, 900)];
+        // 11 exited, 99 is new -- neither has a valid delta across the window.
+        let after = [(10u32, 900u64), (99, 12_345)];
+        assert_eq!(
+            rank_cpu_consumers(&before, &after),
+            vec![(10, 400)],
+            "only threads present in BOTH snapshots have a measurable delta"
+        );
+        // A counter that went backwards (impossible, but do not underflow on it).
+        assert_eq!(rank_cpu_consumers(&[(1, 900)], &[(1, 100)]), vec![]);
+    }
+
     /// The captured softlock, replayed: target pinned at 0.12 while the screen's clock runs.
     #[test]
     fn loading_witness_fires_when_target_freezes_but_the_clock_runs() {
