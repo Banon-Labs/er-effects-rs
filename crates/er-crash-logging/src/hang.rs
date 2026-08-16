@@ -140,13 +140,24 @@ pub mod loading_screen {
     }
 
     impl Sample {
-        /// A screen that is displaying and has not been finalized or closed.
+        /// A screen that is displaying, unfinished, and not yet finalized or closed.
         ///
         /// `active < 0` is the reset state written by the game's own teardown (0x140860d90), so
         /// an inactive screen is not a stall -- it is the absence of a loading screen.
+        ///
+        /// A target of 1.0 is excluded, and that exclusion was paid for: the first live firing of
+        /// this oracle (2026-08-15) was a FALSE POSITIVE at `target 1.0000 unchanged for 30.9s`
+        /// during ordinary boot. A screen that has animated all the way to 100% and is sitting
+        /// there waiting to be dismissed is finished, not frozen -- the interesting failure is a
+        /// load that stopped PART WAY, which is what the captured softlock (0.12) looked like.
+        /// Reporting the completed case cost a needless 128-thread suspension and one of three
+        /// report slots.
         #[must_use]
         pub fn is_pending(&self) -> bool {
-            self.active >= 0 && self.close_gate == 0 && self.already_closed == 0
+            self.active >= 0
+                && self.close_gate == 0
+                && self.already_closed == 0
+                && self.lerp_target < 1.0
         }
     }
 
@@ -867,6 +878,25 @@ mod tests {
             }
             .is_pending(),
             "already closed is a completed load"
+        );
+        // Regression for the oracle's FIRST live firing, which was a false positive: it reported
+        // "target 1.0000 unchanged for 30.9s" during ordinary boot. A screen that animated all
+        // the way to 100% and is waiting to be dismissed is finished, not frozen.
+        assert!(
+            !Sample {
+                lerp_target: 1.0,
+                ..pending
+            }
+            .is_pending(),
+            "a completed load sitting at 100% is not a stall"
+        );
+        assert!(
+            Sample {
+                lerp_target: 0.99,
+                ..pending
+            }
+            .is_pending(),
+            "a load frozen just short of complete IS still a stall"
         );
         assert!(
             !Sample {
