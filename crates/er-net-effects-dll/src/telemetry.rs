@@ -49,7 +49,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n  \"effect_dinput_non_keyboard_reads\": {},\n  \"effect_owned_removals\": {},\n  \"effect_unowned_removals_skipped\": {},\n  \"effect_permanent_effects\": \"{}\",\n  \"effect_duration_filtered\": {},\n  \"effect_stacked_count\": {},\n  \"effect_stack_write_failures\": {},\n",
         effects::effect_hotkey_hook_active(),
         effects::effect_hotkey_hook_hits(),
         effects::effect_hotkey_applied_actions(),
@@ -59,7 +59,14 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::dinput_mouse_hook_fires(),
         effects::dinput_suppressed_arrow_keys(),
         effects::dinput_queued_selector_keys(),
-        effects::dinput_repeated_selector_keys()
+        effects::dinput_repeated_selector_keys(),
+        effects::dinput_non_keyboard_reads(),
+        effects::owned_removals(),
+        effects::unowned_removals_skipped(),
+        effects::permanent_effects_mode(),
+        effects::duration_filtered_effects(),
+        effects::stacked_effect_count(),
+        effects::stack_write_failures()
     ));
     body.push_str(&format!(
         "  \"effect_selector_visible\": {},\n  \"effect_selector_text\": \"{}\",\n",

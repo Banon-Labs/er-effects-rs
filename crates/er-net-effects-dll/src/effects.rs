@@ -21,7 +21,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::{config::runtime_config, crash_telemetry, input_suppression, log::net_effects_log};
+use crate::{
+    config::runtime_config, crash_telemetry, duration_filter, input_suppression,
+    log::net_effects_log, stacked_config,
+};
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
 const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
@@ -29,6 +32,10 @@ const EFFECT_HOTKEY_LEFT: usize = 1 << 2;
 const EFFECT_HOTKEY_RIGHT: usize = 1 << 3;
 const EFFECT_HOTKEY_TOGGLE: usize = 1 << 4;
 const EFFECT_HOTKEY_SELECTOR_TOGGLE: usize = 1 << 5;
+/// Numpad `+`: add the highlighted effect to the always-on stack.
+const EFFECT_HOTKEY_STACK_ADD: usize = 1 << 6;
+/// Numpad `-`: take it back out.
+const EFFECT_HOTKEY_STACK_REMOVE: usize = 1 << 7;
 
 const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
@@ -69,6 +76,21 @@ static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
+/// `RemoveSpEffect` calls this DLL declined to make because it never applied that effect. A
+/// large number here is the mass-strip that used to take the player's talisman and gear effects
+/// with it on every selection change.
+static UNOWNED_REMOVALS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+/// Catalog entries the `permanent_effects` setting kept out of the selector.
+static DURATION_FILTERED_EFFECTS: AtomicUsize = AtomicUsize::new(0);
+/// `RemoveSpEffect` calls this DLL did make, for effects it had applied itself.
+static OWNED_REMOVALS: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_STACK_ADD: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_STACK_REMOVE: AtomicUsize = AtomicUsize::new(0);
+/// Failed writes of the stack back to `er-net-effects.toml`. Silence here is the only thing that
+/// makes an in-game stack edit a durable one.
+static STACK_WRITE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// How many effects are on the always-on stack right now.
+static STACKED_EFFECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
@@ -122,6 +144,11 @@ pub(crate) struct NamedEffectCall {
     pub(crate) active: bool,
     active_seen_since_enable: bool,
     apply_failed: bool,
+    /// This DLL applied this effect and has not taken it back yet. The ONLY licence to call
+    /// `RemoveSpEffect` for it -- see [`NamedEffectCall::release_owned`].
+    applied_by_us: bool,
+    /// On the always-on stack: stays applied wherever the selector cursor goes.
+    pub(crate) stacked: bool,
 }
 
 impl NamedEffectCall {
@@ -134,7 +161,35 @@ impl NamedEffectCall {
             active: false,
             active_seen_since_enable: false,
             apply_failed: false,
+            applied_by_us: false,
+            stacked: false,
         }
+    }
+
+    /// Apply, and take ownership of the effect so it can be taken back later.
+    fn apply_owned(&mut self, player: &mut PlayerIns, network_sync: bool) {
+        self.kind.apply(player, network_sync);
+        self.applied_by_us = true;
+    }
+
+    /// Remove ONLY what this DLL put on the player, and report whether anything was removed.
+    ///
+    /// WHY OWNERSHIP RATHER THAN A BLIND REMOVE. A catalog is a flat list of raw SpEffect IDs --
+    /// `visuals-only` alone holds 843, among them `491 // Rune Arc` and other IDs the GAME
+    /// applies from talismans, armour, weapon buffs and consumables. The selector used to clear
+    /// every non-selected call whenever the selection changed, so choosing one effect fired
+    /// `RemoveSpEffect` for 842 IDs the DLL had never applied. Any of those the player legitimately
+    /// had were stripped -- and because equipment effects are only re-applied on re-equip or on
+    /// respawn, they stayed gone until exactly that. This DLL now takes back only what it gave.
+    fn release_owned(&mut self, player: &mut PlayerIns) -> bool {
+        if !self.applied_by_us {
+            UNOWNED_REMOVALS_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        self.kind.remove(player);
+        self.applied_by_us = false;
+        OWNED_REMOVALS.fetch_add(1, Ordering::Relaxed);
+        true
     }
 }
 
@@ -229,6 +284,8 @@ impl NetEffectsState {
                 })
             })
             .or_else(|| (!catalogs.is_empty()).then_some(0));
+        mark_stacked_calls(&mut calls);
+
         let effect_hotkeys_effects_on =
             restore_effects_enabled() && selected_effect_index.is_some();
         if effect_hotkeys_effects_on
@@ -352,6 +409,10 @@ fn effect_file_signature(path: &Path) -> String {
 
 fn current_effect_catalog_signature() -> String {
     let mut parts = Vec::new();
+    // The config shapes the catalogs as much as the catalog files do: `permanent_effects` decides
+    // what is offered and `stacked_effects` decides what is exempt from that. Folding it into the
+    // same signature is what makes an edit to the file take effect without a relaunch.
+    parts.push(crate::config::poll_live_config());
     parts.push(format!(
         "master:{}",
         effect_file_signature(&effect_master_catalog_path())
@@ -534,6 +595,7 @@ struct RawEffectCatalog {
 
 fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Option<String>) {
     let mut load_errors = Vec::new();
+    let mut master_durations: Option<HashMap<i32, f32>> = None;
     let master_names = match fs::read_to_string(effect_master_catalog_path()) {
         Ok(json) => match parse_effect_master_catalog_json(&json) {
             Ok(master) => Some(
@@ -541,6 +603,19 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
                     .effects
                     .into_iter()
                     .map(|effect| {
+                        // The master catalog omits any field equal to its PARAMDEF default, and
+                        // `f32 effectEndurance` declares none, so an absent field is a 0-second
+                        // one-shot -- never a permanent effect. See `duration_filter`.
+                        let duration = effect
+                            .fields
+                            .get("effectEndurance")
+                            .and_then(|value| value.as_f64())
+                            .map_or(duration_filter::PARAMDEF_DEFAULT_ENDURANCE, |value| {
+                                value as f32
+                            });
+                        master_durations
+                            .get_or_insert_with(HashMap::new)
+                            .insert(effect.id, duration);
                         let name = if effect.name.is_empty() {
                             format!("SpEffect {}", effect.id)
                         } else {
@@ -589,6 +664,12 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
         }
     }
 
+    let permanent_effects = crate::config::live_permanent_effects();
+    // An id the player put on the stack by hand outranks the filter. The filter decides what the
+    // selector OFFERS; the stack is a decision already made, and silently dropping it would leave
+    // a configured effect that never applies and no way to see why.
+    let stacked_ids_config = crate::config::live_stacked_effects();
+    let mut filtered_by_duration = 0usize;
     let mut calls = Vec::new();
     let mut call_index_by_id = HashMap::<i32, usize>::new();
     let mut catalogs = Vec::new();
@@ -599,6 +680,17 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
         for id in raw.ids {
             if !seen.insert(id) {
                 continue;
+            }
+            // Filter here rather than while navigating, so the offered set, the N/M counter and
+            // every wrap-around agree with each other by construction.
+            if permanent_effects.filters() && !stacked_ids_config.contains(&id) {
+                let duration = master_durations
+                    .as_ref()
+                    .and_then(|durations| durations.get(&id).copied());
+                if !permanent_effects.allows(duration) {
+                    filtered_by_duration = filtered_by_duration.saturating_add(1);
+                    continue;
+                }
             }
             let name = if let Some(names) = master_names.as_ref() {
                 let Some(name) = names.get(&id).cloned() else {
@@ -631,6 +723,57 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
         }
     }
 
+    // A stacked id that no catalog offers at all -- hand-typed, or from a catalog the player has
+    // since deleted -- still gets a call of its own. It is never selectable (nothing points at it
+    // from a catalog), but it applies, which is what being on the stack means.
+    let mut stacked_without_catalog = Vec::new();
+    for id in &stacked_ids_config {
+        if call_index_by_id.contains_key(id) {
+            continue;
+        }
+        let name = master_names
+            .as_ref()
+            .and_then(|names| names.get(id).cloned())
+            .unwrap_or_else(|| format!("SpEffect {id}"));
+        call_index_by_id.insert(*id, calls.len());
+        calls.push(NamedEffectCall::new(
+            name,
+            call_kind_from_spec(EffectKindSpec::SpEffect, *id),
+            false,
+        ));
+        stacked_without_catalog.push(*id);
+    }
+    if !stacked_without_catalog.is_empty() {
+        net_effects_log(format_args!(
+            "effect-stack: {stacked_without_catalog:?} are on the stack but in no catalog; \
+             applying them anyway (they will not appear under the selector cursor)"
+        ));
+    }
+
+    if permanent_effects.filters() {
+        DURATION_FILTERED_EFFECTS.store(filtered_by_duration, Ordering::Relaxed);
+        let offered: usize = catalogs
+            .iter()
+            .map(|catalog| catalog.call_indices.len())
+            .sum();
+        net_effects_log(format_args!(
+            "effect-catalogs: permanent_effects={} dropped {filtered_by_duration} entr{} \
+             ({offered} still offered across {} catalog(s)){}",
+            permanent_effects.as_str(),
+            if filtered_by_duration == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            catalogs.len(),
+            if master_durations.is_none() {
+                "; NO master catalog on disk, so no duration was known for any effect"
+            } else {
+                ""
+            }
+        ));
+    }
+
     let load_error = (!load_errors.is_empty())
         .then(|| format!("effect catalog load errors: {}", load_errors.join("; ")));
     (calls, catalogs, load_error)
@@ -642,6 +785,8 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
         VK_UP => EFFECT_HOTKEY_UP,
         VK_RIGHT => EFFECT_HOTKEY_RIGHT,
         VK_DOWN => EFFECT_HOTKEY_DOWN,
+        VK_ADD => EFFECT_HOTKEY_STACK_ADD,
+        VK_SUBTRACT => EFFECT_HOTKEY_STACK_REMOVE,
         VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
         VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
         _ => 0,
@@ -676,6 +821,12 @@ pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
     }
     if action & EFFECT_HOTKEY_RIGHT != 0 {
         EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_STACK_ADD != 0 {
+        EFFECT_HOTKEY_PENDING_STACK_ADD.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_STACK_REMOVE != 0 {
+        EFFECT_HOTKEY_PENDING_STACK_REMOVE.fetch_add(1, Ordering::SeqCst);
     }
     if action & EFFECT_HOTKEY_TOGGLE != 0 {
         EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
@@ -917,6 +1068,10 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         ));
         EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(selector_toggles, Ordering::SeqCst);
     }
+    STACKED_EFFECT_COUNT.store(
+        state.calls.iter().filter(|call| call.stacked).count(),
+        Ordering::Relaxed,
+    );
     sync_effect_selector_input_suppression(state.effect_selector_visible);
     if !state.effect_selector_visible {
         clear_effect_selector_text();
@@ -970,8 +1125,19 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
     } else {
         "WAITING"
     };
+    let stacked_count = state.calls.iter().filter(|call| call.stacked).count();
+    // Say STACKED on the highlighted entry itself, so + and - have visible consequences on the
+    // thing the player is looking at rather than only in a total off to the side.
+    let stack_text = format!(
+        " | STACK {stacked_count}{}",
+        if selected_call.is_some_and(|call| call.stacked) {
+            " STACKED"
+        } else {
+            ""
+        }
+    );
     let mut text = format!(
-        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {} | {}{}",
+        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {} | {}{}{}",
         catalog_display_index,
         catalog_count,
         catalog_name,
@@ -986,6 +1152,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         },
         if state.network_sync { "ON" } else { "OFF" },
         runtime_status,
+        stack_text,
         trigger_text
     );
     text = text
@@ -1027,6 +1194,129 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
     }
 }
 
+/// Add the highlighted effect to the always-on stack, and write it into `er-net-effects.toml`.
+///
+/// Applied immediately as well as persisted: a key that only edits a file, and needs a relaunch
+/// to do anything, is a key nobody trusts.
+fn stack_add_selected(player: &mut PlayerIns, state: &mut NetEffectsState) {
+    let network_sync = state.network_sync;
+    let Some(index) = state.selected_effect_index else {
+        state.last_driver_command = Some("effect-stack: nothing highlighted to add".to_owned());
+        return;
+    };
+    let Some(call) = state.calls.get_mut(index) else {
+        return;
+    };
+    let EffectCallKind::SpEffect { id } = call.kind;
+    let name = call.name.clone();
+    if call.stacked {
+        state.last_driver_command = Some(format!("effect-stack: {id} ({name}) is already stacked"));
+        return;
+    }
+    call.stacked = true;
+    call.enabled = true;
+    call.remove_requested = false;
+    call.apply_owned(player, network_sync);
+    call.active = call.kind.is_active(player);
+    call.active_seen_since_enable = call.active;
+    call.apply_failed = !call.active;
+
+    let ids = stacked_ids(state);
+    let written = write_stacked_effects(&ids);
+    state.last_driver_command = Some(format!(
+        "effect-stack: added {id} ({name}); {} stacked{}",
+        ids.len(),
+        if written {
+            ""
+        } else {
+            " -- CONFIG WRITE FAILED"
+        }
+    ));
+}
+
+/// Take the highlighted effect back off the stack, and out of the config file.
+fn stack_remove_selected(player: &mut PlayerIns, state: &mut NetEffectsState) {
+    let Some(index) = state.selected_effect_index else {
+        state.last_driver_command = Some("effect-stack: nothing highlighted to remove".to_owned());
+        return;
+    };
+    let selected = state.selected_effect_index;
+    let Some(call) = state.calls.get_mut(index) else {
+        return;
+    };
+    let EffectCallKind::SpEffect { id } = call.kind;
+    let name = call.name.clone();
+    if !call.stacked {
+        state.last_driver_command = Some(format!("effect-stack: {id} ({name}) is not stacked"));
+        return;
+    }
+    call.stacked = false;
+    // Unstacking the effect the cursor is ON leaves it enabled: it is still the selection, and
+    // yanking it out from under the player would read as the key doing two things at once.
+    if selected != Some(index) || !state.effect_hotkeys_effects_on {
+        call.enabled = false;
+        call.release_owned(player);
+        call.active_seen_since_enable = false;
+        call.apply_failed = false;
+        call.active = call.kind.is_active(player);
+    }
+
+    let ids = stacked_ids(state);
+    let written = write_stacked_effects(&ids);
+    state.last_driver_command = Some(format!(
+        "effect-stack: removed {id} ({name}); {} stacked{}",
+        ids.len(),
+        if written {
+            ""
+        } else {
+            " -- CONFIG WRITE FAILED"
+        }
+    ));
+}
+
+/// The stacked ids, in call order.
+fn stacked_ids(state: &NetEffectsState) -> Vec<i32> {
+    state
+        .calls
+        .iter()
+        .filter(|call| call.stacked)
+        .map(|call| {
+            let EffectCallKind::SpEffect { id } = call.kind;
+            id
+        })
+        .collect()
+}
+
+/// Rewrite just the `stacked_effects` line of the config the player also owns.
+///
+/// Read-modify-write through a temp file and a rename, so a crash mid-write cannot leave a
+/// half-written config that fails to parse on the next launch.
+fn write_stacked_effects(ids: &[i32]) -> bool {
+    let path = &runtime_config().config_path;
+    let existing = fs::read_to_string(path).unwrap_or_default();
+    let updated = stacked_config::rewrite(&existing, ids);
+    let tmp = path.with_extension("toml.tmp");
+    let wrote = fs::write(&tmp, updated)
+        .and_then(|()| fs::rename(&tmp, path))
+        .is_ok();
+    if !wrote {
+        STACK_WRITE_FAILURES.fetch_add(1, Ordering::SeqCst);
+        net_effects_log(format_args!(
+            "effect-stack: FAILED to write {} -- the stack is live but will not survive a relaunch",
+            path.display()
+        ));
+    }
+    wrote
+}
+
+pub(crate) fn stacked_effect_count() -> usize {
+    STACKED_EFFECT_COUNT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn stack_write_failures() -> usize {
+    STACK_WRITE_FAILURES.load(Ordering::Relaxed)
+}
+
 pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffectsState) {
     poll_effect_trigger_hotkeys(state);
     consume_effect_trigger_hotkeys(player, state);
@@ -1035,9 +1325,18 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     let downs = EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst);
     let lefts = EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst);
     let rights = EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst);
+    let stack_adds = EFFECT_HOTKEY_PENDING_STACK_ADD.swap(0, Ordering::SeqCst);
+    let stack_removes = EFFECT_HOTKEY_PENDING_STACK_REMOVE.swap(0, Ordering::SeqCst);
     let arrow_total = ups + downs + lefts + rights;
     let arrows_allowed = state.effect_selector_visible;
-    let applied_total = toggles + if arrows_allowed { arrow_total } else { 0 };
+    // The stack keys ride with the arrows: they act on what the selector is highlighting, so
+    // they mean nothing while it is hidden.
+    let stack_total = if arrows_allowed {
+        stack_adds + stack_removes
+    } else {
+        0
+    };
+    let applied_total = toggles + stack_total + if arrows_allowed { arrow_total } else { 0 };
     if !arrows_allowed && arrow_total != 0 {
         state.last_driver_command = Some(format!(
             "effect-hotkey: ignored {arrow_total} arrow keypresses because selector is hidden"
@@ -1065,6 +1364,17 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     for _ in 0..downs {
         step_selected_effect(player, state, -1);
     }
+    // After the cursor has moved, so a press of + in the same frame stacks what is NOW selected.
+    for _ in 0..stack_adds {
+        stack_add_selected(player, state);
+    }
+    for _ in 0..stack_removes {
+        stack_remove_selected(player, state);
+    }
+    STACKED_EFFECT_COUNT.store(
+        state.calls.iter().filter(|call| call.stacked).count(),
+        Ordering::Relaxed,
+    );
 }
 
 fn poll_effect_trigger_hotkeys(state: &mut NetEffectsState) {
@@ -1284,7 +1594,7 @@ fn select_catalog(
 
 fn disable_all_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     for call in &mut state.calls {
-        call.kind.remove(player);
+        call.release_owned(player);
         call.enabled = false;
         call.remove_requested = false;
         call.active_seen_since_enable = false;
@@ -1304,12 +1614,17 @@ fn enable_only_call(
         if call_index == index {
             call.enabled = true;
             call.remove_requested = false;
-            call.kind.apply(player, network_sync);
+            call.apply_owned(player, network_sync);
             call.active = call.kind.is_active(player);
             call.active_seen_since_enable = call.active;
             call.apply_failed = !call.active;
+        } else if call.stacked {
+            // The whole point of the stack: moving the cursor must not take these off. They stay
+            // enabled, so `reapply_expired_enabled_calls` keeps them alive too.
+            call.enabled = true;
+            call.active = call.kind.is_active(player);
         } else {
-            call.kind.remove(player);
+            call.release_owned(player);
             call.enabled = false;
             call.remove_requested = false;
             call.active_seen_since_enable = false;
@@ -1341,6 +1656,45 @@ fn enable_only_call(
     }
 }
 
+/// Mark the configured stack on a freshly built call list.
+///
+/// Shared by startup and by the LIVE rebuild, and that sharing is the point: the rebuild replaces
+/// every call, so a rebuild that did not re-mark silently emptied the stack -- the effects stayed
+/// on the player (nothing released them) but nothing was left to keep them alive or to take them
+/// off, and the overlay said STACK 0. Editing any catalog file was enough to trigger it.
+fn mark_stacked_calls(calls: &mut [NamedEffectCall]) {
+    let stacked_effects = crate::config::live_stacked_effects();
+    let mut missing = Vec::new();
+    for id in &stacked_effects {
+        match find_call_index_by_id(calls, *id) {
+            Some(index) => {
+                if let Some(call) = calls.get_mut(index) {
+                    call.stacked = true;
+                    call.enabled = true;
+                    call.remove_requested = false;
+                }
+            }
+            None => missing.push(*id),
+        }
+    }
+    if !stacked_effects.is_empty() {
+        net_effects_log(format_args!(
+            "effect-stack: {} configured, {} selectable{}",
+            stacked_effects.len(),
+            stacked_effects.len() - missing.len(),
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!("; NOT resolvable to an effect: {missing:?}")
+            }
+        ));
+    }
+    STACKED_EFFECT_COUNT.store(
+        calls.iter().filter(|call| call.stacked).count(),
+        Ordering::Relaxed,
+    );
+}
+
 pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let signature = current_effect_catalog_signature();
     if state.effect_catalogs_signature == signature {
@@ -1358,7 +1712,8 @@ pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut NetE
     let effects_were_on = state.effect_hotkeys_effects_on;
 
     disable_all_calls(player, state);
-    let (calls, catalogs, load_error) = build_effect_catalog_state();
+    let (mut calls, catalogs, load_error) = build_effect_catalog_state();
+    mark_stacked_calls(&mut calls);
     state.calls = calls;
     state.catalogs = catalogs;
     state.load_error = load_error;
@@ -1520,7 +1875,7 @@ fn execute_driver_command(
         }
         ["remove_all"] => {
             for call in &mut state.calls {
-                call.kind.remove(player);
+                call.release_owned(player);
                 call.enabled = false;
                 call.remove_requested = false;
                 call.active_seen_since_enable = false;
@@ -1568,7 +1923,7 @@ fn set_call_enabled(
 
     call.enabled = enabled;
     if enabled {
-        call.kind.apply(player, network_sync);
+        call.apply_owned(player, network_sync);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable = call.active;
         call.apply_failed = !call.active;
@@ -1583,7 +1938,7 @@ fn set_call_enabled(
             persist_selected_catalog(catalog);
         }
     } else {
-        call.kind.remove(player);
+        call.release_owned(player);
         call.remove_requested = false;
         call.active_seen_since_enable = false;
         call.apply_failed = false;
@@ -1600,7 +1955,7 @@ fn set_call_enabled(
 pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     for call in &mut state.calls {
         if call.remove_requested {
-            call.kind.remove(player);
+            call.release_owned(player);
             call.remove_requested = false;
             call.active_seen_since_enable = false;
             call.apply_failed = false;
@@ -1611,7 +1966,7 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut NetEffe
 fn apply_selected_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
     let network_sync = state.network_sync;
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
-        call.kind.apply(player, network_sync);
+        call.apply_owned(player, network_sync);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
@@ -1625,7 +1980,7 @@ fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsSta
         .iter_mut()
         .filter(|call| call.enabled && !call.active_seen_since_enable && !call.apply_failed)
     {
-        call.kind.apply(player, network_sync);
+        call.apply_owned(player, network_sync);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
@@ -1640,7 +1995,7 @@ pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut 
         .enumerate()
         .filter(|(_, call)| call.enabled && !call.active && call.active_seen_since_enable)
     {
-        call.kind.apply(player, network_sync);
+        call.apply_owned(player, network_sync);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
@@ -1711,6 +2066,26 @@ pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
 
 pub(crate) fn dinput_queued_selector_keys() -> usize {
     input_suppression::dinput_queued_selector_keys()
+}
+
+pub(crate) fn duration_filtered_effects() -> usize {
+    DURATION_FILTERED_EFFECTS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn permanent_effects_mode() -> &'static str {
+    runtime_config().permanent_effects.as_str()
+}
+
+pub(crate) fn unowned_removals_skipped() -> usize {
+    UNOWNED_REMOVALS_SKIPPED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn owned_removals() -> usize {
+    OWNED_REMOVALS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn dinput_non_keyboard_reads() -> usize {
+    input_suppression::dinput_non_keyboard_reads()
 }
 
 pub(crate) fn dinput_repeated_selector_keys() -> usize {
