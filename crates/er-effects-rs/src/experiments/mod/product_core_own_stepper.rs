@@ -425,6 +425,16 @@ pub(crate) use er_telemetry::counters::FORCE_OFFLINE_BYTES_CLEARED;
 /// (dialog+0x50 valid -> no mis-context overflow). Build is catch_unwind-wrapped so the pump always
 /// proceeds. bd HOOK-DESIGN-titletopdialog-update-0x1409aac10-incontext-build-2026-06-23.
 pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f32, input: usize) {
+    // TitleTopDialog::update reads the global accept byte and invokes open_menu at the tail of this
+    // exact frame. Delivering it from the recurring game task races menu handlers that clear the
+    // byte before that read; product autoload therefore arms it immediately before the original.
+    if product_autoload_enabled() {
+        if let Ok(base) = game_module_base() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                er_title_flow::maybe_set_title_accept_byte(base)
+            }));
+        }
+    }
     let orig_addr = TITLE_UPDATE_ORIG.load(Ordering::SeqCst);
     if orig_addr != TITLE_OWNER_SCAN_START_ADDRESS && orig_addr != 0 {
         let orig: unsafe extern "system" fn(usize, f32, usize) =

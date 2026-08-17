@@ -2277,9 +2277,20 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
+        // Deliver the product accept latch in the same TitleTopDialog::update frame that consumes
+        // it. The game-task write can be cleared by other menu handlers before update reaches its
+        // tail, leaving a40 at zero indefinitely despite a core-ready title.
+        unsafe { install_title_update_hook(module_base) };
         unsafe { maybe_hide_title_press_start(module_base, &ready) };
         unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
-        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+        // `TitleTopDialog::open_menu` sets a40 only while it assembles and drains its
+        // native job chain.  The follow-up update returns to a40==0 even though the
+        // menu transition was accepted.  Re-arming the accept byte then restarts that
+        // transition forever and starves the semantic Continue row.  Once the
+        // one-way own latch observed the native a40 edge, wait for that row instead.
+        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
+        {
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
             // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
             // context. Static disasm of TitleTopDialog::update shows the natural path only calls
