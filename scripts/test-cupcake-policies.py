@@ -809,6 +809,50 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
+        # False positive fixed 2026-08-15 (arm (a')): neither the copy/archive
+        # verb list (a) nor the interpreter word list (a') required a WORD
+        # boundary after the matched token, so `[^;|&()]*` let the match start
+        # partway through an unrelated word whose PREFIX happened to equal one
+        # of those tokens. `sha256sum` starts with `sh` (an (a') interpreter
+        # token), so a read-only hash compare of two files -- one path staged
+        # inside quotes, the other an unquoted game-install operand, piped
+        # through `sed` to redact the home directory -- denied as if it were a
+        # bundling command. It copies, moves, and writes nothing.
+        PolicyCase(
+            "allow-sha256sum-compare-staged-and-gameinstall-ersc-dll",
+            'G="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop"\n'
+            'sha256sum "$G/ersc.dll.er-effects-staged" /home/banon/Elden/ersc.dll'
+            " | sed 's|/home/banon|~|'",
+            True,
+        ),
+        # A bare read-only stat/listing of an ersc.dll path (no copy/archive
+        # verb, no interpreter, no redirect) must always allow.
+        PolicyCase(
+            "allow-stat-gameinstall-ersc-dll",
+            'stat "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"',
+            True,
+        ),
+        PolicyCase(
+            "allow-ls-la-gameinstall-ersc-dll",
+            "ls -la /home/banon/Elden/ersc.dll",
+            True,
+        ),
+        # Chaining a second command onto the restore-rename deliberately
+        # forfeits the same-path user-restore exemption -- the exemption's
+        # fail-closed shape requires the WHOLE command to be a single `mv`
+        # with exactly two quoted operands, so anything appended (even a
+        # read-only `ls -la`) drops back to the plain file-moving arms, which
+        # deny with no destination scoping. This is intentional and must not
+        # regress: an exempted restore command is not a place to smuggle a
+        # second statement.
+        PolicyCase(
+            "deny-mv-restore-staged-ersc-dll-chained-with-ls",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'"
+            " && ls -la '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
         PolicyCase(
             "allow-quoted-forbidden-launch-note",
             "echo 'do not run steam -applaunch 1245620'",
@@ -936,16 +980,21 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
-        # AskUserQuestion (the multiple-choice questionnaire tool) is HARD-BLOCKED
-        # unconditionally (block_askuserquestion): the user does not want
-        # questionnaire prompts surfaced during /goal work -- the agent must
-        # proceed autonomously and state blockers/recommendations in prose. There
-        # is no reliable goal-active signal to gate on, so the block is always-on.
+        # AskUserQuestion (the multiple-choice questionnaire tool). CORRECTED 2026-08-15: the prior
+        # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
+        # design-interview question from the `grilling` skill was blocked while NOT in any /goal work.
+        # User verdict: "That cupcake policy is not triggered correctly." Re-investigation found no
+        # reliable goal-active signal to gate a conditional deny on, and PreToolUse cannot carry a
+        # non-blocking advisory in this build either (empirically confirmed: add_context/ask both no-op
+        # to Allow on PreToolUse), so the deny is removed outright. AskUserQuestion now proceeds
+        # unconditionally through this file; the advisory reminder lives in the companion
+        # block_askuserquestion_reminder.rego (UserPromptSubmit/add_context, exercised via opa test, not
+        # this live-engine harness).
         PolicyCase(
-            "deny-askuserquestion-questionnaire",
+            "allow-askuserquestion-questionnaire",
             "",
-            False,
-            "blocked the AskUserQuestion questionnaire tool",
+            True,
+            None,
             {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
             include_timeout=False,
             tool_name="AskUserQuestion",
