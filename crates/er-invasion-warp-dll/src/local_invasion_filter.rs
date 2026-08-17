@@ -427,6 +427,65 @@ unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) 
     unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) }
 }
 
+/// Report WHICH MODULE owns the option-menu function pointers Seamless calls.
+///
+/// Read-only, once per process. These four fields are how `show` talks to the menu: `+0xa8` opens
+/// the dialog, `+0xb0` clears the game's option list, `+0xb8` appends one row, `+0xe0` tears the
+/// dialog down. Whether they point into `ersc.dll` or into `eldenring.exe` is not decidable
+/// statically -- ERSC resolves them by pattern scan at init and stores no absolute game address
+/// anywhere in its image -- and the answer decides where an added menu row would have to attach.
+/// If they land in `eldenring.exe`, the 1.16.2 dump names them outright.
+///
+/// Nothing is written and nothing is called: this only reads pointers already sitting in an object
+/// we hold.
+#[cfg(windows)]
+fn report_menu_seams(osm: usize) {
+    /// `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row, `+0xe0` teardown.
+    const SEAMS: [(usize, &str); 4] = [
+        (0xa8, "open_dialog"),
+        (0xb0, "clear_options"),
+        (0xb8, "append_option"),
+        (0xe0, "teardown"),
+    ];
+    // Attributed against the only two modules that could own them, both of which this module
+    // already resolves. A plausible in-image offset identifies the owner; an implausible one says
+    // the pointer belongs to neither, which is itself the answer.
+    const PLAUSIBLE_IMAGE_SIZE: usize = 0x0800_0000;
+    let ersc = ersc_module_base();
+    let game = er_game_base::mem::game_module_base().ok();
+    let mut parts = Vec::new();
+    for (offset, name) in SEAMS {
+        let Some(pointer) = (unsafe { er_game_base::mem::safe_read_usize(osm + offset) }) else {
+            parts.push(format!("{name}@+{offset:#x}=<unreadable>"));
+            continue;
+        };
+        let owner = [("ersc.dll", ersc), ("eldenring.exe", game)]
+            .into_iter()
+            .filter_map(|(module, base)| base.map(|base| (module, base)))
+            .find(|(_, base)| pointer >= *base && pointer - base < PLAUSIBLE_IMAGE_SIZE)
+            .map_or_else(
+                || "<neither module>".to_owned(),
+                |(module, base)| format!("{module}+{:#x}", pointer - base),
+            );
+        parts.push(format!("{name}@+{offset:#x}=0x{pointer:x} ({owner})"));
+    }
+    // The visible-option vector, to confirm which group this menu is and how many rows it holds.
+    let counts = (
+        unsafe { er_game_base::mem::safe_read_usize(osm + 0x108) },
+        unsafe { er_game_base::mem::safe_read_usize(osm + 0x110) },
+    );
+    let visible = match counts {
+        (Some(begin), Some(end)) if end >= begin && begin != 0 => {
+            format!("{} row(s)", (end - begin) / 0x90)
+        }
+        _ => "<unreadable>".to_owned(),
+    };
+    crate::standalone_log(format_args!(
+        "local-invasion: menu seams -- {} | visible options: {visible}",
+        parts.join(" ")
+    ));
+}
+
 /// Why a session could not be resolved. Carried so a failed cancel names its cause instead of
 /// being one generic line that fits three different bugs.
 #[derive(Clone, Copy, Debug)]
@@ -733,6 +792,10 @@ fn trace_session_state(session: usize) {
     }
     log_transition(previous, state, None);
     note_attempt_progress(previous, state);
+    if state == ersc::SESSION_STATE_SEARCHING {
+        // A new hunt is a new question; whatever the last one turned into is spent.
+        INVASION_ACTUALLY_HAPPENED.store(false, Ordering::SeqCst);
+    }
     if state == ersc::SESSION_STATE_SEARCHING && !AUTO_SEARCH_ARMED.swap(true, Ordering::SeqCst) {
         crate::standalone_log(format_args!(
             "local-invasion: you started a search -- rejected matches will be cancelled and the \
@@ -785,6 +848,28 @@ fn note_attempt_progress(previous: usize, state: u32) {
 /// Named here rather than in `ersc` because it is OUR progress marker, chosen from measurement,
 /// not a constant recovered from Seamless's own code.
 const SESSION_STATE_OFFER_RECEIVED: u32 = 0x12;
+
+/// The destination of the match in flight, remembered so the success banner can name it at the
+/// moment the join actually LANDS rather than when the server first offered it. `usize::MAX` = no
+/// match pending.
+static PENDING_SUCCESS_BLOCK: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// This attempt actually became an invasion: the engine reported `LobbyState::Client`, which is
+/// written only when the join RPC SUCCEEDED and the P2P session exists.
+///
+/// Measured 2026-08-17: every real join reached it 0.57-3.5s after join data, and not one of the
+/// eleven rejected matches ever did -- those go `Joining(4) -> Closing(7) -> None(0)`. So this is
+/// the discriminator that `Verdict::Keep` was standing in for, and unlike `Keep` it does not
+/// depend on our filter having judged the match.
+static INVASION_ACTUALLY_HAPPENED: AtomicBool = AtomicBool::new(false);
+
+/// When `SetMultiplayJoinData` last fired, in [`now_ms`]. `0` = not since launch.
+static JOIN_DATA_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// Packed last-logged engine reading, so the trace prints on change instead of every frame.
+/// `u64::MAX` is "nothing logged yet", which is distinct from any real packing.
+static JOIN_PROGRESS_LAST: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Frames sampled where the engine had nothing in flight while ERSC still claimed an attempt.
+static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// Monotonic milliseconds since the first call.
 ///
@@ -880,6 +965,13 @@ const fn state_name(state: u32) -> &'static str {
 /// written.
 #[cfg(windows)]
 unsafe extern "system" fn set_join_data_hook(a: usize, b: usize, c: usize, d: usize) -> usize {
+    // THE MISSING CLOCK. This instant is the only honest "we got a connection" marker we have:
+    // the server has pushed join data and the destination is decided. Every stall measured on
+    // 2026-08-16 (53s, 59s, 91s, 213s) is time spent after this line with nothing to show for it,
+    // and nothing in this DLL was timing it. ERSC's own state cannot substitute -- `0x15` is a
+    // published flag bit, not a handshake stage.
+    JOIN_DATA_AT_MS.store(now_ms(), Ordering::SeqCst);
+    JOIN_PROGRESS_LAST.store(u64::MAX, Ordering::SeqCst);
     judge_incoming_match(b);
     let orig = ORIG_SET_JOIN_DATA.load(Ordering::SeqCst);
     if orig == 0 {
@@ -1105,9 +1197,14 @@ pub fn judge_incoming_match(join_data: usize) {
     let Some(config) = current_config() else {
         return;
     };
-    if !config.enabled {
-        return; // switched off: never touch a match
-    }
+
+    // THE READS COME FIRST, AND THE SWITCH GATES THE ACTION RATHER THAN THE BANNER.
+    //
+    // This used to return here when the filter was off, which made the on-screen notice a
+    // by-product of filtering: switch the mod off and the banner went with it. The banner is a
+    // status surface in its own right -- where the server just sent you is worth saying whether or
+    // not any rule was applied -- so only `cancel_match` is gated below. Nothing here writes to the
+    // game, and the reads are fault-closed, so an off filter still touches no match.
 
     // `safe_read_i32` is the widest fault-tolerant read this base crate exposes; the block id is
     // a bit pattern, so the sign reinterpretation is meaningless and the cast is exact.
@@ -1134,6 +1231,13 @@ pub fn judge_incoming_match(join_data: usize) {
     // over a `BTreeSet` that is the numerically smallest id -- while the anchor compared against
     // all of its own names, so a destination sharing a name through any other of its names was
     // rejected as `WrongPlaceName`.
+    if !config.enabled {
+        // Nothing was judged, so there is no verdict to report -- just the destination, stated as
+        // the server's choice rather than as anything the mod approved.
+        announce_arrival(config.reject_notice, destination);
+        return;
+    }
+
     let candidate = InvasionCandidate::new(destination, place_names_for_block(destination));
     match config.judge(&anchor, &candidate) {
         Verdict::Keep(reason) => {
@@ -1147,6 +1251,12 @@ pub fn judge_incoming_match(join_data: usize) {
                 anchor.block,
                 anchor.named_location_count()
             ));
+            // The banner for this does NOT fire here. A kept match is a match we allowed, not an
+            // invasion that happened: measured 2026-08-16, joins sat dead for 53-213s after this
+            // exact instant. Saying "Invasion successful" at join time can therefore be a lie. It
+            // is announced from the tick instead, when the engine reports `LobbyState::Client` and
+            // the join has demonstrably landed.
+            PENDING_SUCCESS_BLOCK.store(destination as usize, Ordering::SeqCst);
         }
         Verdict::Reject(reason) => {
             crate::standalone_log(format_args!(
@@ -1168,6 +1278,76 @@ pub fn judge_incoming_match(join_data: usize) {
 /// against [`er_invasion_warp::reject_notice`] rather than through this.
 #[cfg(not(windows))]
 fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+fn announce_arrival(_enabled: bool, _destination: u32) {}
+
+/// Report a destination that arrived while the filter was switched off.
+///
+/// Shares the one notice latch with the verdict banners, so the surface never contradicts itself
+/// about what it last said.
+#[cfg(windows)]
+fn announce_arrival(enabled: bool, destination: u32) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let place = crate::place_name::place_name_for_block(destination);
+        guard.observe_arrival(enabled, destination, place.as_deref())
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the join-data hook -- the same context and surface as the
+    // verdict banners.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the arrival banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet."
+        ));
+    }
+}
+
+/// Host-side stub; the decision half is tested against [`er_invasion_warp::reject_notice`].
+#[cfg(not(windows))]
+fn announce_success(_enabled: bool, _destination: u32) {}
+
+/// Put a successful invasion on the same banner the rejections use.
+///
+/// Shares [`RejectNotice`] with [`announce_rejection`] on purpose: one banner, one memory of what
+/// it last said. That is what lets an arrival clear the rejection latch, so a later rejection at
+/// the same place is announced instead of being swallowed as a repeat.
+#[cfg(windows)]
+fn announce_success(enabled: bool, destination: u32) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let place = crate::place_name::place_name_for_block(destination);
+        guard.observe_success(enabled, destination, place.as_deref())
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the join-data hook -- the same context, and the same auto-closing
+    // announcement surface, as the rejection banner.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the success banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The invasion still happened; \
+             only the on-screen notice is missing."
+        ));
+    }
+}
 
 /// Put a rejection on the game's system-message banner, if the player asked for that.
 ///
@@ -1335,6 +1515,29 @@ fn arm_self_recovery(session: SeamlessSession) {
         return;
     }
     if read_session_state(session.session) != Some(ersc::SESSION_STATE_IDLE) {
+        return;
+    }
+    // AN INVASION THAT HAPPENED IS NOT AN ATTEMPT THAT DIED.
+    //
+    // The doc above assumed `Verdict::Keep` would have disarmed the loop first. Measured
+    // 2026-08-17, it does not: that session logged ZERO keeps and eleven rejects (`mode=area` with
+    // no named locations rejects everything it judges), so the loop stayed armed through three real
+    // invasions -- and this function restarted the hunt while the player was still on the loading
+    // screen back to their own world. They arrived home coloured as an invader with a Seamless name
+    // popup reading `[Unknown]`, because a fresh invasion was already in flight.
+    //
+    // So the disarm is taken from what the ENGINE did rather than from what our filter decided.
+    if INVASION_ACTUALLY_HAPPENED.swap(false, Ordering::SeqCst) {
+        // Disarm as a kept match would have: the hunt is over until the player asks for another.
+        AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
+        if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
+            backoff.stand_down();
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: that attempt became a real invasion (the session reached \
+             LobbyState::Client) -- NOT restarting the hunt. Use the lynchpin again when you want \
+             another one"
+        ));
         return;
     }
     // HOW BADLY DID THE LAST ATTEMPT GO? Restarting instantly is right when Seamless actually
@@ -1790,6 +1993,15 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     } else {
         keys.forget();
     }
+    // Phase 1 measurement, ABOVE the Seamless gate on purpose. These are ENGINE fields: they do
+    // not depend on ERSC being resolvable, and the baseline of what they read during ordinary play
+    // is exactly as valuable as what they read mid-attempt. Gating them behind `resolve_session`
+    // would have recorded nothing at all until the player opened the Seamless menu.
+    trace_join_progress(
+        resolve_session()
+            .ok()
+            .and_then(|s| read_session_state(s.session)),
+    );
     // Everything below is Seamless-side and purely observational until a rejected match has
     // actually armed a re-search, so a run without Seamless loaded costs one failed module lookup.
     let Ok(session) = resolve_session() else {
@@ -1812,6 +2024,111 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     watch_for_stall(session);
     arm_self_recovery(session);
     drive_pending_reinvade(session);
+}
+
+/// Read the engine's own view of the join, and log it when it changes.
+///
+/// PHASE 1 IS MEASUREMENT ONLY: this decides nothing and cancels nothing. It exists to produce
+/// the three traces the detector's threshold has to come from -- a healthy reject, a dead KEEP,
+/// and a real invasion -- because the only numbers we have today describe the ERSC side, whose
+/// middle states are virtualised and whose `0x15` is not a stage at all.
+///
+/// # Safety
+/// Game task thread. Every read is fault-closed through `safe_read_*`; a null or stale singleton
+/// yields `None` and the sample is skipped rather than faulting.
+#[cfg(windows)]
+fn trace_join_progress(ersc_state: Option<u32>) {
+    let Some(progress) = read_join_progress() else {
+        return;
+    };
+    let verdict = progress.verdict();
+    // `Client` and nothing else. `call_for_warp` is tempting and WRONG: `WarpNextStageKick_` runs
+    // for every warp including a plain fast travel, so latching on it would mark an ordinary grace
+    // warp as an invasion.
+    if progress.lobby_state == er_invasion_warp::join_progress::lobby_state::CLIENT
+        && !INVASION_ACTUALLY_HAPPENED.swap(true, Ordering::SeqCst)
+    {
+        // The join landed. THIS is the moment "Invasion successful" is true -- measured at
+        // 0.57-3.5s after join data on every real join, and never reached by a match that dies.
+        let pending = PENDING_SUCCESS_BLOCK.swap(usize::MAX, Ordering::SeqCst);
+        if pending != usize::MAX
+            && let Some(config) = current_config()
+        {
+            announce_success(config.reject_notice, pending as u32);
+        }
+    }
+    // Pack the reading so an unchanged frame costs one atomic compare and no formatting.
+    let packed = (u64::from(progress.lobby_state as u32) << 40)
+        | (u64::from(progress.protocol_state as u32) << 24)
+        | (u64::from(u8::from(progress.join_request_handle != 0)) << 16)
+        | (u64::from(u8::from(progress.join_check_remain > 0.0)) << 8)
+        | u64::from(u8::from(progress.call_for_warp));
+    // Only an attempt ERSC actually claims can be a stalled one. An unresolvable session is not
+    // evidence of anything, so it never counts.
+    let ersc_claims_attempt = ersc_state.is_some_and(|state| state != ersc::SESSION_STATE_IDLE);
+    if verdict == er_invasion_warp::join_progress::Verdict::Idle && ersc_claims_attempt {
+        JOIN_PROGRESS_IDLE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+    }
+    if JOIN_PROGRESS_LAST.swap(packed, Ordering::SeqCst) == packed {
+        return;
+    }
+    let since_join = match JOIN_DATA_AT_MS.load(Ordering::SeqCst) {
+        0 => String::new(),
+        at => format!(" +{}ms since join data", now_ms().saturating_sub(at)),
+    };
+    crate::standalone_log(format_args!(
+        "join-progress: ersc={} {progress}{since_join}",
+        match ersc_state {
+            Some(state) => format!("{state:#04x}"),
+            None => "<unresolved>".to_owned(),
+        }
+    ));
+}
+
+/// One fault-closed sample of the engine-side join fields.
+#[cfg(windows)]
+fn read_join_progress() -> Option<er_invasion_warp::join_progress::JoinProgress> {
+    use er_invasion_warp::join_progress as jp;
+    use er_invasion_warp::warp::{
+        SESSION_LOBBY_STATE_OFFSET, SESSION_MANAGER_GLOBAL_RVA, SESSION_PROTOCOL_STATE_OFFSET,
+    };
+
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let manager = unsafe { er_game_base::mem::safe_read_usize(base + SESSION_MANAGER_GLOBAL_RVA) }?;
+    if manager == 0 {
+        return None;
+    }
+    let game_man = unsafe { er_game_base::mem::safe_read_usize(base + jp::GAME_MAN_GLOBAL_RVA) }?;
+    let call_for_warp = if game_man == 0 {
+        false
+    } else {
+        unsafe { er_game_base::mem::safe_read_u8(game_man + jp::GAME_MAN_CALL_FOR_WARP_OFFSET) }
+            .is_some_and(|byte| byte != 0)
+    };
+    Some(jp::JoinProgress {
+        lobby_state: unsafe {
+            er_game_base::mem::safe_read_i32(manager + SESSION_LOBBY_STATE_OFFSET)
+        }?,
+        protocol_state: unsafe {
+            er_game_base::mem::safe_read_i32(manager + SESSION_PROTOCOL_STATE_OFFSET)
+        }?,
+        join_request_handle: unsafe {
+            er_game_base::mem::safe_read_i32(manager + jp::SESSION_JOIN_REQUEST_HANDLE_OFFSET)
+        }?,
+        join_check_remain: unsafe {
+            er_game_base::mem::safe_read_f32(manager + jp::SESSION_JOIN_CHECK_REMAIN_OFFSET)
+        }?,
+        wait_init_remain: unsafe {
+            er_game_base::mem::safe_read_f32(manager + jp::SESSION_WAIT_INIT_REMAIN_OFFSET)
+        }?,
+        call_for_warp,
+    })
+}
+
+/// How many frames the engine looked idle while ERSC still claimed an attempt.
+#[must_use]
+pub fn join_progress_idle_samples() -> usize {
+    JOIN_PROGRESS_IDLE_SAMPLES.load(Ordering::Relaxed)
 }
 
 /// The window of the session object that is watched for VM writes.

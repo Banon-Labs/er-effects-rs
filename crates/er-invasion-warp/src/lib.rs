@@ -53,6 +53,7 @@ pub mod aip;
 pub use aip::*;
 
 pub mod invasion_warp;
+pub mod join_progress;
 pub mod keybind;
 pub use invasion_warp::*;
 
