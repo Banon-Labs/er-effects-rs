@@ -49,7 +49,7 @@ python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 python3 "$repo_root/scripts/test-idle-hold-signal.py"
 python3 "$repo_root/scripts/test-native-ownership-vocab-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
-command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego"
+command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
@@ -187,6 +187,26 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry --lib
 # level up. This makes the list's completeness executable.
 python3 "$repo_root/scripts/check-me3-shell-coverage.py" --selftest
 python3 "$repo_root/scripts/check-me3-shell-coverage.py"
+
+# Knowing every shell exists is not knowing which of them can share a process. Five pairs
+# corrupt each other -- two MinHook instances on one prologue, two D3D12 Present compositors,
+# a harness that drives input every frame -- and that knowledge used to live only as prose in
+# a hand-written ~/Elden/*.me3. scripts/er-dll-closure.py now reads it as data to decide what a
+# generated profile may load, so the table must stay complete: a new cdylib that nobody has
+# classified is exactly the one a dependency-closure walk auto-includes.
+python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
+python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# The branch-launch pipeline. Each stage refuses rather than guessing, and each carries its own
+# selftest for the refusal it exists to make -- a stale DLL, an unrankable conflict, a save with
+# no decoded identity, a block printed without the DLL's testimony.
+python3 "$repo_root/scripts/er_run_lib.py"
+python3 "$repo_root/scripts/er-dll-closure.py" --selftest
+python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
+python3 "$repo_root/scripts/er-pick-save.py" --selftest
+python3 "$repo_root/scripts/er-gen-me3-profile.py" --selftest
+python3 "$repo_root/scripts/er-run-reaper.py" --selftest
+python3 "$repo_root/scripts/er-run-branch.py" --selftest
 
 # Product D3 contract: the customized quit menu is an rlib dependency inside the one shipped
 # er_effects_rs.dll. Its standalone DLL remains an explicitly-built harness and must never leak into
