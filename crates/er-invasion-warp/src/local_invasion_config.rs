@@ -422,6 +422,17 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
         match key {
             "enabled" => out.push_str(&format!("enabled = {}\n", config.enabled)),
             "hunt" => out.push_str(&format!("hunt = {}\n", config.hunt)),
+            // THESE TWO WERE MISSING, AND THE DEFAULT ARM BELOW COPIES THE SHIPPED FILE'S LINE
+            // VERBATIM -- so every write silently reset them to `false`, on disk AND in memory
+            // (`save` adopts the re-parsed round-trip). Marking a location with Insert was enough
+            // to switch the player's own banner off and drop them out of the DLL-users pool, with
+            // nothing said. Any key the writer does not name is a key the writer destroys.
+            "reject_notice" => {
+                out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
+            }
+            "dll_users_only" => {
+                out.push_str(&format!("dll_users_only = {}\n", config.dll_users_only));
+            }
             "mode" => out.push_str(&format!("mode = \"{}\"\n", config.mode.as_str())),
             "named_locations" => {
                 let names = config
@@ -599,6 +610,62 @@ mod tests {
             rendered.contains("allowed_blocks = [0x0f000000, 0x3c353800]"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn every_boolean_survives_the_writer_including_the_two_it_used_to_eat() {
+        // THE BUG THIS PINS. `reject_notice` and `dll_users_only` had no arm in the writer, so the
+        // default arm copied the shipped file's `= false` over them. Pressing Insert to mark a
+        // location therefore switched the player's banner off and dropped them out of the DLL-users
+        // pool, on disk and in memory, silently. The old round-trip test could not see it because
+        // its fixture left both at their `false` defaults -- a fixture that only exercises defaults
+        // cannot detect a writer that emits defaults.
+        let config = LocalInvasionConfig {
+            enabled: true,
+            hunt: true,
+            reject_notice: true,
+            dll_users_only: true,
+            ..Default::default()
+        };
+        let rendered = render_local_invasion_config(&config);
+        let parsed = parse_local_invasion_config(&rendered);
+        assert_eq!(parsed.issues, Vec::new(), "our own output must parse clean");
+        assert!(
+            parsed.config.reject_notice,
+            "reject_notice was eaten: {rendered}"
+        );
+        assert!(
+            parsed.config.dll_users_only,
+            "dll_users_only was eaten: {rendered}"
+        );
+        assert_eq!(parsed.config, config);
+    }
+
+    #[test]
+    fn the_writer_names_every_key_the_shipped_file_declares() {
+        // Structural, so the NEXT field added cannot repeat this. Any assignment in the shipped
+        // default file that the writer does not match on is a setting the writer overwrites with
+        // the shipped literal the moment anything calls it.
+        let source = include_str!("local_invasion_config.rs");
+        let writer = source
+            .split_once("fn render_local_invasion_config")
+            .expect("the writer is in this file")
+            .1;
+        let writer = writer.split_once("\n}").expect("the writer ends").0;
+        for line in DEFAULT_CONFIG_TOML.lines() {
+            let Some((key, _)) = line.split_once('=') else {
+                continue;
+            };
+            let key = key.trim();
+            if key.is_empty() || key.starts_with('#') || key.starts_with('[') {
+                continue;
+            }
+            assert!(
+                writer.contains(&format!("\"{key}\" =>")),
+                "the shipped config declares `{key}` but the writer has no arm for it, so every \
+                 write resets it to the shipped default"
+            );
+        }
     }
 
     #[test]
