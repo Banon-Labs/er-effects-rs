@@ -11,7 +11,7 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
-use crate::{effects, log::net_effects_log};
+use crate::{dinput_state, effects, hold_repeat::HoldRepeat, log::net_effects_log};
 
 static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
 static HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -24,7 +24,11 @@ static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_PREVIOUS_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_QUEUED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
-static DINPUT_REPEAT_STATE: OnceLock<Mutex<DinputRepeatState>> = OnceLock::new();
+/// State reads through the hooked vtable entry that were NOT the keyboard's DIK table. A live
+/// count well above zero is the shared-vtable case, and every one of these used to manufacture a
+/// phantom key release.
+static DINPUT_NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_REPEAT_STATE: OnceLock<Mutex<HoldRepeat>> = OnceLock::new();
 
 const DIRECTINPUT_VERSION: u32 = 0x0800;
 const DINPUT_KEYBOARD_BUFFER_LEN: usize = 256;
@@ -37,6 +41,9 @@ const DIK_RIGHT: usize = 0xcd;
 const DIK_UP: usize = 0xc8;
 const DIK_DOWN: usize = 0xd0;
 const DIK_INSERT: usize = 0xd2;
+/// Numpad `+` and `-`, from `dinput.h`. They edit the always-on effect stack.
+const DIK_ADD: usize = 0x4e;
+const DIK_SUBTRACT: usize = 0x4a;
 
 const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
@@ -45,6 +52,8 @@ const VK_DOWN: u32 = 0x28;
 const VK_INSERT: u32 = 0x2d;
 const VK_0: u32 = 0x30;
 const VK_NUMPAD0: u32 = 0x60;
+const VK_ADD: u32 = 0x6b;
+const VK_SUBTRACT: u32 = 0x6d;
 
 const DINPUT_KEY_LEFT: usize = 1 << 0;
 const DINPUT_KEY_RIGHT: usize = 1 << 1;
@@ -53,13 +62,11 @@ const DINPUT_KEY_DOWN: usize = 1 << 3;
 const DINPUT_KEY_0: usize = 1 << 4;
 const DINPUT_KEY_NUMPAD0: usize = 1 << 5;
 const DINPUT_KEY_INSERT: usize = 1 << 6;
+const DINPUT_KEY_ADD: usize = 1 << 7;
+const DINPUT_KEY_SUBTRACT: usize = 1 << 8;
 const DINPUT_ARROW_KEY_MASK: usize =
     DINPUT_KEY_LEFT | DINPUT_KEY_RIGHT | DINPUT_KEY_UP | DINPUT_KEY_DOWN;
 
-const HOLD_REPEAT_LATCH_DELAY: Duration = Duration::from_millis(280);
-const HOLD_REPEAT_INITIAL_INTERVAL: Duration = Duration::from_millis(120);
-const HOLD_REPEAT_ACCEL_STEP: Duration = Duration::from_millis(12);
-const HOLD_REPEAT_MIN_INTERVAL: Duration = Duration::from_millis(42);
 const IID_IDIRECTINPUT8W: GUID = GUID::from_values(
     0xbf798031,
     0x483a,
@@ -115,20 +122,6 @@ const REPEAT_KEYS: [RepeatKey; 4] = [
     },
 ];
 
-struct DinputRepeatState {
-    next_repeat_at: [Option<Instant>; 4],
-    repeat_interval: [Duration; 4],
-}
-
-impl Default for DinputRepeatState {
-    fn default() -> Self {
-        Self {
-            next_repeat_at: [None; 4],
-            repeat_interval: [HOLD_REPEAT_INITIAL_INTERVAL; 4],
-        }
-    }
-}
-
 pub(crate) fn set_arrow_key_suppression(enabled: bool) {
     SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
     if !HOOKS_INSTALLED.load(Ordering::Relaxed) {
@@ -161,6 +154,10 @@ pub(crate) fn dinput_queued_selector_keys() -> usize {
 
 pub(crate) fn dinput_repeated_selector_keys() -> usize {
     DINPUT_REPEATED_SELECTOR_KEYS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn dinput_non_keyboard_reads() -> usize {
+    DINPUT_NON_KEYBOARD_READS.load(Ordering::Relaxed)
 }
 
 unsafe fn vtable_fn<F: Copy>(obj: RawObj, slot: usize) -> F {
@@ -214,8 +211,15 @@ unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, dat
     }
     let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
     let hr = unsafe { original(device, size, data) };
-    queue_dinput_selector_edges(hr, size, data);
-    zero_dinput_arrow_state(hr, size, data);
+    // ONLY a 256-byte DIK table is keyboard state. The mouse (and any other device sharing this
+    // vtable entry) hands us a buffer with no key bytes in it, which reads as "every arrow
+    // released" and re-arms the press on the very next keyboard poll -- see `dinput_state`.
+    if dinput_state::is_keyboard_state(size) {
+        queue_dinput_selector_edges(hr, size, data);
+        zero_dinput_arrow_state(hr, size, data);
+    } else {
+        DINPUT_NON_KEYBOARD_READS.fetch_add(1, Ordering::Relaxed);
+    }
     hr
 }
 
@@ -242,7 +246,7 @@ fn reset_dinput_repeat_state() {
     if let Some(state) = DINPUT_REPEAT_STATE.get()
         && let Ok(mut state) = state.lock()
     {
-        *state = DinputRepeatState::default();
+        state.reset();
     }
 }
 
@@ -263,6 +267,8 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
         (DINPUT_KEY_0, DIK_0),
         (DINPUT_KEY_NUMPAD0, DIK_NUMPAD0),
         (DINPUT_KEY_INSERT, DIK_INSERT),
+        (DINPUT_KEY_ADD, DIK_ADD),
+        (DINPUT_KEY_SUBTRACT, DIK_SUBTRACT),
     ] {
         if dinput_key_down(size, data, offset) {
             pressed_mask |= bit;
@@ -281,6 +287,9 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
         (DINPUT_KEY_0, VK_0, true),
         (DINPUT_KEY_NUMPAD0, VK_NUMPAD0, true),
         (DINPUT_KEY_INSERT, VK_INSERT, true),
+        // No alt: these two act on the highlighted effect, like the arrows do.
+        (DINPUT_KEY_ADD, VK_ADD, false),
+        (DINPUT_KEY_SUBTRACT, VK_SUBTRACT, false),
     ] {
         if new_edges & bit == 0 || (needs_alt && !alt_down) {
             continue;
@@ -304,7 +313,7 @@ fn queue_held_arrow_repeats(pressed_mask: usize, new_edges: usize) -> usize {
         if let Some(state) = DINPUT_REPEAT_STATE.get()
             && let Ok(mut state) = state.lock()
         {
-            *state = DinputRepeatState::default();
+            state.reset();
         }
         return 0;
     }
@@ -312,37 +321,22 @@ fn queue_held_arrow_repeats(pressed_mask: usize, new_edges: usize) -> usize {
     let now = Instant::now();
     let mut queued = 0usize;
     let Ok(mut state) = DINPUT_REPEAT_STATE
-        .get_or_init(|| Mutex::new(DinputRepeatState::default()))
+        .get_or_init(|| Mutex::new(HoldRepeat::default()))
         .lock()
     else {
         return 0;
     };
 
+    // The press itself was already queued by the caller as the single step. This only decides
+    // whether a HOLD owes another one: latch, then a steady one-at-a-time cadence, and only
+    // after a long stretch of that does it start to speed up. See `hold_repeat`.
     for (index, key) in REPEAT_KEYS.iter().enumerate() {
-        if held_arrows & key.bit == 0 {
-            state.next_repeat_at[index] = None;
-            state.repeat_interval[index] = HOLD_REPEAT_INITIAL_INTERVAL;
-            continue;
+        let held = held_arrows & key.bit != 0;
+        let edge = new_edges & key.bit != 0;
+        if state.observe(index, held, edge, now) {
+            effects::queue_effect_keyboard_vk(key.vk, false);
+            queued = queued.saturating_add(1);
         }
-        if new_edges & key.bit != 0 || state.next_repeat_at[index].is_none() {
-            state.next_repeat_at[index] = Some(now + HOLD_REPEAT_LATCH_DELAY);
-            state.repeat_interval[index] = HOLD_REPEAT_INITIAL_INTERVAL;
-            continue;
-        }
-        let Some(next_repeat_at) = state.next_repeat_at[index] else {
-            continue;
-        };
-        if now < next_repeat_at {
-            continue;
-        }
-        effects::queue_effect_keyboard_vk(key.vk, false);
-        queued = queued.saturating_add(1);
-        let interval = state.repeat_interval[index]
-            .checked_sub(HOLD_REPEAT_ACCEL_STEP)
-            .unwrap_or(HOLD_REPEAT_MIN_INTERVAL)
-            .max(HOLD_REPEAT_MIN_INTERVAL);
-        state.repeat_interval[index] = interval;
-        state.next_repeat_at[index] = Some(now + interval);
     }
 
     queued

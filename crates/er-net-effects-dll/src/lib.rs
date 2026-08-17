@@ -11,14 +11,22 @@
 mod config;
 #[cfg(windows)]
 mod crash_telemetry;
+// Ungated on purpose: pure classification, so its tests run on the host.
+mod dinput_state;
+// Ungated on purpose: pure catalog-filter rules, so its tests run on the host.
+mod duration_filter;
 #[cfg(windows)]
 mod effects;
+// Ungated on purpose: pure timing logic, so its tests run on the host.
+mod hold_repeat;
 #[cfg(windows)]
 mod input_suppression;
 #[cfg(windows)]
 mod log;
 #[cfg(windows)]
 mod present_overlay;
+// Ungated on purpose: pure config-list editing, so its tests run on the host.
+mod stacked_config;
 #[cfg(windows)]
 mod telemetry;
 
