@@ -170,9 +170,20 @@ class LogTail:
         try:
             with self.path.open("rb") as handle:
                 handle.seek(min(start, stat.st_size))
-                return handle.read().decode("utf-8", errors="replace")
+                data = handle.read()
         except OSError:
             return ""
+        # A LINE IS EVIDENCE ONLY ONCE IT IS TERMINATED, and this cost a live run. The DLL's
+        # `runtime-config: loaded` line is ~540 bytes and is not written atomically, so a read
+        # landing mid-write returns a PREFIX -- "runtime-config: loaded '<game toml>'" with the
+        # `sidecar=` field still unwritten. The caller cannot tell that from a DLL that genuinely
+        # named no sidecar, so it declared a perfectly good run "the DLL IGNORED this run's
+        # overlay" and told the reader not to cite it. Hand back only whole lines; the fragment
+        # arrives complete on the next poll, milliseconds later.
+        end = data.rfind(b"\n")
+        if end < 0:
+            return ""
+        return data[: end + 1].decode("utf-8", errors="replace")
 
 
 def await_testimony(log_path: Path, tail: LogTail, sidecar: Path, launcher_pid: int) -> dict:
@@ -624,6 +635,24 @@ def selftest() -> int:
             "an IN-PLACE truncation is detected and re-read from byte 0, not silently skipped",
         )
 
+        # A read landing mid-write must yield NOTHING rather than a prefix that parses as a
+        # complete record with its later fields missing.
+        partial = Path(raw) / "partial.log"
+        partial.write_text("", encoding="utf-8")
+        partial_tail = LogTail(partial)
+        with partial.open("a", encoding="utf-8") as handle:
+            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+        check(
+            partial_tail.new_text() == "",
+            "a half-written line is withheld until its newline arrives",
+        )
+        with partial.open("a", encoding="utf-8") as handle:
+            handle.write("car=Z:/t/er_effects_rs.toml slot=4\n")
+        check(
+            "sidecar=Z:/t/er_effects_rs.toml" in partial_tail.new_text(),
+            "the completed line is delivered whole on the next read",
+        )
+
     block = running_block(
         {
             "run_id": "r1",
@@ -697,6 +726,49 @@ def selftest() -> int:
         )
         verdict2 = await_testimony(log2, tail2, Path("/t/er_effects_rs.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
+
+        # THE FALSE NEGATIVE THIS COSTS A RUN OVER, observed live on br-20260816-183410-949e:
+        # the real loaded line is ~540 bytes and does not land in one write. Reading the first
+        # write yields `runtime-config: loaded '<game toml>'` with no `sidecar=` yet, which is
+        # indistinguishable from a DLL that named no sidecar -- so the launcher condemned a run
+        # that was loading exactly the character it had picked. `wrong-sidecar` is terminal by
+        # design (the DLL reads its config once), which is precisely why the input must be a
+        # whole line before it is judged.
+        split_log = Path(raw) / "split.log"
+        split_log.write_text("", encoding="utf-8")
+        observed_partial = threading.Event()
+
+        class SignallingTail(LogTail):
+            """Fires the instant the partial line has been read, so the completing write is
+            ordered by an observed event rather than by a sleep the timing gate would reject."""
+
+            def new_text(self) -> str:
+                text = super().new_text()
+                observed_partial.set()
+                return text
+
+        split_tail = SignallingTail(split_log)
+        with split_log.open("a", encoding="utf-8") as handle:
+            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+
+        def finish_line() -> None:
+            observed_partial.wait(timeout=5)
+            with split_log.open("a", encoding="utf-8") as handle:
+                handle.write("car=Z:/t/er_effects_rs.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
+
+        writer = threading.Thread(target=finish_line, daemon=True)
+        writer.start()
+        try:
+            verdict_split = await_testimony(
+                split_log, split_tail, Path("/t/er_effects_rs.toml"), os.getpid()
+            )
+        finally:
+            writer.join(timeout=2)
+        check(
+            verdict_split["status"] == "confirmed",
+            f"a loaded line arriving in two writes confirms instead of condemning the run "
+            f"(got {verdict_split['status']})",
+        )
 
     # THE REGRESSION THAT COST A LIVE RUN. The game directory is written to constantly during
     # boot, so every inotify slice returns instantly. When the budget was a COUNT of slices it
