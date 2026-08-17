@@ -33,7 +33,10 @@ use core::fmt;
 
 /// `GLOBAL_GameMan` -- `0x143d69918`. Holds the join destination `SetMultiplayJoinData` writes
 /// and the flag `WarpNextStageKick_` sets when a warp is committed.
-pub const GAME_MAN_GLOBAL_RVA: usize = 0x3d6_9918;
+///
+/// Derived, not restated: the address is declared once in `er-game-base`, so a future correction
+/// there cannot leave this module pointing at a stale global.
+pub use er_game_base::rva::GAME_MAN_SINGLETON_RVA as GAME_MAN_GLOBAL_RVA;
 /// `GameMan::callForWarp`, written `true` by `WarpNextStageKick_` (`0x1405f7b70`) via
 /// `SetCallForWarp` (`0x14067aea0`), whose whole body is `*(u8*)(gameMan + 0x10) = arg`.
 ///
