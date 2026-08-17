@@ -402,9 +402,10 @@ unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) 
              you see are Seamless's own and nothing here will act while you decide"
         ));
     }
+    let mut first_capture = false;
     if a != 0 {
-        let first = OSM.swap(a, Ordering::SeqCst) == 0;
-        if first {
+        first_capture = OSM.swap(a, Ordering::SeqCst) == 0;
+        if first_capture {
             let session =
                 unsafe { er_game_base::mem::safe_read_usize(a + ersc::NEXT_OBJECT_OFFSET) };
             crate::standalone_log(format_args!(
@@ -424,23 +425,49 @@ unsafe extern "system" fn show_observer(a: usize, b: usize, c: usize, d: usize) 
     if orig == 0 {
         return 0;
     }
-    unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) }
+    let result = unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(a, b, c, d) };
+    // AFTER the original, not before it, and this is not a style preference -- it is the whole
+    // difference between reading the rows and reading nothing. `show` is what CLEARS and APPENDS
+    // the option vector, so on entry `+0x108`/`+0x110` still describe the previous (empty) menu.
+    // The first live run reported `visible options: <unreadable>` from exactly that mistake, and
+    // a manual /proc read moments later showed one populated 0x90-byte row sitting there. Same
+    // `first` latch, so this still reports once per process.
+    if first_capture {
+        report_menu_seams(a);
+    }
+    result
 }
 
 /// Report WHICH MODULE owns the option-menu function pointers Seamless calls.
 ///
-/// Read-only, once per process. These four fields are how `show` talks to the menu: `+0xa8` opens
-/// the dialog, `+0xb0` clears the game's option list, `+0xb8` appends one row, `+0xe0` tears the
-/// dialog down. Whether they point into `ersc.dll` or into `eldenring.exe` is not decidable
-/// statically -- ERSC resolves them by pattern scan at init and stores no absolute game address
-/// anywhere in its image -- and the answer decides where an added menu row would have to attach.
-/// If they land in `eldenring.exe`, the 1.16.2 dump names them outright.
+/// Read-only, once per process. ERSC resolves these by pattern scan at init and stores no absolute
+/// game address anywhere in its image, so the owner was not decidable statically -- and the owner
+/// decides where an added menu row would have to attach.
+///
+/// ANSWERED LIVE, 2026-08-17 (run `br-20260817-184836-d6a7`, user opened the lynchpin menu):
+///
+/// ```text
+/// +0xa8 open_dialog   0x140e9e4f0   eldenring.exe+0xe9e4f0
+/// +0xb0 clear_options 0x140800950   eldenring.exe+0x800950
+/// +0xb8 append_option 0x140800840   eldenring.exe+0x800840
+/// +0xe0 <not a menu fn> 0x13fff0f80 anonymous rwx region based 0x13fff0000
+/// ```
+///
+/// The first three are GAME functions, so 1.16.2's zero shift makes those RVAs directly nameable
+/// in the dump and an added row is a static-RE job rather than another runtime hunt. `+0xe0` was
+/// guessed to be the teardown and is not: it points below the game image entirely, into a separate
+/// anonymous region, so treat that offset as unmapped rather than as a fourth seam.
+///
+/// Module attribution is by base-address arithmetic on purpose. Under Wine every PE maps as
+/// ANONYMOUS memory, so `/proc/<pid>/maps` carries no file name to match against and a
+/// name-based lookup would report "unknown" for pointers that are plainly inside the game.
 ///
 /// Nothing is written and nothing is called: this only reads pointers already sitting in an object
 /// we hold.
 #[cfg(windows)]
 fn report_menu_seams(osm: usize) {
-    /// `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row, `+0xe0` teardown.
+    /// `+0xa8` open dialog, `+0xb0` clear list, `+0xb8` append row; `+0xe0` probed and found NOT
+    /// to be a menu function (see above) -- kept only so the report keeps saying so.
     const SEAMS: [(usize, &str); 4] = [
         (0xa8, "open_dialog"),
         (0xb0, "clear_options"),
