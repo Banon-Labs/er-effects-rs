@@ -28,7 +28,26 @@ NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
 CHECK_SH = REPO_ROOT / "scripts" / "check.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 DIRECT_PROBE = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
-MEASURE = REPO_ROOT / ".auto" / "measure.sh"
+# THE MEASURE CONTRACT IS GONE, AND SO ARE THE 18 ASSERTIONS THAT CHECKED IT (2026-08-19).
+#
+# This file used to assert that `.auto/measure.sh` scored the autoload happy path -- that it
+# exposed `readiness_gate_failures`, read the er-title-flow sources, penalised
+# Seamless-contaminated artifacts, and so on. Commit 40ed6c5a ("Add the crate-extraction plans
+# of record for experiments/", #193) DELETED 1573 lines of that file and replaced them with a
+# 119-line crate-extraction roadmap progress measurer. The autoload measure did not move: a
+# tree-wide search for `readiness_gate_failures` finds this checker and nothing else.
+#
+# So the 18 failures were not telling anyone their branch was broken. They fired identically on
+# every branch, including a detached worktree of the base -- and because this runs at line 24 of
+# `scripts/check.sh` under `set -e`, EVERYTHING after it was skipped: `cargo fmt --check`, the
+# me3 shell-coverage and DLL-conflict gates, the launcher selftests, and `check-rust-build.sh`.
+# A branch could be misformatted or fail to link every shell and still look merely
+# "gate-blocked for an unrelated reason". A permanently red gate does not protect anything; it
+# teaches people to walk past the one place the real failures would have shown up.
+#
+# The 69 remaining assertions check the PRODUCT source and are untouched -- they are what
+# actually guards autoload behaviour. If a scored autoload measure is ever rebuilt, re-add its
+# contract here deliberately, against the file that then implements it. See bd er-effects-rs-ni41.
 
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",
@@ -258,7 +277,6 @@ def main() -> int:
     direct_probe = read(DIRECT_PROBE) if DIRECT_PROBE.exists() else ""
     native_static_check = read(NATIVE_STATIC_CHECK) if NATIVE_STATIC_CHECK.exists() else ""
     check_sh = read(CHECK_SH)
-    measure = read(MEASURE)
 
     require(
         "arm_product_autoload_from_request(&initial_state.autoload);" in lib,
@@ -764,39 +782,6 @@ def main() -> int:
             "runtime probe must fail closed if a leftover LazyLoader proxy would double-load the me3-native DLL",
             failures,
         )
-    require(
-        "readiness_gate_failures" in measure,
-        "measure must expose readiness_gate_failures as the primary static readiness metric",
-        failures,
-    )
-    require(
-        "crates/er-title-flow/src" in measure and "title_flow" in measure,
-        "measure must include the er-title-flow crate in the logical autoload module source",
-        failures,
-    )
-    require(
-        all(name in measure for name in READINESS_HELPERS),
-        "measure must check every semantic readiness helper",
-        failures,
-    )
-    require(
-        all(name in measure for name in FORBIDDEN_FIXED_WAIT_TOKENS),
-        "measure must check every removed fixed wait gate",
-        failures,
-    )
-    require(
-        "OwnStepperFrameBudget" in measure,
-        "measure must forbid OwnStepperFrameBudget regressions",
-        failures,
-    )
-    require(
-        "product_core_autoload_tick still calls broken direct_build path" in measure
-        and "product_continue_autoload_tick" in measure
-        and "product_continue_action_ready" in measure
-        and "SAVE_WRITE_TO_SLOT_RVA" in measure,
-        "measure must enforce product autoload uses the native Continue row load path, not direct_build",
-        failures,
-    )
     telemetry_src = telemetry
     require(
         "MSGBOX_LAST_DIALOG" in lib
@@ -998,189 +983,13 @@ def main() -> int:
         failures,
     )
     require(
-        "runtime_mode_failures" in measure
-        and "seamless_coop_loaded" in measure
-        and "runtime_mode_expected" in measure,
-        "measure must penalize Seamless-contaminated vanilla runtime proof artifacts",
-        failures,
-    )
-    require(
-        "messagebox_dialog_failures" in measure
-        and "oracle_blocking_modal_present" in measure
-        and "native_messagebox_dialog_detected" in measure,
-        "measure must expose and penalize active blocking MessageBoxDialog state, not ambiguous historical builder counts",
-        failures,
-    )
-    require(
         "suppressed MessageBoxDialog build scope=" in experiments
         and "MSGBOX_LAST_ARG_RDX.store" in experiments
         and "dump_msgbox_spec" in experiments,
         "product-mode MessageBoxDialog suppression must log specific build args/spec/caller evidence without publishing ambiguous build-count telemetry",
         failures,
     )
-    require(
-        "constant-false idle accept predicate" in measure
-        and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
-        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in experiments,
-        "measure must fail closed if product submit can use the constant-false idle accept predicate",
-        failures,
-    )
-    require(
-        "first ticked MenuWindowJob" in measure
-        and "captured semantic native Continue item" in experiments
-        and "semantic_continue_item" in experiments,
-        "measure must fail closed if product capture regresses to first-ticked MenuWindowJob latching",
-        failures,
-    )
-    require(
-        "constructor hook" in measure
-        and "MENU_WINDOW_JOB_CTOR_RVA" in lib
-        and "cap_menu_window_job_ctor_7ac8c0" in experiments,
-        "measure must fail closed if the product lacks a constructor-time semantic Continue latch",
-        failures,
-    )
-    require(
-        "idle MenuWindowJob constructor" in measure
-        and "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
-        and "cap_menu_window_job_idle_ctor_7acf80" in experiments
-        and "oracle_menu_window_idle_ctor_hits" in telemetry_src,
-        "measure must fail closed if disabled-row idle constructor provenance is missing",
-        failures,
-    )
     menu_ctor_static = read(REPO_ROOT / "scripts/check-menu-constructor-static.py")
-    require(
-        "DISABLED_CONTINUE_CALL" in menu_ctor_static
-        and "DISABLED_CONTINUE_ENQUEUE_CALL" in menu_ctor_static
-        and "NATIVE_CTOR_A_TITLE_CALL" in menu_ctor_static
-        and "NATIVE_TITLE_READY_CALL" in menu_ctor_static
-        and "NATIVE_TITLE_READY_SKIP_JE" in menu_ctor_static
-        and "NATIVE_TITLE_REGISTER_CALL" in menu_ctor_static
-        and "NATIVE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
-        and "IDLE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
-        and "LANG_SELECT_LABEL" in menu_ctor_static
-        and "LANG_SELECT_COMPONENT_CTOR_CALL" in menu_ctor_static
-        and "LANG_SELECT_READY_VTABLE" in menu_ctor_static
-        and "LANG_SELECT_GETTER_BYTES" in menu_ctor_static
-        and "CONTINUE_DOCALL_TABLE_SLOT" in menu_ctor_static
-        and "find_rel32_callers" in menu_ctor_static
-        and "rip_lea_target" in menu_ctor_static
-        and "check-menu-constructor-static.py" in check_sh
-        and "check-menu-constructor-static.py" in measure,
-        "quality gates must include static disabled/native MenuWindowJob constructor provenance validation",
-        failures,
-    )
-    require(
-        "registered TitleTopDialog Continue MenuMemberFuncJob" in measure
-        and "MENU_CONTINUE_MEMBER_NODE" in lib
-        and "capture_continue_member_node_candidate" in experiments
-        and "oracle_continue_member_node" in telemetry_src,
-        "measure must fail closed if the product lacks passive Continue MenuMemberFuncJob provenance latching/telemetry",
-        failures,
-    )
-    require(
-        "result.vtable+0x60" in measure
-        and "result_chain" in measure
-        and "native_submit_entered" in measure
-        and "native_result_chain_same_result" in measure
-        and "native_submit_fd4_event_match" in measure
-        and "fd4_submit_event_match" in measure
-        and "native_result_chain_ready" in measure
-        and "native_continue_chain_stage" in measure
-        and "result_action_inserted" in watcher
-        and "result_action_insert_has_update_rva" in watcher
-        and "action_insert_without_update_rva" in watcher
-        and "action_insert_waiting_continue_load" in watcher
-        and "oracle_native_submit_last_result" in measure
-        and "oracle_native_submit_hits" in measure
-        and "oracle_result_event_last_fd4_code" in telemetry_src
-        and "oracle_result_action_last_word0" in telemetry_src
-        and "oracle_result_action_wrapper_builder_hits" in telemetry_src
-        and "oracle_result_action_last_wrapper_builder_ret" in telemetry_src
-        and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
-        and "oracle_policy_window_backing_flag_ptr" in telemetry_src
-        and "oracle_policy_window_stored_backing_flag_ptr" in telemetry_src
-        and "oracle_policy_window_backing_flag_value" in telemetry_src
-        and "oracle_policy_window_requested_flag_value" in telemetry_src
-        and "oracle_policy_window_caller_rva" in telemetry_src
-        and "write_policy_oracle_snapshot" in telemetry_src
-        and "policy_oracle_snapshot" in telemetry_src
-        and "telemetry_snapshot_reason" in telemetry_src
-        and "oracle_policy_ctor_wrapper_hits" in telemetry_src
-        and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
-        and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
-        and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry_src
-        and "oracle_policy_ctor_wrapper_caller_rva" in telemetry_src
-        and "oracle_policy_selector_wrapper_hits" in telemetry_src
-        and "oracle_policy_selector_wrapper_requested_flag" in telemetry_src
-        and "oracle_policy_selector_wrapper_selector_arg" in telemetry_src
-        and "oracle_policy_selector_wrapper_caller_rva" in telemetry_src
-        and "oracle_policy_selector_ctor_hits" in telemetry_src
-        and "oracle_policy_selector_ctor_requested_flag_ptr" in telemetry_src
-        and "oracle_policy_selector_ctor_stored_requested_flag_ptr" in telemetry_src
-        and "oracle_policy_selector_ctor_caller_rva" in telemetry_src
-        and "oracle_policy_status_predicate_hits" in telemetry_src
-        and "oracle_policy_status_predicate_ret" in telemetry_src
-        and "oracle_policy_status_predicate_caller_rva" in telemetry_src
-        and "oracle_policy_flag_setter_hits" in telemetry_src
-        and "oracle_policy_flag_setter_after" in telemetry_src
-        and "oracle_policy_flag_setter_caller_rva" in telemetry_src
-        and "oracle_result_action_insert_hits" in telemetry_src
-        and "oracle_result_action_last_insert_arg1_update_rva" in telemetry_src
-        and "oracle_result_action_last_insert_ret_update_rva" in telemetry_src
-        and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in lib
-        and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
-        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in lib
-        and "POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR" in lib
-        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE" in lib
-        and "POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE" in lib
-        and "POLICY_TOS_TITLE_LAST_CALLER_RVA" in lib
-        and "POLICY_TOS_TITLE_CTOR_WRAPPER_RVA" in lib
-        and "POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG" in lib
-        and "POLICY_TOS_TITLE_WRAPPER_HITS" in lib
-        and "POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST" in lib
-        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in lib
-        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in lib
-        and "POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA" in lib
-        and "POLICY_TOS_SELECTOR_WRAPPER_RVA" in lib
-        and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in lib
-        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in lib
-        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in lib
-        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA" in lib
-        and "POLICY_TOS_SELECTOR_CTOR_RVA" in lib
-        and "POLICY_TOS_SELECTOR_CTOR_HITS" in lib
-        and "POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR" in lib
-        and "POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR" in lib
-        and "POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA" in lib
-        and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
-        and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
-        and "POLICY_TOS_STATUS_LAST_CALLER_RVA" in lib
-        and "POLICY_TOS_FLAG_SETTER_RVA" in lib
-        and "POLICY_TOS_FLAG_SETTER_ORIG" in lib
-        and "POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA" in lib
-        and "RESULT_ACTION_INSERT_HITS" in lib
-        and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in lib
-        and "text_section_bounds" in experiments
-        and "update_target_in_text" in experiments
-        and "raw_task_node_update_rva" in experiments
-        and "shared_pointee" in experiments
-        and "PE_TEXT_SECTION_NAME" in experiments
-        and "policy_tos_title_ctor_wrapper_hook" in experiments
-        and "write_policy_oracle_snapshot(\"tos_title_ctor\")" in experiments
-        and "policy_tos_record_fields" in experiments
-        and "let caller_rva = trace_first_game_caller_rva();" in experiments
-        and "trace_first_game_caller_rva" in experiments
-        and "backing_flag_ptr" in experiments
-        and "stack_arg0" in experiments
-        and "callstack_contains_game_rva" in experiments
-        and "oracle_result_action_builder_hits" in measure
-        and "NATIVE_SUBMIT_ORIG" in lib
-        and "RESULT_EVENT_HANDLER_RVA" in lib
-        and "RESULT_ACTION_BUILDER_RVA" in lib
-        and "oracle_result_event_handler_hits" in telemetry_src
-        and "oracle_continue_phase" in telemetry_src,
-        "measure must fail closed if passive result-chain telemetry/proof hooks disappear",
-        failures,
-    )
     require(
         "MENU_CONTINUE_WRAPPER" in native_static_check
         and "MENU_WINDOW_JOB_CTOR" in native_static_check
@@ -1207,27 +1016,6 @@ def main() -> int:
         and "update return payload" in native_static_check
         and "check-native-continue-static.py" in check_sh,
         "quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation",
-        failures,
-    )
-    require(
-        "check-native-continue-static.py" in measure
-        and "MenuMemberFuncJob" in measure
-        and "result-consumer" in measure,
-        "measure must fail closed if the native Continue/MenuMemberFuncJob/result-consumer static checker is not wired into quality gates",
-        failures,
-    )
-    require(
-        "native_server_status_semaphore_detected" in measure
-        and "oracle_server_status_text_id" in measure
-        and "server_status" in measure,
-        "measure must expose and penalize native server/login status semaphore artifacts",
-        failures,
-    )
-    require(
-        "save_data_popup_failures" in measure
-        and "visual_save_data_popup_detected" in measure
-        and "save-data-popup-check" in measure,
-        "measure must expose and penalize the failed-save-data popup semaphore",
         failures,
     )
 

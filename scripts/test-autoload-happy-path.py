@@ -12,7 +12,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
-MEASURE_SCRIPT = REPO_ROOT / ".auto" / "measure.sh"
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check-autoload-happy-path.py"
 
 EXPECTED_PROFILE = """profileVersion = "v1"
@@ -42,12 +41,6 @@ EXPECTED_PAB_ADVANCE = """# Copy to er-effects-pab-advance.txt next to eldenring
 EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable
 # er-effects-rs' built-in current-version splash skip patch.
 """
-
-
-def require_measure_reads_title_flow() -> None:
-    measure = MEASURE_SCRIPT.read_text(encoding="utf-8", errors="replace")
-    if "crates/er-title-flow/src" not in measure or "title_flow" not in measure:
-        raise SystemExit("measure must read er-title-flow as part of the logical autoload module")
 
 
 def load_checker():
@@ -114,7 +107,6 @@ macro_rules! own_stepper_idx10_fallbacks {
 
 
 def main() -> int:
-    require_measure_reads_title_flow()
     require_attach_order_uses_runtime_calls()
     require_split_runtime_path_is_followed()
 

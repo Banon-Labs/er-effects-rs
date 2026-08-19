@@ -21,6 +21,7 @@ python3 "$repo_root/scripts/test-save-slot-oracle.py"
 python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/test-semaphore-watchdog.py"
 python3 "$repo_root/scripts/test-input-harness-static.py"
+python3 "$repo_root/scripts/check-retired-button-labels.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
 # An unresolvable staged save is terminal for the process. Pin the caller-side state transitions and

@@ -74,7 +74,7 @@ The custom continue flow is not just unneeded, it is **harmful**: it does not fo
 recorded vanilla continue. Do NOT drive a custom load. The correct three steps:
 
 1. **Disable what happens when the user clicks to load a character** — the custom/product
-   continue flow: the sq-repro menu-click SendInput drive (Save→Quit→Load Profile→slot→
+   continue flow: the sq-repro menu-click SendInput drive (Save→Quit→Load Character→slot→
    confirm — slow and steals focus the whole time) AND the finalize-forcing (`menuData+0x5d`
    writes in `product_core_autoload_tick` that shove mms18→19→20).
 2. **On that click, ONLY: make the target save resident in memory + set the active slot**
