@@ -68,6 +68,9 @@ SCRIPTS = REPO_ROOT / "scripts"
 LAUNCHER = Path.home() / "Elden" / "launch.sh"
 PROFILE_DIR = Path.home() / "Elden"
 AUTOLOAD_LOG_NAME = "er-effects-autoload-debug.log"
+# The log above belongs to THIS DLL and no other. The sidecar-testimony contract is only
+# available when it is loaded, because it is the only shell that reads the sidecar at all.
+PRODUCT_DLL_NAME = "er_effects_rs.dll"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -228,6 +231,49 @@ def await_testimony(log_path: Path, tail: LogTail, sidecar: Path, launcher_pid: 
                 watch.wait(slice_seconds)
 
 
+def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float) -> dict:
+    """Weaker witness, for a run whose DLL set does not include the product shell.
+
+    WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
+    our config read -- but only `er_effects_rs.dll` writes it, because it is the only shell that
+    reads the sidecar. Once the launcher/watchdog/guard work merged to main, the closure started
+    selecting DLL sets that legitimately EXCLUDE that shell, and the gate went on waiting for a
+    witness the run never loaded. It then condemned a perfectly healthy game: run
+    br-20260817-184836-d6a7 printed `ELDEN RING DID NOT START` while `eldenring.exe` was up and
+    the invasion DLL was heartbeating into its own log.
+
+    So when the strong witness is unavailable, ask a weaker question honestly rather than a
+    strong one wrongly: has ANY log next to the executable gained bytes since we launched? That
+    proves the process is up and one of our shells is running in it. It does NOT prove which
+    sidecar was read, and the caller must not claim that it does.
+
+    Matching is by mtime rather than by a DLL-name -> log-name table on purpose: those names do
+    not follow a convention (`er_net_effects_dll.dll` writes `er-net-effects.log`,
+    `er_invasion_warp_dll.dll` writes `er-invasion-warp-dll.log`), so a table would be a second
+    source of truth that silently rots every time a shell is added.
+    """
+    deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
+    with er_run_lib.DirectoryWatch(game_dir_path) as watch:
+        while True:
+            for log in sorted(game_dir_path.glob("*.log")):
+                try:
+                    if log.stat().st_mtime > started_at:
+                        return {"status": "confirmed-weak", "log": log.name,
+                                "line": f"{log.name} written after launch"}
+                except OSError:
+                    continue
+            if not er_run_lib.process_alive(launcher_pid):
+                return {"status": "silent", "launcher_exited": True}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"status": "silent", "launcher_exited": False}
+            slice_seconds = min(TESTIMONY_SLICE_SECONDS, remaining)
+            if not watch.available:
+                er_run_lib.wait_for_exit(launcher_pid, slice_seconds)
+            else:
+                watch.wait(slice_seconds)
+
+
 def running_block(context: dict) -> str:
     save = context.get("save")
     lines = [
@@ -272,10 +318,23 @@ def running_block(context: dict) -> str:
         f"  sidecar       {context['sidecar']}",
         f"  evidence      {context['evidence_class']}",
         "",
-        "  PROVEN BY     the DLL's own log line, not by the process existing:",
+        # A block that overstates its own evidence is worse than no block, so the wording
+        # tracks which witness was actually obtained rather than always claiming the strong one.
+        (
+            "  PROVEN BY     the DLL's own log line, not by the process existing:"
+            if context.get("witness") != "weak"
+            else "  PROVEN BY     one of this run's DLLs writing its log, not by the process\n"
+            "                existing. This run does not load er_effects_rs.dll, which is the\n"
+            "                only shell that reports a sidecar, so the sidecar was NOT verified:"
+        ),
         f"    {context['testimony'][:96]}",
         "",
-        "  NOT claimed   window visible / world loaded / player able to move.",
+        (
+            "  NOT claimed   window visible / world loaded / player able to move."
+            if context.get("witness") != "weak"
+            else "  NOT claimed   window visible / world loaded / player able to move / which\n"
+            "                save the DLLs actually read."
+        ),
         f"                re-check later: scripts/er-run-branch.py --status {context['run_id']}",
         "  cleanup       automatic when the game exits; the next launch collects it otherwise.",
         "=======================================================",
@@ -447,6 +506,8 @@ def launch(args) -> int:
         raise RuntimeError(f"launcher not found: {LAUNCHER}")
 
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Monotonic-free on purpose: compared against file mtimes, which are wall clock.
+    launched_at = time.time()
     process = subprocess.Popen(
         ["bash", str(LAUNCHER)],
         env={**os.environ, "ME3_PROFILE": staged["profile"]},
@@ -459,8 +520,16 @@ def launch(args) -> int:
     state.pid = process.pid
     state.save()
 
-    testimony = await_testimony(log_path, tail, Path(staged["sidecar"]), process.pid)
-    if testimony["status"] != "confirmed":
+    # Which witness this run can actually produce. Asking for sidecar testimony from a DLL set
+    # that does not contain the shell which writes it is how a healthy run gets condemned.
+    loads_product_dll = any(
+        Path(dll).name == PRODUCT_DLL_NAME for dll in staged["dlls"]
+    )
+    if loads_product_dll:
+        testimony = await_testimony(log_path, tail, Path(staged["sidecar"]), process.pid)
+    else:
+        testimony = await_any_dll_log(log_path.parent, process.pid, launched_at)
+    if testimony["status"] not in ("confirmed", "confirmed-weak"):
         alive = er_run_lib.process_alive(process.pid)
         if testimony["status"] == "wrong-sidecar":
             reason = "the DLL loaded but IGNORED this run's overlay"
@@ -477,9 +546,14 @@ def launch(args) -> int:
             detail = [
                 f"launcher pid {process.pid} "
                 + ("is alive but silent" if alive else "exited before saying anything"),
-                f"waited {TESTIMONY_BUDGET_SECONDS:.0f}s (wall clock) for a "
-                f"'runtime-config: loaded' line in",
-                f"  {log_path}",
+                (
+                    f"waited {TESTIMONY_BUDGET_SECONDS:.0f}s (wall clock) for a "
+                    f"'runtime-config: loaded' line in"
+                    if loads_product_dll
+                    else f"waited {TESTIMONY_BUDGET_SECONDS:.0f}s (wall clock) for ANY DLL log to "
+                    f"be written in"
+                ),
+                f"  {log_path if loads_product_dll else log_path.parent}",
             ]
 
         # Only tear down staged files if nothing is using them. A game still booting will read
@@ -524,6 +598,7 @@ def launch(args) -> int:
                 "sidecar": staged["sidecar"],
                 "evidence_class": staged["evidence_class"],
                 "testimony": testimony["line"],
+                "witness": "weak" if testimony["status"] == "confirmed-weak" else "strong",
             }
         )
     )
@@ -726,6 +801,55 @@ def selftest() -> int:
         )
         verdict2 = await_testimony(log2, tail2, Path("/t/er_effects_rs.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
+
+        # THE FALSE NEGATIVE THAT CONDEMNED A RUNNING GAME, br-20260817-184836-d6a7. Once the
+        # launcher/watchdog/guard commits merged to main, the closure legitimately stopped
+        # selecting er_effects_rs.dll -- the only shell that writes a `runtime-config: loaded`
+        # line. The gate kept waiting for it and printed ELDEN RING DID NOT START while
+        # eldenring.exe was up and the invasion DLL was heartbeating into its own log.
+        weak_dir = Path(raw) / "weakwitness"
+        weak_dir.mkdir()
+        launched = time.time()
+        # A log that predates the launch must NOT count: it is last run's evidence.
+        stale = weak_dir / "er-invasion-warp-dll.log"
+        stale.write_text("from a previous run\n", encoding="utf-8")
+        os.utime(stale, (launched - 600, launched - 600))
+        fresh_written = threading.Event()
+
+        def write_fresh() -> None:
+            (weak_dir / "er-net-effects.log").write_text("hello\n", encoding="utf-8")
+            fresh_written.set()
+
+        writer_weak = threading.Thread(target=write_fresh, daemon=True)
+        writer_weak.start()
+        try:
+            weak = await_any_dll_log(weak_dir, os.getpid(), launched)
+        finally:
+            writer_weak.join(timeout=2)
+        check(
+            weak["status"] == "confirmed-weak",
+            f"a run without er_effects_rs.dll confirms from any DLL's log (got {weak['status']})",
+        )
+        check(
+            weak.get("log") == "er-net-effects.log",
+            f"the FRESH log is the witness, not the stale one (got {weak.get('log')})",
+        )
+
+        # And the block must not borrow the strong claim when only the weak witness was had.
+        weak_block = running_block(
+            {
+                "run_id": "r-weak", "pid": 1, "started": "now", "branch": "b",
+                "head": "a" * 40, "merge_base": "b" * 40, "base_ref": "origin/main",
+                "dirty": False, "dlls": [("er_invasion_warp_dll.dll", "c" * 64)],
+                "ersc": None, "excluded": [], "save": None, "profile": "/p.me3",
+                "sidecar": "/s.toml", "evidence_class": "x",
+                "testimony": "er-net-effects.log written after launch", "witness": "weak",
+            }
+        )
+        check(
+            "sidecar was NOT verified" in weak_block,
+            "the weak-witness block says outright that the sidecar was not verified",
+        )
 
         # THE FALSE NEGATIVE THIS COSTS A RUN OVER, observed live on br-20260816-183410-949e:
         # the real loaded line is ~540 bytes and does not land in one write. Reading the first
