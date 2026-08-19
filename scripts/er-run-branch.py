@@ -170,9 +170,20 @@ class LogTail:
         try:
             with self.path.open("rb") as handle:
                 handle.seek(min(start, stat.st_size))
-                return handle.read().decode("utf-8", errors="replace")
+                data = handle.read()
         except OSError:
             return ""
+        # A LINE IS EVIDENCE ONLY ONCE IT IS TERMINATED, and this cost a live run. The DLL's
+        # `runtime-config: loaded` line is ~540 bytes and is not written atomically, so a read
+        # landing mid-write returns a PREFIX -- "runtime-config: loaded '<game toml>'" with the
+        # `sidecar=` field still unwritten. The caller cannot tell that from a DLL that genuinely
+        # named no sidecar, so it declared a perfectly good run "the DLL IGNORED this run's
+        # overlay" and told the reader not to cite it. Hand back only whole lines; the fragment
+        # arrives complete on the next poll, milliseconds later.
+        end = data.rfind(b"\n")
+        if end < 0:
+            return ""
+        return data[: end + 1].decode("utf-8", errors="replace")
 
 
 def await_testimony(log_path: Path, tail: LogTail, sidecar: Path, launcher_pid: int) -> dict:
@@ -245,7 +256,13 @@ def running_block(context: dict) -> str:
             f"  save          {save['save_file']}",
             f"  container     .{save['container']}"
             + ("   SOURCE WRITABLE" if save.get("source_writable") else "   source read-only"),
-            f"  seed          {save['seed']}   (rerun: --seed {save['seed']})",
+            # An explicit --save has no seed, and "--seed None" is not a command anyone can run.
+            # The rerun hint has to name whatever actually determined this character.
+            (
+                f"  seed          {save['seed']}   (rerun: --seed {save['seed']})"
+                if save.get("seed") is not None
+                else f"  chosen by     --save (rerun: --save '{save['save_file']}:{save['slot']}')"
+            ),
         ]
     else:
         lines.append("  character     <active Steam user's default save>")
@@ -327,8 +344,50 @@ def preflight(args) -> tuple[dict, dict | None]:
         if code != 0:
             raise RuntimeError(f"no save could be picked: {err.strip() or out.strip()}")
         save = json.loads(out)
+    elif args.save != "default":
+        save = decode_explicit_save(args.save)
 
     return closure, save
+
+
+def decode_explicit_save(spec: str) -> dict:
+    """Resolve `PATH[:SLOT]` into the same decoded shape a random pick produces.
+
+    The decode is NOT optional. AGENTS.md's Autoload Identity Launch Gate requires the character
+    and slot to be known from current save evidence before a launch that will autoload -- and
+    naming a file proves neither. A path whose named slot holds no character is refused here
+    rather than discovered on a loading screen.
+    """
+    path, _, slot_text = spec.rpartition(":")
+    if not path:
+        path, slot_text = spec, ""
+    slot = None
+    if slot_text:
+        try:
+            slot = int(slot_text)
+        except ValueError as err:
+            raise RuntimeError(f"bad slot in --save {spec!r}: {err}") from err
+
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise RuntimeError(f"--save names a file that does not exist: {source}")
+
+    code, out, err = run_script(
+        "er-pick-save.py", "--json", "--all", "--root", str(source.parent)
+    )
+    if code != 0:
+        raise RuntimeError(f"could not decode {source}: {err.strip() or out.strip()}")
+    targets = [t for t in json.loads(out)["targets"] if Path(t["save_file"]) == source]
+    if slot is not None:
+        targets = [t for t in targets if t["slot"] == slot]
+    if not targets:
+        where = f"{source} slot {slot}" if slot is not None else str(source)
+        raise RuntimeError(
+            f"no occupied character at {where}. Nothing will autoload, so this launch is refused."
+        )
+    chosen = targets[0]
+    return {**chosen, "seed": None, "draws": 0, "eligible_files": 1,
+            "occupied_slots_in_file": len(targets), "corpus_root": str(source.parent)}
 
 
 def launch(args) -> int:
@@ -576,6 +635,24 @@ def selftest() -> int:
             "an IN-PLACE truncation is detected and re-read from byte 0, not silently skipped",
         )
 
+        # A read landing mid-write must yield NOTHING rather than a prefix that parses as a
+        # complete record with its later fields missing.
+        partial = Path(raw) / "partial.log"
+        partial.write_text("", encoding="utf-8")
+        partial_tail = LogTail(partial)
+        with partial.open("a", encoding="utf-8") as handle:
+            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+        check(
+            partial_tail.new_text() == "",
+            "a half-written line is withheld until its newline arrives",
+        )
+        with partial.open("a", encoding="utf-8") as handle:
+            handle.write("car=Z:/t/er_effects_rs.toml slot=4\n")
+        check(
+            "sidecar=Z:/t/er_effects_rs.toml" in partial_tail.new_text(),
+            "the completed line is delivered whole on the next read",
+        )
+
     block = running_block(
         {
             "run_id": "r1",
@@ -650,6 +727,49 @@ def selftest() -> int:
         verdict2 = await_testimony(log2, tail2, Path("/t/er_effects_rs.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
 
+        # THE FALSE NEGATIVE THIS COSTS A RUN OVER, observed live on br-20260816-183410-949e:
+        # the real loaded line is ~540 bytes and does not land in one write. Reading the first
+        # write yields `runtime-config: loaded '<game toml>'` with no `sidecar=` yet, which is
+        # indistinguishable from a DLL that named no sidecar -- so the launcher condemned a run
+        # that was loading exactly the character it had picked. `wrong-sidecar` is terminal by
+        # design (the DLL reads its config once), which is precisely why the input must be a
+        # whole line before it is judged.
+        split_log = Path(raw) / "split.log"
+        split_log.write_text("", encoding="utf-8")
+        observed_partial = threading.Event()
+
+        class SignallingTail(LogTail):
+            """Fires the instant the partial line has been read, so the completing write is
+            ordered by an observed event rather than by a sleep the timing gate would reject."""
+
+            def new_text(self) -> str:
+                text = super().new_text()
+                observed_partial.set()
+                return text
+
+        split_tail = SignallingTail(split_log)
+        with split_log.open("a", encoding="utf-8") as handle:
+            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+
+        def finish_line() -> None:
+            observed_partial.wait(timeout=5)
+            with split_log.open("a", encoding="utf-8") as handle:
+                handle.write("car=Z:/t/er_effects_rs.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
+
+        writer = threading.Thread(target=finish_line, daemon=True)
+        writer.start()
+        try:
+            verdict_split = await_testimony(
+                split_log, split_tail, Path("/t/er_effects_rs.toml"), os.getpid()
+            )
+        finally:
+            writer.join(timeout=2)
+        check(
+            verdict_split["status"] == "confirmed",
+            f"a loaded line arriving in two writes confirms instead of condemning the run "
+            f"(got {verdict_split['status']})",
+        )
+
     # THE REGRESSION THAT COST A LIVE RUN. The game directory is written to constantly during
     # boot, so every inotify slice returns instantly. When the budget was a COUNT of slices it
     # was consumed in milliseconds and a healthy run was declared silent. The budget must be
@@ -700,7 +820,14 @@ def selftest() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--save", choices=("random", "default"), default="random")
+    parser.add_argument(
+        "--save",
+        default="random",
+        metavar="random|default|PATH[:SLOT]",
+        help="random (default), default (the active Steam user's own container), or an explicit "
+        "save path with an optional :SLOT. An explicit save is still DECODED and reported before "
+        "launch -- naming a file is not the same as knowing which character is in it.",
+    )
     parser.add_argument("--seed", type=int, help="reproduce an exact save pick")
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
