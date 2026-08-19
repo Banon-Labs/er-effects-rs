@@ -332,8 +332,25 @@ When the user asks whether a runtime-affecting refactor is possible/easy/safe, i
 ## No Compromises
 
 We accept **no compromises** on the stated objective: a same-character repeat load
-(System->Quit->Load Profile) that reaches **genuine world readiness** (character rendered
-AND the player can move). Do not settle for a weaker solution that technically "works"
+(System->Quit->**Load Character**) that reaches **genuine world readiness** (character rendered
+AND the player can move).
+
+**THE BUTTON NAMES, AND THE OLD ONES THIS REPO IS STILL FULL OF.** Both load rows on the
+Quit Game tab are OURS -- vanilla ships only *Save Game* and *Return to Desktop*, and the
+mod clones the row twice. They were renamed on 2026-07-31 after a review found the original
+pair indistinguishable, but the old words survive in prose, in `bd` memories and in the
+constant names, so read them as synonyms rather than as a second feature:
+
+| old name (still in memories/symbols) | ON SCREEN since 2026-07-31 | takes as input |
+|---|---|---|
+| Load Profile | **Load Character** | a character from the save container already loaded |
+| Load Save Profiles | **Load Character from File** | a save file off the disk |
+
+The label bytes live in `SYSTEM_QUIT_LOAD_PROFILE_LABEL_W` and
+`SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W` (`system_quit_dialog_handlers.rs`) -- the symbols
+kept the old names while their contents changed, which is exactly the trap this table
+exists to close. An agent that quotes the old name "Load Profile" at the user is naming a
+button that has not been on screen since July. Do not settle for a weaker solution that technically "works"
 but does not actually reach that bar. When a path looks blocked, that is a signal to
 find the *real* solution at a deeper layer -- not to lower the bar.
 

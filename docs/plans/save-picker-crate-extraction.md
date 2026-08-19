@@ -15,7 +15,8 @@ The two products, as the user named them:
 * **(A) our own drawn picker** -- the picker we fully draw and manage, shown when the game
   starts without a save provided. Crate `er-save-picker` + shell `er-save-picker-dll`.
 * **(B) the customized post-autoload vanilla menu**, as ONE product -- the Save Game button
-  and its functionality, BOTH Load Profile buttons (Load Profile + Load Save Profiles), and
+  and its functionality, BOTH load buttons (Load Character + Load Character from File --
+  renamed 2026-07-31 from Load Profile / Load Save Profiles), and
   the Quit to Desktop button. Crate `er-quit-menu` + shell `er-quit-menu-dll`.
 
 ---
@@ -109,7 +110,7 @@ larger than "three buttons".
 | Save-flow stage machine `save_flow_tick`, `save_flow_fire_gate_tick` | `experiments/lifecycle.rs` 229-1000 | ~770 |
 | Foreign-save ProfileSummary preview, swap/restore, prepare-selected-slot, recommit-after-return-title-save | `save_swap_profile_table.rs` 1-417 | 417 |
 | Ownership ledger + `delay_delete_enqueue_renderer`, PR-#103 Scaleform lifecycle guard, `~MenuWindowJob` doomed-window UAF fix, window-list push hook, quit-to-desktop clean kill, the noop-action / Save-Game-text / Save-Game-confirm installers, `system_quit_profile_load_activate_hook` | `system_quit_ownership_repro.rs` 26-102, 386-1340 | ~950 |
-| ProfileSelect confirm routing, portrait retarget at switch, `system_quit_arm_quickload_autoload` (the core of Load Profile), in-world load guards, continue-confirm hook | `system_quit_repro_guards.rs` 1286-1544, 1610-2022 | ~680 |
+| ProfileSelect confirm routing, portrait retarget at switch, `system_quit_arm_quickload_autoload` (the core of Load Character, ex-Load Profile), in-world load guards, continue-confirm hook | `system_quit_repro_guards.rs` 1286-1544, 1610-2022 | ~680 |
 | Quit-tab pane restore, return-title chain, ProfileSelect top-menu tick, OptionSetting pane sampling, `system_quit_menu_window_run_post` | `profile_rows_system_quit_menu.rs` 510-1314, 1424-1581, 1663-1834 | ~1315 |
 | Continue-confirm installer, stuck-testnet-step force-finish, profile-load-job-run hook, the three profile-load installers | `system_quit_hooks.rs` 2-55, 160-310, 383-482, 982-1034 | ~480 |
 | `install_system_quit_duplicate_button_hook` -- the single entry point that installs the whole feature | `layout_global_hooks.rs` 61-160 | ~100 |
@@ -142,13 +143,13 @@ and must not be dragged into a shipped feature crate:
 
 **PRODUCT despite living in a file named `*_repro*`.** `system_quit_ownership_repro.rs`
 carries the merged PR #103 UAF ownership fix, and `system_quit_repro_guards.rs` carries the
-core of Load Profile. Do not mistake either for scaffolding:
+core of Load Character (ex-Load Profile). Do not mistake either for scaffolding:
 
 * `ownership_take` / `ownership_release` / `delay_delete_enqueue_renderer` (26-102)
 * `install_scaleform_handler_lifecycle_guard` (386-472) -- the PR-#103 double-free guard
 * the `~MenuWindowJob` doomed-window UAF fix (473-716, bd `er-effects-rs-j74t`)
 * `install_quit_to_desktop_clean_kill_hook` (886-939) -- the Quit to Desktop clean kill
-* `system_quit_arm_quickload_autoload` (`repro_guards.rs` 1403-1544) -- Load Profile's core
+* `system_quit_arm_quickload_autoload` (`repro_guards.rs` 1403-1544) -- Load Character's core (the row was called Load Profile before 2026-07-31)
 
 **DELETE (~640 lines, X).** Verified zero callers; deleting them is behavior-preserving by
 construction and is its own slice:
@@ -328,7 +329,7 @@ What the code shows, as supporting evidence:
 
 * On `main` the OS dialog has **three** callers, all reached through
   `open_picker_for_intent` (`save_picker_surface.rs:159`): `PickerOpenRequest::LoadSource
-  { action_obj }` from the Load Save Profiles row, `PickerOpenRequest::SaveDestination
+  { action_obj }` from the Load Character from File row (ex-Load Save Profiles), `PickerOpenRequest::SaveDestination
   { system_dialog }` from the Save Game flow, and -- since PR #109 --
   `PickerOpenRequest::MissingSaveBoot` from the boot flow (`save_picker_boot.rs:222`,
   dispatched at `save_picker_surface.rs:170`/`:179`). The boot flow no longer only draws
