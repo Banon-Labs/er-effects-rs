@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 79 | 50,691 |
+| all `experiments/**` | 76 | 50630 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -88,7 +88,7 @@ S10 and S11 are complete in-place module splits. R1 does not reopen their correc
 
 Reject a duplicate descriptor-guard extraction. Merged PR #272 already moved the descriptor-advance detour, byte-verified RVA/offset identities, and trampoline state into `er-scaleform-hooks`; its fresh-title proof recorded `oracle_scaleform_desc_guard_installed = 1`. The remaining `scaleform_descriptor_guard.rs` root wrapper is product policy: it retains attach-time ordering and turns the hook crate's installation result into product diagnostic logging. Moving that wrapper would be a different startup-policy change, not R24A's native mechanism move. The remaining R24 resource/message families stay independently executable.
 
-## Appendix A -- R1 current 79-file partition and caller ledger
+## Appendix A -- R1 current 76-file partition and caller ledger
 
 Every row below is a current source file. `Current partition` is the exact present owner/disposition; `Next node` is a future decision or implementation node and does not change present ownership.
 
@@ -111,14 +111,14 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 133 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,523 | System>Quit save-flow implementation | R20 |
-| `lifecycle/task_tick.rs` | 445 | product recurring-task scheduling | `STAY` |
-| `lifecycle/title_visual_startup.rs` | 185 | product startup arming/order | R22 |
+| `lifecycle/task_tick.rs` | 446 | product recurring-task scheduling | `STAY` |
+| `lifecycle/title_visual_startup.rs` | 186 | product startup arming/order | R22 |
 | `mem.rs` | 67 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 8 | product diagnostic facade | D4 |
 | `menu_diag/menu_observation.rs` | 614 | product menu observation | D4 |
 | `mod.rs` | 113 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 112 | own-stepper memory family | D5 and R14 |
-| `mod/product_core_own_stepper.rs` | 627 | product core own-stepper | D5 |
+| `mod/product_core_own_stepper.rs` | 637 | product core own-stepper | D5 |
 | `mod/product_core_own_stepper/fallback_drives.rs` | 641 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 11 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,750 | native-load, world-resource, and save-byte families | D5 |
@@ -139,9 +139,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
 | `startup_hooks/diagnostics/mod.rs` | 174 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
-| `startup_hooks/loading_cover/dlc_roots_self_heal.rs` | 2 | verified deletion candidate | R2 |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,550 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
-| `startup_hooks/loading_cover/mod.rs` | 189 | loading-cover module facade | R15-R16 |
+| `startup_hooks/loading_cover/mod.rs` | 186 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 276 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 898 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
@@ -149,13 +148,11 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,407 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 868 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 471 | window-observation/final-geometry family | R9 |
-| `startup_hooks/quit_menu/mod.rs` | 204 | quit-menu module facade | R10-R20 |
+| `startup_hooks/quit_menu/mod.rs` | 198 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
 | `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,957 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 1,243 | System>Quit destination commit family | R18 |
-| `startup_hooks/quit_menu/save_dest_identity.rs` | 7 | compatibility shim | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
-| `startup_hooks/quit_menu/save_picker_dim_overlay.rs` | 6 | compatibility shim | R18 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,894 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/quit_menu/save_picker_path_editor.rs` | 758 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
 | `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,192 | product profile renderer and quit swap families | R18-R19 |
@@ -165,7 +162,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,162 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 289 | System>Quit row identity family | R18 |
 | `startup_hooks/save_picker/mod.rs` | 171 | save-picker module facade | R17 |
-| `startup_hooks/save_picker/save_picker_boot.rs` | 469 | boot picker surface | R17 |
+| `startup_hooks/save_picker/save_picker_boot.rs` | 420 | boot picker surface | R17 |
 | `startup_hooks/save_picker/save_picker_os_dialog.rs` | 27 | compatibility shim | R17-R18 |
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 7 | title facade | R22 |
