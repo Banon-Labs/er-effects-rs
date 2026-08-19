@@ -18,7 +18,14 @@ FORBIDDEN_OWNERSHIP = re.compile(
     r"UNANALYSED|UNANALYZED|UNCLASSIFIED|APPROXIMATE(?:LY)?|ESTIMAT(?:E|ED|ES)|~",
     re.IGNORECASE,
 )
-LEDGER_HEADING = "## Appendix A -- R1 current 79-file partition and caller ledger"
+# Matched by PATTERN, not by literal text, because the heading carries the file count and the
+# count changes every time a file enters or leaves `experiments/**`. A literal match makes a
+# truthful heading update break the gate, which pressures the next person to leave the number
+# stale instead. Nothing is lost: the count is separately and exactly validated against
+# measured source by the `all experiments/**` total row below.
+LEDGER_HEADING = re.compile(
+    r"^## Appendix A -- R1 current \d+-file partition and caller ledger$", re.MULTILINE
+)
 
 # These are source edges that define the ownership seams R1 refreshes. A later move must
 # update this table and the roadmap in the same PR; it cannot silently preserve an old caller map.
@@ -165,7 +172,7 @@ def main() -> int:
         listed,
         current_inventory(),
         expected_total,
-        text.count(LEDGER_HEADING),
+        len(LEDGER_HEADING.findall(text)),
         text,
     )
     errors.extend(validate_caller_edges())
