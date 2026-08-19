@@ -72,6 +72,13 @@ backup/
 *.db-shm
 db.sqlite
 bd.db
+# Issue export (derived). The Dolt database is the source of truth -- `no-db: false` in
+# config.yaml -- and it has its own versioned remote
+# (`bd dolt remote list` -> doltremoteapi.dolthub.com/chozandrias/er-effects-rs).
+# Tracking the export made git three-way-merge a row store line-wise, so every branch that
+# touched an issue conflicted here. Regenerate any time with `bd export -o .beads/issues.jsonl`.
+issues.jsonl
+
 # NOTE: Do NOT add negation patterns here.
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
