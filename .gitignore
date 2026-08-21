@@ -33,6 +33,9 @@ dump-exec.bin
 # Claude-generated local worktrees are machine/session state, never repository submodules.
 /.claude/worktrees/
 
+# Local dependency checkouts the param bridge resolves (e.g. .deps/Smithbox).
+/.deps/
+
 ProDebug.dll
 offline-launcher.exe
 

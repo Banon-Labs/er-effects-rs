@@ -78,6 +78,11 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll ent
 "er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
 "er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
 "er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
+"er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
+CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \
+cycle-chain and VFX rows, once, then stops. It installs NO detours -- the crate contains no \
+MinHook instance, no er-hook union entry and no VirtualProtect, so it shares no prologue with any \
+other shell. Same class as mushroom-man-runtime: touches param rows, not hook prologues."""
 "er-inventory-sort-dll" = "Applies equipment-menu sort defaults once per process; installs no detour."
 "er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
 "er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."

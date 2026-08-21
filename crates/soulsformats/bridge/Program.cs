@@ -30,6 +30,7 @@ static int Run(string[] args)
     const string ParamListMode = "param-list";
     const string ParamRowDumpMode = "param-row-dump";
     const string ParamVfxCandidatesMode = "param-vfx-candidates";
+    const string ParamFieldScanMode = "param-field-scan";
     const int ModeArgIndex = 0;
     const int RegulationArgIndex = 1;
     const int ParamNameArgIndex = 2;
@@ -39,9 +40,9 @@ static int Run(string[] args)
     const int FailureExitCode = 1;
     const int UsageExitCode = 2;
 
-    if (args.Length < 2 || (args[ModeArgIndex] != ParamRowsMode && args[ModeArgIndex] != ParamListMode && args[ModeArgIndex] != ParamRowDumpMode && args[ModeArgIndex] != ParamVfxCandidatesMode))
+    if (args.Length < 2 || (args[ModeArgIndex] != ParamRowsMode && args[ModeArgIndex] != ParamListMode && args[ModeArgIndex] != ParamRowDumpMode && args[ModeArgIndex] != ParamVfxCandidatesMode && args[ModeArgIndex] != ParamFieldScanMode))
     {
-        Console.Error.WriteLine("usage: soulsformats-bridge param-list <regulation.bin> | param-vfx-candidates <regulation.bin> <param-name> | param-row-dump <regulation.bin> <param-name> <row-id> | param-rows <regulation.bin> <param-name> <row-id> [row-id...]");
+        Console.Error.WriteLine("usage: soulsformats-bridge param-list <regulation.bin> | param-vfx-candidates <regulation.bin> <param-name> | param-row-dump <regulation.bin> <param-name> <row-id> | param-rows <regulation.bin> <param-name> <row-id> [row-id...] | param-field-scan <regulation.bin> <param-name> <field-name> [skip-value]");
         return UsageExitCode;
     }
 
@@ -66,7 +67,7 @@ static int Run(string[] args)
             return SuccessExitCode;
         }
 
-        if ((args[ModeArgIndex] == ParamRowsMode || args[ModeArgIndex] == ParamRowDumpMode) && args.Length < RequiredArgCount)
+        if ((args[ModeArgIndex] == ParamRowsMode || args[ModeArgIndex] == ParamRowDumpMode || args[ModeArgIndex] == ParamFieldScanMode) && args.Length < RequiredArgCount)
         {
             Console.Error.WriteLine("usage: soulsformats-bridge param-row-dump <regulation.bin> <param-name> <row-id> | param-rows <regulation.bin> <param-name> <row-id> [row-id...]");
             return UsageExitCode;
@@ -78,7 +79,9 @@ static int Run(string[] args)
         }
 
         var paramName = args[ParamNameArgIndex];
-        var requestedIds = args.Length > RowIdArgStartIndex ? args[RowIdArgStartIndex..].Select(int.Parse).ToArray() : Array.Empty<int>();
+        var requestedIds = args.Length > RowIdArgStartIndex && args[ModeArgIndex] != ParamFieldScanMode
+            ? args[RowIdArgStartIndex..].Select(int.Parse).ToArray()
+            : Array.Empty<int>();
         var binderFile = binder.Files.FirstOrDefault(file =>
         {
             var normalizedName = file.Name.Replace('\\', '/');
@@ -107,6 +110,31 @@ static int Run(string[] args)
                 var paramdef = SoulsFormats.PARAMDEF.XmlDeserialize(paramdefPath);
                 param.ApplyParamdef(paramdef, ulong.MaxValue, "");
             }
+        }
+
+        if (args[ModeArgIndex] == ParamFieldScanMode)
+        {
+            // Print id/name/value for every row whose <field-name> cell differs from
+            // the optional skip-value (default "-1"), e.g. inventory all SpEffectParam
+            // rows with a real saveCategory. Requires PARAMDEX_ER_DEFS_DIR for cells.
+            var fieldName = args[RowIdArgStartIndex];
+            var skipValue = args.Length > RowIdArgStartIndex + 1 ? args[RowIdArgStartIndex + 1] : "-1";
+            var matches = param.Rows.Select(row => new
+            {
+                id = row.ID,
+                name = row.Name ?? "",
+                value = row.Cells.Where(cell => cell.Def.InternalName == fieldName)
+                    .Select(cell => cell.Value?.ToString() ?? "").FirstOrDefault() ?? "",
+            }).Where(row => row.value != skipValue && row.value != "").ToArray();
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                param_name = paramName,
+                field_name = fieldName,
+                row_count = param.Rows.Count,
+                match_count = matches.Length,
+                matches,
+            }));
+            return SuccessExitCode;
         }
 
         if (args[ModeArgIndex] == ParamVfxCandidatesMode)

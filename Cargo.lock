@@ -2785,6 +2785,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-death-persist-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "fromsoftware-shared",
+]
+
+[[package]]
 name = "er-effects-data"
 version = "0.1.0"
 dependencies = [

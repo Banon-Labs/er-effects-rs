@@ -19,6 +19,7 @@ members = [
   "crates/er-save-disable-dll",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
+  "crates/er-death-persist-dll",
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-scaleform-hooks",

@@ -99,6 +99,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-armament-icons:er_armament_icons
 		er-better-refills-dll:er_better_refills
 		er-crash-logging-dll:er_crash_logging_dll
+		er-death-persist-dll:er_death_persist
 		er-input-harness-dll:er_input_harness_dll
 		er-invasion-warp-dll:er_invasion_warp_dll
 		er-inventory-sort-dll:er_inventory_sort
