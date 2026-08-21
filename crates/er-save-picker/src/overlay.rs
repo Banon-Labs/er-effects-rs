@@ -4,6 +4,12 @@
 // the save-picker extraction. Product/game state crosses through `host.rs`; raster primitives
 // come from `er-loading-bar`, matching the boot bar's glyphs and rectangles.
 
+// The keyboard hook, the OS input polling and the window geometry reads below are
+// `#[cfg(windows)]`, so a HOST build compiles their helpers, key constants and imports with
+// every caller cfg'd out. `dead_code` / `unused_imports` there describe the cfg, not real
+// debt; the SHIPPING target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
@@ -29,31 +35,11 @@ const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
 const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
 
-fn boot_draw_text_rgb(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    x: usize,
-    y: usize,
-    text: &str,
-    rgb: [u8; 3],
-    scale: usize,
-) {
-    er_loading_bar::draw_text_rgb(buf, w, h, x, y, text, rgb, scale);
-}
-
-fn boot_fill_rect(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    x0: usize,
-    y0: usize,
-    rw: usize,
-    rh: usize,
-    rgb: [u8; 3],
-) {
-    er_loading_bar::fill_rect_rgb(buf, w, h, x0, y0, rw, rh, rgb);
-}
+// The boot view's text and rects ARE the shared raster primitives -- these local names are
+// aliases, not wrappers, so the picker and the boot bar cannot drift apart visually. Aliasing
+// rather than forwarding also keeps the upstream arity out of this crate's own signatures.
+use er_loading_bar::draw_text_rgb as boot_draw_text_rgb;
+use er_loading_bar::fill_rect_rgb as boot_fill_rect;
 
 /// Cached `user32!GetAsyncKeyState` / `xinput!XInputGetState` resolutions (0 = unresolved, !0 = tried-and-absent).
 pub use er_telemetry::counters::GET_ASYNC_KEY_STATE_PROC;
@@ -215,9 +201,11 @@ fn resolve_get_async_key_state() -> Option<GetAsyncKeyStateFn> {
     if cached != 0 {
         return Some(unsafe { std::mem::transmute::<usize, GetAsyncKeyStateFn>(cached) });
     }
-    let addr = unsafe { GetModuleHandleA(PCSTR(b"user32.dll\0".as_ptr())) }
+    let addr = unsafe { GetModuleHandleA(PCSTR(c"user32.dll".as_ptr().cast::<u8>())) }
         .ok()
-        .and_then(|m| unsafe { GetProcAddress(m, PCSTR(b"GetAsyncKeyState\0".as_ptr())) })
+        .and_then(|m| unsafe {
+            GetProcAddress(m, PCSTR(c"GetAsyncKeyState".as_ptr().cast::<u8>()))
+        })
         .map(|p| p as usize);
     match addr {
         Some(a) if a != 0 => {
@@ -255,7 +243,9 @@ fn resolve_xinput_get_state() -> Option<XInputGetStateFn> {
         let Ok(module) = (unsafe { GetModuleHandleA(PCSTR(dll.as_ptr())) }) else {
             continue;
         };
-        if let Some(proc) = unsafe { GetProcAddress(module, PCSTR(b"XInputGetState\0".as_ptr())) } {
+        if let Some(proc) =
+            unsafe { GetProcAddress(module, PCSTR(c"XInputGetState".as_ptr().cast::<u8>())) }
+        {
             let a = proc as usize;
             XINPUT_GET_STATE_PROC.store(a, Ordering::SeqCst);
             return Some(unsafe { std::mem::transmute::<usize, XInputGetStateFn>(a) });
@@ -816,6 +806,12 @@ pub fn ensure_save_picker_keyboard_hook() {
         SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
     }
 }
+
+/// Host builds have no keyboard hook to install. Kept beside the windows implementation, not
+/// at the end of the file: a `cfg`-gated item after the test module is invisible on the
+/// shipping target and only shows up as `items_after_test_module` on the host.
+#[cfg(not(windows))]
+pub fn ensure_save_picker_keyboard_hook() {}
 
 /// File-browser stage input: navigate/drive/page, and on picking a save file, parse its character
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a
@@ -1471,6 +1467,3 @@ mod mouse_hit_tests {
         assert_eq!(picker_character_row_hit(below_slots, 3, false), None);
     }
 }
-
-#[cfg(not(windows))]
-pub fn ensure_save_picker_keyboard_hook() {}

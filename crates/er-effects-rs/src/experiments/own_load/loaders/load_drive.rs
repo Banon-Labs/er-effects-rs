@@ -170,6 +170,7 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
 ///   * `fp_real`: the PlayerGameData char fingerprint is real (level/stats non-default).
 ///   * `title_owner` non-null AND title_owner+0x284 (new-game flag) == 0 (continue_confirm's LOAD
 ///     branch; non-zero would take the NewGame path -- fail closed).
+///
 /// Keeps `simulated_button_presses_total = 0`: this is a pure in-process native call, no input.
 pub(crate) unsafe fn own_load_continue_fire(
     base: usize,
@@ -323,7 +324,7 @@ unsafe fn own_load_install_job_fire(
         ));
         return;
     }
-    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst) as i32;
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     let slot_addr = title_owner + TITLE_OWNER_MENUJOB_SLOT_130_OFFSET;
     // BEFORE: dump owner+0x130 (the idle IfElseJob it replaces). Pure reads.
     let (b_job, b_vt, b_seq, b_built, b_idx) = own_load_install_job_slot_snapshot(slot_addr);
@@ -617,7 +618,7 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         .unwrap_or(0);
     let inner_seq = unsafe { safe_read_usize(job + MENUJOB_INNER_SEQ_70_OFFSET) }.unwrap_or(null);
     // Throttled log (every OWN_LOAD_STREAM_LOG_INTERVAL pumps), plus the first pump.
-    if fired == 1 || fired % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
+    if fired == 1 || fired.is_multiple_of(OWN_LOAD_STREAM_LOG_INTERVAL) {
         append_autoload_debug(format_args!(
             "own-load-pump: pump #{fired} Run(job=0x{job:x}) state={state} (1=Continue 2=Success 3=Failed) subcode={subcode} (deser 5/2/6) +0x68_built={built_flag} +0x70_seq=0x{inner_seq:x} delta={frame_delta}"
         ));

@@ -125,7 +125,7 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "child-finish-request: hooked EzChildStepBase::RequestFinish 0x{addr:x} -- read-only teardown-requester trace armed"
@@ -563,12 +563,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
             )),
         }
     }
-    if let Ok(base) = game_module_base() {
-        if fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
-            && unsafe { safe_read_usize(fd4_time) }.is_some()
-        {
-            unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-        }
+    if let Ok(base) = game_module_base()
+        && fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
+        && unsafe { safe_read_usize(fd4_time) }.is_some()
+    {
+        unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
     }
     append_autoload_debug(format_args!(
         "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success after direct native-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"

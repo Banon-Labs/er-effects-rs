@@ -54,23 +54,6 @@ pub(crate) fn format_id_list(ids: &[i32]) -> String {
     format!("[{joined}]")
 }
 
-/// Add an id, or report that it is already there. Order is insertion order, so the file reads as
-/// a history of what the player added.
-pub(crate) fn upsert(ids: &mut Vec<i32>, id: i32) -> bool {
-    if ids.contains(&id) {
-        return false;
-    }
-    ids.push(id);
-    true
-}
-
-/// Drop an id, reporting whether it was there.
-pub(crate) fn remove(ids: &mut Vec<i32>, id: i32) -> bool {
-    let before = ids.len();
-    ids.retain(|existing| *existing != id);
-    ids.len() != before
-}
-
 /// Rewrite the config text so `stacked_effects` reads as `ids`, leaving everything else alone.
 ///
 /// The key is replaced where it already is -- not moved to the end -- so a file the player has
@@ -153,17 +136,6 @@ mod tests {
         assert_eq!(format_id_list(&ids), "[491, 3507, 10790]");
         assert_eq!(parse_id_list(&format_id_list(&ids)), ids);
         assert_eq!(format_id_list(&[]), "[]");
-    }
-
-    #[test]
-    fn upsert_is_idempotent_and_remove_reports_what_it_did() {
-        let mut ids = vec![1];
-        assert!(upsert(&mut ids, 2));
-        assert!(!upsert(&mut ids, 2), "adding twice is not a change");
-        assert_eq!(ids, vec![1, 2]);
-        assert!(remove(&mut ids, 1));
-        assert!(!remove(&mut ids, 1));
-        assert_eq!(ids, vec![2]);
     }
 
     #[test]

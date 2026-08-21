@@ -423,7 +423,7 @@ pub(crate) fn apply_startup_window_final_geometry() {
     let width = target.right - target.left;
     let height = target.bottom - target.top;
     WINRECONFIG_EARLY_APPLY_RECT.store(
-        (((width as u32 as usize) << 16) | (height as u32 as usize & 0xffff)).min(usize::MAX),
+        ((width as u32 as usize) << 16) | (height as u32 as usize & 0xffff),
         Ordering::SeqCst,
     );
 

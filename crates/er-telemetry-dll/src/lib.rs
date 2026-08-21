@@ -9,7 +9,6 @@
 //! Runnable alone (telemetry-only me3 profile) or alongside the product DLL as an
 //! additional `[[natives]]` entry. All reusable logic lives in the er-telemetry
 //! LIB; this crate is only the DllMain + task-registration shell.
-#![allow(non_snake_case)]
 
 #[cfg(windows)]
 use std::{ffi::c_void, sync::Once};
@@ -268,6 +267,9 @@ fn install_window_reconfig_hooks() {
 
 #[cfg(windows)]
 #[unsafe(no_mangle)]
+/// # Safety
+///
+/// Called by the Windows loader. Do not call directly.
 pub unsafe extern "system" fn DllMain(
     _module: HINSTANCE,
     reason: u32,

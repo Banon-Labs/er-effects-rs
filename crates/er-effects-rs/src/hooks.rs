@@ -1,33 +1,18 @@
 //! hooks module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
 use std::{
     ffi::c_void,
     fs,
     path::PathBuf,
-    sync::{
-        Arc, Mutex, Once,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::input_blocker::InputBlocker;
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
@@ -204,8 +189,7 @@ pub(crate) fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
                 runtime.initial_delay_ticks = value
                     .trim()
                     .parse::<u64>()
-                    .unwrap_or(SAFE_INPUT_INITIAL_DELAY_TICKS)
-                    .max(SAFE_INPUT_INITIAL_DELAY_TICKS);
+                    .unwrap_or(SAFE_INPUT_INITIAL_DELAY_TICKS);
             }
             "backend" => {}
             _ => {}

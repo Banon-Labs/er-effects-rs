@@ -3,12 +3,10 @@
 //! picker/quit-menu seams are moved.
 
 pub(crate) use er_save_picker::overlay::{
-    GET_ASYNC_KEY_STATE_PROC, MISSING_SAVE_PICKER_SELECTED_SLOT, SAVE_PICKER_CHAR_CURSOR,
     SAVE_PICKER_KBD_HOOK_HITS, SAVE_PICKER_OVERLAY_ARMED, SAVE_PICKER_OVERLAY_DRAW_HITS,
     SAVE_PICKER_OVERLAY_HELD_POLLS, SAVE_PICKER_OVERLAY_INPUT_HITS, SAVE_PICKER_OVERLAY_OPEN_COUNT,
     SAVE_PICKER_OVERLAY_PICK_COUNT, SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT,
-    SAVE_PICKER_OVERLAY_POLL_COUNT, SAVE_PICKER_OVERLAY_PREV_ACTIONS, SAVE_PICKER_STAGE_CHARS,
-    XINPUT_GET_STATE_PROC, boot_stage_picked_save_for_character_choice,
+    SAVE_PICKER_OVERLAY_POLL_COUNT, boot_stage_picked_save_for_character_choice,
     ensure_save_picker_keyboard_hook, missing_save_picker_selected_slot, overlay_save_picker_onto,
     save_picker_overlay_active, save_picker_overlay_process_completion,
 };

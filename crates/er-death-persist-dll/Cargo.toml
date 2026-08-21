@@ -12,3 +12,6 @@ crate-type = ["cdylib"]
 er-game-base = { path = "../er-game-base" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+
+[lints]
+workspace = true

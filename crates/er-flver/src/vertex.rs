@@ -28,7 +28,7 @@ pub(crate) fn read_vec3(b: &[u8], off: usize) -> [f32; 3] {
 /// `(u8-127)/127`; short formats snorm `i16/32767`.
 pub(crate) fn read_dir3(b: &[u8], off: usize, format: u32) -> [f32; 3] {
     match format {
-        0x01 | 0x02 | 0x03 | 0x04 => [f32_le(b, off), f32_le(b, off + 4), f32_le(b, off + 8)],
+        0x01..=0x04 => [f32_le(b, off), f32_le(b, off + 4), f32_le(b, off + 8)],
         0x1A | 0x2E => [
             i16_le(b, off) as f32 / 32767.0,
             i16_le(b, off + 2) as f32 / 32767.0,
@@ -46,7 +46,7 @@ pub(crate) fn read_dir3(b: &[u8], off: usize, format: u32) -> [f32; 3] {
 pub(crate) fn read_tangent(b: &[u8], off: usize, format: u32) -> [f32; 4] {
     let d = read_dir3(b, off, format);
     let w = match format {
-        0x01 | 0x02 | 0x03 | 0x04 => f32_le(b, off + 12),
+        0x01..=0x04 => f32_le(b, off + 12),
         0x1A | 0x2E => i16_le(b, off + 6) as f32 / 32767.0,
         _ => b.get(off + 3).map_or(1.0, |&v| v as f32 / 127.5 - 1.0),
     };

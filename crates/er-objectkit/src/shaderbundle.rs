@@ -104,9 +104,7 @@ pub fn pick_pass<'a>(
             s.stage == stage && {
                 let l = s.name.to_lowercase();
                 // match `_<slot>_<pass>.` exactly to avoid `_0_GbufDpt` vs `_0_Gbuf`
-                l.contains(&tag)
-                    && l[l.find(&tag).unwrap() + tag.len()..]
-                        .starts_with(|c: char| c == '.' || c == '_')
+                l.contains(&tag) && l[l.find(&tag).unwrap() + tag.len()..].starts_with(['.', '_'])
             }
         })
     };

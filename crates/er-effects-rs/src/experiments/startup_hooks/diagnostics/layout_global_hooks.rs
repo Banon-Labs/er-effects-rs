@@ -95,7 +95,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -152,7 +152,7 @@ pub(crate) fn install_menu_window_latch_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     MENU_WINDOW_LATCH_INSTALLED
                         .store(MENU_WINDOW_LATCH_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -201,7 +201,7 @@ pub(crate) fn install_c30_writer_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     C30_WRITER_HOOK_INSTALLED
                         .store(C30_WRITER_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -365,7 +365,7 @@ pub(crate) fn install_sound_post_event_observer_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SOUND_POST_EVENT_CORE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "sound-post-event: hooked AK::SoundEngine::PostEvent core 0x{addr:x}; pre-world startup/title-logo Wwise events will be muted and counted"

@@ -62,10 +62,6 @@ unsafe fn badge_movie_slot(url: usize) -> Option<usize> {
         .position(|t| unsafe { bounded_ascii_contains(url, t.url_needle) })
 }
 
-unsafe fn is_badge_movie_url(url: usize) -> bool {
-    unsafe { badge_movie_slot(url) }.is_some()
-}
-
 /// Sentinel for "trampoline not installed yet".
 const ORIG_UNSET: usize = 0;
 
@@ -117,12 +113,6 @@ const _: () = assert!(
     er_gfx::arts_badge::TARGETS.len() <= MAX_TARGETS,
     "grow MAX_TARGETS to cover every badge target"
 );
-
-/// Bounded diagnostic budget for vanilla-LENGTH candidate files that reach
-/// [`maybe_swap_equip_file`]: the reject gates below are otherwise silent, which made a
-/// swap miss unattributable (run 20260727-201106: 02_011 opened at boot, zero swap or
-/// failure lines).
-static DIAG_CANDIDATE_LOGS: AtomicU64 = AtomicU64::new(0);
 
 /// Bounded budget for raw File-object dumps (layout attribution: run 20260727-201851 had
 /// 112 parses with ZERO vanilla-length candidates, so the File reaching these hooks may

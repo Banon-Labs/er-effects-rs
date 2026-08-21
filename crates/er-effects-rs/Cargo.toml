@@ -121,3 +121,20 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Direct3D",
 ] }
+# LINT PARITY (root `[workspace.lints]`): this crate is at ZERO clippy + rustc warnings on its
+# shipping target (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`),
+# so it opts into the denied `rust.warnings` + `clippy.all` groups with no per-lint escapes.
+#
+# Getting here cleared 542 measured violations plus the 1,046 `unused_imports` that this crate's
+# 25 module-level `#![allow(unused_imports)]` blankets had been hiding. All 25 blankets are gone --
+# the imports behind them were deleted, so the crate is clean on its own rather than by suppression.
+#
+# The 246 `dead_code` hits were NOT blanket-allowed either: 8 items were genuinely orphaned
+# scaffolding and were deleted, and the rest carry a per-item `#[allow(dead_code)]` with a one-line
+# reason, because this is a reverse-engineering codebase and most of that "dead" code is a decoded
+# RVA, struct offset, or value vocabulary that is worth keeping whether or not anything reads it
+# today. The only other escapes are four per-site `#[allow]`s: two `permissions_set_readonly_false`
+# (the lint describes a UNIX behaviour this Windows-only DLL cannot reach) and two
+# `too_many_arguments` on pass-throughs that mirror `er_loading_bar`'s own signatures.
+[lints]
+workspace = true

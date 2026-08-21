@@ -16,3 +16,6 @@ er-game-base = { path = "../er-game-base" }
 er-hook = { path = "../er-hook" }
 er-save-loader = { path = "../er-save-loader" }
 er-telemetry = { path = "../er-telemetry" }
+
+[lints]
+workspace = true

@@ -353,6 +353,10 @@ pub fn glyph_5x7(c: char) -> [u8; GLYPH_H] {
 }
 
 /// Blit `text` into a tight RGBA buffer at `(x, y)`, scaled by `scale`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "raster primitive: destination buffer + its dimensions + position + payload + style are all irreducible"
+)]
 pub fn draw_text_rgb(
     buf: &mut [u8],
     w: usize,
@@ -393,6 +397,10 @@ pub fn draw_text_rgb(
 }
 
 /// Axis-aligned opaque fill into a tight RGBA buffer. Coordinates are clamped.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "raster primitive: destination buffer + its dimensions + rect + color are all irreducible"
+)]
 pub fn fill_rect_rgb(
     buf: &mut [u8],
     w: usize,

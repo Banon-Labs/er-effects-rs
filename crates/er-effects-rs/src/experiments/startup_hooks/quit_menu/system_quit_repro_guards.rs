@@ -88,6 +88,7 @@ pub(crate) fn sq_repro_pause_at_menu() -> bool {
 // ENV-GATE RATIONALE: ER_EFFECTS_SQ_LOAD_SWITCH=1 selects the profile-load-switch repro autopilot (Quit
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
+#[allow(dead_code)] // Retained: Load-switch repro mode selector; the presence-gate contract in its doc is the retained part.
 pub(crate) fn sq_repro_load_switch_mode() -> bool {
     // DECOUPLED TOGGLE (2026-07-19): the load2 flow drives a REAL profile-load switch (Quit tab ->
     // Load Profile -> pick top character -> confirm -> load) whenever the separate input-harness DLL
@@ -374,7 +375,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let base_ok = base != TITLE_OWNER_SCAN_START_ADDRESS;
             let load_done = base_ok && unsafe { now_loading_active(base) };
             let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
-            let loading = !base_ok || !load_done || fake_cover;
+            let _loading = !base_ok || !load_done || fake_cover;
             // READINESS GATE (2026-07-18, user-directed). "committed + player-present + cover-gone" is
             // NOT enough -- it holds during the load-2 freeze. Require RENDER-READY held for the settle
             // window before advancing. Hold the settle clock at 0 whenever the load is still streaming OR
@@ -438,7 +439,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             }
             SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
             let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
-            if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
+            if waited.is_multiple_of(SQ_REPRO_WAIT_RELOAD_LOG_EVERY) {
                 append_autoload_debug(format_args!(
                     "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} can_move={} move_epoch={} render_ready={render_ready} load_done={load_done} fake_cover={fake_cover} requestCode={request_code} mms={mms_live}",
                     switch_index + 1,
@@ -457,7 +458,6 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     sq_repro_target_switches(),
                 ));
             }
-            return;
         }
         _ => {
             set_pad(0);
@@ -827,7 +827,7 @@ pub(crate) fn install_system_quit_inworld_load_guard() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "system-quit-quickload: hooked in-world load routine 0x{addr:x}; picked-slot deserialize skipped while old world up, forwarded at clean title"
@@ -868,7 +868,7 @@ pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(slot: u3
     let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
     if switch_active && world_up {
         let n = SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 8 || n % 120 == 0 {
+        if n <= 8 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: in-world load REQUEST neutralized #{n} slot={slot} phase={phase} (old world still up) -- saveState/b80 kept idle so no NowLoading; return-title tears down + autoload loads at clean title"
             ));
@@ -922,7 +922,7 @@ pub(crate) fn install_system_quit_request_load_slot_guard() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "system-quit-quickload: hooked in-world load request RequestLoadSlot 0x{addr:x}; saveState/b80=2 arm neutralized while old world up, forwarded at clean title"
@@ -1017,7 +1017,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
         } else {
             let slot = selected as i32;
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-            let gm = game_man_ptr_or_null();
+            let _gm = game_man_ptr_or_null();
             let native_slot_proven =
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
             append_autoload_debug(format_args!(
@@ -1078,19 +1078,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
                     && unsafe { is_heap_aligned_ptr(menu_man) }
-                {
-                    if let Some(menu_data) =
+                    && let Some(menu_data) =
                         unsafe { safe_read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
-                    {
-                        if menu_data != TITLE_OWNER_SCAN_START_ADDRESS
-                            && unsafe { is_heap_aligned_ptr(menu_data) }
-                        {
-                            unsafe {
-                                *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET)
-                                    as *mut u8) = 0;
-                                *((menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
-                            }
-                        }
+                    && menu_data != TITLE_OWNER_SCAN_START_ADDRESS
+                    && unsafe { is_heap_aligned_ptr(menu_data) }
+                {
+                    unsafe {
+                        *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+                        *((menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
                     }
                 }
                 unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };

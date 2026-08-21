@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 50639 |
+| all `experiments/**` | 76 | 49,575 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -95,78 +95,78 @@ Every row below is a current source file. `Current partition` is the exact prese
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
 | `can_move_probe.rs` | 467 | product `STAY`: real-module conversion template | `STAY` |
-| `continue_load.rs` | 11 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 683 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 738 | product slot-resolution policy | D5 and R14 |
-| `gating.rs` | 11 | product re-export facade | D1 |
-| `gating/env_flags.rs` | 684 | product gate policy | D1 |
-| `gating/runtime_modes.rs` | 141 | product runtime-mode policy | D1 |
-| `gpu_frame_timing.rs` | 424 | product diagnostic | `STAY` |
-| `gpu_readback.rs` | 70 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,599 | loading-bar, boot-cover, and product adapter families | R4-R5 |
-| `gpu_readback/gpu_draw_shared.rs` | 476 | boot-cover draw helper family | R5 and R27-R30 |
-| `gpu_readback/save_picker_overlay.rs` | 23 | product compatibility shim | R17 |
-| `input_block.rs` | 1,421 | product input ownership | `STAY` |
+| `continue_load.rs` | 9 | product re-export facade | D5 |
+| `continue_load/product_continue.rs` | 653 | product continue/load policy | D5 |
+| `continue_load/slot_resolution.rs` | 737 | product slot-resolution policy | D5 and R14 |
+| `gating.rs` | 9 | product re-export facade | D1 |
+| `gating/env_flags.rs` | 651 | product gate policy | D1 |
+| `gating/runtime_modes.rs` | 137 | product runtime-mode policy | D1 |
+| `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
+| `gpu_readback.rs` | 62 | product GPU-readback facade | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,627 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback/gpu_draw_shared.rs` | 469 | boot-cover draw helper family | R5 and R27-R30 |
+| `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
+| `input_block.rs` | 1,404 | product input ownership | `STAY` |
 | `input_trace.rs` | 924 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 133 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,523 | System>Quit save-flow implementation | R20 |
-| `lifecycle/task_tick.rs` | 446 | product recurring-task scheduling | `STAY` |
+| `lifecycle/task_tick.rs` | 444 | product recurring-task scheduling | `STAY` |
 | `lifecycle/title_visual_startup.rs` | 186 | product startup arming/order | R22 |
-| `mem.rs` | 67 | product compatibility helpers | R3 and R5 |
-| `menu_diag.rs` | 8 | product diagnostic facade | D4 |
-| `menu_diag/menu_observation.rs` | 614 | product menu observation | D4 |
-| `mod.rs` | 113 | experiments module root and compatibility exports | `STAY` |
-| `mod/own_stepper_idx6_memory.rs` | 112 | own-stepper memory family | D5 and R14 |
-| `mod/product_core_own_stepper.rs` | 637 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 641 | product fallback-drive diagnostic | D5 |
-| `own_load.rs` | 11 | S11 own-load facade | D5 |
-| `own_load/drive.rs` | 1,750 | native-load, world-resource, and save-byte families | D5 |
+| `mem.rs` | 24 | product compatibility helpers | R3 and R5 |
+| `menu_diag.rs` | 4 | product diagnostic facade | D4 |
+| `menu_diag/menu_observation.rs` | 615 | product menu observation | D4 |
+| `mod.rs` | 101 | experiments module root and compatibility exports | `STAY` |
+| `mod/own_stepper_idx6_memory.rs` | 109 | own-stepper memory family | D5 and R14 |
+| `mod/product_core_own_stepper.rs` | 567 | product core own-stepper | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 639 | product fallback-drive diagnostic | D5 |
+| `own_load.rs` | 9 | S11 own-load facade | D5 |
+| `own_load/drive.rs` | 1,719 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
-| `own_load/loaders/load_drive.rs` | 667 | load-drive implementation family | D5 |
+| `own_load/loaders/load_drive.rs` | 668 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 497 | switch-reload adapter family | D5 |
-| `own_stepper.rs` | 11 | own-stepper facade | D5 |
-| `own_stepper/bootstrap_drive.rs` | 909 | product bootstrap-drive policy | D5 |
+| `own_stepper.rs` | 9 | own-stepper facade | D5 |
+| `own_stepper/bootstrap_drive.rs` | 874 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 741 | product load-step policy | D5 |
-| `present_overlay.rs` | 947 | product present mechanism | R3 |
+| `present_overlay.rs` | 946 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
-| `save_redirect.rs` | 11 | save-redirect facade | R32 |
-| `save_redirect/file_ops.rs` | 352 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,026 | save source/path policy and redirect adapters | R32-R37 |
-| `startup_hooks.rs` | 197 | product startup root and arming facade | `STAY` |
+| `save_redirect.rs` | 9 | save-redirect facade | R32 |
+| `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,000 | save source/path policy and redirect adapters | R32-R37 |
+| `startup_hooks.rs` | 103 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/dlc_roots_trace.rs` | 169 | product diagnostic | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 383 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
-| `startup_hooks/diagnostics/mod.rs` | 174 | diagnostics module facade | `STAY` |
+| `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,550 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
-| `startup_hooks/loading_cover/mod.rs` | 186 | loading-cover module facade | R15-R16 |
-| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 285 | portrait oracle family | R16 |
-| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 898 | Scaleform resource and profile-table families | D2 and R24 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,535 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
+| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
+| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 902 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,075 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,407 | Scaleform resource, title, and product families | R22 and R24 |
-| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 868 | title message-box and Scaleform families | R22 and R24 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,400 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 471 | window-observation/final-geometry family | R9 |
-| `startup_hooks/quit_menu/mod.rs` | 198 | quit-menu module facade | R10-R20 |
-| `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,765 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,957 | mixed profile-row title, quit, and sampler families | R11 |
-| `startup_hooks/quit_menu/save_dest_commit.rs` | 1,243 | System>Quit destination commit family | R18 |
+| `startup_hooks/quit_menu/mod.rs` | 68 | quit-menu module facade | R10-R20 |
+| `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,768 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,954 | mixed profile-row title, quit, and sampler families | R11 |
+| `startup_hooks/quit_menu/save_dest_commit.rs` | 1,227 | System>Quit destination commit family | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 656 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 2,894 | native picker, destination, and row-builder families | R17-R19 |
-| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 758 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
-| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,192 | product profile renderer and quit swap families | R18-R19 |
+| `startup_hooks/quit_menu/save_picker_path_editor.rs` | 760 | R13B1-R13B4 families listed in section 4.3 | R13A-R13B4 |
+| `startup_hooks/quit_menu/save_swap_profile_table.rs` | 1,201 | product profile renderer and quit swap families | R18-R19 |
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 1,459 | System>Quit dialog implementation and picker adapter | R10 and R18 |
-| `startup_hooks/quit_menu/system_quit_hooks.rs` | 682 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
-| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,407 | ownership, telemetry, quit, and portrait families | R19 |
-| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,162 | product repro guard and quit/title families | R2 and R19 |
+| `startup_hooks/quit_menu/system_quit_hooks.rs` | 681 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
+| `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,399 | ownership, telemetry, quit, and portrait families | R19 |
+| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 1,157 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/quit_menu/system_quit_row_identity.rs` | 289 | System>Quit row identity family | R18 |
-| `startup_hooks/save_picker/mod.rs` | 171 | save-picker module facade | R17 |
-| `startup_hooks/save_picker/save_picker_boot.rs` | 420 | boot picker surface | R17 |
-| `startup_hooks/save_picker/save_picker_os_dialog.rs` | 27 | compatibility shim | R17-R18 |
+| `startup_hooks/save_picker/mod.rs` | 22 | save-picker module facade | R17 |
+| `startup_hooks/save_picker/save_picker_boot.rs` | 421 | boot picker surface | R17 |
+| `startup_hooks/save_picker/save_picker_os_dialog.rs` | 19 | compatibility shim | R17-R18 |
 | `startup_hooks/save_picker/save_picker_surface.rs` | 122 | picker surface routing adapter | R17-R18 |
-| `title.rs` | 7 | title facade | R22 |
-| `trace.rs` | 14 | trace facade | R6A-R6D and D4 |
+| `title.rs` | 5 | title facade | R22 |
+| `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
 | `trace/menu_constructor_capture.rs` | 1,336 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 2,059 | title reload and menu trace families | R6C, R21, and D4 |
 | `trace/native_result_map_hooks.rs` | 739 | native result-map hook family | R6A and D4 |

@@ -28,3 +28,6 @@ thiserror = "2"
 fstools_formats = { git = "https://github.com/soulsmods/fstools-rs", rev = "4b0db28d1c419cdedc62cc8e8def9c6eaad38d12" }
 # Only `wgpu::VertexFormat`/`VertexBufferLayout` (core types, no GPU backend needed).
 wgpu = { version = "29", default-features = false, optional = true }
+
+[lints]
+workspace = true

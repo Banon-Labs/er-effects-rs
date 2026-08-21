@@ -266,10 +266,12 @@ pub use er_telemetry::counters::PORTRAIT_LUMA_FLICKER_MAX;
 /// per run: an idle anim must push `_max` clearly above ~0 while lighting flicker alone cannot.
 pub use er_telemetry::counters::PORTRAIT_MOTION_METRIC_LAST;
 pub use er_telemetry::counters::PORTRAIT_MOTION_METRIC_MAX;
-/// Previous published frame's 32x32 downsample planes for the motion/flicker metrics:
-/// (alpha, luma, keyed) where `keyed` = the frame had transparent cells (depth cutout live).
+/// One published frame's 32x32 downsample planes for the motion/flicker metrics:
+/// `(alpha, luma, keyed)`, where `keyed` = the frame had transparent cells (depth cutout live).
+pub type PortraitMotionPlanes = (Vec<u8>, Vec<u8>, bool);
+/// Previous published frame's 32x32 downsample planes for the motion/flicker metrics.
 /// Render thread only.
-pub static PORTRAIT_MOTION_PREV_PLANES: std::sync::Mutex<Option<(Vec<u8>, Vec<u8>, bool)>> =
+pub static PORTRAIT_MOTION_PREV_PLANES: std::sync::Mutex<Option<PortraitMotionPlanes>> =
     std::sync::Mutex::new(None);
 pub use er_telemetry::counters::PROFILE_COLOR_FROM_BUNDLE_WINDOW_MARK;
 pub use er_telemetry::counters::PROFILE_COLOR_FROM_SCAN_WINDOW_MARK;

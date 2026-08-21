@@ -13,7 +13,6 @@ pub(crate) use er_title_flow::CS_MENU_DATA_ENDING_FLAG_5E_OFFSET;
 pub(crate) use er_title_flow::ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA;
 pub(crate) use er_title_flow::GAME_MAN_ENDING_FLAG_B7C_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_ENDING_FLAG_B7D_OFFSET;
-pub(crate) use er_title_flow::GAME_MAN_LOADING_MODE_BF5_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_WARP_REQUESTED_10_OFFSET;
 /// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
 /// symmetry so we fully undo what the final functor set.
@@ -32,11 +31,6 @@ pub(crate) use er_title_flow::CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET;
 // CSMenuMan+0x798 is (re)populated after the load.
 pub(crate) use er_title_flow::TITLE_STEP_IN_GAME_STEP_2E8_OFFSET;
 pub(crate) use er_title_flow::IN_GAME_STEP_REQUEST_CODE_D8_OFFSET;
-pub(crate) use er_title_flow::CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET;
-pub(crate) use er_title_flow::CS_MENU_MAN_FIELD_6B0_OFFSET;
-pub(crate) use er_title_flow::CS_DELAY_DELETE_MAN_GLOBAL_RVA;
-pub(crate) use er_title_flow::CS_DELAY_DELETE_PENDING_40_OFFSET;
-pub(crate) use er_title_flow::CS_DELAY_DELETE_FINALIZE_54_OFFSET;
 /// `CS::EzChildStepBase::RequestFinish` (dump `0x140eb5590` -> live `0x140eb5570`, shift -0x20,
 /// content-unique). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
 /// step's finish-requested byte at child+0xb4) then latches wrapper+0x10. The quit-to-title
@@ -54,7 +48,6 @@ pub(crate) const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT;
-pub(crate) use er_title_flow::SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA;
 pub(crate) use er_title_flow::SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT;
 /// Count of quick-load handoffs that invoked the original native Quit Game row action trampoline
 /// instead of the low-level accepted callback alone. This is an experiment to test whether the full
@@ -78,8 +71,6 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TICK;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_STABLE_FRAMES;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MAX_STABLE_FRAMES;
-/// The picked slot the oracle is tracking (usize::MAX = none / classified); reset on a new pick.
-pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TRACKED_SLOT;
 /// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
@@ -105,19 +96,6 @@ pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_STEP;
 pub(crate) use er_title_flow::SWITCH_ORACLE_REQUEST_CODE;
-pub(crate) use er_title_flow::SWITCH_ORACLE_FINALIZE_12A;
-pub(crate) use er_title_flow::SWITCH_ORACLE_B80;
-/// Count of forced b80 3->0 drains at the mms18 finalize stall (reload-drain-b80 semaphore).
-pub(crate) use er_telemetry::counters::RELOAD_DRAIN_B80_COUNT;
-/// Reload epoch (fresh_deser) for which the post-finish stable-proof already fired (holds the world:
-/// phase->IDLE + clear b78). One-shot PER reload epoch, decoupled from FRESH_DESER_DONE (own_load
-/// consumes that latch at commit, which used to block the stable-proof and let the world revert to
-/// title after finish). usize::MAX = none yet.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_STABLE_PROOF_EPOCH;
-/// Reload epoch whose MoveMapStep finalize reached the near-done substates (>=8 WARP/SERVER FINALIZE),
-/// i.e. the load has effectively finished. Used to hold the world the instant the finalize completes --
-/// BEFORE the move probe could prove movement (the world reverts too fast for the 60-frame probe).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH;
 /// MoveMap destination BlockId + world-stable RAM semaphore offsets (RE-verified 2026-07-19,
 /// bd er-effects-rs-9fmm). `InGameStep::STEP_MoveMap_Update` @0x140aec810 loads the destination block
 /// after requestCode(+0xd8)=2; it reads `GameMan+0xac8` (loadTargetMapId) when
@@ -127,6 +105,7 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH;
 pub(crate) const GAME_MAN_MOVE_MAP_STEP_BLOCK_ID_14_OFFSET: usize = 0x14;
 pub(crate) const GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET: usize = 0xac8;
 /// BlockId sentinel meaning "no destination" (skip the map load).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MOVE_MAP_BLOCK_ID_NONE: u32 = 0xffff_ffff;
 /// `FUN_140508d30` (dump 0x140508d30) returns `WorldChrMan.field47_0x1e524 == 2` = world genuinely
 /// stable/ready -- a stronger world-ready oracle than can_move. RE-verified offset + constant.
@@ -155,10 +134,6 @@ pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_PLAYER_PRESENT;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
-pub(crate) use er_title_flow::SWITCH_ORACLE_LOADING_FIELD10;
-pub(crate) use er_title_flow::SWITCH_ORACLE_LOADING_FIELD11;
-pub(crate) use er_title_flow::SWITCH_ORACLE_MMS_B7C1;
-pub(crate) use er_title_flow::SWITCH_ORACLE_MMS_BLOCKS;
 /// MoveMapStep internal step index -> name. Order from the InGameStep-analogue registrar labels
 /// (`u_MoveMapStep::STEP_*` at dump 0x142b5eb30..) and VALIDATED for 0..3 by the observed
 /// `mms_state 1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait` progression (own_stepper idx6 watch).
@@ -249,33 +224,11 @@ pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_INIT_HITS;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
 pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
-pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_MOVEMAP_RVA;
-pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED;
-pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_ORIG;
-pub(crate) use er_title_flow::INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA;
-pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED;
-pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG;
-/// Consecutive frames the defer detour has held STEP_MoveMap_Update (reset when finalize leaves 1..=8).
-pub(crate) use er_telemetry::counters::INGAMESTEP_MOVEMAP_UPDATE_DEFER_TICKS;
-/// Total defer holds (telemetry: >0 means the premature-teardown race was intercepted).
-pub(crate) use er_telemetry::counters::INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT;
-/// Total early b73 return-title-latch clears (telemetry: >0 means the quit-save latch was held off
-/// before the MoveMapStep ending evaluator could revert the reloaded world).
-pub(crate) use er_telemetry::counters::RELOAD_B73_HOLD_COUNT;
-/// Total menuData+0x5e/+0x5d ending-latch clears during a reload (telemetry: >0 means the session-end
-/// OUTPUT latch that STEP_EndFlow reads was held off so the reloaded world persists).
-pub(crate) use er_telemetry::counters::RELOAD_ENDING_LATCH_HOLD_COUNT;
-pub(crate) use er_title_flow::INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX;
-pub(crate) use er_title_flow::MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET;
-pub(crate) use er_title_flow::MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET;
-pub(crate) use er_title_flow::MOVEMAPSTEP_NEXT_STEP_4C_OFFSET;
-pub(crate) use er_title_flow::MOVEMAPSTEP_DONE_FLAG_50_OFFSET;
-pub(crate) use er_title_flow::MOVEMAPSTEP_HOLD_TIMER_270_OFFSET;
 pub(crate) use er_title_flow::MOVEMAPSTEP_COUNTDOWN_100_OFFSET;
 /// MoveMapStep+0x244 is the native completion bit consumed by InGameStep/TitleStep
 /// (`FUN_140aebe20` returns true iff MoveMapStep exists and this byte is nonzero).
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
-pub(crate) use er_title_flow::MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET;
 /// SAVE-DISABLED SWITCH COMPLETION (2026-07-16). By design the ONLY save writer is the in-game "Save
 /// Game" button; the game's quit-save on a System->Quit switch must NOT run. But the native return-title
 /// state machine advances `GameMan+0xbc4` 1->2->3 ONLY inside a successful quit-save write (dump
@@ -290,16 +243,8 @@ pub(crate) use er_title_flow::MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET;
 /// blocks>0) and parked at STEP_MoveMap with the final functor already fired, we clear bc4->0 so it
 /// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT;
-pub(crate) use er_title_flow::GAME_MAN_SAVE_REQUESTED_B72_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT;
 pub(crate) use er_title_flow::FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET;
-pub(crate) use er_title_flow::WORLDINFO_BLOCK_LIST_B3030_OFFSET;
-pub(crate) use er_title_flow::WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET;
-pub(crate) use er_title_flow::WORLDINFO_BLOCK_AREA_ID_C_OFFSET;
-pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX;
-pub(crate) use er_title_flow::WORLDINFO_PROCESS_MSB_LOADLISTS_RVA;
 /// PopulateLists' per-area block-res source-builder (deobf 0x0066bb10, dump 0x14066bc00). The ONLY caller
 /// of the +0xce0 WorldBlockRes constructor. Its 2nd arg (rdx) is the input MSB block list; it early-outs
 /// on `*(rdx+0x10) == 0` (the block count) and builds nothing. On a fresh boot this list is full (incl the
@@ -341,6 +286,7 @@ pub(crate) const FILECAP_STATUS_LOADED: i32 = 0x04;
 // 0x1406157f0 sets +0x35=5 when worldBlockInfo+0x28 != 0). The stalecap fix no longer forces this --
 // RE proved forcing the phase re-runs phase-1's find-or-insert which refcount-bumps the SAME stale cap
 // and re-issues no read. Kept as documentation of the native retry value; the fix now re-enqueues.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCKRES_PHASE_TEARDOWN_RETRY: u8 = 5;
 // --- FD4 file-cap re-issue path (RE 2026-07-17, deobf eldenring-deobf.bin) ---
 // The stale second-load cap is status +0x88==4 (loaded) with data +0x90==NULL because world teardown
@@ -401,6 +347,7 @@ pub(crate) const EBL_REGISTRY_GLOBAL_RVA: u32 = 0x084864a8;
 /// file/EBL/mount path), so a read-only forwarding hook is safe. Hooked to capture its context args on
 /// load 1 (fires + works) vs load 2 (skipped?) -- both the bug-fix driver interface and the own-load
 /// primitive (drive the essential map mount menu-free for any save).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082dbf0;
 /// MountEblArchive (deobf entry VA 0x1401efc00, prologue `40 55 56 57 41 56 41 57`): mounts an EBL/BHD
 /// archive so its packed block files can be read. `fn(rcx=CSEblFileManager, rdx, r8, r9)` -- all three of
@@ -410,26 +357,18 @@ pub(crate) const MAP_LOAD_ORCHESTRATOR_RVA: u32 = 0x0082dbf0;
 /// PROBE ONLY: hooked to log which archives mount on the first autoload vs the System->Quit->Load reload,
 /// to confirm/refute whether the destination map's archive is unmounted on quit and NOT re-mounted on the
 /// warm reload (the run7 empty-EBL-read hypothesis; content child +0x90 stays null though status->4).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MOUNT_EBL_ARCHIVE_RVA: u32 = 0x001efc00;
 // World BLOCK constructor (deobf/runtime 0x0062ec00): the ONLY writer of block+0x40 (load-state slice
 // count) and block+0x48 (slice base), sourced from STACK args (0x68/0x70(%rsp)). NOT hooked -- a
 // register-only forwarding hook loses those stack args and corrupts every block (runtime AV 2026-07-17).
 // The slice-count/base offsets (0x40/0x48) live with the fix when it needs to repoint them.
-/// Consecutive frames the switch has sat at WORLD RES WAIT with the incoming block's load-state NULL
-/// (a real stall; the boot-load transient clears in << 2s), the one-shot latch for the ProcessMsbLoadLists
-/// rebuild, and the count of rebuilds performed (runtime semaphore).
-pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_NULL_STREAK;
-pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_REBUILD_TRIED;
-pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_REBUILD_COUNT;
 // The matched block's load-state, read exactly as FUN_14066d4d0 does: call the block's vtable slot
 // +0x10 (`block->vtable[0x10](block)`) to get the load-state object, then LOADED requires +0x2d != 0
 // AND +0x35 == 0x0a(10). +0x35 (the stream-state/phase enum) stuck below 10 = the block is registered
 // but its stream never completes (the WORLD RES WAIT stall). The getter/flag/phase offsets already
 // exist as BLOCK_LOADSTATE_GETTER_VT_10_OFFSET / BLOCK_LOADSTATE_FLAG_2D_OFFSET /
 // BLOCK_LOADSTATE_PHASE_35_OFFSET in constants/gaitem_restore.rs -- reused here, not redefined.
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_REQUEST_2C_OFFSET;
-pub(crate) use er_title_flow::WORLDINFO_OVERWORLD_LIST_B3148_OFFSET;
-pub(crate) use er_title_flow::WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET;
 pub(crate) use er_title_flow::INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET;
 pub(crate) use er_title_flow::INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET;
 pub(crate) use er_title_flow::INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET;
@@ -450,25 +389,6 @@ pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY: Atomic
     AtomicUsize::new(usize::MAX);
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT;
-/// Count of autoload-handoff reload frames where the DLL re-armed CSMenuMan.loadingScreenData.field_0x10
-/// so STEP_RequestWait keeps the native +0x798 loading job alive until movement proof instead of draining
-/// requestCode to 0 and returning to title.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT;
-/// Count of autoload-handoff reload frames where the DLL cleared CSMenuMan.loadingScreenData.field_0x11
-/// so the native loading-screen close/result request cannot prematurely drain +0x798 before movement proof.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT;
-/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4b8 low byte at 0 during
-/// state 18 so the native STEP_MoveMap advance gate cannot reach Cleanup/Finish before movement proof.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS4B8_HOLD_COUNT;
-/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x4c (`next`) at state 18 so
-/// the state machine cannot jump to Cleanup/Finish before movement proof.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS18_NEXT_HOLD_COUNT;
-/// Count of autoload-handoff reload frames where the DLL reset MoveMapStep state-18 timer/countdown
-/// fields before the native body could expire into Cleanup/Finish.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS18_TIMER_HOLD_COUNT;
-/// Count of autoload-handoff reload frames where the DLL held MoveMapStep+0x244 false so
-/// TitleStep::GameStepWait cannot consume the reload as a completed return-to-title before movement proof.
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
@@ -481,8 +401,6 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_LIST;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_RESTORE_COUNT;
 /// `PropertyEditDialog`/System dialog embedded `SceneObjProxy` used by the Quit tab builder for child binds.
 pub(crate) const SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET: usize = 0x1200;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE;
@@ -514,6 +432,7 @@ pub(crate) use er_title_flow::CONNECTION_ERROR_DIALOG;
 pub(crate) static MSGBOX_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MSGBOX_TOTAL_BUILDS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static MSGBOX_POSTLOAD_BUILDS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static MSGBOX_LAST_ARG_RCX: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -539,6 +458,7 @@ pub(crate) const MSGBOX_ONDECIDE_RVA: usize = MsgBoxRva::OnDecide as usize;
 /// owner->vtable[+0x10](dialog); else StepResult(3=stop)+EmitResult. Directly emits "stop" to
 /// the parent MenuWindowJob so it tears the dialog down -- a more direct dismiss than OnDecide
 /// (which only moved the selection to OK). Acceptable because the connection-error OK is a no-op.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MSGBOX_FORCE_STOP_RVA: usize = MsgBoxRva::ForceStop as usize;
 // Startup modal handling is lifecycle-driven by `startup_modal_blocking_state`, not by a fixed
 // grace window.

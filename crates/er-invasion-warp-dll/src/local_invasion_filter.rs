@@ -50,9 +50,10 @@
 //! ignores. `nothing_in_this_module_detours_ersc`'s successor test pins that budget so growing it
 //! is a decision rather than a drift.
 //!
-//! `ersc.dll` is RELOCATABLE and has no fixed load address, so every ERSC address is `module base
-//! + RVA` resolved at runtime and byte-checked before use. If Seamless is not loaded the filter
-//! never arms: without a Seamless session there are no Seamless invasions to filter.
+//! `ersc.dll` is RELOCATABLE and has no fixed load address, so every ERSC address is
+//! `module base + RVA` resolved at runtime and byte-checked before use. If Seamless is not
+//! loaded the filter never arms: without a Seamless session there are no Seamless invasions
+//! to filter.
 //!
 //! # Fail-closed direction
 //!
@@ -2590,10 +2591,12 @@ mod tests {
     /// The window is read every frame, so it must stay small enough to be free.
     #[test]
     fn the_session_watch_window_stays_small() {
-        assert!(
-            SESSION_WATCH_WORDS * 8 <= 0x200,
-            "a per-frame read of this size is no longer negligible"
-        );
+        const {
+            assert!(
+                SESSION_WATCH_WORDS * 8 <= 0x200,
+                "a per-frame read of this size is no longer negligible"
+            )
+        };
     }
 
     /// The digest is SHA-256 hex. A probe that expected the 16-character `%016llX` intermediate

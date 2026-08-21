@@ -12,3 +12,6 @@ description = "Tier-0 lossless Scaleform-GFX (uncompressed 'GFX' v11) reader/wri
 bitflags = "2.11.0"
 # Shared zero-dependency content fingerprint owner.
 er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

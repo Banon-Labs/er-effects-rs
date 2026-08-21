@@ -140,9 +140,6 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_STRIP_W;
 /// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
 pub(crate) use er_telemetry::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
-/// Persistent UPLOAD buffer holding the rasterized strip (recreated when the footprint changes).
-pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD;
-pub(crate) use er_telemetry::counters::BOOT_VIEW_UPLOAD_SIZE;
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 /// First-load latch: the initial game boot-to-title native loading-screen counters are sticky. Do not
@@ -229,6 +226,7 @@ const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
 pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
+#[allow(dead_code)] // Retained: Glyph metric pair with the live BOOT_VIEW_GLYPH_H; kept so the two are read together.
 pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = er_loading_bar::GLYPH_ADV;
 /// Hairline bar, like the game's own loading bar.
 const BOOT_VIEW_BAR_H: usize = 3;
@@ -1137,11 +1135,15 @@ fn boot_view_phase_submilestone(phase: er_loading_bar::LoadPhase) -> (&'static s
 /// 5x7 glyphs for the milestone labels + percent readout. Each row byte uses bit 4 as the LEFTMOST
 /// pixel. Hand-authored for this module (our own asset; nothing game-derived). Unknown chars render
 /// as blanks rather than failing.
+#[allow(dead_code)] // Retained: Measurement half of the boot-view text API, beside the live draw half.
 pub(crate) fn boot_text_width(text: &str, scale: usize) -> usize {
     er_loading_bar::text_width(text, scale)
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
+// Argument-for-argument pass-through of `er_loading_bar::draw_text_rgb`. Grouping these into a
+// struct would only unpack it again one line later; the argument count belongs to that API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn boot_draw_text_rgb(
     buf: &mut [u8],
     w: usize,
@@ -1190,6 +1192,9 @@ fn boot_draw_text_shadowed(
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
+// Argument-for-argument pass-through of `er_loading_bar::fill_rect_rgb`; same reasoning as
+// `boot_draw_text_rgb` above.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn boot_fill_rect(
     buf: &mut [u8],
     w: usize,
@@ -1333,7 +1338,7 @@ fn boot_bg_find_latest_local_steam_screenshot() -> Option<std::path::PathBuf> {
                     .modified()
                     .or_else(|_| meta.created())
                     .unwrap_or(std::time::UNIX_EPOCH);
-                if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+                if best.as_ref().is_none_or(|(t, _)| modified > *t) {
                     best = Some((modified, path));
                 }
             }
@@ -1354,30 +1359,27 @@ fn boot_bg_steam_userdata_roots() -> Vec<std::path::PathBuf> {
         "STEAM_HOME",
         "STEAM_ROOT",
     ] {
-        if let Ok(value) = std::env::var(var) {
-            if !value.is_empty() {
-                boot_bg_push_unique_root(
-                    &mut roots,
-                    std::path::PathBuf::from(value).join("userdata"),
-                );
-            }
+        if let Ok(value) = std::env::var(var)
+            && !value.is_empty()
+        {
+            boot_bg_push_unique_root(&mut roots, std::path::PathBuf::from(value).join("userdata"));
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            let home = std::path::PathBuf::from(home);
-            boot_bg_push_unique_root(
-                &mut roots,
-                home.join(".steam").join("steam").join("userdata"),
-            );
-            boot_bg_push_unique_root(
-                &mut roots,
-                home.join(".local")
-                    .join("share")
-                    .join("Steam")
-                    .join("userdata"),
-            );
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        let home = std::path::PathBuf::from(home);
+        boot_bg_push_unique_root(
+            &mut roots,
+            home.join(".steam").join("steam").join("userdata"),
+        );
+        boot_bg_push_unique_root(
+            &mut roots,
+            home.join(".local")
+                .join("share")
+                .join("Steam")
+                .join("userdata"),
+        );
     }
     roots
 }
@@ -1575,16 +1577,18 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     // Portrait draws INSIDE the rasterizer (behind the bar) when active and the picker is not up.
     let draw_portrait = portrait_active && !picker_active;
     let mut rgba = boot_view_rasterize(
-        region_w,
-        region_h,
-        ms_idx,
-        permille,
-        content_x,
-        content_y,
-        content_w,
+        BootViewRaster {
+            w: region_w,
+            h: region_h,
+            idx: ms_idx,
+            permille,
+            content_x,
+            content_y,
+            content_w,
+            text_scale,
+            draw_portrait,
+        },
         bg,
-        text_scale,
-        draw_portrait,
     );
     if picker_active {
         // Picker owns the screen exclusively (no character context to portrait/stat yet).
@@ -1619,9 +1623,10 @@ pub(crate) fn boot_view_d3d12_compositor_frame(
     }
 }
 
-/// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
-/// background with the same understated bar/label geometry overlaid near the bottom.
-fn boot_view_rasterize(
+/// Everything `boot_view_rasterize` rasterizes into, named. Three consecutive `usize` geometry
+/// pairs cannot be read safely at a positional call site, and there is no order the compiler
+/// would have caught.
+struct BootViewRaster {
     w: usize,
     h: usize,
     idx: usize,
@@ -1629,10 +1634,24 @@ fn boot_view_rasterize(
     content_x: usize,
     content_y: usize,
     content_w: usize,
-    bg: Option<&BootBgImage>,
     text_scale: usize,
     draw_portrait: bool,
-) -> Vec<u8> {
+}
+
+/// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
+/// background with the same understated bar/label geometry overlaid near the bottom.
+fn boot_view_rasterize(spec: BootViewRaster, bg: Option<&BootBgImage>) -> Vec<u8> {
+    let BootViewRaster {
+        w,
+        h,
+        idx,
+        permille,
+        content_x,
+        content_y,
+        content_w,
+        text_scale,
+        draw_portrait,
+    } = spec;
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
     if let Some(bg) = bg {
@@ -1908,7 +1927,18 @@ unsafe fn fill_boot_view_fade_upload(
         .min(h.saturating_sub(strip_h));
     let (ms_idx, permille) = boot_view_progress();
     let mut tight = boot_view_rasterize(
-        w, h, ms_idx, permille, strip_x, strip_y, strip_w, None, text_scale, false,
+        BootViewRaster {
+            w,
+            h,
+            idx: ms_idx,
+            permille,
+            content_x: strip_x,
+            content_y: strip_y,
+            content_w: strip_w,
+            text_scale,
+            draw_portrait: false,
+        },
+        None,
     );
     for px in tight.chunks_exact_mut(RGBA8_BPP) {
         px[3] = alpha;
@@ -2017,7 +2047,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
     unsafe { device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), None, None, None) };
     if !unsafe {
         fill_boot_view_fade_upload(
-            &upload,
+            upload,
             alpha,
             footprint.Footprint.RowPitch as usize,
             cw as usize,
@@ -2035,7 +2065,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
         unsafe {
             record_transition(
                 list,
-                &texture,
+                texture,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_COPY_DEST,
             )
@@ -2062,7 +2092,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
     unsafe {
         record_transition(
             list,
-            &texture,
+            texture,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         )
@@ -2100,7 +2130,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
         list.SetGraphicsRootSignature(root_sig);
         list.SetPipelineState(pso);
         list.SetDescriptorHeaps(&[Some(srv_heap.clone())]);
-        list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(&device, &srv_heap, 0));
+        list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(&device, srv_heap, 0));
         list.SetGraphicsRoot32BitConstants(
             1,
             constants.len() as u32,
@@ -2119,7 +2149,7 @@ unsafe fn composite_boot_release_fade_frame(swapchain_raw: usize, alpha: u8) -> 
             D3D12_RESOURCE_STATE_PRESENT,
         );
     }
-    if !unsafe { execute_and_wait(&queue, &list, &fence) } {
+    if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
     BOOT_VIEW_FADE_HITS.fetch_add(1, Ordering::SeqCst);
@@ -2245,7 +2275,7 @@ unsafe fn composite_boot_progress_inner(
     let can_move_handoff = crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst)
         && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == cur_load_epoch;
     let render_release_handoff = boot_view_cover_release_ready(can_move_handoff);
-    let epoch_world_handoff = render_release_handoff;
+    let _epoch_world_handoff = render_release_handoff;
     let world_handoff = render_release_handoff;
     // DIAGNOSTIC (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
     // stop gates. The product cover must not stop at player-present/native-loading; only the same
@@ -2288,9 +2318,7 @@ unsafe fn composite_boot_progress_inner(
     let native_loading_seen = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst)
         > BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.load(Ordering::SeqCst);
     let real_loading_handoff = forced_continue_handoff || native_loading_seen;
-    if (loading_handoff || real_loading_handoff || world_handoff)
-        && !(real_loading_handoff || world_handoff)
-    {
+    if loading_handoff && !real_loading_handoff && !world_handoff {
         // Early profile/keyed-frame semaphores can assert while the game is still between title/menu
         // work and the forced Continue transition. They mean "keep covering", not "start the
         // handoff bail clock"; starting the clock here caused the cover to bail before CS::LoadingScreen

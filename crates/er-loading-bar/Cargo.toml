@@ -6,3 +6,6 @@ publish = false
 
 [lib]
 name = "er_loading_bar"
+
+[lints]
+workspace = true

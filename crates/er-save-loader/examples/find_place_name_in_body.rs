@@ -45,8 +45,8 @@ fn main() {
         let Ok(u10) = bnd4::entry_body(&data, "USER_DATA010") else {
             continue;
         };
-        for slot in 0..bnd4::SAVE_SLOT_COUNT {
-            if !active[slot] {
+        for (slot, is_active) in active.iter().enumerate() {
+            if !is_active {
                 continue;
             }
             let Some(rec) = profile_summary::slot_summary_from_body(u10, slot) else {

@@ -44,7 +44,7 @@ fn arts_mounts(movie: &Movie) -> Vec<(u16, u16)> {
         .collect()
 }
 
-fn sprite<'m>(movie: &'m Movie, id: u16) -> Option<&'m Vec<Tag>> {
+fn sprite(movie: &Movie, id: u16) -> Option<&Vec<Tag>> {
     movie.tags.iter().find_map(|t| match t {
         Tag::DefineSprite { id: sid, tags, .. } if *sid == id => Some(tags),
         _ => None,

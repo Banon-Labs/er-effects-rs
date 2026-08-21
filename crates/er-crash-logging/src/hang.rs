@@ -42,7 +42,13 @@ use std::ffi::c_void;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{CONTEXT_RIP_OFFSET, CONTEXT_RSP_OFFSET, module_tag};
+// `ThreadSample::format_stack` is the only consumer outside the windows-only report paths.
+#[cfg(any(windows, test))]
+use crate::module_tag;
+// `sample_thread` reads these out of a raw `CONTEXT`; the test module pins them against
+// `CONTEXT_SIZE`. Neither consumer exists in a non-test host build.
+#[cfg(any(windows, test))]
+use crate::{CONTEXT_RIP_OFFSET, CONTEXT_RSP_OFFSET};
 #[cfg(windows)]
 use crate::{
     MIN_VALID_PTR, append_log, config, loaded_modules, ms_since_install, path_for, safe_read_u32,
@@ -55,14 +61,17 @@ use crate::{
 ///
 /// This is the one version-pinned constant in the module. `validate_frame_counter` is what keeps it
 /// honest on any other build.
+#[cfg(any(windows, test))]
 const GAME_FRAME_COUNTER_RVA: usize = 0x3d8_567c;
 
 /// Executable this counter belongs to. Checked case-insensitively before the RVA is read at all, so
 /// the watchdog stays inert if the crate is ever loaded into some other host process.
+#[cfg(windows)]
 const GAME_MODULE_NAME: &str = "eldenring.exe";
 
 /// Let the loader finish and the game reach its main loop before the first sample. Nothing in this
 /// module may touch the game until `DllMain` has long returned.
+#[cfg(windows)]
 const STARTUP_DELAY_MS: u32 = 5_000;
 
 /// Poll interval for every detector in this module.
@@ -74,43 +83,58 @@ const STARTUP_DELAY_MS: u32 = 5_000;
 ///
 /// The cost is one `u32` read per tick. The stall and loading-screen detectors are unaffected
 /// because both measure elapsed TIME, not tick counts.
+#[cfg(windows)]
 const SAMPLE_INTERVAL_MS: u32 = 50;
 
 /// Frames of deficit that constitute a reportable hitch: ~1 second of lost time at 60fps.
+#[cfg(windows)]
 const FRAMEDROP_THRESHOLD_FRAMES: f64 = 60.0;
 
 /// Plausible frame rates. A measured baseline outside this range means the counter is not a
 /// per-frame counter on this build, so frame-drop detection disarms rather than reporting noise.
+#[cfg(windows)]
 const FRAMEDROP_MIN_FPS: f64 = 20.0;
+#[cfg(windows)]
 const FRAMEDROP_MAX_FPS: f64 = 360.0;
 
 /// How long to watch the counter to learn the game's frame rate before arming.
+#[cfg(windows)]
 const FRAMEDROP_CALIBRATION_MS: u64 = 2_000;
 
 /// Gap between the two CPU snapshots used to attribute a hitch.
+#[cfg(windows)]
 const FRAMEDROP_ATTRIBUTION_MS: u32 = 250;
 
 /// Threads named in a hitch report, ranked by CPU consumed during the hitch.
+#[cfg(windows)]
 const FRAMEDROP_TOP_THREADS: usize = 5;
 
 /// Hitches are common enough that an unbounded report would fill the log; a stall is not.
+#[cfg(windows)]
 const MAX_FRAMEDROP_REPORTS: usize = 5;
 
 /// Minimum gap between hitch reports, so one bad streak cannot spend the whole budget at once.
+#[cfg(windows)]
 const FRAMEDROP_REPORT_COOLDOWN_SECS: u64 = 30;
 
 /// How many distinct increments must be observed before the watchdog trusts the address.
+#[cfg(any(windows, test))]
 const ARM_ADVANCES_REQUIRED: u32 = 3;
 
 /// How long to wait for those increments before giving up and disarming. Generous: the counter does
 /// not move until the game is past its own boot.
+#[cfg(any(windows, test))]
 const ARM_TIMEOUT_SAMPLES: u32 = 300;
 
 /// One stall is one report. Bounded so a game left frozen overnight cannot fill the disk.
+#[cfg(windows)]
 const MAX_HANG_REPORTS: usize = 3;
 
+#[cfg(windows)]
 const MAX_THREADS_SAMPLED: usize = 128;
+#[cfg(any(windows, test))]
 const THREAD_STACK_QWORDS: usize = 192;
+#[cfg(any(windows, test))]
 const THREAD_STACK_MAX_FRAMES: usize = 40;
 
 #[cfg(windows)]
@@ -127,7 +151,9 @@ const INVALID_HANDLE_VALUE: isize = -1;
 const SUSPEND_FAILED: u32 = u32::MAX;
 
 /// x86-64 `CONTEXT`: 0x4d0 bytes, 16-byte aligned, `ContextFlags` at offset 0x30.
+#[cfg(any(windows, test))]
 const CONTEXT_SIZE: usize = 0x4d0;
+#[cfg(any(windows, test))]
 const CONTEXT_FLAGS_OFFSET: usize = 0x30;
 #[cfg(windows)]
 const CONTEXT_AMD64_CONTROL_INTEGER: u32 = 0x0010_0000 | 0x0000_0001 | 0x0000_0002;
@@ -147,6 +173,8 @@ const CONTEXT_AMD64_CONTROL_INTEGER: u32 = 0x0010_0000 | 0x0000_0001 | 0x0000_00
 ///
 /// `expected` comes from a frame rate MEASURED at arming rather than an assumed 60: a 30fps cap
 /// would otherwise read as a permanent 50% deficit, and an uncapped build would never trip.
+// Pure logic driven by the windows-only watchdog thread, and by the test module.
+#[cfg(any(windows, test))]
 pub mod framedrop {
     /// Samples retained. At the module's 50ms tick this covers well over the window; the window
     /// is enforced by accumulated TIME, so a caller ticking at a different rate is still correct.
@@ -192,11 +220,6 @@ pub mod framedrop {
             })
         }
 
-        #[must_use]
-        pub fn baseline_fps(&self) -> f64 {
-            self.baseline_fps
-        }
-
         /// Frames owed inside the current window.
         #[must_use]
         pub fn deficit(&self) -> f64 {
@@ -213,7 +236,7 @@ pub mod framedrop {
         /// inside the window reads as the net loss -- but the reported total floors at zero, since
         /// "owed -12 frames" is not a thing.
         pub fn observe(&mut self, frames_advanced: u32, window_seconds: f64) -> Option<Hitch> {
-            if !(window_seconds > 0.0) || !window_seconds.is_finite() {
+            if window_seconds <= 0.0 || !window_seconds.is_finite() {
                 return None;
             }
             let expected = self.baseline_fps * window_seconds;
@@ -305,13 +328,19 @@ pub mod framedrop {
 // advancing, and the screen has neither been finalized (+0x11) nor closed (+0x0c). A live clock
 // beside a dead target is a frozen substep; both frozen together just means the process died,
 // which the frame counter already catches.
+// Pure logic driven by the windows-only watchdog thread, and by the test module.
+#[cfg(any(windows, test))]
 pub mod loading_screen {
     /// Offsets into `CS::LoadingScreenData`, verified against live values on 1.16.2.
     pub const ALREADY_CLOSED_OFFSET: usize = 0x0c;
     pub const CLOSE_GATE_OFFSET: usize = 0x11;
     pub const ACTIVE_OFFSET: usize = 0x14;
+    /// Measured, but not read: the witness compares TARGET against ELAPSED, not the start value.
+    #[allow(dead_code)]
     pub const LERP_START_OFFSET: usize = 0x18;
     pub const LERP_TARGET_OFFSET: usize = 0x1c;
+    /// Measured, but not read: a frozen target is the stall signal, whatever duration was asked for.
+    #[allow(dead_code)]
     pub const LERP_DURATION_OFFSET: usize = 0x20;
     pub const ELAPSED_OFFSET: usize = 0x24;
 
@@ -377,9 +406,7 @@ pub mod loading_screen {
                 self.frozen_for = 0.0;
                 return None;
             }
-            let Some(previous) = previous else {
-                return None;
-            };
+            let previous = previous?;
             // A different screen (or the same one restarted) resets the accounting: the target
             // moved, or the clock went backwards because the struct was reused.
             if previous.lerp_target != sample.lerp_target || sample.elapsed < previous.elapsed {
@@ -497,6 +524,7 @@ static WATCHDOG_STARTED: std::sync::Once = std::sync::Once::new();
 #[cfg(windows)]
 type ThreadStart = unsafe extern "system" fn(*mut c_void) -> u32;
 
+#[cfg(any(windows, test))]
 #[repr(C)]
 struct ThreadEntry32 {
     size: u32,
@@ -509,6 +537,7 @@ struct ThreadEntry32 {
 }
 
 #[repr(C, align(16))]
+#[cfg(any(windows, test))]
 struct ThreadContext([u8; CONTEXT_SIZE]);
 
 #[cfg(windows)]
@@ -570,9 +599,6 @@ pub(crate) fn start(stall_seconds: u64) {
         unsafe { CloseHandle(handle) };
     });
 }
-
-#[cfg(not(windows))]
-pub(crate) fn start(_stall_seconds: u64) {}
 
 #[cfg(windows)]
 unsafe extern "system" fn watchdog_thread(_parameter: *mut c_void) -> u32 {
@@ -747,11 +773,6 @@ fn read_loading_screen_sample() -> Option<loading_screen::Sample> {
     })
 }
 
-#[cfg(not(windows))]
-fn read_loading_screen_sample() -> Option<loading_screen::Sample> {
-    None
-}
-
 /// Total CPU (kernel + user) each thread has consumed, in 100ns units.
 ///
 /// Cheap enough to call twice around a hitch: it opens a handle per thread and reads a counter,
@@ -782,6 +803,7 @@ fn thread_cpu_times() -> Vec<(u32, u64)> {
 /// Pure so it can be tested without a process: the ordering is the whole product here, and an
 /// attribution that ranks wrongly is worse than none because it points the reader at an idle
 /// thread with total confidence.
+#[cfg(any(windows, test))]
 fn rank_cpu_consumers(before: &[(u32, u64)], after: &[(u32, u64)]) -> Vec<(u32, u64)> {
     let mut deltas: Vec<(u32, u64)> = after
         .iter()
@@ -1029,6 +1051,7 @@ fn enumerate_threads() -> Vec<u32> {
     ids
 }
 
+#[cfg(any(windows, test))]
 fn new_thread_entry() -> ThreadEntry32 {
     ThreadEntry32 {
         size: std::mem::size_of::<ThreadEntry32>() as u32,
@@ -1041,6 +1064,10 @@ fn new_thread_entry() -> ThreadEntry32 {
     }
 }
 
+#[cfg(any(windows, test))]
+// `report_stall` formats these four, and it is windows-only; the test module exercises the stack
+// scan alone, so a host test build reads a struct nothing on that target has a reason to consume.
+#[cfg_attr(not(windows), allow(dead_code))]
 struct ThreadSample {
     thread_id: u32,
     rip: usize,
@@ -1050,6 +1077,7 @@ struct ThreadSample {
     stack_len: usize,
 }
 
+#[cfg(any(windows, test))]
 impl ThreadSample {
     fn format_stack(&self, modules: &[(usize, usize, String)]) -> String {
         let mut out = String::from("[");
@@ -1137,6 +1165,7 @@ fn sample_thread(thread_id: u32) -> Option<ThreadSample> {
     Some(sample)
 }
 
+#[cfg(any(windows, test))]
 fn read_context_field(context: &ThreadContext, offset: usize) -> usize {
     let mut bytes = [0u8; std::mem::size_of::<usize>()];
     bytes.copy_from_slice(&context.0[offset..offset + std::mem::size_of::<usize>()]);
@@ -1147,7 +1176,6 @@ fn read_context_field(context: &ThreadContext, offset: usize) -> usize {
 mod tests {
     use super::*;
 
-    #[test]
     /// A steady 60fps must never accumulate a deficit, however long it runs.
     #[test]
     fn framedrop_stays_quiet_at_a_steady_baseline() {
@@ -1500,8 +1528,9 @@ mod tests {
 
     #[test]
     fn context_layout_matches_windows_amd64() {
-        // ContextFlags must sit inside the buffer, and RIP/RSP must be readable from it.
-        assert!(CONTEXT_FLAGS_OFFSET + 4 <= CONTEXT_SIZE);
+        // ContextFlags must sit inside the buffer, and RIP/RSP must be readable from it. The
+        // first is all constants, so it is checked at compile time rather than here.
+        const _: () = assert!(CONTEXT_FLAGS_OFFSET + 4 <= CONTEXT_SIZE);
         assert!(CONTEXT_RIP_OFFSET + std::mem::size_of::<usize>() <= CONTEXT_SIZE);
         assert!(CONTEXT_RSP_OFFSET + std::mem::size_of::<usize>() <= CONTEXT_SIZE);
         assert_eq!(std::mem::align_of::<ThreadContext>(), 16);
@@ -1516,9 +1545,10 @@ mod tests {
     #[test]
     fn arming_requires_more_than_one_observed_advance() {
         // A single advance could be noise in an unrelated dword; the point of the gate is that a
-        // wrong address cannot arm the watchdog.
-        assert!(ARM_ADVANCES_REQUIRED > 1);
-        assert!(ARM_TIMEOUT_SAMPLES > ARM_ADVANCES_REQUIRED);
+        // wrong address cannot arm the watchdog. Both operands are constants, so these are
+        // compile-time assertions: an offending edit fails the BUILD, not this test run.
+        const _: () = assert!(ARM_ADVANCES_REQUIRED > 1);
+        const _: () = assert!(ARM_TIMEOUT_SAMPLES > ARM_ADVANCES_REQUIRED);
     }
 
     #[test]

@@ -138,7 +138,7 @@ fn container_index(
         })
 }
 
-fn container_tags<'m>(movie: &'m Movie, container: Option<usize>) -> &'m [Tag] {
+fn container_tags(movie: &Movie, container: Option<usize>) -> &[Tag] {
     match container {
         None => &movie.tags,
         Some(i) => match &movie.tags[i] {
@@ -148,6 +148,11 @@ fn container_tags<'m>(movie: &'m Movie, container: Option<usize>) -> &'m [Tag] {
     }
 }
 
+/// One resolved edit, ready for phase 2: `(container, anchor index, op, pre-parsed
+/// replacement, original index in `edits`)`. The trailing edit index both reports errors
+/// and keeps the phase-2 sort a total order.
+type PlannedEdit = (Option<usize>, usize, EditOp, Option<Tag>, usize);
+
 /// Apply `edits` to `movie` all-or-nothing. On success returns the number of
 /// edits applied; on any error `movie` is left untouched.
 pub fn apply_edits(movie: &mut Movie, edits: &[TagEdit]) -> Result<usize, EditError> {
@@ -156,8 +161,7 @@ pub fn apply_edits(movie: &mut Movie, edits: &[TagEdit]) -> Result<usize, EditEr
     // resolved. `taken` conflict-guards only Replace/Remove (which CONSUME the
     // anchor); an InsertAfter merely references the anchor as a position, so it
     // may share an anchor with a replace/remove.
-    let mut planned: Vec<(Option<usize>, usize, EditOp, Option<Tag>, usize)> =
-        Vec::with_capacity(edits.len());
+    let mut planned: Vec<PlannedEdit> = Vec::with_capacity(edits.len());
     let mut taken: Vec<(Option<usize>, usize, usize)> = Vec::with_capacity(edits.len());
     for (edit_index, edit) in edits.iter().enumerate() {
         let container = container_index(movie, edit_index, edit.sprite_id)?;
@@ -219,7 +223,7 @@ pub fn apply_edits(movie: &mut Movie, edits: &[TagEdit]) -> Result<usize, EditEr
     // earlier removals/insertions cannot shift the indices of not-yet-applied
     // edits (all indices were resolved against the pre-mutation tag list).
     let applied = planned.len();
-    planned.sort_by(|a, b| (b.0, b.1, b.4).cmp(&(a.0, a.1, a.4)));
+    planned.sort_by_key(|p| std::cmp::Reverse((p.0, p.1, p.4)));
     for (container, anchor_index, op, replacement, _) in planned {
         let tags: &mut Vec<Tag> = match container {
             None => &mut movie.tags,

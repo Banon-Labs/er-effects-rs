@@ -152,11 +152,13 @@ mod tests {
     /// A bound, so a wild pointer cannot walk the heap looking for a terminator.
     #[test]
     fn the_name_length_is_bounded_but_fits_real_place_names() {
-        assert!(
-            MAX_PLACE_NAME_CHARS >= 40,
-            "must fit the longest area names"
-        );
-        assert!(MAX_PLACE_NAME_CHARS <= 256);
+        const {
+            assert!(
+                MAX_PLACE_NAME_CHARS >= 40,
+                "must fit the longest area names"
+            )
+        };
+        const { assert!(MAX_PLACE_NAME_CHARS <= 256) };
     }
 
     /// Host builds cannot call the game, and must say so by declining rather than inventing a name.

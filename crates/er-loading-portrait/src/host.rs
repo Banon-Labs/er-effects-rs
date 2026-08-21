@@ -8,6 +8,12 @@
 //! compiles unchanged. Until a host installs, every seam answers a neutral default
 //! (logging is a no-op, all gates are off, slot lookups report "nothing loaded"), so the
 //! crate is inert rather than wrong.
+// The `pub(crate)` seam wrappers at the bottom of this file exist for the feature modules,
+// every one of which is `#[cfg(windows)]`. On a host build those modules are compiled out, so
+// the wrappers are unused BY CONSTRUCTION rather than by neglect -- deleting them would delete
+// the seam. This is scoped to `not(windows)` deliberately: the shipping target
+// (x86_64-pc-windows-msvc) keeps full dead-code enforcement over this file.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::path::PathBuf;
 use std::sync::OnceLock;

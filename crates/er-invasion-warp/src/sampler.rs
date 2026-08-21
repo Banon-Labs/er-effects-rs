@@ -172,7 +172,7 @@ pub unsafe fn invasion_warp_catalog_tick() {
         return;
     }
     let tick = TICKS.fetch_add(1, Ordering::SeqCst);
-    if tick % CATALOG_SAMPLE_INTERVAL_TICKS != 0 {
+    if !tick.is_multiple_of(CATALOG_SAMPLE_INTERVAL_TICKS) {
         return;
     }
     // The task runs on one thread, so this lock is uncontended; recovering from poisoning
@@ -205,10 +205,9 @@ fn report_step(
     reason: &str,
     catalog: Option<&crate::invasion_warp::InvasionWarpCatalog>,
 ) {
-    use crate::host::{append_autoload_debug, publish_oracle_json};
+    use crate::host::append_autoload_debug;
     use crate::oracles::{
-        NEGATIVE_ORACLES_UNMEASURED_NOTE, catalog_oracle_json, describe_catalog_oracle,
-        publish_catalog_oracles,
+        NEGATIVE_ORACLES_UNMEASURED_NOTE, describe_catalog_oracle, publish_catalog_oracles,
     };
 
     match step {
@@ -427,11 +426,9 @@ mod tests {
         // Totals that move on every sample can never build a streak; the attempt limit is what
         // stops the walk running on the game thread for the whole session.
         let mut sampler = CatalogSampler::new();
-        let mut blocks = 1usize;
         let mut last = CatalogSampleStep::Finished;
-        for _ in 0..CATALOG_SAMPLE_ATTEMPT_LIMIT {
+        for blocks in (1usize..).take(CATALOG_SAMPLE_ATTEMPT_LIMIT as usize) {
             last = sampler.observe(Some(summary(blocks, blocks * 10, 1)));
-            blocks += 1;
         }
         assert_eq!(
             last,

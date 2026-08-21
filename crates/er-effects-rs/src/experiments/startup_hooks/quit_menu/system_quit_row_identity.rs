@@ -7,8 +7,8 @@ use super::*;
 
 pub(crate) use er_quit_menu::rows::{
     PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
-    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitInputKind, QuitRow, QuitRowAmbiguity,
-    QuitRowDiscriminator, QuitRowFacts, QuitRowLabel, QuitRowTable, QuitRowVerdict,
+    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitInputKind, QuitRow, QuitRowFacts,
+    QuitRowLabel, QuitRowTable, QuitRowVerdict,
     quit_controller_of_action_alias as system_quit_controller_of_action_alias, quit_row_facts_text,
     quit_row_index_from_plus1, quit_row_is_false_quit_claim,
     quit_row_verdict_text as system_quit_row_verdict_text, resolve_quit_row,

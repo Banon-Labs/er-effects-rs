@@ -130,7 +130,7 @@ impl Matbin {
 /// the `.spx` extension.
 pub fn shader_leaf(shader_path: &str) -> String {
     let leaf = shader_path
-        .rsplit(|c| c == '\\' || c == '/')
+        .rsplit(['\\', '/'])
         .next()
         .unwrap_or(shader_path);
     leaf.strip_suffix(".spx").unwrap_or(leaf).to_owned()

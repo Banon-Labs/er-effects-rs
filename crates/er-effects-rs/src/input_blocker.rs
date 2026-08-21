@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use bitflags::bitflags;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -14,10 +14,6 @@ static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 /// while the harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key`
 /// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
 pub use er_telemetry::counters::DINPUT_KB_HOOK_FIRES;
-/// LEGACY telemetry field, retained for the emitted `oracle`/`effect_dinput_mouse_hook_fires` schema.
-/// The DInput MOUSE `GetDeviceState` hook was REMOVED (user 2026-07-23: the user's real mouse must
-/// behave as normal player input, never blocked), so this counter is no longer incremented and stays 0.
-pub use er_telemetry::counters::DINPUT_MOUSE_HOOK_FIRES;
 pub(crate) use er_telemetry::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
 pub(crate) use er_telemetry::counters::INJECTED_KEY;
 pub(crate) use er_telemetry::counters::SUPPRESS_ARROW_KEYS;
@@ -44,6 +40,7 @@ impl InputBlocker {
     }
 
     /// Receives the context from the pre-reload DLL.
+    #[allow(dead_code)] // InputBlocker API surface, retained: no in-crate caller today.
     pub fn forward_instance(instance: &'static InputBlocker) {
         if INPUT_BLOCKER.set(instance).is_ok() {
             instance.hooks_installed.store(true, Ordering::Relaxed);
@@ -62,6 +59,7 @@ impl InputBlocker {
         Ok(())
     }
 
+    #[allow(dead_code)] // InputBlocker API surface, retained: no in-crate caller today.
     pub fn block(&self, inputs: InputFlags) {
         self.flags.fetch_or(inputs.bits(), Ordering::Relaxed);
     }
@@ -70,6 +68,7 @@ impl InputBlocker {
         self.flags.store(inputs.bits(), Ordering::Relaxed);
     }
 
+    #[allow(dead_code)] // InputBlocker API surface, retained: no in-crate caller today.
     pub fn unblock(&self, inputs: InputFlags) {
         self.flags
             .fetch_and(inputs.complement().bits(), Ordering::Relaxed);
@@ -82,6 +81,7 @@ impl InputBlocker {
     }
 
     /// Suppress only the DInput arrow-key state while leaving the rest of the keyboard live.
+    #[allow(dead_code)] // InputBlocker API surface, retained: no in-crate caller today.
     pub fn set_arrow_key_suppression(&self, enabled: bool) {
         SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
     }
@@ -267,6 +267,6 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
     unsafe { kb_hook.queue_enable()? };
 
     unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
-    std::mem::forget(kb_hook);
+    crate::mh::leak_installed_hook(kb_hook);
     Ok(())
 }

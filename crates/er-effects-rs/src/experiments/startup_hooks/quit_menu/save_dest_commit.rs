@@ -100,9 +100,6 @@ use super::*;
 //    -- itself a whole-container write over the user's loaded save -- now requires positive
 //    evidence of a CONTENT change: an unreadable stat is reported as unreadable, not as mutation.
 
-/// Destination oracles.
-pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
 /// Flow latches: the menu-pump open request, and the "a destination is chosen, commit once the
 /// picker has torn down" hand-off from the picker's activation hook to the save-flow tick.
@@ -111,16 +108,12 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_BAK_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT;
 /// 1 while the scoped write-open redirect is armed. Read by the `CreateFileW` detour BEFORE it
 /// touches any lock, so an unarmed process pays one relaxed-ordering atomic load per open.
 pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
 pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEED_FAIL_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_SEEDED_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
 pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 // The destination-commit SAFETY oracles this file raises -- every refusal, deferral and
@@ -131,10 +124,13 @@ pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 pub(crate) const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
 /// `CreateFileW` desired-access bits that make an open a WRITE open (`GENERIC_WRITE`,
 /// `FILE_WRITE_DATA`). Read-opens (the RMW base read) must pass through untouched.
+#[allow(dead_code)] // Retained: Decoded CreateFileW access bits for the save-destination redirect; kept with the rest of that table.
 pub(crate) const SAVE_DEST_WRITE_ACCESS_MASK: u32 = 0x4000_0000 | 0x2;
 /// Save-container extensions: a destination whose leaf is the live save's counterpart twin
 /// (`ER0000.co2` vs `ER0000.sl2`) is still the same open, whichever side rewrote the path first.
+#[allow(dead_code)] // Retained: Save-container extension pair naming the counterpart-twin rule its doc describes.
 pub(crate) const SAVE_DEST_SEAMLESS_EXTENSION: &str = "co2";
+#[allow(dead_code)] // Retained: Save-container extension pair naming the counterpart-twin rule its doc describes.
 pub(crate) const SAVE_DEST_VANILLA_EXTENSION: &str = "sl2";
 
 /// The chosen destination for the save currently being committed. `None` = the loaded save is the
@@ -265,18 +261,9 @@ pub(crate) fn save_dest_wide_leaf_lower(path: &[u16]) -> Option<Vec<u16>> {
     er_quit_menu::save_dest_commit::save_dest_wide_leaf_lower(path)
 }
 
-pub(crate) fn save_dest_ascii_lower(c: u16) -> u16 {
-    er_quit_menu::save_dest_commit::save_dest_ascii_lower(c)
-}
-
 /// The live save's leaf plus its counterpart-extension twin, ASCII-lowercased UTF-16.
 pub(crate) fn save_dest_accepted_leaves(live_path: &Path) -> Vec<Vec<u16>> {
     er_quit_menu::save_dest_commit::save_dest_accepted_leaves(live_path)
-}
-
-/// Leaf names of the live save and its counterpart twin, ASCII-lowercased UTF-8.
-pub(crate) fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
-    er_quit_menu::save_dest_commit::save_dest_accepted_leaf_names(live_path)
 }
 
 /// Every directory whose `ER0000.{sl2,co2}` write-open IS the loaded save's.
@@ -580,10 +567,7 @@ pub(crate) fn save_dest_redirect_for_open(path: &[u16], access: u32) -> Option<V
         SAVE_DEST_FOREIGN_OPEN_PASSED.fetch_add(1, Ordering::SeqCst);
         return None;
     };
-    if accepted_paths
-        .iter()
-        .any(|accepted| *accepted == normalized)
-    {
+    if accepted_paths.contains(&normalized) {
         return Some(target_w);
     }
     // Different spelling, possibly the same folder. This costs one directory open, and only for

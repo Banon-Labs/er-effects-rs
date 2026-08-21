@@ -174,16 +174,15 @@ fn dump_arts_plate_usage() {
             shape_bounds,
             ..
         } = t
+            && [446u16, 448].contains(shape_id)
         {
-            if [446u16, 448].contains(shape_id) {
-                println!(
-                    "SHAPE {shape_id} bounds=[{:.1},{:.1} .. {:.1},{:.1}]px",
-                    shape_bounds.x_min as f32 / 20.0,
-                    shape_bounds.y_min as f32 / 20.0,
-                    shape_bounds.x_max as f32 / 20.0,
-                    shape_bounds.y_max as f32 / 20.0,
-                );
-            }
+            println!(
+                "SHAPE {shape_id} bounds=[{:.1},{:.1} .. {:.1},{:.1}]px",
+                shape_bounds.x_min as f32 / 20.0,
+                shape_bounds.y_min as f32 / 20.0,
+                shape_bounds.x_max as f32 / 20.0,
+                shape_bounds.y_max as f32 / 20.0,
+            );
         }
     }
     println!("plate ancestry chars: {wanted:?}");

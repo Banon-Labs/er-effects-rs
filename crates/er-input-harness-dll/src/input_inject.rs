@@ -44,11 +44,20 @@ const HEAP_LO: usize = 0x10000;
 pub enum MenuEvent {
     /// Vertical move DOWN (id 0x00) and UP (id 0x45) -- verified vertical-move ids. Injected singly now
     /// (directional), so nav can stop on a middle row instead of saturating an extreme.
+    ///
+    /// RETAINED RE FACT: `MoveDown` is a reversed native-binding event id; the current quit route
+    /// happens to reach its target with `MoveUp` only. Half of a reversed directional pair is not
+    /// scaffolding -- dropping it would discard the id.
+    #[allow(dead_code)]
     MoveDown,
     MoveUp,
     /// OptionSetting tab-switch: LEFT/prev tab (id 0x30) and RIGHT/next tab (id 0x31). RE 2026-07-22
     /// (bd MENU-GAPS-CLOSED): GridControl pager FUN_1407392f0 -> tab handler FUN_14093b760.
     TabLeft,
+    /// RETAINED RE FACT: the RIGHT/next half (id 0x31) of the tab-switch pair reversed above. The quit
+    /// route reaches the Quit tab with `TabLeft` alone, so nothing constructs this today -- but the id
+    /// is reversed evidence with named Ghidra provenance, not scaffolding.
+    #[allow(dead_code)]
     TabRight,
     Confirm,
     /// Modal-dialog OK/accept (id 0x01). Consumed ONLY by the dialog builder FUN_140e9a920 while a modal

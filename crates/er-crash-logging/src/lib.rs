@@ -17,6 +17,12 @@ use std::{
 
 mod hang;
 
+/// Publish the live `CS::LoadingScreenData*` for the hang watchdog's loading-screen oracle.
+///
+/// Re-exported because `mod hang` is private: the function is documented as the entry point for a
+/// host DLL that is not `er_effects_rs.dll`, and such a host is by definition another crate.
+pub use hang::publish_loading_screen_data;
+
 const DEFAULT_LOG_FILE: &str = "er-crash-log.txt";
 const DEFAULT_LATEST_FILE: &str = "er-crash-latest.txt";
 const DEFAULT_BREADCRUMB_FILE: &str = "er-crash-breadcrumb-latest.txt";
@@ -81,6 +87,8 @@ pub enum Phase {
     ExceptionObserved = 90,
 }
 
+// `phase_label` is the only caller and it is windows-only; the test module pins the strings.
+#[cfg(any(windows, test))]
 impl Phase {
     fn label(self) -> &'static str {
         match self {
@@ -198,6 +206,7 @@ const MAX_THROW_RECORDS: usize = 8;
 /// Faults get their own, larger budget that throws cannot touch.
 const MAX_FAULT_RECORDS: usize = 24;
 /// Distinct `(code, address)` sites tracked for repeat counting.
+#[cfg(windows)]
 const THROW_SITE_SLOTS: usize = 24;
 
 pub fn record_class(code: u32) -> RecordClass {
@@ -245,11 +254,13 @@ const CONTEXT_RAX_OFFSET: usize = 0x78;
 const CONTEXT_RCX_OFFSET: usize = 0x80;
 #[cfg(windows)]
 const CONTEXT_RDX_OFFSET: usize = 0x88;
+#[cfg(any(windows, test))]
 pub(crate) const CONTEXT_RSP_OFFSET: usize = 0x98;
 #[cfg(windows)]
 const CONTEXT_R8_OFFSET: usize = 0xb8;
 #[cfg(windows)]
 const CONTEXT_R9_OFFSET: usize = 0xc0;
+#[cfg(any(windows, test))]
 pub(crate) const CONTEXT_RIP_OFFSET: usize = 0xf8;
 
 // MSVC C++ EH payload, as raised by `_CxxThrowException`. `ExceptionInformation` is
@@ -311,8 +322,6 @@ const STACK_SCAN_SLOTS: usize = 256;
 const STACK_SCAN_MAX_FRAMES: usize = 32;
 #[cfg(windows)]
 const STACK_RAW_QWORDS: usize = 8;
-#[cfg(windows)]
-const NULL_MODULE_BASE: usize = 0;
 #[cfg(windows)]
 pub(crate) const MIN_VALID_PTR: usize = 0x10000;
 #[cfg(windows)]
@@ -426,7 +435,7 @@ fn exception_site_histogram(modules: &[(usize, usize, String)]) -> String {
             })
         })
         .collect();
-    sites.sort_by(|left, right| right.0.cmp(&left.0));
+    sites.sort_by_key(|site| std::cmp::Reverse(site.0));
     let mut out = String::from("[");
     for (index, (count, code, address)) in sites.iter().enumerate() {
         if index != 0 {
@@ -658,7 +667,7 @@ unsafe extern "system" fn unhandled_exception_filter(info: *mut ExceptionPointer
     if !first_entry {
         return chain_previous_unhandled_filter(info);
     }
-    if let Some(snapshot) = (unsafe { ExceptionSnapshot::from_raw(info) }) {
+    if let Some(snapshot) = unsafe { ExceptionSnapshot::from_raw(info) } {
         let repeat = current_site_count(snapshot.code, snapshot.address);
         let report = exception_report(&snapshot, "unhandled-exception-fatal", repeat);
         let _ = fs::write(path_for(config().latest_file_name), &report);
@@ -1261,12 +1270,14 @@ fn scan_stack_raw(rsp: usize, modules: &[(usize, usize, String)]) -> String {
     out
 }
 
+#[cfg(any(windows, test))]
 pub(crate) fn module_tag(addr: usize, modules: &[(usize, usize, String)]) -> String {
     module_for_addr(addr, modules)
         .map(|(name, offset)| format!("{{{name}+0x{offset:x}}}"))
         .unwrap_or_default()
 }
 
+#[cfg(any(windows, test))]
 fn module_for_addr(addr: usize, modules: &[(usize, usize, String)]) -> Option<(&str, usize)> {
     modules.iter().find_map(|(base, size, name)| {
         addr.checked_sub(*base)
@@ -1344,7 +1355,7 @@ pub(crate) fn loaded_modules() -> Vec<(usize, usize, String)> {
     modules
 }
 
-#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[cfg(all(windows, not(target_arch = "x86_64")))]
 pub(crate) fn loaded_modules() -> Vec<(usize, usize, String)> {
     Vec::new()
 }

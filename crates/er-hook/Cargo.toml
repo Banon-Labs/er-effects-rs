@@ -12,3 +12,6 @@ name = "er_hook"
 
 [build-dependencies]
 cc = "1.0"
+
+[lints]
+workspace = true

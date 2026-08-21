@@ -691,7 +691,7 @@ mod live {
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let pooled =
             er_invasion_warp::lobby_pool::pooled_lobby_key(config.dll_users_only, original)?;
-        if POOL_ANNOUNCED.swap(true, Ordering::SeqCst) != true {
+        if !POOL_ANNOUNCED.swap(true, Ordering::SeqCst) {
             crate::standalone_log(format_args!(
                 "lobby-pool: dll_users_only is ON -- Seamless's match key {} becomes {}. You will \
                  only meet players running this DLL with the same option, for hosting AND \
@@ -930,25 +930,25 @@ mod live {
         c: usize,
         d: usize,
     ) -> usize {
-        if let Some(value) = hunt_target() {
-            if let Some(add) = add_string_filter(iface) {
-                let key = format!("{LOBBY_MAP_KEY}\0");
-                let payload = format!("{value}\0");
-                unsafe {
-                    add(
-                        iface,
-                        key.as_ptr(),
-                        payload.as_ptr(),
-                        LOBBY_COMPARISON_EQUAL,
-                    )
-                };
-                let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
-                if n == 1 {
-                    crate::standalone_log(format_args!(
-                        "hunt: asking Steam for hosts at {value} only (#{n}) -- hosts without this \
+        if let Some(value) = hunt_target()
+            && let Some(add) = add_string_filter(iface)
+        {
+            let key = format!("{LOBBY_MAP_KEY}\0");
+            let payload = format!("{value}\0");
+            unsafe {
+                add(
+                    iface,
+                    key.as_ptr(),
+                    payload.as_ptr(),
+                    LOBBY_COMPARISON_EQUAL,
+                )
+            };
+            let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 {
+                crate::standalone_log(format_args!(
+                    "hunt: asking Steam for hosts at {value} only (#{n}) -- hosts without this \
                          DLL do not publish the key and will not be returned"
-                    ));
-                }
+                ));
             }
         }
         let orig = ORIG_REQUEST_LOBBY_LIST.load(Ordering::SeqCst);

@@ -19,8 +19,6 @@
 //! rasterizer) crosses the seam as injected function pointers: see [`host::install_host`].
 //! This crate must not depend on the root crate.
 
-#![allow(unused_imports)]
-
 mod prelude;
 
 pub mod host;

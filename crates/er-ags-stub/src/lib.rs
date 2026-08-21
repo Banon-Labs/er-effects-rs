@@ -12,7 +12,6 @@
 //! Every export is `extern "C" -> i32` (AGSReturnCode); the x64 ABI passes args in registers, so a
 //! no-arg stub validly ignores them and returns the code in eax. On failure ER never reads the out
 //! params, so returning a code is sufficient.
-#![allow(non_snake_case)]
 
 const AGS_SUCCESS: i32 = 0;
 const AGS_FAILURE: i32 = 1;
@@ -20,6 +19,15 @@ const AGS_NO_AMD_DRIVER_INSTALLED: i32 = 6;
 
 macro_rules! ags_export {
     ($name:ident => $ret:expr) => {
+        // The export NAME is the ABI: ER's import table asks the loader for `agsInit`,
+        // `agsDriverExtensionsDX12_Init`, ... verbatim, so these are AMD's spelling and not a
+        // style choice -- renaming one to snake_case unbinds ER's import and the game fails to
+        // start. Scoped to the generated item rather than the crate so a genuinely
+        // misnamed non-export elsewhere would still be caught.
+        #[allow(
+            non_snake_case,
+            reason = "export name is AMD's AGS 5.x ABI, matched byte-for-byte"
+        )]
         #[unsafe(no_mangle)]
         pub extern "C" fn $name() -> i32 {
             $ret

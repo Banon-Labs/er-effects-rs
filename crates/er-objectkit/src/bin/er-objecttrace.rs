@@ -39,14 +39,12 @@ fn main() -> ExitCode {
         }
     }
 
-    if force_extract || !dir_has_matbins(&matbin_dir) {
-        if let Err(e) = extract_corpus(&matbin_dir) {
-            eprintln!("extraction failed: {e}");
-            eprintln!(
-                "(need Elden Ring + Smithbox; or point --matbin-dir at an existing extraction)"
-            );
-            return ExitCode::FAILURE;
-        }
+    if (force_extract || !dir_has_matbins(&matbin_dir))
+        && let Err(e) = extract_corpus(&matbin_dir)
+    {
+        eprintln!("extraction failed: {e}");
+        eprintln!("(need Elden Ring + Smithbox; or point --matbin-dir at an existing extraction)");
+        return ExitCode::FAILURE;
     }
 
     let (idx, skipped) = match TraceIndex::from_matbin_dir(&matbin_dir) {

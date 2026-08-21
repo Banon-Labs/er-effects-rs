@@ -13,7 +13,11 @@
 //! planned through `er-save-redirect`, then closes the standalone latch instead of pretending to
 //! install hooks or load the game save.
 
-#![allow(non_snake_case)]
+// A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,7 +154,7 @@ fn standalone_remember_picker_dir(dir: &Path) {
 
 #[cfg(windows)]
 fn product_dll_present() -> bool {
-    unsafe { GetModuleHandleA(PCSTR(b"er_effects_rs.dll\0".as_ptr())).is_ok() }
+    unsafe { GetModuleHandleA(PCSTR(c"er_effects_rs.dll".as_ptr().cast::<u8>())).is_ok() }
 }
 
 #[cfg(windows)]

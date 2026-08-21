@@ -317,6 +317,13 @@ pub unsafe fn install_core_createfilew_hook(
         match unsafe { MH_ApplyQueued() } {
             MH_STATUS::MH_OK => {
                 state.mark_core_createfilew_installed();
+                // The detour must outlive this scope for the process lifetime; the `forget` states
+                // that even though `MhHook` is currently plain pointers, so a future `Drop` that
+                // unhooks cannot silently retire the save-redirect CreateFileW hook.
+                #[allow(
+                    clippy::forget_non_drop,
+                    reason = "intent marker: the installed detour must never be released"
+                )]
                 std::mem::forget(hook);
                 log(format!(
                     "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
@@ -341,16 +348,6 @@ pub struct SaveRedirectHookDetours {
     pub nt_create_file: *mut c_void,
 }
 
-/// Install the redirect-mode save hook batch once.
-///
-/// Product still decides when redirect mode is armed, supplies module/export resolution, supplies
-/// detour entry points, and logs to its telemetry sink. The shared core owns the idempotent MinHook
-/// initialization, queue/store/apply sequence for the redirect batch.
-///
-/// # Safety
-/// Every detour pointer must match the ABI of the target function resolved for it and remain valid
-/// for the process lifetime. The `install_core_createfilew` callback must install the matching core
-/// `CreateFileW` hook before this batch needs to redirect save opens.
 /// Install the redirect-mode save hook batch only after a redirect root or trace mode is ready.
 ///
 /// This keeps the native no-save picker boot path unhooked until the product has activated a picked
@@ -358,6 +355,10 @@ pub struct SaveRedirectHookDetours {
 ///
 /// # Safety
 /// Same requirements as [`install_redirect_save_hooks`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "readiness gate in front of `install_redirect_save_hooks`; it forwards that function's argument list unchanged"
+)]
 pub unsafe fn install_redirect_save_hooks_when_ready(
     state: &SaveHookInstallState,
     redirect_root_ready: bool,
@@ -388,6 +389,20 @@ pub unsafe fn install_redirect_save_hooks_when_ready(
     }
 }
 
+/// Install the redirect-mode save hook batch once.
+///
+/// Product still decides when redirect mode is armed, supplies module/export resolution, supplies
+/// detour entry points, and logs to its telemetry sink. The shared core owns the idempotent MinHook
+/// initialization, queue/store/apply sequence for the redirect batch.
+///
+/// # Safety
+/// Every detour pointer must match the ABI of the target function resolved for it and remain valid
+/// for the process lifetime. The `install_core_createfilew` callback must install the matching core
+/// `CreateFileW` hook before this batch needs to redirect save opens.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "dependency-injection seam: each export resolver, detour bundle and sink is a distinct collaborator supplied by the product DLL"
+)]
 pub unsafe fn install_redirect_save_hooks(
     state: &SaveHookInstallState,
     detours: SaveRedirectHookDetours,
@@ -1367,9 +1382,7 @@ pub fn staged_save_root_for_file(path: &Path) -> Option<(PathBuf, u64)> {
         // `EldenRing` directory name and should fail the staged-root shortcut deterministically.
         let text = comp.as_os_str().to_string_lossy();
         if text.eq_ignore_ascii_case("EldenRing") {
-            let Some(steam_id_comp) = comps.peek() else {
-                return None;
-            };
+            let steam_id_comp = comps.peek()?;
             // UTF-8 Lossy: SteamID directory classification only; invalid host bytes are rejected by
             // the ASCII-digit check below.
             let steam_id = steam_id_comp.as_os_str().to_string_lossy();
@@ -2600,6 +2613,14 @@ mod tests {
         std::fs::set_permissions(&file, perms).unwrap();
         assert!(save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
+        // Restoring write permission on the throwaway temp file this test created, so the
+        // `remove_file` below succeeds. Deliberately NOT narrowed to owner-write: the value under
+        // test is `save_file_is_readonly`, and the repo rule that the live game-owned save must stay
+        // writable makes "clear the readonly bit" the exact semantics to exercise here.
+        #[allow(
+            clippy::permissions_set_readonly_false,
+            reason = "test-local temp file: clearing the readonly bit is the behaviour under test and the file is deleted on the next line"
+        )]
         perms.set_readonly(false);
         std::fs::set_permissions(&file, perms).unwrap();
         let _ = std::fs::remove_file(&file);

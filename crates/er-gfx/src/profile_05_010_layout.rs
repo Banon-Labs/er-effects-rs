@@ -235,22 +235,27 @@ impl Profile05_010Layout {
                     252,
                     24,
                     TextAlign::Left,
-                    "Maddened Bean",
-                    "[..] save-files",
-                    "Save Root",
+                    ["Maddened Bean", "[..] save-files", "Save Root"],
                 ),
             ),
             (
                 "StaticText_110502",
-                field(-352, -14, 149, 24, TextAlign::Left, "Level", "", ""),
+                field(-352, -14, 149, 24, TextAlign::Left, ["Level", "", ""]),
             ),
             (
                 "Level",
-                field(-282, -14, 52, 24, TextAlign::Right, "125", "", ""),
+                field(-282, -14, 52, 24, TextAlign::Right, ["125", "", ""]),
             ),
             (
                 "Location",
-                field(252, -14, 152, 24, TextAlign::Right, "Midra's Manse", "", ""),
+                field(
+                    252,
+                    -14,
+                    152,
+                    24,
+                    TextAlign::Right,
+                    ["Midra's Manse", "", ""],
+                ),
             ),
             (
                 "PlayTime",
@@ -260,9 +265,7 @@ impl Profile05_010Layout {
                     200,
                     24,
                     TextAlign::Right,
-                    "107:49:34",
-                    "2026-07-07",
-                    "2026-07-07",
+                    ["107:49:34", "2026-07-07", "2026-07-07"],
                 ),
             ),
             (
@@ -273,9 +276,11 @@ impl Profile05_010Layout {
                     587,
                     24,
                     TextAlign::Left,
-                    "",
-                    "PARENT FOLDER / Go to save-files",
-                    "45-Slots / ER0000.sl2",
+                    [
+                        "",
+                        "PARENT FOLDER / Go to save-files",
+                        "45-Slots / ER0000.sl2",
+                    ],
                 ),
             ),
             (
@@ -286,22 +291,24 @@ impl Profile05_010Layout {
                     425,
                     16,
                     TextAlign::Center,
-                    "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7",
-                    "",
-                    "",
+                    [
+                        "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7",
+                        "",
+                        "",
+                    ],
                 ),
             ),
             (
                 "DriveCell_0",
-                field(-325, -16, 64, 24, TextAlign::Center, "", "[C:]", "[C:]"),
+                field(-325, -16, 64, 24, TextAlign::Center, ["", "[C:]", "[C:]"]),
             ),
             (
                 "DriveCell_1",
-                field(-247, -16, 64, 24, TextAlign::Center, "", "[S:]", "[S:]"),
+                field(-247, -16, 64, 24, TextAlign::Center, ["", "[S:]", "[S:]"]),
             ),
             (
                 "DriveCell_2",
-                field(-166, -16, 64, 24, TextAlign::Center, "", ">Z:<", ">Z:<"),
+                field(-166, -16, 64, 24, TextAlign::Center, ["", ">Z:<", ">Z:<"]),
             ),
             (
                 "CurrentPath",
@@ -311,9 +318,11 @@ impl Profile05_010Layout {
                     700,
                     39,
                     TextAlign::Left,
-                    "",
-                    "Z:\\home\\banon\\Elden Ring Saves",
-                    "Z:\\home\\banon\\Elden Ring Saves",
+                    [
+                        "",
+                        "Z:\\home\\banon\\Elden Ring Saves",
+                        "Z:\\home\\banon\\Elden Ring Saves",
+                    ],
                 ),
             ),
         ] {
@@ -327,9 +336,7 @@ impl Profile05_010Layout {
                 700,
                 20,
                 TextAlign::Left,
-                "",
-                "",
-                "Z:\\home\\banon\\Elden Ring Saves",
+                ["", "", "Z:\\home\\banon\\Elden Ring Saves"],
             ),
             row_chrome: RowChromeLayout {
                 backing: transform(
@@ -453,15 +460,16 @@ pub fn shipped() -> &'static Profile05_010Layout {
     SHIPPED_REF.get_or_init(Profile05_010Layout::default)
 }
 
+/// `samples` is `[load_character, save_picker, drive_row]` -- the three row surfaces, in the
+/// order they are declared on [`FieldLayout`]. One array rather than three positional `&str`s
+/// so this table constructor stays inside the argument budget.
 fn field(
     x: i32,
     y: i32,
     width: i32,
     font_height: i32,
     align: TextAlign,
-    sample_load_character: &str,
-    sample_save_picker: &str,
-    sample_drive_row: &str,
+    samples: [&str; 3],
 ) -> FieldLayout {
     FieldLayout {
         x: x as f32,
@@ -470,9 +478,9 @@ fn field(
         clip_height: 40,
         font_height,
         align,
-        sample_load_character: sample_load_character.to_owned(),
-        sample_save_picker: sample_save_picker.to_owned(),
-        sample_drive_row: sample_drive_row.to_owned(),
+        sample_load_character: samples[0].to_owned(),
+        sample_save_picker: samples[1].to_owned(),
+        sample_drive_row: samples[2].to_owned(),
     }
 }
 

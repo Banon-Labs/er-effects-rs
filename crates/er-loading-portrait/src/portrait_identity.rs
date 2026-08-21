@@ -247,11 +247,11 @@ mod tests {
             PublishedIdentity::NothingPublished
         );
         assert_eq!(
-            published_identity_verdict(0 + 1, Some(0)),
+            published_identity_verdict(1, Some(0)),
             PublishedIdentity::Match
         );
         assert_eq!(
-            published_identity_verdict(0 + 1, Some(3)),
+            published_identity_verdict(1, Some(3)),
             PublishedIdentity::SlotMismatch {
                 published: 0,
                 loaded: 3

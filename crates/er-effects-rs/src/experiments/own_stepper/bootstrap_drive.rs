@@ -1,40 +1,6 @@
 use std::{
-    ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
-
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    time::Instant,
 };
 
 #[allow(unused_imports)]
@@ -904,6 +870,5 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
             ));
         }
         MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
-        return;
     }
 }

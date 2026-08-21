@@ -314,7 +314,6 @@ pub(crate) fn os_native_picker_active() -> bool {
     (host().os_native_picker_active)()
 }
 #[allow(dead_code)]
-#[allow(dead_code)]
 pub(crate) fn system_quit_windows_path_for_log(path: &str) -> String {
     (host().windows_path_for_log)(path)
 }

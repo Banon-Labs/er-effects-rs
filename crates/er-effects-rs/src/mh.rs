@@ -9,11 +9,21 @@
 //! The `#[no_mangle] er_effects_union_register` C export stays HERE (not in `er-hook`): it is a
 //! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures ONLY
 //! `er_effects_rs.dll` exports it -- exactly as before the extraction.
-#![allow(dead_code, non_snake_case, non_camel_case_types, missing_docs)]
-
 use std::sync::atomic::AtomicUsize;
 
 pub use er_hook::*;
+
+/// Hand an installed detour over to MinHook and stop tracking its handle here.
+///
+/// Every hook install site used to end in `std::mem::forget(hook)` to say "this detour
+/// outlives the scope that created it". That was a no-op: `MhHook` is three raw pointers
+/// with no `Drop` impl, so dropping it never uninstalled anything -- MinHook has owned the
+/// detour since `MH_ApplyQueued`. `clippy::forget_non_drop` flags exactly that, so the
+/// intent moved here instead, where it is stated once rather than mimed 60-odd times.
+///
+/// Takes `MhHook` by value (not a generic) on purpose: a generic would silently accept a
+/// type that *does* implement `Drop` and really run its destructor.
+pub fn leak_installed_hook(_hook: MhHook) {}
 
 /// C-ABI export (2026-07-18, user-directed cross-DLL union). A COMPANION DLL loaded into the same
 /// process (the log-only `er-reload-trace-dll`) hooks ~40 native load/menu functions that OVERLAP

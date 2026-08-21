@@ -47,7 +47,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
                 TITLE_MENU_RESOURCE_ACQUIRE_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -67,7 +67,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             Ok(hook) => {
                 TITLE_SCALEFORM_FILE_OPEN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -88,7 +88,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
                 TITLE_SCALEFORM_RESOURCE_CTOR_ORIG
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                crate::mh::leak_installed_hook(hook);
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -146,26 +146,25 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
         TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL,
         ER_TPF_COVER_SYSTEX_KEY,
     );
-    if stats_panel_enabled() && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") } {
-        if let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) } {
-            if let Some(key) = er_loading_portrait::stats_panel_registered_systex_key(
-                slot,
-                STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
-            ) {
-                if unsafe { rewrite_native_dlstring_ascii(pair + 0x30, key) }.is_some() {
-                    rewritten_visible_profile_surface = true;
-                    let prev = STATS_PANEL_BIND_REDIRECT_MASK.fetch_or(1 << slot, Ordering::SeqCst);
-                    let n = STATS_PANEL_BIND_REDIRECTS.fetch_add(1, Ordering::SeqCst) + 1;
-                    // Log the FIRST redirect of each slot (prev bit was clear) so we get exactly 10
-                    // lines, not one per bind.
-                    if prev & (1 << slot) == 0 {
-                        append_autoload_debug(format_args!(
-                            "stats-panel: redirected slot {slot} face bind target -> '{key}' (redirects={n} mask=0x{:x})",
-                            STATS_PANEL_BIND_REDIRECT_MASK.load(Ordering::SeqCst)
-                        ));
-                    }
-                }
-            }
+    if stats_panel_enabled()
+        && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") }
+        && let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) }
+        && let Some(key) = er_loading_portrait::stats_panel_registered_systex_key(
+            slot,
+            STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
+        )
+        && unsafe { rewrite_native_dlstring_ascii(pair + 0x30, key) }.is_some()
+    {
+        rewritten_visible_profile_surface = true;
+        let prev = STATS_PANEL_BIND_REDIRECT_MASK.fetch_or(1 << slot, Ordering::SeqCst);
+        let n = STATS_PANEL_BIND_REDIRECTS.fetch_add(1, Ordering::SeqCst) + 1;
+        // Log the FIRST redirect of each slot (prev bit was clear) so we get exactly 10
+        // lines, not one per bind.
+        if prev & (1 << slot) == 0 {
+            append_autoload_debug(format_args!(
+                "stats-panel: redirected slot {slot} face bind target -> '{key}' (redirects={n} mask=0x{:x})",
+                STATS_PANEL_BIND_REDIRECT_MASK.load(Ordering::SeqCst)
+            ));
         }
     }
     if interesting && hit <= 128 {
@@ -269,7 +268,7 @@ pub(crate) fn install_title_flow_context_record_regulation_fix_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "title-flow-context-record-fix: hooked native record helper 0x{addr:x}"
@@ -321,7 +320,7 @@ pub(crate) fn install_title_scaleform_bind_observer_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "title-cover-part-b: hooked passive Scaleform bind observer 0x{addr:x}; no product bind calls added"
@@ -590,7 +589,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "title-cover-part-a: hooked named-child SceneObjProxy binder 0x{addr:x}; PressStart/StaticSystemText will be hidden at bind time"
@@ -936,7 +935,6 @@ pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> 
 /// Scaleform-HTML string for native SetText. Pure formatting ownership lives in `er-loading-portrait`;
 /// this compatibility name keeps the startup-hook callsite stable.
 pub(crate) use er_loading_portrait::build_title_stats_compact_html_utf16 as build_stats_compact_html_utf16;
-pub(crate) use er_loading_portrait::build_title_stats_html_utf16 as build_stats_html_utf16;
 
 fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
     let body = line.strip_suffix(&[0]).unwrap_or(line);
@@ -947,12 +945,11 @@ fn decode_scaleform_html_line(line: &[u16]) -> Option<String> {
 }
 
 fn scaleform_html_body(line: &str) -> (&str, bool) {
-    if let Some(rest) = line.strip_prefix("<p align=\"") {
-        if let Some((_align, body)) = rest.split_once("\">") {
-            if let Some(body) = body.strip_suffix("</p>") {
-                return (body, true);
-            }
-        }
+    if let Some(rest) = line.strip_prefix("<p align=\"")
+        && let Some((_align, body)) = rest.split_once("\">")
+        && let Some(body) = body.strip_suffix("</p>")
+    {
+        return (body, true);
     }
     (line, false)
 }
@@ -987,6 +984,7 @@ fn merge_scaleform_html_utf16_lines(first: &[u16], second: &[u16]) -> Vec<u16> {
     merged.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
+#[allow(dead_code)] // Retained: Block (<br>) layout variant of the live inline merge; the two Scaleform-HTML shapes are kept side by side.
 fn merge_scaleform_html_utf16_block(first: &[u16], second: &[u16]) -> Vec<u16> {
     let Some(first) = decode_scaleform_html_line(first) else {
         return second.to_vec();
@@ -1100,7 +1098,7 @@ pub(crate) unsafe extern "system" fn profile_row_model_build_hook(
         && !unsafe { profile_slot_location_is_this_characters(slot) }
         && let Some(id) = profile_slot_place_name_id(slot)
     {
-        unsafe { stage_profile_record_place_name(slot, id) }.map(|displaced| {
+        unsafe { stage_profile_record_place_name(slot, id) }.inspect(|&displaced| {
             let n = PROFILE_ROW_PLACE_NAME_REPAIRS.fetch_add(1, Ordering::SeqCst) + 1;
             if n <= 10 || n.is_power_of_two() {
                 append_autoload_debug(format_args!(
@@ -1108,7 +1106,6 @@ pub(crate) unsafe extern "system" fn profile_row_model_build_hook(
                     profile_slot_saved_map(slot).unwrap_or(0)
                 ));
             }
-            displaced
         })
     } else {
         None
@@ -2343,28 +2340,24 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
     // original returned failed on every row because native teardown had already invalidated the
     // setter path. Constrain the row's own animated Cursor now; native hover later changes only its
     // visibility, preserving this cell-sized geometry.
-    if let Some(focus) = drive_strip_focus {
-        if let Ok(base) = game_module_base() {
-            if unsafe {
-                crate::experiments::startup_hooks::apply_drive_row_native_cursor(
-                    base, row_proxy, focus,
-                )
-            } {
-                let applies =
-                    PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
-                if applies <= 4 || applies.is_power_of_two() {
-                    append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
-                    ));
-                }
-            } else {
-                let failures =
-                    PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-                if failures <= 4 || failures.is_power_of_two() {
-                    append_autoload_debug(format_args!(
-                        "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
-                    ));
-                }
+    if let Some(focus) = drive_strip_focus
+        && let Ok(base) = game_module_base()
+    {
+        if unsafe {
+            crate::experiments::startup_hooks::apply_drive_row_native_cursor(base, row_proxy, focus)
+        } {
+            let applies = PROFILE_DRIVE_NATIVE_CURSOR_APPLIES.fetch_add(1, Ordering::SeqCst) + 1;
+            if applies <= 4 || applies.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "save-picker: native drive-row Cursor constrained to focus={focus:?} inside populate ownership (applies={applies})"
+                ));
+            }
+        } else {
+            let failures = PROFILE_DRIVE_NATIVE_CURSOR_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+            if failures <= 4 || failures.is_power_of_two() {
+                append_autoload_debug(format_args!(
+                    "save-picker: native drive-row Cursor transform FAILED inside populate ownership focus={focus:?} row=0x{row_proxy:x} (failures={failures})"
+                ));
             }
         }
     }

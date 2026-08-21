@@ -15,3 +15,6 @@ er-telemetry = { path = "../er-telemetry" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
+
+[lints]
+workspace = true

@@ -3,6 +3,18 @@ use crate::prelude::*;
 /// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
 /// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
 /// texture holds the portrait when several same-/different-size textures share the offscreen nest.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
 pub unsafe fn readback_excluding_rgba8(
     start: usize,
     exclude_start: usize,
@@ -148,30 +160,46 @@ pub use er_telemetry::counters::RB_COH_FRAME;
 /// Frames whose readback was DROPPED because the chosen ring slot was still BUSY (the worker had not
 /// finished consuming it). Intended backpressure -- the render thread never blocks. Telemetry.
 pub use er_telemetry::counters::RB_COH_SLOT_BUSY_DROPS;
-/// Depth captured COHERENTLY with the current color frame `(dw, dh, depth, depth_cand)`, stashed by
+/// One coherently-captured depth frame: `(dw, dh, depth, depth_cand)` -- dimensions, the de-swizzled
+/// f32 depth plane, and the candidate pointer the plane was read from (identity proof).
+pub type CoherentDepth = (u32, u32, Vec<f32>, usize);
+/// Depth captured COHERENTLY with the current color frame, stashed by
 /// `readback_offscreen_fast_coherent` for the SAME draw tick's `apply_depth_alpha_key` to consume via
 /// `take_coherent_depth`. Single render-thread producer/consumer within one tick; the producer always
 /// sets it (coherent success) or clears it (fallback) each frame, so a later frame never reads a stale
 /// depth. `None` -> the mask path reads depth fresh (the legacy separate read).
 /// (Step 2: bypassed -- the worker reads depth from the staging slot; left per the design note.)
 #[allow(dead_code)]
-pub static COHERENT_DEPTH: Mutex<Option<(u32, u32, Vec<f32>, usize)>> = Mutex::new(None);
+pub static COHERENT_DEPTH: Mutex<Option<CoherentDepth>> = Mutex::new(None);
 pub use er_telemetry::counters::COHERENT_READ_FALLBACK;
 /// Instrumentation the first coherent pass lacked: how many draw ticks the COHERENT color+depth readback
 /// SUCCEEDED (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
 /// run PROVES whether the single-fence path is actually engaging (not silently degrading).
 pub use er_telemetry::counters::COHERENT_READ_OK;
 
-/// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
-/// centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
-/// backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
-/// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
-/// PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
+// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
+// centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
+// backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
+// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
+// PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
+// (Design note only: the statics it described are gone, so this is NOT a doc comment -- as `///` it
+// would silently attach to the next item.)
 
 /// DETERMINISTICALLY resolve the content RT's vkd3d `ID3D12Resource` from a CSGxTexture by following the
 /// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
 /// validating each hop's vtable so a layout change fails closed instead of dereferencing garbage. NO
 /// memory scan / QI of arbitrary objects -> nothing to race the teardown free. Returns an AddRef'd ref.
+///
+/// # Safety
+///
+/// `srv_gx` carries no precondition -- every hop is read through `safe_read_*` and each
+/// vtable is checked against the game image or a d3d12 module, so a wrong or stale
+/// pointer fails closed with `None`.
+///
+/// The caller owns LIFETIME: the final hop is a `QueryInterface`, which faults
+/// uncatchably if the object was already freed, so the owning renderer must still be
+/// live. The returned reference is AddRef'd and is released by dropping it. Render
+/// thread only.
 pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID3D12Resource> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null && p > 0x10000;
@@ -250,6 +278,24 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
 /// re-copy is safe through the whole loading screen -> the portrait refreshes without crashing.
 /// `srv_gx` is the renderer offscreen's CSGxTexture; `start` is the offscreen nest (`renderer+0xa8`)
 /// that `readback_offscreen_rgba8` reads the real head from.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// Additionally, every call after the first re-copies the raw pointer cached in
+/// `PROFILE_LIVE_RT_RES`, borrowing it as an `ID3D12Resource` WITHOUT re-validating it.
+/// That cache is sound only because the resource is our own built renderer's RT; a
+/// caller that tears that renderer down without clearing the cache turns this into a
+/// dereference of freed memory.
 pub unsafe fn readback_cached_content_rgba8(
     start: usize,
     srv_gx: usize,
@@ -287,6 +333,21 @@ pub unsafe fn readback_cached_content_rgba8(
     .flatten()
 }
 
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// This is the RAW inner body with NO `catch_unwind` of its own, so a panic unwinds into
+/// whatever called it -- across the game's frames when that caller is a detour. Call it
+/// only from inside an existing `catch_unwind`, as `readback_offscreen_rgba8` does.
 pub unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
     // Scan the wrapper nest for the real VKD3D ID3D12Resource (validated TEXTURE2D, QI-owned ref;
     // its Drop balances the QI AddRef, so the game's object is left net-untouched).
@@ -502,6 +563,16 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
 /// but it does NOT create new D3D12 objects each call -- which is why the per-call version published only
 /// ~4x under loading (command-queue creation kept failing). With the cache the readback succeeds every
 /// frame so the displayed head follows the cursor. Returns `None` on any failure (draws the last frame).
+///
+/// # Safety
+///
+/// `resource` must be a live `ID3D12Resource` created on the same device the cached
+/// `RB_FAST_*` queue/allocator/list/fence were created on; beyond its own `GetDesc` and
+/// `GetDevice` it is used without further validation.
+///
+/// The `RB_FAST_*` objects are process-global and are reset, recorded into, submitted
+/// and waited on with NO locking, so this may only be called from ONE thread (the render
+/// thread). Two concurrent calls corrupt the shared command allocator.
 pub unsafe fn readback_resource_cached_fast(
     resource: ID3D12Resource,
 ) -> Option<(u32, u32, Vec<u8>)> {
@@ -724,6 +795,21 @@ pub unsafe fn readback_resource_cached_fast(
 /// NOTE (worker offload, 2026-07-06): no longer on the live path -- the coherent readback captures depth
 /// with the color on one fence and the render thread hands it to the consume worker, so the separate-fence
 /// depth read is unused. Retained as the proven standalone depth-readback for reference.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// Same single-thread rule as the color path: the cached `RB_DEPTH_*` objects are shared
+/// without locking.
 #[allow(dead_code)]
 pub unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {

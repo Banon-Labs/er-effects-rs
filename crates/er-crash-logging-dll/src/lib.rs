@@ -4,8 +4,6 @@
 //! first-chance exceptions into `er-crash-log.txt` / `er-crash-latest.txt` in the
 //! game directory without loading the product DLL.
 
-#![allow(non_snake_case)]
-
 use std::sync::Once;
 
 const DLL_PROCESS_ATTACH: u32 = 1;

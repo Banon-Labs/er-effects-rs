@@ -68,15 +68,50 @@ where
     Ok(save_state != IDLE_SAVE_STATE)
 }
 
+/// Which native load primitives [`request_direct_menu_load`] should invoke for a given
+/// [`SaveLoadMethod`]. These four flags were positional `bool` arguments; grouping them keeps the
+/// method -> primitive mapping in one place and out of the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectMenuLoadCalls {
+    /// Call `save_write_entry_0b` (the map-load dispatch entry).
+    map_load: bool,
+    /// Call `combined_save_write` (the combined load dispatch).
+    combined_load: bool,
+    /// Set the native title-bootstrap load flag before queuing the continue flags.
+    title_bootstrap_marker: bool,
+    /// Pump the native save/load state machine instead of returning a completed request.
+    save_load_pump: bool,
+}
+
+impl DirectMenuLoadCalls {
+    fn for_method(method: SaveLoadMethod) -> Self {
+        Self {
+            map_load: matches!(
+                method,
+                SaveLoadMethod::DirectMapLoad | SaveLoadMethod::DirectCombinedLoad
+            ),
+            combined_load: matches!(
+                method,
+                SaveLoadMethod::DirectCombinedLoad
+                    | SaveLoadMethod::DirectCombinedOnly
+                    | SaveLoadMethod::DirectBootstrapCombined
+                    | SaveLoadMethod::DirectBootstrapPump
+            ),
+            title_bootstrap_marker: matches!(
+                method,
+                SaveLoadMethod::DirectBootstrapCombined | SaveLoadMethod::DirectBootstrapPump
+            ),
+            save_load_pump: matches!(method, SaveLoadMethod::DirectBootstrapPump),
+        }
+    }
+}
+
 unsafe fn request_direct_menu_load<G, F>(
     game_man: &mut G,
     module_base: usize,
     slot: i32,
     attempt: u64,
-    call_map_load: bool,
-    call_combined_load: bool,
-    call_title_bootstrap_marker: bool,
-    call_save_load_pump: bool,
+    calls: DirectMenuLoadCalls,
     debug: &mut F,
 ) -> Result<bool, String>
 where
@@ -99,7 +134,7 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
     type MarkTitleBootstrap = unsafe extern "system" fn();
     type SaveLoadPumpDefault = unsafe extern "system" fn();
 
-    if call_save_load_pump && game_man.save_state() != IDLE_SAVE_STATE {
+    if calls.save_load_pump && game_man.save_state() != IDLE_SAVE_STATE {
         let save_load_pump_default: SaveLoadPumpDefault =
             unsafe { std::mem::transmute(game_rva(module_base, SAVE_LOAD_PUMP_DEFAULT_RVA)?) };
         unsafe { save_load_pump_default() };
@@ -132,7 +167,7 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
     let save_request_profile: SaveRequestProfile =
         unsafe { std::mem::transmute(game_rva(module_base, SAVE_REQUEST_PROFILE_RVA)?) };
 
-    if call_title_bootstrap_marker {
+    if calls.title_bootstrap_marker {
         let mark_title_bootstrap: MarkTitleBootstrap =
             unsafe { std::mem::transmute(game_rva(module_base, MARK_TITLE_BOOTSTRAP_RVA)?) };
         unsafe { mark_title_bootstrap() };
@@ -147,7 +182,7 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
     unsafe { set_save_slot(slot) };
     unsafe { request_save(REQUEST_SAVE_ENABLED) };
     unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
-    if call_combined_load && !call_map_load {
+    if calls.combined_load && !calls.map_load {
         let combined_save_write: CombinedSaveWrite =
             unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_COMBINED_RVA)?) };
         let combined_ret = unsafe {
@@ -160,12 +195,12 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
         debug(format!(
             "attempt {attempt}: direct combined_save_write returned {combined_ret}"
         ));
-        if call_save_load_pump {
+        if calls.save_load_pump {
             return Ok(false);
         }
         return Ok(combined_ret != MAP_LOAD_FALSE_RETURN);
     }
-    if call_map_load {
+    if calls.map_load {
         let save_write_entry_0b: SaveWriteEntry0b =
             unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_ENTRY0B_RVA)?) };
         let ret = unsafe { save_write_entry_0b() };
@@ -173,7 +208,7 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
         if ret == MAP_LOAD_FALSE_RETURN {
             return Ok(false);
         }
-        if call_combined_load {
+        if calls.combined_load {
             let combined_save_write: CombinedSaveWrite =
                 unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_COMBINED_RVA)?) };
             let combined_ret = unsafe {
@@ -186,7 +221,7 @@ const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
             debug(format!(
                 "attempt {attempt}: direct combined_save_write returned {combined_ret}"
             ));
-            if call_save_load_pump {
+            if calls.save_load_pump {
                 return Ok(false);
             }
             return Ok(combined_ret != MAP_LOAD_FALSE_RETURN);

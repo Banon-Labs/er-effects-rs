@@ -536,32 +536,6 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
     ret
 }
 
-#[cfg(test)]
-mod cap_builder_tests {
-    use super::explicit_boot_loadgame_slot;
-
-    #[test]
-    fn picker_beats_configured_slot() {
-        assert_eq!(
-            explicit_boot_loadgame_slot(Some(8), Some(3)),
-            Some((8, "user pick"))
-        );
-    }
-
-    #[test]
-    fn configured_slot_beats_container_when_no_picker_exists() {
-        assert_eq!(
-            explicit_boot_loadgame_slot(None, Some(0)),
-            Some((0, "configured autoload slot"))
-        );
-    }
-
-    #[test]
-    fn invalid_explicit_slots_are_not_forwarded() {
-        assert_eq!(explicit_boot_loadgame_slot(Some(10), Some(-1)), None);
-    }
-}
-
 /// Selector-owner step tick 0x140826d50(step, ctx, result). Rate-limited (it ticks every
 /// frame). Logs the step this, its +0x68 install flag, and the slot at ctx[0].
 pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
@@ -1333,4 +1307,30 @@ pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
         }
     }
     unsafe { call_cap_original(&SEQUENCE_ITER_ORIG, seq, b, c, d) }
+}
+
+#[cfg(test)]
+mod cap_builder_tests {
+    use super::explicit_boot_loadgame_slot;
+
+    #[test]
+    fn picker_beats_configured_slot() {
+        assert_eq!(
+            explicit_boot_loadgame_slot(Some(8), Some(3)),
+            Some((8, "user pick"))
+        );
+    }
+
+    #[test]
+    fn configured_slot_beats_container_when_no_picker_exists() {
+        assert_eq!(
+            explicit_boot_loadgame_slot(None, Some(0)),
+            Some((0, "configured autoload slot"))
+        );
+    }
+
+    #[test]
+    fn invalid_explicit_slots_are_not_forwarded() {
+        assert_eq!(explicit_boot_loadgame_slot(Some(10), Some(-1)), None);
+    }
 }

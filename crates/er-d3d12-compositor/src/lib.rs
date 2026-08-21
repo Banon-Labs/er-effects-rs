@@ -9,8 +9,6 @@
 //! a caller-supplied frame provider; the standalone wrapper can still prove the
 //! Present path without pulling in er-effects-rs.
 
-#![allow(non_snake_case)]
-
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -801,7 +799,7 @@ unsafe fn transition(
     before: D3D12_RESOURCE_STATES,
     after: D3D12_RESOURCE_STATES,
 ) {
-    let mut barrier = D3D12_RESOURCE_BARRIER {
+    let barrier = D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
         Anonymous: D3D12_RESOURCE_BARRIER_0 {

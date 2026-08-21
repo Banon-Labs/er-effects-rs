@@ -364,8 +364,8 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     {
         timeline_event("T0", tick, format_args!("state10 observe-baseline"));
     }
-    if let Some(o) = owner {
-        if OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED {
+    if let Some(o) = owner
+        && OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED {
             let dialog =
                 unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
             let dialog_vt = if dialog != null {
@@ -392,7 +392,6 @@ pub unsafe fn title_observe_tick(module_base: usize, tick: u64) {
                 }
             }
         }
-    }
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let gm = game_man_ptr_or_null();

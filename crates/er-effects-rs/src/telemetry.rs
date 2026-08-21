@@ -1,42 +1,19 @@
 //! telemetry module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
 use std::{
-    ffi::c_void,
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use eldenring::cs::{GameMan, PlayerIns};
+use er_save_loader::GameManTelemetry;
+use fromsoftware_shared::FromStatic;
+use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::PCSTR};
 
 #[allow(unused_imports)]
 use crate::*;

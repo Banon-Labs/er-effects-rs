@@ -717,7 +717,9 @@ fn a_file_without_metadata_has_no_last_saved_time() {
 /// Known epochs, including the leap-year cases an off-by-one in the era algorithm breaks first.
 #[test]
 fn civil_time_matches_known_epochs() {
-    let cases: [(i64, (i64, u32, u32, u32, u32)); 8] = [
+    // `(unix seconds, (year, month, day, hour, minute))` for one civil-time conversion.
+    type CivilCase = (i64, (i64, u32, u32, u32, u32));
+    let cases: [CivilCase; 8] = [
         (0, (1970, 1, 1, 0, 0)),
         (86_399, (1970, 1, 1, 23, 59)),
         (86_400, (1970, 1, 2, 0, 0)),
@@ -1035,7 +1037,7 @@ fn a_single_drive_keeps_the_complete_path_row_without_fake_cycling() {
     model.cycle_drive(true);
     assert_eq!(model.current_dir(), Path::new("Z:\\home\\banon"));
     // The location row and up row are fixed; the remaining rows stay available to entries.
-    assert_eq!(model.max_entries_single_page(), PICKER_ROW_COUNT - 2);
+    assert_eq!(model.entries_per_page(), PICKER_ROW_COUNT - 2);
 }
 
 /// The `[..]` row names the folder it goes TO, not just the direction, and truncates rather

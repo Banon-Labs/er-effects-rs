@@ -1,8 +1,10 @@
 //! Validate the er-shaderkit DXBC reflection against REAL extracted shaders:
+//!
 //!  1. tally which DX-container chunks appear across all bundles (esp. whether any
 //!     carry `RDEF` — Elden Ring's DXIL shaders mostly don't);
 //!  2. run `er_shaderkit::parse_input_signature` on a real `.vpo` and print the
 //!     resolved input signature (names + registers) so we can eyeball FLVER binding.
+//!
 //! Run: `cargo run -p er-objectkit --example dump_dxbc_chunks`.
 
 use std::collections::BTreeMap;

@@ -26,13 +26,11 @@ use super::*;
 // the root-owned unsafe memory sampling and telemetry publication, and re-exports the moved names as
 // compatibility shims for existing root callsites.
 pub(crate) use er_loading_portrait::portrait_equip::{
-    PORTRAIT_EQUIP_BAD_CHEST, PORTRAIT_EQUIP_BAD_HANDS, PORTRAIT_EQUIP_BAD_HEAD,
-    PORTRAIT_EQUIP_BAD_LEGS, PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE, PORTRAIT_EQUIP_CAPTURE_BAD,
-    PORTRAIT_EQUIP_CAPTURE_CLEAN, PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED, PORTRAIT_EQUIP_SLOT_CHEST,
-    PORTRAIT_EQUIP_SLOT_HANDS, PORTRAIT_EQUIP_SLOT_HEAD, PORTRAIT_EQUIP_SLOT_LEGS,
-    PORTRAIT_EQUIP_VALUE_PRESENT, PORTRAIT_EQUIP_VALUE_UNSAMPLED, PortraitEquipSample,
-    portrait_effective_protector_id, portrait_equip_latch_first, portrait_equip_pack,
-    portrait_equip_sample_bad_mask, portrait_equip_unpack, protector_default_param_id,
+    PORTRAIT_EQUIP_CAPTURE_BAD, PORTRAIT_EQUIP_CAPTURE_CLEAN, PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED,
+    PORTRAIT_EQUIP_SLOT_CHEST, PORTRAIT_EQUIP_SLOT_HANDS, PORTRAIT_EQUIP_SLOT_HEAD,
+    PORTRAIT_EQUIP_SLOT_LEGS, PortraitEquipSample, portrait_effective_protector_id,
+    portrait_equip_latch_first, portrait_equip_pack, portrait_equip_sample_bad_mask,
+    portrait_equip_unpack,
 };
 
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_BAD_FRAMES;
@@ -97,6 +95,7 @@ pub(crate) fn portrait_equip_roll_window(window: usize) {
 ///     has not been fed yet;
 ///   * any of the fault-guarded reads comes back unmapped, including the one-per-window read of the
 ///     target record's own protector ids (the next tick simply retries).
+///
 /// A window that produces zero samples is itself a FAILURE verdict -- see `oracle_portrait_equip_sampled_frames`.
 pub(crate) unsafe fn portrait_equip_read_sample(
     base: usize,
@@ -125,8 +124,8 @@ pub(crate) unsafe fn portrait_equip_read_sample(
     let unkd4 = unsafe { safe_read_i32(chr_asm + CHR_ASM_UNKD4_OFFSET) }?;
     let unkd8 = unsafe { safe_read_i32(chr_asm + CHR_ASM_UNKD8_OFFSET) }?;
     let mut param_ids = [CHR_ASM_OVERRIDE_ABSENT; CHR_ASM_PROTECTOR_SLOT_COUNT];
-    for slot_index in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
-        param_ids[slot_index] =
+    for (slot_index, param_id) in param_ids.iter_mut().enumerate() {
+        *param_id =
             unsafe { safe_read_i32(chr_asm + chr_asm_protector_param_id_offset(slot_index)) }?;
     }
     if param_ids.iter().all(|id| *id < 0) {
@@ -230,8 +229,12 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
         && PORTRAIT_EQUIP_CAPTURE_VERDICT.load(Ordering::SeqCst)
             == PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED
     {
-        for slot in 0..CHR_ASM_PROTECTOR_SLOT_COUNT {
-            PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID[slot].store(
+        for (slot, captured) in PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID
+            .iter()
+            .enumerate()
+            .take(CHR_ASM_PROTECTOR_SLOT_COUNT)
+        {
+            captured.store(
                 portrait_equip_pack(sample.effective[slot]),
                 Ordering::SeqCst,
             );
@@ -261,7 +264,6 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
 #[cfg(test)]
 mod portrait_equip_oracle_root_tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The protector param-id offsets are pinned by `GetProtectorParamIdBySlot`'s `lea 0xc(%rdx)` +
     /// `mov 0x7c(%rcx,%rdx,4)`, and all four must stay inside the struct.

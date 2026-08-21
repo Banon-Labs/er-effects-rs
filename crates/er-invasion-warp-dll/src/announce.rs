@@ -360,6 +360,11 @@ pub unsafe fn show(text: &str) -> bool {
     true
 }
 
+/// Host-build stub: there is no announce view to write to, so nothing is ever placed.
+///
+/// # Safety
+/// Nothing to uphold -- the body only returns `false`. `unsafe` only so the signature matches
+/// the `cfg(windows)` twin above, which writes into the game's announce view.
 #[cfg(not(windows))]
 pub unsafe fn show(_text: &str) -> bool {
     false
@@ -385,10 +390,12 @@ mod tests {
         // The two text fields must not overlap, and the pointer must come first -- that ORDER is
         // the whole reason the pointer works: the display step reads `+0x08` and only consults the
         // DLString at `+0x10` when it is null.
-        assert!(
-            MSG_TEXT_POINTER_OFFSET + 8 <= MSG_TEXT_OFFSET,
-            "the raw pointer must fit before the embedded string"
-        );
+        const {
+            assert!(
+                MSG_TEXT_POINTER_OFFSET + 8 <= MSG_TEXT_OFFSET,
+                "the raw pointer must fit before the embedded string"
+            )
+        };
         // is_active sits at the message's own offset 0, which is why the write target is the
         // message base rather than the message plus something.
         //
@@ -412,20 +419,26 @@ mod tests {
     fn the_measurement_offsets_sit_after_the_play_state_and_do_not_overlap() {
         assert_eq!(TEXT_NEEDS_SCROLL_OFFSET, 0x0b5c);
         assert_eq!(TEXT_OVERFLOW_OFFSET, 0x0b64);
-        assert!(
-            PLAY_STATE_OFFSET < TEXT_NEEDS_SCROLL_OFFSET,
-            "the play state is written before these are read"
-        );
-        assert!(
-            TEXT_NEEDS_SCROLL_OFFSET + 1 <= TEXT_OVERFLOW_OFFSET,
-            "the scroll flag must not overlap the width"
-        );
+        const {
+            assert!(
+                PLAY_STATE_OFFSET < TEXT_NEEDS_SCROLL_OFFSET,
+                "the play state is written before these are read"
+            )
+        };
+        const {
+            assert!(
+                TEXT_NEEDS_SCROLL_OFFSET < TEXT_OVERFLOW_OFFSET,
+                "the scroll flag must not overlap the width"
+            )
+        };
         // Measuring on the same frame reads the PREVIOUS notice's width, which would report a
         // broken banner as healthy -- the exact false-negative this oracle exists to prevent.
-        assert!(
-            MEASURE_DELAY_FRAMES >= 2,
-            "the Load case runs on a LATER frame than the one that arms it"
-        );
+        const {
+            assert!(
+                MEASURE_DELAY_FRAMES >= 2,
+                "the Load case runs on a LATER frame than the one that arms it"
+            )
+        };
     }
 
     /// A prologue too short to discriminate would let a moved function pass the check and be called
@@ -499,10 +512,12 @@ mod tests {
     /// so a long message cannot scroll for the rest of the session.
     #[test]
     fn the_length_cap_is_sane_for_a_scrolling_line() {
-        assert!(
-            MAX_CHARS >= 40,
-            "must fit 'Rejected m60_42_36_00 (elsewhere)'"
-        );
-        assert!(MAX_CHARS <= 200, "a message this long would scroll forever");
+        const {
+            assert!(
+                MAX_CHARS >= 40,
+                "must fit 'Rejected m60_42_36_00 (elsewhere)'"
+            )
+        };
+        const { assert!(MAX_CHARS <= 200, "a message this long would scroll forever") };
     }
 }

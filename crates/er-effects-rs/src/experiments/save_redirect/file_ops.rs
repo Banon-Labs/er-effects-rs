@@ -1,17 +1,14 @@
 use super::*;
 
 use er_save_redirect::{
-    SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
-    SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
     SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
     SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SHGFP_MAX_PATH_W, SaveNtCreateDetourGuard,
     SaveRedirectHookDetours, classify_nt_create_file_save_path,
     fill_get_disk_free_space_ex_outputs, install_core_createfilew_hook,
     install_redirect_save_hooks_when_ready, is_ntquery_volume_free_space_class,
     nt_createfile_diag_hit_should_log, ntquery_volume_available_units,
-    patch_ntquery_volume_free_space, save_detour_disk_io_allowed,
-    shgetfolderpath_is_appdata_request, shgetfolderpath_staged_appdata_len,
-    wide_ends_with_ci_ascii, write_shgetfolderpath_staged_root,
+    patch_ntquery_volume_free_space, shgetfolderpath_is_appdata_request,
+    shgetfolderpath_staged_appdata_len, write_shgetfolderpath_staged_root,
 };
 
 type ShGetFolderPathWFn = unsafe extern "system" fn(isize, i32, isize, u32, *mut u16) -> i32;
@@ -130,7 +127,7 @@ pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
         if !objname.is_null() {
             let len_bytes = unsafe { *(objname as *const u16) } as usize;
             let buf = unsafe { *(objname.add(0x08) as *const usize) } as *const u16;
-            if !buf.is_null() && len_bytes >= 2 && len_bytes < 0x2000 {
+            if !buf.is_null() && (2..0x2000).contains(&len_bytes) {
                 let nwch = len_bytes / 2;
                 let path = unsafe { std::slice::from_raw_parts(buf, nwch) };
                 // Focus the (capped) budget on ER0000.sl2 opens ONLY -- early boot churns hundreds
@@ -192,9 +189,6 @@ pub(super) unsafe extern "system" fn save_ntcreatefile_diag_hook(
     }
     ret
 }
-
-type GetDiskFreeSpaceExWFn =
-    unsafe extern "system" fn(*const u16, *mut u64, *mut u64, *mut u64) -> i32;
 
 /// GetDiskFreeSpaceExW detour: for the EldenRing save dir, report ample free space (Wine returns
 /// bogus 0 on the Z:->/home drive, which fails the save-commit free-space precheck -> corrupted-save

@@ -33,10 +33,10 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // MinHook patches it (no race); load2/load3 reloads still CALL LoadlistInit afterwards so the hook
     // fires and captures worldloadlistlistVirtualPath. Idempotent (install-once swap guard). bd
     // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
-    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
-        if let Ok(base) = game_module_base() {
-            unsafe { install_loadlist_init_capture_hook(base) };
-        }
+    if unsafe { PlayerIns::local_player_mut() }.is_ok()
+        && let Ok(base) = game_module_base()
+    {
+        unsafe { install_loadlist_init_capture_hook(base) };
     }
     // REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
     // 2026-07-23): this used to call enforce_keyboard_game_input_disable() EVERY in-world frame whenever the
@@ -189,12 +189,12 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     }
     // before the player check so it arms at the title (pre-load), independent
     // of the active observe/own-stepper mode.
-    if c30_watch_enabled() {
-        if let Ok(base) = game_module_base() {
-            let frame =
-                C30_WATCH_FRAME_COUNTER.fetch_add(C30_WATCH_HIT_INCREMENT, Ordering::SeqCst) as u64;
-            unsafe { maybe_arm_c30_watch(base, frame) };
-        }
+    if c30_watch_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        let frame =
+            C30_WATCH_FRAME_COUNTER.fetch_add(C30_WATCH_HIT_INCREMENT, Ordering::SeqCst) as u64;
+        unsafe { maybe_arm_c30_watch(base, frame) };
     }
     // RECURRING world-stream observer (own-load-stream-observer-must-be-recurring-task-2026-06-22).
     // Internally no-ops until own_load_continue_fire sets OWN_LOAD_CONTINUE_FIRED, so it
@@ -245,14 +245,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // or normal map transitions; when armed it holds movability/loading-close until CSWorldGeomMan geometry
     // streaming settles (bounded fail-soft), removing the movable-while-streaming overlap dip.
     install_worldreswait_gate_hook();
-    if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
-        || golden_observe_enabled()
+    if ((own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
+        || golden_observe_enabled())
+        && let Ok(base) = game_module_base()
     {
-        if let Ok(base) = game_module_base() {
-            let gm = game_man_ptr_or_null();
-            let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
-            unsafe { own_load_stream_observe_recurring(base, gm, player_present) };
-        }
+        let gm = game_man_ptr_or_null();
+        let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        unsafe { own_load_stream_observe_recurring(base, gm, player_present) };
     }
     // PATH B PRIVATE PUMP (own_load_pump): if own_load_pump_fire built+armed the LoadGame job,
     // tick its Run privately EVERY frame here (the game thread) -- replicating native
@@ -277,30 +276,30 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             crate::constants::FRAME_TIME_WORST_US.fetch_max(us, Ordering::Relaxed);
         }
     }
-    if own_load_pump_enabled() {
-        if let Ok(base) = game_module_base() {
-            let gm = game_man_ptr_or_null();
-            let frame_delta = task_data.delta_time.time;
-            unsafe { own_load_pump_tick(base, gm, frame_delta) };
-        }
+    if own_load_pump_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        let gm = game_man_ptr_or_null();
+        let frame_delta = task_data.delta_time.time;
+        unsafe { own_load_pump_tick(base, gm, frame_delta) };
     }
     // DIRECT "Continue pressed" trigger: at the settled main menu (post press-any-button,
     // GameMan set up), write the exact bit the native selector consumes
     // (*(TitleFlowContext+0x14c)=1), invoke the selector to BUILD the LoadGame job, and
     // PushBackJob it to the dialog queue. Self-gates + fires once; no input. Then DRAIN the
     // queue each frame (FUN_1407a90f0) so the posted job runs to completion (deser+world).
-    if fire_tfc_continue_enabled() {
-        if let Ok(base) = game_module_base() {
-            // Autonomous press-any-button: self-fire the open-menu registrar when the
-            // title settles (zero-input), so no real button press is needed.
-            unsafe { maybe_auto_open_menu(base) };
-            // The Continue BUILD now runs IN-CONTEXT from the hooked TitleTopDialog::update
-            // detour (the pump's live-dialog frame), NOT from this game task -- that timing
-            // was the mis-context cause. Install the hook once; the detour fires the build.
-            unsafe { install_title_update_hook(base) };
-            let frame_delta = task_data.delta_time.time;
-            unsafe { tfc_continue_drain_tick(base, frame_delta) };
-        }
+    if fire_tfc_continue_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        // Autonomous press-any-button: self-fire the open-menu registrar when the
+        // title settles (zero-input), so no real button press is needed.
+        unsafe { maybe_auto_open_menu(base) };
+        // The Continue BUILD now runs IN-CONTEXT from the hooked TitleTopDialog::update
+        // detour (the pump's live-dialog frame), NOT from this game task -- that timing
+        // was the mis-context cause. Install the hook once; the detour fires the build.
+        unsafe { install_title_update_hook(base) };
+        let frame_delta = task_data.delta_time.time;
+        unsafe { tfc_continue_drain_tick(base, frame_delta) };
     }
     // GOLDEN-PATH zero-input boot -> open menu (DECOUPLED from fire_tfc_continue): the
     // readiness-gated press-any-button advance (hook 0x1407ad1c0 -> set [job+0x1e8]=2)
@@ -317,12 +316,12 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the rows never built (continue-scan = 0 nodes, stage 3). Zero-input (decoded accept
     // flag, not a synthesized event). bd er-effects-rs-e9e + rowbuild-mechanism-incontext-
     // openmenu-2026-06-23.
-    if pab_advance_enabled() {
-        if let Ok(base) = game_module_base() {
-            unsafe { install_pab_advance_hook(base) };
-            if !native_profile_capture_enabled() {
-                unsafe { maybe_set_title_accept_byte(base) };
-            }
+    if pab_advance_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        unsafe { install_pab_advance_hook(base) };
+        if !native_profile_capture_enabled() {
+            unsafe { maybe_set_title_accept_byte(base) };
         }
     }
     // Now-loading helper observer: attach only after the native title accept byte fired.
@@ -338,33 +337,33 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
     // frame in fewer wall-clock frames. Default-on product behavior for real runs (the
     // detour self-gates per frame); install once. bd er-effects-rs-urw.
-    if title_anim_speedup_enabled() {
-        if let Ok(base) = game_module_base() {
-            unsafe { install_title_anim_speed_hook(base) };
-            // READ-ONLY native state-transition timeline (menu-build-overlap lever
-            // "look before acting" instrument): logs every SetState(owner,int) with a
-            // timestamp so we learn exactly when BeginTitle(3) fires and whether the
-            // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
-            unsafe { install_title_setstate_trace_hook(base) };
-            // Failed same-session reload guard experiments are explicit opt-in only; canonical
-            // semaphore-diff runs must remain observational.
-            if movemapstep_step_move_map_gate_hold_enabled() {
-                unsafe { install_movemapstep_step_move_map_gate_hook(base) };
-            }
-            // STEP_MoveMap_Update finalize-defer detour: the root fix for the warm-reload premature
-            // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-effects-reload-defer.txt
-            // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
-            unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
-            // Child-done-query override: prevent the PREMATURE MoveMapStep child teardown that strands
-            // load2 (FUN_140eb5550 returns done at field25=0 -> STEP_MoveMap_Update tears the child down
-            // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
-            // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
-            unsafe { install_child_done_query_override_hook(base) };
-            // NOTE: the LoadlistInit capture hook is NOT installed here -- installing it at DLL attach
-            // crashed ER boot (MinHook patching STEP_MoveMap_LoadlistInit's entry during early boot). It
-            // is deferred to the first player-present frame instead (see the tick below). bd
-            // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
+    if title_anim_speedup_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        unsafe { install_title_anim_speed_hook(base) };
+        // READ-ONLY native state-transition timeline (menu-build-overlap lever
+        // "look before acting" instrument): logs every SetState(owner,int) with a
+        // timestamp so we learn exactly when BeginTitle(3) fires and whether the
+        // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
+        unsafe { install_title_setstate_trace_hook(base) };
+        // Failed same-session reload guard experiments are explicit opt-in only; canonical
+        // semaphore-diff runs must remain observational.
+        if movemapstep_step_move_map_gate_hold_enabled() {
+            unsafe { install_movemapstep_step_move_map_gate_hook(base) };
         }
+        // STEP_MoveMap_Update finalize-defer detour: the root fix for the warm-reload premature
+        // teardown (bd er-effects-rs-9fmm). Self-gated internally on the er-effects-reload-defer.txt
+        // marker + a committed reload epoch, so installing it is inert until a marked reload runs.
+        unsafe { install_ingamestep_step_movemap_update_defer_hook(base) };
+        // Child-done-query override: prevent the PREMATURE MoveMapStep child teardown that strands
+        // load2 (FUN_140eb5550 returns done at field25=0 -> STEP_MoveMap_Update tears the child down
+        // -> advancer stops). Isolated to the MoveMapStep child (rcx==mms+0x108) on a committed
+        // reload; load1 untouched. bd COMPLETE-CHAIN-load2-child-torndown-early-fun140eb5550-done.
+        unsafe { install_child_done_query_override_hook(base) };
+        // NOTE: the LoadlistInit capture hook is NOT installed here -- installing it at DLL attach
+        // crashed ER boot (MinHook patching STEP_MoveMap_LoadlistInit's entry during early boot). It
+        // is deferred to the first player-present frame instead (see the tick below). bd
+        // loadlist-hook-defer-install-to-player-present-not-attach-2026-07-20.
     }
     // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
     // title frame so the connection-loss event handlers -- which build the GR_System_Message
@@ -404,43 +403,42 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // timed anti-debug so debug exceptions / our INT3 breakpoints reach our VEH.
     // Runs ONCE, BEFORE arming breakpoints, from the game task (game up, .text
     // decrypted) -- our own controlled timing, not the LazyLoader's.
-    if anti_antidebug_enabled() {
-        if let Ok(base) = game_module_base() {
-            unsafe { apply_anti_antidebug_once(base) };
-        }
+    if anti_antidebug_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        unsafe { apply_anti_antidebug_once(base) };
     }
     // Software (INT3) breakpoints from er-effects-breakpoints.txt: install once.
     // The VEH (crash logger) logs every hit's register/stack context + re-arms.
-    if sw_breakpoints_enabled() {
-        if let Ok(base) = game_module_base() {
-            unsafe { install_sw_breakpoints_once(base) };
-        }
+    if sw_breakpoints_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        unsafe { install_sw_breakpoints_once(base) };
     }
     // STAY-ACTIVE: force ER's input-accept flag so a virtual gamepad keeps driving the
     // menus while ER is UNFOCUSED (user can work elsewhere during a golden capture). ER
     // clears [DLUID+0x88d] each frame when it isn't GetActiveWindow; re-set it to 1.
-    if stay_active_enabled() {
-        if let Ok(base) = game_module_base() {
-            // DLUID (input-device-manager) singleton VA 0x14485dc18.
-            const DLUID_SINGLETON_RVA: usize = RuntimeGlobalRva::DluidInputManager as usize;
-            #[repr(C)]
-            struct DluidInputManagerLayout {
-                unknown_000: [u8; 0x88d],
-                input_active: u8,
-            }
-            const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize =
-                core::mem::offset_of!(DluidInputManagerLayout, input_active);
-            const INPUT_ACTIVE: u8 = true as u8;
-            const NULL_DLUID: usize = NULL_MODULE_BASE;
-            let dluid =
-                unsafe { safe_read_usize(base + DLUID_SINGLETON_RVA) }.unwrap_or(NULL_DLUID);
-            // Defensive: only write once the flag byte is confirmed READABLE (so a
-            // not-yet-initialized or bad singleton ptr can never fault the game thread).
-            if dluid != NULL_DLUID
-                && unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }.is_some()
-            {
-                unsafe { *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE };
-            }
+    if stay_active_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        // DLUID (input-device-manager) singleton VA 0x14485dc18.
+        const DLUID_SINGLETON_RVA: usize = RuntimeGlobalRva::DluidInputManager as usize;
+        #[repr(C)]
+        struct DluidInputManagerLayout {
+            unknown_000: [u8; 0x88d],
+            input_active: u8,
+        }
+        const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize =
+            core::mem::offset_of!(DluidInputManagerLayout, input_active);
+        const INPUT_ACTIVE: u8 = true as u8;
+        const NULL_DLUID: usize = NULL_MODULE_BASE;
+        let dluid = unsafe { safe_read_usize(base + DLUID_SINGLETON_RVA) }.unwrap_or(NULL_DLUID);
+        // Defensive: only write once the flag byte is confirmed READABLE (so a
+        // not-yet-initialized or bad singleton ptr can never fault the game thread).
+        if dluid != NULL_DLUID
+            && unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }.is_some()
+        {
+            unsafe { *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE };
         }
     }
 }

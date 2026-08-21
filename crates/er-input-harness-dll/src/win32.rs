@@ -2,13 +2,11 @@
 //!
 //! Mirrors the raw-`extern`/`#[link]` style of `er-reload-trace-dll` (no `windows`-crate
 //! dependency, so nothing extra crosses the cargo-xwin cross-compile boundary). Only the calls the
-//! DIRECT-input-memory self-drive uses are declared: module/proc resolution (find the game image and
-//! the product's union export), timing/log helpers, and `ReadProcessMemory` for fault-safe
+//! DIRECT-input-memory self-drive uses are declared: module resolution (find the game image),
+//! timing/log helpers, and `ReadProcessMemory` for fault-safe
 //! game-memory reads. There is deliberately NO `SendInput`/`XInput`/window-focus surface: those were
 //! the dead path (user, 2026-07-19) -- ER menu/gameplay input is driven by writing the game's own
 //! input memory (CSMenuMan keystate bitmap + DLUID input-active flag), never synthesized OS input.
-
-#![allow(non_snake_case)]
 
 use std::ffi::c_void;
 
@@ -17,8 +15,6 @@ pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetModuleHandleA(name: *const u8) -> *mut c_void;
-    pub fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
-    pub fn Sleep(ms: u32);
     pub fn GetTickCount64() -> u64;
     pub fn ReadProcessMemory(
         process: isize,
@@ -61,20 +57,9 @@ pub fn er_window_is_foreground() -> bool {
     pid != 0 && pid == unsafe { GetCurrentProcessId() }
 }
 
+/// `KEYEVENTF_KEYUP` -- the only `keybd_event` flag this surface needs. Used solely by `send_key_up`.
+#[allow(dead_code)]
 const KEYEVENTF_KEYUP: u32 = 0x0002;
-
-/// Send ONE OS keyboard tap (down+up) of virtual-key `vk`, but ONLY when the ER window is foreground
-/// (`er_window_is_foreground`). Returns true if the key was sent. Real input path -> reaches Scaleform.
-pub fn send_key_tap(vk: u8) -> bool {
-    if !er_window_is_foreground() {
-        return false;
-    }
-    unsafe {
-        keybd_event(vk, 0, 0, 0);
-        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
-    }
-    true
-}
 
 /// Focus-gated OS key DOWN (hold) -- for a sustained press (movement test: hold W). Returns true if sent.
 pub fn send_key_down(vk: u8) -> bool {
@@ -87,6 +72,12 @@ pub fn send_key_down(vk: u8) -> bool {
 
 /// Focus-gated OS key UP (release) -- pairs with `send_key_down`. Always sent (release is safe even if the
 /// window lost focus mid-hold, to avoid a stuck key).
+///
+/// RETAINED THOUGH CURRENTLY UNCALLED: this is the release half of `send_key_down`, which IS live (the
+/// OSMOVE probe in `crate::drive` holds VK_W with it). Nothing calls this today, which means that probe
+/// currently holds W without ever releasing it -- deleting the release path would remove the only way to
+/// fix that, so the item stays and the gap stays visible.
+#[allow(dead_code)]
 pub fn send_key_up(vk: u8) {
     unsafe { keybd_event(vk, 0, KEYEVENTF_KEYUP, 0) };
 }

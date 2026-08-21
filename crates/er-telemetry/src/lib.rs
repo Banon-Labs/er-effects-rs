@@ -146,10 +146,9 @@ mod cpu {
         };
         let (mut max_busy, mut saturated, mut proc_cpu) = (-1.0f32, 0u32, -1.0f32);
         if status == 0 && g.valid {
-            for i in 0..ncores {
-                let idle_d = (buf[i].idle - g.cores[i].0) as f64;
-                let total =
-                    (buf[i].kernel - g.cores[i].1) as f64 + (buf[i].user - g.cores[i].2) as f64;
+            for (cur, prev) in buf.iter().zip(g.cores.iter()).take(ncores) {
+                let idle_d = (cur.idle - prev.0) as f64;
+                let total = (cur.kernel - prev.1) as f64 + (cur.user - prev.2) as f64;
                 if total > 0.0 {
                     let busy = ((total - idle_d) / total * 100.0) as f32;
                     if busy > max_busy {
@@ -165,8 +164,8 @@ mod cpu {
                 proc_cpu = (((pk - g.proc_k) + (pu - g.proc_u)) as f64 / wall_100ns) as f32;
             }
         }
-        for i in 0..ncores {
-            g.cores[i] = (buf[i].idle, buf[i].kernel, buf[i].user);
+        for (prev, cur) in g.cores.iter_mut().zip(buf.iter()).take(ncores) {
+            *prev = (cur.idle, cur.kernel, cur.user);
         }
         g.proc_k = pk;
         g.proc_u = pu;
@@ -213,11 +212,11 @@ mod renderdoc {
     static API_PTR: AtomicUsize = AtomicUsize::new(0);
 
     fn resolve() -> usize {
-        let h = unsafe { GetModuleHandleA(b"renderdoc.dll\0".as_ptr()) };
+        let h = unsafe { GetModuleHandleA(c"renderdoc.dll".as_ptr().cast::<u8>()) };
         if h == 0 {
             return 0;
         }
-        let getapi = unsafe { GetProcAddress(h, b"RENDERDOC_GetAPI\0".as_ptr()) };
+        let getapi = unsafe { GetProcAddress(h, c"RENDERDOC_GetAPI".as_ptr().cast::<u8>()) };
         if getapi == 0 {
             return 0;
         }
@@ -256,12 +255,10 @@ mod renderdoc {
         if PATH_SET
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
+            && let Ok(path) = std::env::var("ER_RENDERDOC_CAPFILE")
+            && let Ok(c) = std::ffi::CString::new(path)
         {
-            if let Ok(path) = std::env::var("ER_RENDERDOC_CAPFILE") {
-                if let Ok(c) = std::ffi::CString::new(path) {
-                    unsafe { (api_ref.set_capture_file_path_template)(c.as_ptr() as *const u8) };
-                }
-            }
+            unsafe { (api_ref.set_capture_file_path_template)(c.as_ptr() as *const u8) };
         }
         unsafe { (api_ref.trigger_capture)() };
         true
@@ -403,21 +400,23 @@ mod profiler {
             let tid = GAME_TID.load(Ordering::Relaxed);
             let td = f32::from_bits(LAST_TD_BITS.load(Ordering::Relaxed));
             let base = GAME_BASE.load(Ordering::Relaxed);
-            if tid != 0 && base != 0 && td >= SLOW_TASK_DELTA {
-                if let Some(rip) = sample_rip(tid) {
-                    if rip > base && rip - base < 0x8000_0000 {
-                        let rva = (rip - base) & !(BUCKET - 1);
-                        if let Ok(mut g) = HIST.lock() {
-                            if let Some(h) = g.as_mut() {
-                                *h.entry(rva).or_insert(0) += 1;
-                            }
-                        }
-                        SAMPLES.fetch_add(1, Ordering::Relaxed);
-                    }
+            if tid != 0
+                && base != 0
+                && td >= SLOW_TASK_DELTA
+                && let Some(rip) = sample_rip(tid)
+                && rip > base
+                && rip - base < 0x8000_0000
+            {
+                let rva = (rip - base) & !(BUCKET - 1);
+                if let Ok(mut g) = HIST.lock()
+                    && let Some(h) = g.as_mut()
+                {
+                    *h.entry(rva).or_insert(0) += 1;
                 }
+                SAMPLES.fetch_add(1, Ordering::Relaxed);
             }
             iters += 1;
-            if iters % DUMP_EVERY == 0 {
+            if iters.is_multiple_of(DUMP_EVERY) {
                 dump();
             }
             unsafe { Sleep(1) };
@@ -437,7 +436,8 @@ mod profiler {
         unsafe {
             *(p.add(CTX_FLAGS_OFF) as *mut u32) = CONTEXT_CONTROL_AMD64;
         }
-        let rip = unsafe {
+
+        unsafe {
             if SuspendThread(h) == u32::MAX {
                 CloseHandle(h);
                 return None;
@@ -451,8 +451,7 @@ mod profiler {
             };
             CloseHandle(h);
             r
-        };
-        rip
+        }
     }
 
     fn dump() {
@@ -460,7 +459,7 @@ mod profiler {
         let Some(h) = g.as_ref() else { return };
         let total = SAMPLES.load(Ordering::Relaxed).max(1);
         let mut v: Vec<(usize, u32)> = h.iter().map(|(k, c)| (*k, *c)).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by_key(|e| std::cmp::Reverse(e.1));
         let mut s = format!(
             "er-cpu-profile: {total} samples of the game thread during slow frames (task_delta>={SLOW_TASK_DELTA}). Top RVAs (rva -> deobf VA = base+rva):\n"
         );
@@ -488,7 +487,7 @@ pub fn standalone_tick() {
     // Throttle disk writes to every 4th tick -- dense enough to sample the game frame time across a
     // ~3s vanilla-reload playable window (at 20fps that is ~0.2s between writes), still a snapshot.
     const WRITE_EVERY: u64 = 4;
-    if n % WRITE_EVERY != 0 {
+    if !n.is_multiple_of(WRITE_EVERY) {
         return;
     }
 

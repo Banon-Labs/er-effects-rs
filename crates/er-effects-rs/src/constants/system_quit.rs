@@ -25,11 +25,6 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
 pub(crate) use er_telemetry::counters::SQ_REPRO_INITIAL_CURSOR;
-pub(crate) use er_title_flow::INJECT_NAV_SETTLE_FRAMES;
-pub(crate) use er_title_flow::INJECT_NAV_TAP_LEN;
-pub(crate) use er_title_flow::INJECT_NAV_GAP_LEN;
-pub(crate) use er_title_flow::INJECT_NAV_CYCLE;
-pub(crate) use er_title_flow::INJECT_NAV_MAX_CYCLES;
 /// Throttle the per-tap log.
 pub(crate) use er_telemetry::counters::INJECT_NAV_LOG_COUNT;
 pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
@@ -85,8 +80,10 @@ pub(crate) use er_telemetry::counters::MOVE_PROBE_EPOCH;
 /// Forward stick deflection the probe injects (near full), the per-FRAME horizontal displacement (world
 /// units) that counts as "moving" (a static/frozen char repeats its position exactly, delta ~0; a walk
 /// clears this easily), and the sustained consecutive-frame count that PROVES movement (user: 60/load).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MOVE_PROBE_STICK_FORWARD: i32 = 30000;
 pub(crate) const MOVE_PROBE_PER_FRAME_THRESHOLD: f32 = 0.01;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
 /// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
 /// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
@@ -117,20 +114,27 @@ pub(crate) const SQ_REPRO_STATE_WAIT_RELOAD: usize = 7;
 /// RIGHT (RB) to the last tab (the Quit/Exit tab, where our injected rows build), then LEFT (LB) back to
 /// tab 0 (Game Options), then dwell -- reproducing the blank Game Options pane the user reported (a tab
 /// goes blank on RETURN after visiting the custom tab). Uses OPTIONSETTING_CURRENT_TAB feedback.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_TAB_RETURN: usize = 8;
 /// PROFILE-BACK repro: capture per-tab row-table baselines, open the cloned Load Profile row, press
 /// B on ProfileSelect, wait for restore, then revisit tabs and compare exact row-table fingerprints.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
 /// SAVE-GAME SELF-DRIVE (save-game-flow WP2): once the Save Game row has opened the destination list,
 /// walk the confirm boxes the way a user does -- move the dialog cursor onto the affirmative
 /// button, then press confirm -- checkpointed on `oracle_save_flow_stage`, never on timers.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_STATE_SAVE_CONFIRM: usize = 13;
 /// Nav directions the confirm-chain drive tries, in order, until one moves the dialog cursor.
 /// The winning direction is latched in `SQ_REPRO_BOX_NAV_BUTTON` for the rest of the run; a
 /// two-button box wraps, so any working axis converges on the target index.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_BOX_NAV_CANDIDATES: [u16; 4] = [
     XINPUT_GAMEPAD_DPAD_LEFT,
     XINPUT_GAMEPAD_DPAD_RIGHT,
@@ -138,24 +142,21 @@ pub(crate) const SQ_REPRO_BOX_NAV_CANDIDATES: [u16; 4] = [
     XINPUT_GAMEPAD_DPAD_DOWN,
 ];
 /// Latched working nav button for the confirm boxes (0 = not discovered yet).
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SQ_REPRO_BOX_NAV_BUTTON: AtomicUsize = AtomicUsize::new(0);
 /// Dialog cursor observed when the current nav candidate began its pulse (usize::MAX = none).
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SQ_REPRO_BOX_NAV_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Candidate index currently being pulsed while the nav direction is still unknown.
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SQ_REPRO_BOX_NAV_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
-/// TAB_RETURN sub-phase: 0 = drive RIGHT to the last tab, 1 = drive LEFT back to tab 0, 2 = dwell.
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_RETURN_PHASE;
-/// Highest tab index seen while driving right (end-of-strip detection) and the tick the dwell began.
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_RETURN_MAX_TAB;
-pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_RETURN_DWELL_START;
 /// Frames with no tab change before we treat the strip end as reached (phase 0 -> 1).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_TAB_RETURN_STALL_TICKS: usize = 40;
 /// Dwell on Game Options this many ticks so the pane-visibility oracle samples the (blank) tab 0.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
-/// The VK code the OPEN_MENU auto-discovery is currently sending (and the winner when IngameTop
-/// opens), so the log reports which menu-open key actually worked on native Windows.
-pub(crate) use er_telemetry::counters::SQ_REPRO_OPEN_KEY_VK;
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
 pub(crate) use er_telemetry::counters::SQ_REPRO_SWITCH_INDEX;
@@ -242,6 +243,7 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// half-streamed one -- prior runs drove OPEN_MENU while load1 was still at mms 13-16. Fallback ticks
 /// so a load that never proves movement still advances (per the strict parity, driving one more load
 /// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
@@ -268,8 +270,6 @@ pub(crate) const MSGBOX_CONFIRM_LATCH_1BC0_OFFSET: usize =
 pub(crate) const MSGBOX_CONFIRM_LATCH_SET: u8 = true as u8;
 pub(crate) const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
-pub(crate) use er_title_flow::DISMISS_MIN_TICK;
-pub(crate) use er_title_flow::ARM_PROBE_FIELD_ABSENT;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
 /// bears IngameInit is compiled-in but NEVER instantiated in this build, so we
 /// call IngameInit (its state-2 handler) with a SYNTHETIC `this`: it only reads
@@ -277,11 +277,17 @@ pub(crate) use er_title_flow::ARM_PROBE_FIELD_ABSENT;
 /// game), primes the world subsystems, and SetupLoad-submits the load. Never
 /// touches the force flag 0x143d856a0. The map id is produced by the same parser
 /// (0x71fd60) over the default map string the new-game path uses.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const OUTER_STEP_INGAMESTEP_OFFSET: usize = 0xc0;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const OUTER_STEP_MAP_OVERRIDE_130_OFFSET: usize = 0x130;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const INGAMEINIT_HANDLER_RVA: usize = 0xb0a1f0;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const INGAMEINIT_MAP_PARSER_RVA: usize = 0x71fd60;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const DEFAULT_MAP_STRING_RVA: usize = 0x2b62c70;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMEINIT_SYNTHETIC_QWORDS: usize = 0x40;
 /// Genuine offline continue drive (recipe Option 1). The MoveMapList save-load
 /// dispatcher 0x140afb880 (clean entry; its Arxan-scrambled body cross-jumps to
@@ -318,21 +324,12 @@ pub(crate) const CONTINUE_OWNER_QWORDS: usize =
     core::mem::size_of::<ContinueOwnerLayout>() / core::mem::size_of::<usize>();
 pub(crate) const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
 pub(crate) const CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS: u64 = u64::MIN;
-pub(crate) use er_title_flow::FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;
-pub(crate) use er_title_flow::SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET;
-pub(crate) use er_title_flow::SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET;
-pub(crate) use er_title_flow::SELECTBOT_REGISTRY_GLOBAL_RVA;
-pub(crate) use er_title_flow::SELECTBOT_LOAD_GATE_RVA;
-pub(crate) use er_title_flow::SELECTBOT_INPUT_MANAGER_GLOBAL_RVA;
-pub(crate) use er_title_flow::SELECTBOT_PUMP_RAN_FLAG_OFFSET;
-pub(crate) use er_title_flow::TITLE_STEP_MENU_JOB_WAIT_STATE;
-pub(crate) use er_title_flow::TITLE_PROCEED_GATE_SET_VALUE;
-pub(crate) use er_title_flow::TITLE_GLOBAL_ACCEPT_BYTE_RVA;
-pub(crate) use er_title_flow::TITLE_MENU_TRANSITION_SINGLETON_RVA;
-pub(crate) use er_title_flow::TITLE_MENU_TRANSITION_FLAG_SET_VALUE;
 /// InGameStep manual-tick experiment (lever / "direct drive the load"). The
 /// load job at `owner+0x2e8` is a `CS::InGameStep` whose step machine only
 /// advances while its FD4StepTemplate::Execute pump (`0x140b0bd60`) is ticked
@@ -343,18 +340,24 @@ pub(crate) use er_title_flow::TITLE_MENU_TRANSITION_FLAG_SET_VALUE;
 /// SAME live ctx — reusing the engine's real per-frame context (float dt at
 /// ctx+0x8) instead of fabricating one. The InGameStep's own state lives at
 /// `+0x48` (`-1` == finished); we tick only while `+0xd8 != 0` and `+0x48 != -1`.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const STEP_PUMP_DRIVER_RVA: u32 = 0x00b0bd60;
-pub(crate) use er_title_flow::INGAMESTEP_STEP_STATE_OFFSET;
-pub(crate) use er_title_flow::INGAMESTEP_NEXT_STATE_OFFSET;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_FINISHED_SENTINEL: i32 = -1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_LOAD_DONE: i32 = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_PUMP_D8_UNOBSERVED: i32 = -2;
 /// FD4StepTemplate force-state override fields (pump `0x140b0bd60` @ 0xb0be01:
 /// `if byte[+0x69]!=0 && byte[+0xa8]==0 { +0x48 = +0x4c = [+0xac]; +0xa8=0 }`).
 /// If `+0x69` is set and `+0xac` pins the step index, the machine never advances.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_OVERRIDE_TRIGGER_OFFSET: usize = 0x69;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_OVERRIDE_GUARD_OFFSET: usize = 0xa8;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_OVERRIDE_TARGET_OFFSET: usize = 0xac;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_OVERRIDE_TRIGGER_CLEAR: u8 = false as u8;
 pub(crate) const MENU_TASK_NULL_STATE_QWORD: usize = NULL_MODULE_BASE;
 pub(crate) const MENU_TASK_NULL_PAYLOAD_PTR: usize = NULL_MODULE_BASE;
@@ -381,6 +384,7 @@ pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new()
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
 /// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).
 pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 /// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
 /// BEFORE the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
@@ -392,6 +396,7 @@ pub(crate) static START_SCALEFORM_GUARD: Once = Once::new();
 pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
 pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();
 pub(crate) static START_PROFILE_SELECT_TABLE_DIAG: Once = Once::new();
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
@@ -597,37 +602,29 @@ pub(crate) use er_telemetry::counters::DIRECT_INPUT_CREATE_DEVICE_ORIG;
 pub(crate) use er_telemetry::counters::DIRECT_INPUT_GET_DEVICE_STATE_ORIG;
 pub(crate) use er_telemetry::counters::TITLE_HANDOFF_COMPLETE;
 pub(crate) use er_title_flow::TITLE_OWNER_PTR;
-pub(crate) use er_title_flow::TITLE_OWNER_TRACE_COUNT;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_CALLED;
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
-/// Trampoline to the original STEP_MenuJobWait (0x140b0d400) for the title-anim speedup hook. 0 = not hooked.
-pub(crate) use er_telemetry::counters::TITLE_ANIM_SPEED_ORIG;
-/// One-shot guard for installing the title-anim speedup hook.
-pub(crate) use er_telemetry::counters::TITLE_ANIM_SPEED_HOOK_INSTALLED;
-/// Trampoline to the original title step-setter `SetState(owner,int)` (0x140b0d960) for the
-/// read-only state-transition trace hook. 0 = not hooked. bd menu-build-overlap-lever-2026-06-24.
-pub(crate) use er_telemetry::counters::TITLE_SETSTATE_TRACE_ORIG;
-/// One-shot guard for installing the title step-setter trace hook.
-pub(crate) use er_telemetry::counters::TITLE_SETSTATE_TRACE_HOOK_INSTALLED;
 /// Last owner (TitleStep) pointer seen by the SetState trace detour. The detour fires from the
 /// FIRST title transition (~+12s), long before the TITLE_OWNER_PTR scan caches it (~+31s), so the
 /// gm-snap session-liveness sampler falls back to this to cover the BOOT load window.
 pub(crate) use er_telemetry::counters::TITLE_SETSTATE_TRACE_LAST_OWNER;
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
-pub(crate) use er_title_flow::TITLE_PROCEED_GATE_FIRED;
 pub(crate) use er_title_flow::TITLE_ACCEPT_BYTE_GATE_FIRED;
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub(crate) use er_title_flow::NATIVE_AUTOLOAD_ARMED;
-pub(crate) use er_telemetry::counters::SYNTHETIC_OUTER_PTR;
 pub(crate) static CONTINUE_OWNER_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) const CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET: u64 = 0;
@@ -645,7 +642,6 @@ pub(crate) static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::ASSERT_LOG_LINES_WRITTEN;
-pub(crate) use er_telemetry::counters::RENDER_FRAME_COUNT;
 pub(crate) static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) use er_telemetry::counters::AV_LOG_LINES_WRITTEN;
@@ -662,6 +658,7 @@ pub(crate) static SELF_DLL_BASE: AtomicUsize = AtomicUsize::new(NULL_MODULE_BASE
 /// handler can bound-check an address to `[base, base+size)` before treating it as `self+RVA`.
 pub(crate) use er_telemetry::counters::SELF_DLL_SIZE;
 pub(crate) static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN;

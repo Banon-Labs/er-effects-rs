@@ -25,6 +25,9 @@ use er_gfx::title_05_010::{
 use er_gfx::{Matrix, Movie, Tag};
 use std::path::PathBuf;
 
+// Measured pitch of the SHIPPED row list, the baseline `COMPACT_ROW_PITCH_PX` is derived
+// against. Retained as the record of vanilla geometry even with no live assertion.
+#[allow(dead_code)]
 const VANILLA_ROW_PITCH_PX: i32 = 156;
 const VANILLA_LIST_HEIGHT_PX: i32 = 780;
 const SCALE_ONE: i32 = 0x1_0000;
@@ -44,10 +47,6 @@ const LOAD_CHARACTER_RENDERED_VERTICAL_TOLERANCE_PX: i32 = 4;
 /// separate fields, the way `ErStats`/`ErCharStats` already split the metadata line. Until then this
 /// pins the number so it cannot quietly erode further.
 const SAVE_PICKER_MIN_FILENAME_CHARS: i32 = 12;
-fn compact_y(y_px: i32) -> i32 {
-    y_px * COMPACT_ROW_PITCH_PX / VANILLA_ROW_PITCH_PX
-}
-
 fn schema_px(px: f32) -> i32 {
     (px * 20.0).round() as i32
 }
@@ -600,6 +599,10 @@ fn row_text_rects(movie: &Movie) -> Vec<TextRect> {
         .collect()
 }
 
+// Where a given sample string lands inside a row field: the DefineEditText align rule
+// (1 = right, 2 = centre, else left) measured against real font widths. No test reads it
+// today; it is the written-down layout rule, kept rather than re-derived.
+#[allow(dead_code)]
 fn row_sample_text_rect(
     movie: &Movie,
     font_movie: &Movie,

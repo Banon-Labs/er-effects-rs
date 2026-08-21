@@ -354,6 +354,10 @@ const SAVE_GESTURE_GAME_DATA_SIZE: usize = 0x100;
 const SAVE_REGION_ID_SIZE: usize = 0x04;
 const SAVE_REGION_COUNT_MAX: u32 = 0x400;
 const SAVE_RIDE_GAME_DATA_SIZE: usize = 0x28;
+#[allow(
+    dead_code,
+    reason = "retained RE fact: BloodstainData is part of the documented slot-body layout table even though the tail walk does not need its size"
+)]
 const SAVE_BLOODSTAIN_DATA_SIZE: usize = 0x44;
 const SAVE_MENU_PROFILE_SAVE_LOAD_SIZE: usize = 0x1008;
 const SAVE_TROPHY_EQUIP_DATA_SIZE: usize = 0x34;
@@ -692,31 +696,29 @@ pub fn steam_id_locations(data: &[u8]) -> Result<Vec<SteamIdLocation>, Bnd4Error
     let entries = parse_entries(data)?;
     let mut out = Vec::new();
     for entry in &entries {
-        if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA") {
-            if let Ok(slot) = slot_digits.parse::<usize>() {
-                if slot < 10 {
-                    let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
-                    let Some(body_offset) = slot_steam_id_offset(&data[body_start..body_end])
-                    else {
-                        continue;
-                    };
-                    let file_offset = body_start + body_offset;
-                    if file_offset + STEAM_ID64_LEN <= body_end {
-                        let value = u64::from_le_bytes(
-                            data[file_offset..file_offset + STEAM_ID64_LEN]
-                                .try_into()
-                                .map_err(|_| Bnd4Error::Truncated)?,
-                        );
-                        out.push(SteamIdLocation {
-                            entry_name: entry.name.clone(),
-                            body_offset,
-                            file_offset,
-                            value,
-                        });
-                    }
-                    continue;
-                }
+        if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA")
+            && let Ok(slot) = slot_digits.parse::<usize>()
+            && slot < 10
+        {
+            let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
+            let Some(body_offset) = slot_steam_id_offset(&data[body_start..body_end]) else {
+                continue;
+            };
+            let file_offset = body_start + body_offset;
+            if file_offset + STEAM_ID64_LEN <= body_end {
+                let value = u64::from_le_bytes(
+                    data[file_offset..file_offset + STEAM_ID64_LEN]
+                        .try_into()
+                        .map_err(|_| Bnd4Error::Truncated)?,
+                );
+                out.push(SteamIdLocation {
+                    entry_name: entry.name.clone(),
+                    body_offset,
+                    file_offset,
+                    value,
+                });
             }
+            continue;
         }
         if entry.name == "USER_DATA010" {
             let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
@@ -754,36 +756,35 @@ pub fn normalize_steam_id_in_place(
     let source_ids = source_steam_ids(data, &entries, steam_id)?;
     let mut report = SteamIdNormalizeReport::default();
     for entry in &entries {
-        if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA") {
-            if let Ok(slot) = slot_digits.parse::<usize>() {
-                if slot < 10 {
-                    let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
-                    if slot_steam_id_offset(&data[body_start..body_end]).is_some() {
-                        report.character_slots_seen += 1;
-                    }
-                    let mut replacements = 0;
-                    for old_id in &source_ids {
-                        replacements += replace_steam_id_occurrences(
-                            &mut data[body_start..body_end],
-                            *old_id,
-                            steam_id,
-                        );
-                    }
-                    if replacements != 0 {
-                        report.character_slots_patched += 1;
-                        rewrite_entry_md5(data, entry)?;
-                        report.md5_rewritten += 1;
-                    } else if source_ids.is_empty()
-                        && let Some(slot_offset) = slot_steam_id_offset(&data[body_start..body_end])
-                        && patch_u64_le(data, body_start + slot_offset, steam_id)?
-                    {
-                        report.character_slots_patched += 1;
-                        rewrite_entry_md5(data, entry)?;
-                        report.md5_rewritten += 1;
-                    }
-                    continue;
-                }
+        if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA")
+            && let Ok(slot) = slot_digits.parse::<usize>()
+            && slot < 10
+        {
+            let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
+            if slot_steam_id_offset(&data[body_start..body_end]).is_some() {
+                report.character_slots_seen += 1;
             }
+            let mut replacements = 0;
+            for old_id in &source_ids {
+                replacements += replace_steam_id_occurrences(
+                    &mut data[body_start..body_end],
+                    *old_id,
+                    steam_id,
+                );
+            }
+            if replacements != 0 {
+                report.character_slots_patched += 1;
+                rewrite_entry_md5(data, entry)?;
+                report.md5_rewritten += 1;
+            } else if source_ids.is_empty()
+                && let Some(slot_offset) = slot_steam_id_offset(&data[body_start..body_end])
+                && patch_u64_le(data, body_start + slot_offset, steam_id)?
+            {
+                report.character_slots_patched += 1;
+                rewrite_entry_md5(data, entry)?;
+                report.md5_rewritten += 1;
+            }
+            continue;
         }
         if entry.name == "USER_DATA010" {
             let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
@@ -797,16 +798,15 @@ pub fn normalize_steam_id_in_place(
                         steam_id,
                     );
                 }
-                if replacements != 0 {
-                    report.user_data10_patched = true;
-                    rewrite_entry_md5(data, entry)?;
-                    report.md5_rewritten += 1;
-                } else if source_ids.is_empty()
-                    && patch_u64_le(
-                        data,
-                        body_start + USER_DATA10_STEAM_ID_BODY_OFFSET,
-                        steam_id,
-                    )?
+                // `||` short-circuits, so the fixed-offset patch is still attempted only when the
+                // occurrence scan replaced nothing and there was no source id to scan for.
+                if replacements != 0
+                    || (source_ids.is_empty()
+                        && patch_u64_le(
+                            data,
+                            body_start + USER_DATA10_STEAM_ID_BODY_OFFSET,
+                            steam_id,
+                        )?)
                 {
                     report.user_data10_patched = true;
                     rewrite_entry_md5(data, entry)?;

@@ -81,29 +81,29 @@ pub fn object_ref_from_path(path: &str) -> ObjectRef {
         .collect();
     let has = |name: &str| tokens.iter().any(|t| t == name);
 
-    if has("character") || has("chr") {
-        if let Some(model) = extract_chr_id(stem) {
-            return ObjectRef {
-                category: ObjectCategory::Character,
-                model,
-            };
-        }
+    if (has("character") || has("chr"))
+        && let Some(model) = extract_chr_id(stem)
+    {
+        return ObjectRef {
+            category: ObjectCategory::Character,
+            model,
+        };
     }
-    if has("asset") || has("aeg") {
-        if let Some(model) = find_aeg(stem) {
-            return ObjectRef {
-                category: ObjectCategory::Asset,
-                model,
-            };
-        }
+    if (has("asset") || has("aeg"))
+        && let Some(model) = find_aeg(stem)
+    {
+        return ObjectRef {
+            category: ObjectCategory::Asset,
+            model,
+        };
     }
-    if has("parts") {
-        if let Some(inner) = bracket_after(stem, 'P') {
-            return ObjectRef {
-                category: ObjectCategory::Parts,
-                model: inner,
-            };
-        }
+    if has("parts")
+        && let Some(inner) = bracket_after(stem, 'P')
+    {
+        return ObjectRef {
+            category: ObjectCategory::Parts,
+            model: inner,
+        };
     }
     if has("map") {
         // Map block like m10_00; else a cutscene asset/chr handled above already.
@@ -144,10 +144,11 @@ fn bracket_after(s: &str, prefix: char) -> Option<String> {
     let pu = prefix.to_ascii_uppercase();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if (bytes[i] == pl as u8 || bytes[i] == pu as u8) && bytes[i + 1] == b'[' {
-            if let Some(end) = s[i + 2..].find(']') {
-                return Some(s[i + 2..i + 2 + end].to_owned());
-            }
+        if (bytes[i] == pl as u8 || bytes[i] == pu as u8)
+            && bytes[i + 1] == b'['
+            && let Some(end) = s[i + 2..].find(']')
+        {
+            return Some(s[i + 2..i + 2 + end].to_owned());
         }
         i += 1;
     }

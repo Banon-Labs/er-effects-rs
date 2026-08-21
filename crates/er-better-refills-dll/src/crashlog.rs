@@ -142,7 +142,7 @@ pub(crate) unsafe fn force_crash_for_smoke() {
     append_crash_log(format_args!(
         "force-crash: marker {FORCE_CRASH_MARKER_FILE_NAME} present next to DLL; deliberately reading unmapped address 0x1"
     ));
-    let bad = 0x1usize as *const u8;
+    let bad = std::ptr::dangling::<u8>();
     let _ = unsafe { std::ptr::read_volatile(bad) };
 }
 
@@ -190,6 +190,13 @@ fn install_exit_hook(
             } else {
                 append_crash_log(format_args!("install: queued exit hook {name}"));
             }
+            // The detour must outlive this scope for the process lifetime; the `forget` states that
+            // even though `MhHook` is currently plain pointers, so a future `Drop` that unhooks
+            // cannot silently retire the crash-log exit hook here.
+            #[allow(
+                clippy::forget_non_drop,
+                reason = "intent marker: the installed detour must never be released"
+            )]
             std::mem::forget(hook);
         }
         Err(status) => append_crash_log(format_args!("install: hook {name} failed: {status:?}")),
@@ -343,10 +350,11 @@ fn address_tag(address: usize) -> String {
     if self_base != 0 && self_size != 0 && address >= self_base && address < self_base + self_size {
         return format!("self+0x{:x}", address - self_base);
     }
-    if let Ok(game_base) = game_module_base() {
-        if address >= game_base && address < game_base + 0x1000_0000 {
-            return format!("game+0x{:x}", address - game_base);
-        }
+    if let Ok(game_base) = game_module_base()
+        && address >= game_base
+        && address < game_base + 0x1000_0000
+    {
+        return format!("game+0x{:x}", address - game_base);
     }
     format!("0x{address:x}")
 }

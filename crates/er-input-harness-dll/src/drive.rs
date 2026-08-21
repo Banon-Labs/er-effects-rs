@@ -32,7 +32,7 @@ use crate::input_inject::{
     native_open_inventory_menu, popup_job_serial, request_open_ingame_menu, tap_menu_event,
 };
 use crate::log::{harness_log, log_phase};
-use crate::pad_inject::{PadButton, set_pad_button, set_vk_id};
+use crate::pad_inject::set_vk_id;
 use crate::title_scan;
 use crate::win32::GetTickCount64;
 
@@ -43,8 +43,6 @@ const TAP_CYCLE_FRAMES: u64 = TAP_SET_FRAMES + TAP_GAP_FRAMES;
 /// Popup-accept cadence (dialog-OK id 0x01, harmless when no dialog is up).
 const POPUP_SET_FRAMES: u64 = 2;
 const POPUP_CYCLE_FRAMES: u64 = 8;
-/// Settle after the tab-switch tap (no passive tab-index read; verified downstream by the quit phase).
-const TAB_SETTLE_FRAMES: u64 = 30;
 
 // ---- per-phase frame budgets (derail if the effect semaphore is not seen within) ----
 /// Boot -> PRESS ANY BUTTON ready: image map + boot-flow settle is long (~150s at 60fps).
@@ -91,7 +89,7 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
                 "probe NATIVEQUIT f{frame}: wrote menuData+0x5d=1 ok={wrote} (direct native return-to-title)"
             );
         }
-        if frame % 15 == 0 || (118..=140).contains(&frame) {
+        if frame.is_multiple_of(15) || (118..=140).contains(&frame) {
             harness_log!(
                 "probe NATIVEQUIT f{frame} return_title={} world_sim={} now_loading={} pause_menu={} menu_id=0x{:x}",
                 rt as u8,
@@ -119,10 +117,10 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         // route to ER under Wine (the load-transition confound is removed by measuring the frozen tail).
         const VK_W: u8 = 0x57;
         let mut sent = 0u8;
-        if frame >= 60 && frame % 30 == 0 {
+        if frame >= 60 && frame.is_multiple_of(30) {
             sent = crate::win32::send_key_down(VK_W) as u8;
         }
-        if frame % 30 == 0 {
+        if frame.is_multiple_of(30) {
             harness_log!(
                 "probe OSMOVE f{frame} fg={} holdW={sent} pause_menu={} menu_id=0x{:x}",
                 crate::win32::er_window_is_foreground() as u8,
@@ -156,7 +154,7 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         if let Some(base) = crate::game_mem::game_base() {
             unsafe { crate::pad_inject::stamp_vk_direct(base, hold, 1) };
         }
-        if frame % PROBE_LOG_EVERY == 0 {
+        if frame.is_multiple_of(PROBE_LOG_EVERY) {
             let (bf, _wf, _gs, _ms, _o) = crate::pad_inject::pad_snapshot();
             harness_log!(
                 "probe HOLD id={hold} f{frame} bf={bf} pause_menu={} menu_id=0x{:x} job=0x{:x} flags=0x{:x} tab={} rt={}",
@@ -175,7 +173,7 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         if !pause_menu_open() {
             request_open_ingame_menu(im);
         }
-        if frame % PROBE_LOG_EVERY == 0 {
+        if frame.is_multiple_of(PROBE_LOG_EVERY) {
             let (bf, wf, gsrc, msrc, obs) = crate::pad_inject::pad_snapshot();
             harness_log!(
                 "probe OPEN f{frame} pause_menu={} builder_fires={bf} writer_fires={wf} game_src=0x{gsrc:x} my_src=0x{msrc:x} obs=[{:x},{:x},{:x}] job=0x{:x} flags=0x{:x}",
@@ -205,7 +203,7 @@ fn probe_menu_tick(im: usize, frame: u64) -> bool {
         if let Some(base) = crate::game_mem::game_base() {
             unsafe { crate::pad_inject::stamp_vk_direct(base, id, if held { 1 } else { 0 }) };
         }
-        if local % PROBE_LOG_EVERY == 0 {
+        if local.is_multiple_of(PROBE_LOG_EVERY) {
             let (bf, wf, gsrc, msrc, _obs) = crate::pad_inject::pad_snapshot();
             harness_log!(
                 "probe id={id} f{frame} bf={bf} wf={wf} gsrc=0x{gsrc:x} msrc=0x{msrc:x} job=0x{:x} flags=0x{:x} tab={} return_title={}",
@@ -440,29 +438,15 @@ impl Phase {
     }
 }
 
-/// Issue each PAD button in `buttons` once (one tap cycle each, in order), EDGE-TOGGLED (held for
-/// TAP_SET frames then released, so the edge-triggered menu registers one clean press per button), then
-/// release. The phase's ADVANCE is its own effect semaphore, not the taps -- a press that lands is
-/// confirmed by a specific RAM change, and one that does nothing derails on budget. Drives the RAW PAD
-/// (bd ROOTCAUSE-plus90-is-OUTPUT), not the +0x90 keystate.
-fn issue_pad_taps_once(buttons: &[PadButton], frame: u64) {
-    let idx = (frame / TAP_CYCLE_FRAMES) as usize;
-    let held = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
-    if idx < buttons.len() && held {
-        set_pad_button(buttons[idx]);
-    } else {
-        set_pad_button(PadButton::None);
-    }
-}
-
 /// Issue each MENU EVENT in `events` once (one edge each, in order), via the CONFIRMED native-binding
-/// keystate channel `inputmgr+0x90+eventId` (`tap_menu_event`). Same edge cadence as `issue_pad_taps_once`
+/// keystate channel `inputmgr+0x90+eventId` (`tap_menu_event`). Same edge cadence the retired pad driver used
 /// (OR the edge bit for `TAP_SET_FRAMES`, then gap -- the game's own input producer rewrites +0x90 to 0 on
 /// the gap frames, giving one clean 0->1 edge with no auto-repeat). This is the in-world MENU nav lever
 /// (open->OptionSetting->tab-switch->quit): getShownMenuFlags (0x1407665e0) reads +0x90[id]&1, so the menu
-/// consumes exactly what this writes. Replaces the raw-pad `set_pad_button` path (that `source+0x88` path
-/// was BISECT-disabled and never drove the menu). The phase's ADVANCE is its own RAM semaphore, so an event
-/// that lands is confirmed by a specific state change and one that does nothing derails on budget.
+/// consumes exactly what this writes. Replaces the retired raw-pad `source+0x88` driver, which was
+/// BISECT-disabled and never drove the menu (removed 2026-08-21; the negative sweep evidence is recorded
+/// on `crate::pad_inject::set_vk_id`). The phase's ADVANCE is its own RAM semaphore, so an event that
+/// lands is confirmed by a specific state change and one that does nothing derails on budget.
 fn issue_menu_taps_once(im: usize, events: &[MenuEvent], frame: u64) {
     let idx = (frame / TAP_CYCLE_FRAMES) as usize;
     let held = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;

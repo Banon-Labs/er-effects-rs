@@ -209,7 +209,7 @@ impl PinListGeometry {
     #[must_use]
     pub const fn row_count(&self) -> Option<usize> {
         let used = self.used_bytes();
-        if used % PIN_ROW_STRIDE != 0 {
+        if !used.is_multiple_of(PIN_ROW_STRIDE) {
             return None;
         }
         Some(used / PIN_ROW_STRIDE)
@@ -506,7 +506,7 @@ pub(crate) fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option
     if param < slab.0 || param >= slab.1 {
         return None;
     }
-    if (param - slab.0) % er_invasion_warp::param_row::SYNTHETIC_PARAM_ROW_LEN != 0 {
+    if !(param - slab.0).is_multiple_of(er_invasion_warp::param_row::SYNTHETIC_PARAM_ROW_LEN) {
         return None;
     }
     let id = unsafe { er_game_base::mem::safe_read_i32(row + ROW_ID_OFFSET) }?;
@@ -638,23 +638,26 @@ fn catalog_signature(registry: &er_invasion_warp::map_surface::InvasionRowRegist
     hash as usize
 }
 
-/// There is deliberately NO "already injected" bookkeeping.
-///
-/// Two earlier shapes both failed, and they failed for the same underlying reason:
-///
-/// * a process-wide flag left every map view after the first with no pins;
-/// * keying on the ViewModel's `this` pointer fixed the *observed* case (two live instances at
-///   different addresses) but is only as good as the assumption that a later ViewModel never
-///   lands where an earlier one was. These objects are allocated out of a menu heap and freed
-///   when the map closes, so a reopen reusing the address is not exotic -- it is the normal
-///   behaviour of a size-bucketed allocator. Under that dedupe, the reopen is silently skipped
-///   and the map is bare, which is precisely the reported symptom.
-///
-/// Injection is idempotent-by-construction instead: the ctor builds a FRESH row list every time
-/// it runs (measured -- `rows=420` on both observed instances, never 785), so "has this list
-/// already got our pins" is answerable from the list itself and the answer is always "no" at the
-/// ctor epilogue. Nothing needs to be remembered between calls, so nothing can be remembered
-/// WRONG.
+// There is deliberately NO "already injected" bookkeeping.
+//
+// (Section rationale for the injection strategy below -- NOT documentation for `sample_donor`.
+// Written as `///` it was silently attached to that function as its doc comment.)
+//
+// Two earlier shapes both failed, and they failed for the same underlying reason:
+//
+// * a process-wide flag left every map view after the first with no pins;
+// * keying on the ViewModel's `this` pointer fixed the *observed* case (two live instances at
+//   different addresses) but is only as good as the assumption that a later ViewModel never
+//   lands where an earlier one was. These objects are allocated out of a menu heap and freed
+//   when the map closes, so a reopen reusing the address is not exotic -- it is the normal
+//   behaviour of a size-bucketed allocator. Under that dedupe, the reopen is silently skipped
+//   and the map is bare, which is precisely the reported symptom.
+//
+// Injection is idempotent-by-construction instead: the ctor builds a FRESH row list every time
+// it runs (measured -- `rows=420` on both observed instances, never 785), so "has this list
+// already got our pins" is answerable from the list itself and the answer is always "no" at the
+// ctor epilogue. Nothing needs to be remembered between calls, so nothing can be remembered
+// WRONG.
 
 /// Read the donor fields off the first existing row.
 ///
@@ -1476,7 +1479,6 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // changed no matter what the user marked. A single-icon re-stamp cannot coexist with a
     // per-location icon; it has to recompute the same decision the build did.
     {
-        use er_invasion_warp::param_row::PARAM_ICON_ID_OFFSET;
         let installed = crate::map_gfx::red_pin_frame_installed();
         // Re-stamp when EITHER input changes: whether the marker frames are in front of Scaleform
         // (the late-swap rescue this block was written for), or the user's lists (the tiers).
@@ -1585,8 +1587,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // pin is the measurement that can, because the converters are what differ per map.
     let mut per_area: [usize; 2] = [0, 0]; // [area 60, area 61]
     let mut per_converter: [usize; 8] = [0; 8];
-    /// How many pins were accepted by a converter belonging to a DIFFERENT area than the
-    /// target's own -- those land in the wrong map's coordinate space.
+    // How many pins were accepted by a converter belonging to a DIFFERENT area than the
+    // target's own -- those land in the wrong map's coordinate space.
     let mut cross_area_projections = 0_usize;
     let mut cross_area_trace = 4_usize;
     let mut area_trace = 4_usize;
@@ -1613,7 +1615,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // first, then legacy points, then provisional markers, so the suffix lost is precisely the
     // legacy pins.
     let mut aborted = 0_usize;
-    /// Appended rows that cannot draw for want of a label. MUST be zero.
+    // Appended rows that cannot draw for want of a label. MUST be zero.
     let mut undrawable = 0_usize;
     for (index, target) in registry.targets().iter().enumerate() {
         // Reuse the projection computed above rather than re-running it: the layer bit and the
@@ -2702,6 +2704,88 @@ pub fn row_stride_mismatches() -> usize {
     ROW_STRIDE_MISMATCH.load(Ordering::SeqCst)
 }
 
+/// Install the row-filter observer. Failure costs the visibility oracle and nothing else.
+///
+/// # Safety
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn install_row_filter_observer() -> usize {
+    let seam = crate::map_seams::WORLDMAP_ROW_FILTER;
+    let address = match unsafe { verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!("map-hooks: {error}"));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            worldmap_row_filter_hook as er_hook::UnionFn,
+            &ORIG_ROW_FILTER,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: observing {} @0x{address:x} -- this is the visibility oracle",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: union registration for {} failed: {status:?} -- pins may still be \
+                 fine, but this run cannot say whether they pass the filter",
+                seam.name
+            ));
+            0
+        }
+    }
+}
+
+/// Install the confirm interceptor. Without it, selecting an injected pin softlocks, so a
+/// failure here is logged loudly -- the pins are already in the list by then.
+///
+/// # Safety
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn install_confirm_interceptor() -> usize {
+    let seam = crate::map_seams::WARP_JOB_ASSEMBLER;
+    let address = match unsafe { verify_seam(&seam) } {
+        Ok(address) => address,
+        Err(error) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: {error} -- WITHOUT THIS HOOK, SELECTING AN INJECTED PIN SOFTLOCKS"
+            ));
+            return 0;
+        }
+    };
+    match unsafe {
+        er_hook::register_union_hook(
+            address,
+            crate::map_confirm::warp_job_assembler_hook as er_hook::UnionFn,
+            &crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER,
+        )
+    } {
+        Ok(()) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: intercepting {} @0x{address:x} -- selecting an invasion pin is now \
+                 answered by us instead of handing a synthetic id to Lua_Warp",
+                seam.name
+            ));
+            1
+        }
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "map-hooks: union registration for {} failed: {status:?} -- SELECTING AN \
+                 INJECTED PIN WILL SOFTLOCK",
+                seam.name
+            ));
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2980,87 +3064,5 @@ mod tests {
         assert_eq!(g.capacity_bytes(), 0);
         assert_eq!(g.spare_rows(), 0);
         assert!(!g.is_plausible());
-    }
-}
-
-/// Install the row-filter observer. Failure costs the visibility oracle and nothing else.
-///
-/// # Safety
-/// Game task thread.
-#[cfg(windows)]
-unsafe fn install_row_filter_observer() -> usize {
-    let seam = crate::map_seams::WORLDMAP_ROW_FILTER;
-    let address = match unsafe { verify_seam(&seam) } {
-        Ok(address) => address,
-        Err(error) => {
-            crate::standalone_log(format_args!("map-hooks: {error}"));
-            return 0;
-        }
-    };
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            worldmap_row_filter_hook as er_hook::UnionFn,
-            &ORIG_ROW_FILTER,
-        )
-    } {
-        Ok(()) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: observing {} @0x{address:x} -- this is the visibility oracle",
-                seam.name
-            ));
-            1
-        }
-        Err(status) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: union registration for {} failed: {status:?} -- pins may still be \
-                 fine, but this run cannot say whether they pass the filter",
-                seam.name
-            ));
-            0
-        }
-    }
-}
-
-/// Install the confirm interceptor. Without it, selecting an injected pin softlocks, so a
-/// failure here is logged loudly -- the pins are already in the list by then.
-///
-/// # Safety
-/// Game task thread.
-#[cfg(windows)]
-unsafe fn install_confirm_interceptor() -> usize {
-    let seam = crate::map_seams::WARP_JOB_ASSEMBLER;
-    let address = match unsafe { verify_seam(&seam) } {
-        Ok(address) => address,
-        Err(error) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: {error} -- WITHOUT THIS HOOK, SELECTING AN INJECTED PIN SOFTLOCKS"
-            ));
-            return 0;
-        }
-    };
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            crate::map_confirm::warp_job_assembler_hook as er_hook::UnionFn,
-            &crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER,
-        )
-    } {
-        Ok(()) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: intercepting {} @0x{address:x} -- selecting an invasion pin is now \
-                 answered by us instead of handing a synthetic id to Lua_Warp",
-                seam.name
-            ));
-            1
-        }
-        Err(status) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: union registration for {} failed: {status:?} -- SELECTING AN \
-                 INJECTED PIN WILL SOFTLOCK",
-                seam.name
-            ));
-            0
-        }
     }
 }

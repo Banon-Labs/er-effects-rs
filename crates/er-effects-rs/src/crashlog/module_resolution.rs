@@ -141,11 +141,10 @@ pub(crate) fn module_for_addr(
     modules: &[(usize, usize, String)],
 ) -> Option<(&str, usize)> {
     for (base, size, name) in modules {
-        if let Some(offset) = addr.checked_sub(*base) {
-            if offset < *size {
+        if let Some(offset) = addr.checked_sub(*base)
+            && offset < *size {
                 return Some((name.as_str(), offset));
             }
-        }
     }
     None
 }
@@ -214,6 +213,17 @@ pub(crate) unsafe fn apply_anti_antidebug_once(base: usize) {
     ));
 }
 
+/// One process-exit entry point to hook: log label, the module and export names to resolve it
+/// through (both NUL-terminated for the ANSI loader calls), our detour, and the slot the
+/// trampoline is stored in.
+type CrashExitTarget = (
+    &'static str,
+    &'static [u8],
+    &'static [u8],
+    *mut c_void,
+    &'static AtomicUsize,
+);
+
 /// Install the crash/exit logger: a vectored handler for access violations plus
 /// MinHooks on the process-exit paths. The exit hooks catch a CLEAN watchdog
 /// termination (ExitProcess) that no exception debugger can observe, and record
@@ -227,7 +237,7 @@ pub(crate) fn install_crash_logger() {
                 "crash-logger MH_Initialize failed: {status:?}"
             )),
         }
-        let targets: [(&str, &[u8], &[u8], *mut c_void, &AtomicUsize); CRASH_EXIT_TARGET_COUNT] = [
+        let targets: [CrashExitTarget; CRASH_EXIT_TARGET_COUNT] = [
             (
                 "ExitProcess",
                 b"kernel32.dll\0",

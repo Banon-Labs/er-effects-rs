@@ -16,7 +16,6 @@
 pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize =
     ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
 pub(crate) use er_title_flow::MEMBERFUNCJOB_VTABLE_RVA;
-pub(crate) use er_title_flow::DIALOG_ROW_REGISTRY_A48_OFFSET;
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).
@@ -58,7 +57,6 @@ pub(crate) const FULLREAD_OWNER_GDM_08_OFFSET: usize = 0x08;
 pub(crate) use er_title_flow::FULLREAD_PHASE_SUBMIT;
 pub(crate) const FULLREAD_PHASE_DRAIN: usize = 1;
 pub(crate) const FULLREAD_PHASE_DESER: usize = 2;
-pub(crate) use er_title_flow::FULLREAD_PHASE_GUARD;
 pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
 pub(crate) use er_title_flow::FULLREAD_PHASE;
 pub(crate) use er_telemetry::counters::FULLREAD_DRAIN_WAITS;
@@ -83,9 +81,7 @@ pub(crate) use er_telemetry::counters::LOADED_PEAK_LEVEL;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_C30;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_NAME_LEN;
 pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-pub(crate) use er_title_flow::GAME_MAN_ARM_FLAG_B72_OFFSET;
 
-pub(crate) use er_title_flow::GameManAutoloadFlagCluster;
 
 pub(crate) use er_title_flow::GAME_MAN_FLAG_B73_PROBE_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_FLAG_B75_PROBE_OFFSET;
@@ -141,6 +137,7 @@ pub(crate) const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
 /// Active SteamID64 getter (0x140e8d590): returns the current signed-in Steam account's full
 /// SteamID64 as a `u64`. Static-grounded from the SAVE_DIR_BUILDER chain; used to normalize staged
 /// foreign save bytes before native deserialize stores them in GameDataMan/ProfileSummary.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const STEAM_ID64_GETTER_RVA: usize = 0xe8d590;
 /// SAVE_DIR_BUILDER's output is a MSVC `basic_string<char16_t, ..., StatefulAllocator>`
 /// (the stateful allocator occupies the first member): allocator ptr at +0x00, the _Bx
@@ -190,21 +187,12 @@ pub(crate) const FD4_IO_POOL_RVA: usize = 0x4853048;
 /// returns false (=> DISCARD) when not found (e.g. the calling thread is not a registered
 /// IO context). Empty when [[registry+0x28]] == [registry+0x28].
 pub(crate) const IO_WORKER_REGISTRY_LIST_28_OFFSET: usize = 0x28;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
-pub(crate) use er_title_flow::ARM_PROBE_MIN_TICK;
-pub(crate) use er_title_flow::ARM_PROBE_TICK_INTERVAL;
 pub(crate) use er_title_flow::TITLE_ACCEPT_LATCH_RVA;
-pub(crate) use er_title_flow::MOVIE_SINGLETON_RVA;
-pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_RVA;
 pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_CLEAR;
-pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_SET;
-pub(crate) use er_title_flow::MOVIE_VTABLE_RVA;
-pub(crate) use er_title_flow::MOVIE_HWND_OFFSET;
-pub(crate) use er_title_flow::WND_SC_CLOSE;
-pub(crate) use er_title_flow::WND_MF_BYCOMMAND;
-pub(crate) use er_title_flow::WND_SW_HIDE;
-pub(crate) use er_title_flow::WND_GET_SYSTEM_MENU_KEEP;
 /// Render-thread liveness probe logging cadence (in render frames).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const RENDER_PROBE_INTERVAL: usize = 120;
 /// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
 /// inside STEP_BeginLogo 0x140b0c2a0, the branch `cmp [rdi+0xb8],0; je 0x140b0c3b2`
@@ -215,21 +203,9 @@ pub(crate) const SPLASH_SKIP_RVA: usize = 0xb0c35d;
 pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
-pub(crate) use er_title_flow::ONLINE_DISABLE_RVA;
-pub(crate) use er_title_flow::ONLINE_DISABLE_EXPECTED_FIRST;
-pub(crate) use er_title_flow::ONLINE_DISABLE_STUB;
 // Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
-pub(crate) use er_title_flow::SIGNIN_FORCE_RVA;
-pub(crate) use er_title_flow::SIGNIN_FORCE_EXPECTED_FIRST;
-pub(crate) use er_title_flow::SIGNIN_FORCE_STUB;
-pub(crate) use er_title_flow::USERINDEX_FORCE_RVA;
-pub(crate) use er_title_flow::USERINDEX_FORCE_EXPECTED_FIRST;
-pub(crate) use er_title_flow::USERINDEX_FORCE_STUB;
-pub(crate) use er_title_flow::ONLINE_PREDICATE_DISABLE_RVA;
-pub(crate) use er_title_flow::MENU_ONLINE_MODE_DISABLE_RVA;
-pub(crate) use er_title_flow::MENU_ONLINE_MODE_EXPECTED_FIRST;
 pub(crate) use er_title_flow::MsgBoxRva;
 
 /// `FUN_1407b0cf0` -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
@@ -238,6 +214,7 @@ pub(crate) use er_title_flow::MsgBoxRva;
 /// the BUTTON COUNT the ctor writes at construction (see `MSGBOX_BUTTON_COUNT_25E8_OFFSET`).
 /// The old name (`MSGBOX_FINISHED_GETTER_RVA`) was wrong and is what made the save-flow poll
 /// resolve a freshly built two-button confirm on its first frame (2026-07-28).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MSGBOX_MULTI_CHOICE_GETTER_RVA: u32 = MsgBoxRva::MultiChoiceGetter as u32;
 pub(crate) use er_title_flow::MSGBOX_DIALOG_VTABLE_RVA;
 /// `CS::MessageBoxDialog::Update` (`FUN_140927d30`), vtable slot 2. STRUCTURAL IDENTITY: all
@@ -283,8 +260,8 @@ pub(crate) const MSGBOX_BUTTON_COUNT_MULTI_CHOICE: i32 = 2;
 ///   * pressing a button runs the OK handler `FUN_14078e030` -> `FUN_14078ef20`, which reads
 ///     that button's `MenuJobResult` out of the 0x210-byte command struct at `+0x180` and
 ///     hands it to the lambda `FUN_14078ee20`, whose whole body is:
-///       `if (*(u8*)(dialog+0x127c)) dialog->vtable[0x60](dialog, result);`
-///       `else                       *(MenuJobResult*)(dialog+0x1e8) = result;`
+///     `if (*(u8*)(dialog+0x127c)) dialog->vtable[0x60](dialog, result);`
+///     `else                       *(MenuJobResult*)(dialog+0x1e8) = result;`
 ///     -- i.e. either EMIT the result (which sets the `+0x3b0` latch) or store it here.
 ///   * the dialog's own `Update` (`FUN_140927d30`) reads `+0x1e8` and only auto-cancels
 ///     (`FUN_1407ac890` -> emit `Failed`) when it is still non-terminal.
@@ -318,30 +295,28 @@ pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK
 pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
 pub(crate) use er_telemetry::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
-pub(crate) use er_title_flow::SAVE_RETRY_DIALOG_VTABLE_RVA;
 /// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
 /// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
 /// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
 pub(crate) const MSGBOX_FADE_CURRENT_1278_OFFSET: usize = 0x1278;
 pub(crate) const MSGBOX_FADE_TARGET_2300_OFFSET: usize = 0x2300;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSGBOX_FINISHED_TRUE: u8 = true as u8;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSGBOX_FINISHED_FALSE: u8 = false as u8;
 pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
-/// A `MenuWindowJob` whose Run built a Seamless-suppressed (ERSC post-PAB) MessageBox. Its next Run
-/// is forced to `MenuJobResult(Success)` so the title `FixOrderJobSequence` steps past the popup that
-/// was never shown -- the same advance the ToS-skip performs. 0 = none pending.
-pub(crate) use er_telemetry::counters::MSGBOX_STALL_JOB;
 /// Original finished-poll getter trampoline (0 until the hook installs).
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static MSGBOX_FINISHED_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::AUTO_ACCEPT_INSTALLED;
 pub(crate) const AUTO_ACCEPT_NOT_INSTALLED: usize = 0;
 pub(crate) const AUTO_ACCEPT_INSTALLED_YES: usize = 1;
-pub(crate) use er_telemetry::counters::AUTO_ACCEPT_COUNT;
 /// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
 pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
 pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_LAST_NATIVE_SLOT;
 pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_SLOT_OVERRIDES;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
 pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
 /// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
@@ -381,6 +356,7 @@ pub(crate) const POLICY_TOS_TITLE_CTOR_RVA: u32 = 0x9b5970;
 pub(crate) const POLICY_TOS_TITLE_CTOR_WRAPPER_RVA: u32 = 0x9b6070;
 pub(crate) const POLICY_TOS_SELECTOR_WRAPPER_RVA: u32 = 0x9b6140;
 pub(crate) const POLICY_TOS_SELECTOR_CTOR_RVA: u32 = 0x9b49f0;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const POLICY_TOS_SELECTOR_VTABLE_RVA: usize = 0x2b27788;
 pub(crate) const POLICY_TOS_TITLE_VTABLE_RVA: usize = 0x2b28100;
 pub(crate) const POLICY_TOS_TITLE_TEXT_PATH_RVA: usize = 0x2b27330;
@@ -544,8 +520,7 @@ pub(crate) static SERVER_STATUS_LAST_STATE: AtomicUsize =
 pub(crate) static SERVER_STATUS_LAST_TEXT_ID: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_SERVER_STATUS_HOOK: Once = Once::new();
-pub(crate) use er_telemetry::counters::AUTO_ACCEPT_VT_LAST;
-pub(crate) use er_telemetry::counters::AUTO_ACCEPT_VT_LOG;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
 /// CS::SceneObjProxy ctor 0x14074a700 -- the fn the title dialog-build path runs to wrap the live
 /// host MenuWindow in a transient SceneObjProxy. Disasm-verified prologue: `mov %rdx,%rbx`
@@ -587,14 +562,20 @@ pub(crate) const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
 /// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
 /// proof, patch it to the multi-slot controls component index used by `FUN_140958d40`; the Quit
 /// Game builder callback is left unchanged, so only the visible layout changes.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA: usize = 0x93bb41;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END: u8 = 0x0e;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT: u8 = 0x02;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN: usize = 1;
 /// Existing native line-help text reused as the visible label/help for the cloned quick-load row.
 /// `GR_LineHelp[406000] == "Select profile to load"` in the local FMG dump.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_LOAD_LINEHELP_ID: u32 = 406000;
 /// Live/deobf `GetGR_LineHelp(MenuString*, int)` (dump `0x140760880` -> live `0x140760790`).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const GET_GR_LINEHELP_ENTRY_RVA: u32 = 0x760790;
 /// Live/deobf `CS::MsgRepository::GetAndFormat(MenuString*, getter, id, fmg_name, abbrev)`
 /// (dump `0x1407634c0` -> live `0x1407633d0`). Hooked narrowly for System -> Quit Game
@@ -733,7 +714,6 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
 // confirm. See `save_flow_boxes.rs` for the recipe.
 pub(crate) use er_telemetry::counters::SAVE_FLOW_ABORT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_DIALOG;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EXPECTED;
 pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_COUNT;
@@ -761,24 +741,10 @@ pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
 // that resolves back to the LOADED save is recognised as such and routed to the sanctioned
 // in-place overwrite -- with the up-front "Overwrite your loaded save?" box gone, that is the ONLY
 // way a user overwrites their own save, so the filesystem-identity check is load-bearing.
-pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
-pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
 /// 1 = an OS Save-As chose an existing file and the Box3 overwrite confirm is owed. Consumed by
 /// the save-flow tick, which owns every `SAVE_FLOW_STAGE` transition on the OS path.
 pub(crate) use er_telemetry::counters::SAVE_DEST_CONFIRM_PENDING;
-pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
-pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
-pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
-pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
 /// Game-task ticks the save flow waits for the destination browser to actually appear after the
 /// open was staged for the menu pump (~3 s at 60 ticks/s, same budget as a confirm-box build).
 /// Exceeding it aborts back to the world with nothing written.
@@ -888,6 +854,7 @@ pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
 /// Live/deobf `MenuHelpLabelComponent::~MenuHelpLabelComponent` (dump `0x140742d90`).
 pub(crate) const MENU_HELP_LABEL_DTOR_RVA: u32 = 0x742c90;
 /// Quit Game / return-to-title action std::function-like vtable used by the native Quit Game builder.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA: usize = 0x2b12b48;
 /// Vtable invoke target for the first native Quit-tab action object (`add rcx, 8; jmp native route`).
 /// This is the row we relabel to Save Game; the hook suppresses the native quit behavior.
@@ -906,6 +873,7 @@ pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA: u32 = 0x9749f0;
 /// must call this first or merely focusing a custom row opens its action.
 pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x974b00;
 /// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
 /// `PropertyEditDialog.properties.items`: 0x1260 + BasicViewItemList.items(+8).
 pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
@@ -1049,9 +1017,11 @@ pub(crate) use er_title_flow::MENU_JOB_QUEUE_READY_RVA;
 /// Live/deobf native `CS::MenuJob::ChainMenuJobs` (`0x1407a7ca0` dump -> live `0x1407a7bb0`).
 /// ABI: `rcx=&first_job_slot, rdx=&out_job_slot, r8=&second_job_slot`; it builds a native
 /// FixOrderJobSequence so the existing menu/job pump owns both jobs rather than a private manual pump.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_JOB_CHAIN_MENU_JOBS_RVA: u32 = 0x7a7bb0;
 /// Live/deobf native ProfileSelect LoadJob builder (`FUN_140826600` dump -> live `0x140826510`).
 /// ABI: `rcx=&out_job_slot, rdx=dialog+0x50/list, r8d=profile_id, r9=*(dialog+0x1cc8)`.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_BUILDER_RVA: u32 = 0x826510;
 /// Live/deobf native Quit Game return-title chain builder (`FUN_14079d7f0` dump -> live `0x14079d700`).
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA: u32 = 0x79d700;
@@ -1177,8 +1147,10 @@ pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFI
 pub(crate) const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
 /// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
 /// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
 /// The DLIO alias every failing `m28` read resolves through.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
 
 /// How many NULL-RESULT parses also carry a DLIO virtual-root dump. The null path fires ~13x/second
@@ -1237,10 +1209,6 @@ pub(crate) use er_telemetry::counters::{
     DLC_ROOTS_TRACE_INSTALLED,
 };
 pub(crate) use er_telemetry::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
-pub(crate) use er_telemetry::counters::{
-    DLC_ROOT_ENTRY_ADDR, DLC_ROOT_GOOD_PATH_HASH, DLC_ROOT_HEAL_ATTEMPTS, DLC_ROOT_HEAL_OK,
-    DLC_ROOT_HEAL_WRONG, DLC_ROOT_SEEN_POPULATED,
-};
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
@@ -1313,6 +1281,7 @@ pub(crate) const OPTIONSETTING_DISPLAY_INFO_BYTES: usize = 0xE0;
 pub(crate) const OPTIONSETTING_DISPLAY_INFO_VISIBLE_OFFSET: usize = 0xd6;
 /// OptionSetting composite sub-dialog job slot (`MenuWindow+0x1768`, job ptr at +0xb8): nonzero when
 /// the composite sub-dialog job is bound (a corroborating signal, read-only).
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const OPTIONSETTING_COMPOSITE_SUBDIALOG_JOB_OFFSET: usize = 0x1768 + 0xb8;
 /// Reject obviously-invalid OptionSetting window pointers before any dereference.
 pub(crate) const OPTIONSETTING_WINDOW_MIN_PTR: usize = 0x10000;
@@ -1491,6 +1460,7 @@ pub(crate) use er_telemetry::counters::GX_CMD_QUEUE_PEAK_LAST_LOGGED;
 /// overwritten -> garbled draws WITHOUT a crash -- the sub-critical sibling of the 0x1aeaf05
 /// slot-table overflow. Track remaining low-water (cumulative + per-switch) to correlate.
 pub(crate) const GX_CMD_QUEUE_ARENA_OFFSET: usize = 0x40;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const GX_CMD_ARENA_ALLOC_COUNT_OFFSET: usize = 0x14;
 pub(crate) const GX_CMD_ARENA_LIMIT_OFFSET: usize = 0x20;
 pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;

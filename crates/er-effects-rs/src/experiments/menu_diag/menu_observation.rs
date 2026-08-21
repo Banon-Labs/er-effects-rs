@@ -447,6 +447,7 @@ pub(crate) unsafe fn dump_titletop_menu_entries(
 ///     `add rcx,8; jmp dialog_factory 0x14081ead0`), held at a MenuWindowJob's `+0xa8`;
 ///   * `CS::MenuMemberFuncJob<TitleTopDialog>` vtable = `base+0x2b265d0` (run 0x1409aaba0),
 ///     the entries the registrar 0x1409b24e0 registers into `[dialog+0xa48]`.
+///
 /// The prior d180-locate walked the FD4 MenuJobSequence tree (owner+0xe0/0x130/0x138) and never
 /// surfaced the item, because the title rows are TitleTopDialog REGISTRY entries, not Sequence
 /// children, AND `[dialog+0xa48]` is an opaque FD4 delegate registry (insert 0x1407a6c00, vcall
