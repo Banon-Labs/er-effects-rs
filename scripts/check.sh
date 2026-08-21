@@ -82,6 +82,7 @@ python3 "$repo_root/scripts/check-fresh-run-logs.py"
 # untested is decorative.
 bash "$repo_root/scripts/test-pr-refactor-scope.sh"
 python3 "$repo_root/scripts/test-dll-byte-identical.py"
+python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
 python3 "$repo_root/scripts/check-crate-extraction-roadmap.py" --selftest

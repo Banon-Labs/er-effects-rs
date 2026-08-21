@@ -111,6 +111,9 @@ jobs:
           bash scripts/test-pr-refactor-scope.sh
           python3 scripts/test-dll-byte-identical.py
 
+      - name: Test public DLL-release workflow
+        run: python3 scripts/test-release-workflow.py
+
       - name: rustfmt
         run: cargo fmt --all -- --check
 
