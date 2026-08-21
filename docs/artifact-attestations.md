@@ -6,6 +6,18 @@ signed SLSA build provenance proving the exact bytes were built by GitHub's
 hosted runners, from this repository, at a specific commit, by the release
 workflow -- not hand-built and uploaded by anyone's laptop.
 
+## Rolling main build
+
+Every successful push to `main` builds every shipped ME3-loadable DLL and
+publishes an immutable prerelease tagged `main-<full-commit-SHA>`. These builds
+share the same development version in purpose, but GitHub's immutable-release
+setting requires a unique tag and asset set for each commit. Download the newest
+`main-*` prerelease from the repository Releases page; use a numbered release
+when you need an immutable stable version.
+
+The build derives its package and artifact list from `scripts/me3-dll-list.py`,
+so a newly shippable DLL cannot be silently omitted from either release type.
+
 ## Verifying a downloaded DLL
 
 With the [GitHub CLI](https://cli.github.com/) (logged in via `gh auth login`):

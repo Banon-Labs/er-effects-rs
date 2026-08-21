@@ -85,6 +85,12 @@ def run_case(case: PolicyCase) -> None:
     else:
         env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = ""
 
+    if isinstance(signals, dict) and "origin_main_oids" in signals:
+        oid_signal = signals["origin_main_oids"]
+        env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = str(oid_signal.get("output", "") if isinstance(oid_signal, dict) else oid_signal)
+    else:
+        env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = "a" * 40 + " " + "a" * 40
+
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -188,6 +194,9 @@ def main() -> int:
             "git push -u origin guard/no-direct-main-push",
             True,
         ),
+        PolicyCase("deny-stale-origin-main-rebase", "git rebase origin/main", False, "origin/main is stale or could not be verified", extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}}),
+        PolicyCase("allow-fresh-origin-main-rebase", "git rebase origin/main", True, extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "a" * 40}}),
+        PolicyCase("deny-stale-force-with-lease", "git push --force-with-lease origin feature/x", False, "origin/main is stale or could not be verified", extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}}),
         # Worktree-target exception: `git -C <registered non-main worktree>`
         # commit/push is allowed even when the session checkout sits on main
         # (bd guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29).

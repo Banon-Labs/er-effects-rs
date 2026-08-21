@@ -3071,6 +3071,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-seamless-bugfixes-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+]
+
+[[package]]
 name = "er-shader-viewer"
 version = "0.1.0"
 dependencies = [

@@ -83,5 +83,13 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll ent
 "er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
 "er-quit-menu-dll" = "System>Quit harness; its detours route through the er-hook union rather than a private MinHook."
 "er-save-picker-dll" = "Detects the product DLL and stays inert when it is present."
+"er-seamless-bugfixes-dll" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
+(0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
+(searched repo-wide). It cannot use the er-hook union: that handler type carries four register \
+arguments only, and SpecialEffect::Apply passes four more on the stack. Instead it byte-checks each \
+prologue immediately before hooking, so an entry another MinHook instance already claimed fails the \
+comparison and disarms with a log line rather than trampling a trampoline. Both detours are naked \
+stubs that tail-jump to the original for every non-null container, so a co-loaded run is \
+byte-for-byte vanilla unless the null case occurs."""
 "er-telemetry-dll" = "Read-only oracles on a FrameBegin task; installs no hooks."
 "mushroom-man-runtime" = "Protector param patch; touches param rows, not hook prologues."

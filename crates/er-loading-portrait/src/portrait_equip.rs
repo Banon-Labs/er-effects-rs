@@ -73,6 +73,12 @@ pub struct PortraitEquipSample {
     pub effective: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
     /// The same four slots as the TARGET save record carries them, for classification.
     pub record: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
+    /// The `CS::ModelIns` this sample was taken against, carried so a reader can tell WHEN the
+    /// sample happened relative to the swap. It is deliberately NOT an input to
+    /// `portrait_equip_sample_bad_mask`: the open question (bd er-effects-rs-7m5y) is whether the
+    /// non-capture bad frames all precede the model being rebuilt for the new character, and a
+    /// value that both classifies and explains would beg that question.
+    pub model_ins: usize,
 }
 
 /// The bare-body row `CS::ChrAsm::GetDefaultProtectorParamId` returns for a protector slot, and which
@@ -183,6 +189,8 @@ mod tests {
             unkd8,
             effective,
             record,
+            // Fixed: the classifier must not read it, and these cases assert exactly that.
+            model_ins: 0,
         }
     }
 
