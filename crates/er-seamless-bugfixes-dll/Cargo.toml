@@ -1,0 +1,21 @@
+[package]
+name = "er-seamless-bugfixes-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_seamless_bugfixes"
+crate-type = ["cdylib"]
+
+# Crash guards for faults that only Seamless Co-op's networking mode can reach.
+#
+# Every guard here is a NULL-CONTAINER guard on a vanilla function that is correct for its own
+# contract but is reached with an argument vanilla never produces. A guard returns the guarded
+# function's OWN "nothing here" value -- never an invented one -- so the caller takes a branch it
+# already knows how to take. See `src/guards/mod.rs` for the rules a new guard must satisfy.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }

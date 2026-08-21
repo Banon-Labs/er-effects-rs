@@ -109,6 +109,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-reload-trace-dll:er_reload_trace_dll
 		er-save-disable-dll:er_save_disable
 		er-save-picker-dll:er_save_picker_dll
+		er-seamless-bugfixes-dll:er_seamless_bugfixes
 		er-telemetry-dll:er_telemetry_dll
 		mushroom-man-runtime:mushroom_man
 	)

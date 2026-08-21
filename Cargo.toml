@@ -41,6 +41,9 @@ members = [
   # split as er-loading-portrait / er-loading-portrait-dll.
   "crates/er-invasion-warp",
   "crates/er-invasion-warp-dll",
+  # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
+  # no product dependency: every guard is a null-container intercept on a vanilla function.
+  "crates/er-seamless-bugfixes-dll",
   "crates/er-safe-input",
   "crates/er-save-loader",
   "crates/er-tpf",
