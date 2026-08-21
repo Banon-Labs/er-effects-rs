@@ -2789,6 +2789,7 @@ name = "er-death-persist-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "fromsoftware-shared",
 ]
 

@@ -32,14 +32,11 @@
 
 use std::{
     collections::{BTreeSet, HashMap},
-    env,
     ffi::c_void,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-    time::SystemTime,
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
+
+use er_game_base::log::{append_line, game_directory_path};
 
 use eldenring::{
     cs::{
@@ -235,20 +232,24 @@ struct PatchOutcome {
     vfx_rows: Vec<u32>,
 }
 
+/// Written next to the game executable, like every other ME3 shell in this
+/// workspace. It used to land in `%LOCALAPPDATA%/ErDeathPersist/`, which put it
+/// outside the one directory `scripts/er-run-branch.py` watches to confirm a DLL
+/// actually loaded -- so a run loading only this shell had no witness and was
+/// reported as a game that never started.
+const RUNTIME_LOG_NAME: &str = "er-death-persist.log";
+
+/// Line counter for the log. The file describes exactly one process run (see
+/// `er_game_base::log::begin_fresh_run`), so ordering within it is the whole story.
+static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 fn write_runtime_log(message: &str) {
-    let Some(path) = runtime_log_path() else {
+    let Some(directory) = game_directory_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{:?} {message}", SystemTime::now());
-    }
-}
-
-fn runtime_log_path() -> Option<PathBuf> {
-    env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|path| path.join("ErDeathPersist").join("er_death_persist.log"))
+    let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+    append_line(
+        &directory.join(RUNTIME_LOG_NAME),
+        format_args!("[{seq:06}] {message}"),
+    );
 }

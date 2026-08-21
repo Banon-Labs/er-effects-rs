@@ -9,5 +9,6 @@ name = "er_death_persist"
 crate-type = ["cdylib"]
 
 [target.'cfg(windows)'.dependencies]
+er-game-base = { path = "../er-game-base" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
