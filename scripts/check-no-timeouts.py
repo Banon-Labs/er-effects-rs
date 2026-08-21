@@ -32,6 +32,22 @@ IGNORED_FILES = {
     # drained" or "the display woke". The no-sleep rule targets runtime probes.
     Path("scripts/vm-sendkeys.py"),
     Path("scripts/vanilla-control-probe.py"),
+    # Sampling profiler / flight recorder, NOT a runtime probe that waits on a readiness
+    # signal. Its `time.sleep` is the sample PERIOD -- the measurement instrument itself --
+    # not synchronization: the tool exists to record a thread's state at a fixed rate right
+    # up to the instant that thread dies, and its stop condition is that observed death (a
+    # real semaphore: /proc state Z or the task disappearing), never a timer. There is no
+    # readiness primitive that can replace a sampling rate, and the event-driven alternative
+    # (ptrace stops) is exactly what this tier avoids so it cannot perturb the game.
+    Path("scripts/wine-thread-death-watch.py"),
+    # Steam lobby probes. Their `time.sleep` is a SAMPLE PERIOD, for the same reason as the
+    # profiler above: `RequestLobbyList` results arrive through a callback that lives inside
+    # ersc.dll's Themida-virtualised region, so there is nothing to hook for "results are ready"
+    # and no readiness primitive exists to replace re-reading at a fixed rate. Both stop on a real
+    # observation -- a member arriving, or the oracle document differing from its previous
+    # contents -- and their deadlines are backstops, never the synchronisation.
+    Path("scripts/frida-lobby-watch-members.py"),
+    Path("scripts/frida-hunt-drive-query.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",

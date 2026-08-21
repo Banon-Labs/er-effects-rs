@@ -77,7 +77,24 @@ bash_tool if endswith(lower_tool_name, ".bash")
 
 bash_tool if contains(lower_tool_name, "ctx_execute")
 
-in_tmp if startswith(file_path, "/tmp/")
+in_tmp if {
+	startswith(file_path, "/tmp/")
+	not in_current_repo(file_path)
+}
+
+in_current_repo(path) if {
+	cwd := object.get(input, "cwd", "")
+	cwd != ""
+	cwd != "/"
+	path == cwd
+}
+
+in_current_repo(path) if {
+	cwd := object.get(input, "cwd", "")
+	cwd != ""
+	cwd != "/"
+	startswith(path, concat("", [cwd, "/"]))
+}
 
 is_script_file if is_script_path(file_path)
 
@@ -89,6 +106,7 @@ is_script_path(path) if {
 tmp_script_path_from_command := path if {
 	parts := regex.find_n(`/tmp/[^\s"'\\;&|<>]+`, command, -1)
 	some path in parts
+	not in_current_repo(path)
 	is_script_path(path)
 }
 

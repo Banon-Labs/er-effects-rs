@@ -17,28 +17,11 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain,
-    IDXGISwapChain1,
-};
+use windows::Win32::Graphics::Dxgi::{IDXGISwapChain, IDXGISwapChain1};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
-    UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
-};
-use windows::core::{IUnknown, Interface, w};
+use windows::core::{IUnknown, Interface};
 
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_Initialize, MH_STATUS};
 
 use super::*;
 
@@ -64,7 +47,7 @@ type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void
 /// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword IS the live
 /// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
 /// the old `GLOBAL_CSGraphics` root, which never held the swapchain -- CSGraphics is unrelated to GX present.)
-const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
 /// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
 const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
 pub(crate) use er_telemetry::counters::GAME_BASE;
@@ -211,15 +194,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
-            // overlay being a product feature this run: telemetry-only measurement records cadence (below)
-            // but SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
-            let tc = std::time::Instant::now();
-            if portrait_overlay_enabled() {
-                unsafe { composite_on_game_swapchain(base, this_u) };
-            }
-            er_telemetry::counters::COMPOSITE_LAST_US
-                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+            unsafe { composite_and_record_exposure(base, this_u) };
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -265,15 +240,7 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // Composite gated on the overlay being a product feature this run; telemetry-only measurement
-            // records cadence (below) but skips the flow-modifying composite (vanilla baseline stays
-            // flow-faithful). See the Present(8) detour for the rationale.
-            let tc = std::time::Instant::now();
-            if portrait_overlay_enabled() {
-                unsafe { composite_on_game_swapchain(base, this_u) };
-            }
-            er_telemetry::counters::COMPOSITE_LAST_US
-                .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+            unsafe { composite_and_record_exposure(base, this_u) };
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
@@ -288,30 +255,6 @@ unsafe extern "system" fn present1_hook(
     } else {
         0
     }
-}
-
-/// `+0x754/+0x755` on a CSMenuProfModelRend are the engine's build-request latches -- the kick raises
-/// them and the engine clears them when the model+offscreen build lands (see kick_target_profile_slot's
-/// "kick only when BOTH read 0 = not already in flight" parity check, loading_cover_save_slot.rs:301-306).
-const PROFILE_RENDERER_REQ_754_OFFSET: usize = 0x754;
-const PROFILE_RENDERER_REQ_755_OFFSET: usize = 0x755;
-/// Presents skipped because a profile-model build was in flight (RAM oracle for the crash mitigation).
-pub(crate) use er_telemetry::counters::PRESENT_COMPOSITE_BUILD_SKIPS;
-
-/// True while the just-kicked profile renderer's build-request latches are still set -- i.e. the engine
-/// is mid-build of the profile model + its offscreen RT. During this window the engine's OWN
-/// ResMan-scheduled offscreen render can reach FUN_141e90290 with a half-seeded GX resource (rcx=0x20)
-/// and access-violate; adding our concurrent composite GPU submit to the game device in the same window
-/// is the ONLY behavioral delta between the crashing fix-run and the six clean control/guard runs
-/// (native-Windows 2026-07-15, bd er-effects-rs-n4x). Bounded: the latches clear when the build lands.
-fn profile_model_build_in_flight() -> bool {
-    let r = PORTRAIT_KICK_RENDERER.load(Ordering::SeqCst);
-    if r == 0 || r == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    let l754 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_754_OFFSET) }.unwrap_or(0);
-    let l755 = unsafe { safe_read_u8(r + PROFILE_RENDERER_REQ_755_OFFSET) }.unwrap_or(0);
-    l754 != 0 || l755 != 0
 }
 
 /// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
@@ -342,7 +285,33 @@ fn composite_suppressed_on_native() -> bool {
 /// drive. So on native Windows: SKIP the portrait composite (it would only ever have a stale/absent head
 /// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
 /// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
-unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
+/// Run the per-frame cover composite and report WHICH gate decided this frame, as a
+/// `er_telemetry::counters::NATIVE_LS_GATE_*` code. The caller feeds that to
+/// [`native_ls_exposure_record`], which latches the frames where the game's own loading screen was
+/// live but our cover did not draw -- er-effects-rs-wmw defect #1, the vanilla flash-through.
+unsafe fn composite_and_record_exposure(base: usize, this_u: usize) {
+    use er_telemetry::counters::NATIVE_LS_GATE_OVERLAY_DISABLED;
+    // Time the boot-view composite (the suspected per-frame WORK stall on reloads). Gated on the
+    // overlay being a product feature this run: telemetry-only measurement records cadence but
+    // SKIPS the flow-modifying composite so the vanilla baseline stays flow-faithful.
+    let tc = std::time::Instant::now();
+    let gate = if portrait_overlay_enabled() {
+        unsafe { composite_on_game_swapchain(base, this_u) }
+    } else {
+        NATIVE_LS_GATE_OVERLAY_DISABLED
+    };
+    er_telemetry::counters::COMPOSITE_LAST_US
+        .store(tc.elapsed().as_micros() as usize, Ordering::SeqCst);
+    crate::telemetry::native_ls_exposure_record(gate);
+}
+
+/// Returns the `NATIVE_LS_GATE_*` code describing whether the cover drew this frame, and if not,
+/// which gate blocked it.
+unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) -> usize {
+    use er_telemetry::counters::{
+        NATIVE_LS_GATE_COVER_STOPPED, NATIVE_LS_GATE_DREW, NATIVE_LS_GATE_EPOCH_WORLD_LIVE,
+        NATIVE_LS_GATE_NATIVE_SUPPRESSED,
+    };
     // FPS PARITY (bd FPS-DELTA-CONFIRMED-load2-20fps-load1-45fps): once the CURRENT load epoch is
     // genuinely in-world (world-clock live for THIS fresh_deser epoch -- BOOT_VIEW_EPOCH_WORLD_LIVE was
     // set to it by the play_time_live oracle), every overlay here (portrait cover, loading bar, save
@@ -358,7 +327,7 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
             && crate::experiments::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0
         {
             PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return NATIVE_LS_GATE_EPOCH_WORLD_LIVE;
         }
     }
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
@@ -375,99 +344,28 @@ unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     // as before.)
     if composite_suppressed_on_native() {
         PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
-        return;
+        return NATIVE_LS_GATE_NATIVE_SUPPRESSED;
     }
-    let portrait_path = running_under_wine();
-    let drew_portrait = if portrait_path && !profile_model_build_in_flight() {
-        unsafe { composite_portrait_on_swapchain(base, this_u) }
-    } else {
-        if portrait_path {
-            PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
-        }
-        false
-    };
-    // Loading bar + save picker + boot-cover handoff oracle. Run this even when the portrait bridge drew:
-    // the portrait path returning `true` used to suppress the boot-progress compositor, which made the
-    // bar/handoff oracle vanish exactly at the forced-Continue/native-loading transition. The boot
+    // Loading bar + save picker + portrait/stats cover + boot-cover handoff oracle. The boot
     // compositor is internally gated by BOOT_VIEW_STOPPED and draw-state, so this is a cheap no-op after
-    // the seamless cut.
-    let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+    // the seamless cut. Its bool is now load-bearing: false means nothing was drawn over the
+    // backbuffer this frame, so whatever the game rendered is what the user sees.
+    let drew = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
     // regardless of the ~4fps boot Present rate; the render-thread poll handles gamepad (and is the
     // keyboard fallback if the hook fails to install).
     let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
     let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
-}
-
-pub(crate) use er_telemetry::counters::FACTORY2_ORIG;
-type Factory2Fn =
-    unsafe extern "system" fn(u32, *const windows::core::GUID, *mut *mut c_void) -> i32;
-
-/// Detour for the `dxgi.dll!CreateDXGIFactory2` EXPORT -- logs that the GAME created a DXGI factory AFTER
-/// our hook installed (the timing precondition for catching its swapchain creation via the export chain).
-unsafe extern "system" fn factory2_hook(
-    flags: u32,
-    riid: *const windows::core::GUID,
-    out: *mut *mut c_void,
-) -> i32 {
-    let orig = FACTORY2_ORIG.load(Ordering::SeqCst);
-    let hr = if orig != 0 {
-        let f: Factory2Fn = unsafe { std::mem::transmute(orig) };
-        unsafe { f(flags, riid, out) }
+    if drew {
+        NATIVE_LS_GATE_DREW
     } else {
-        -1
-    };
-    let factory = if out.is_null() {
-        0
-    } else {
-        (unsafe { *out }) as usize
-    };
-    append_autoload_debug(format_args!(
-        "present-overlay: GAME called CreateDXGIFactory2 (export) -> hr={hr} factory=0x{factory:x} (export chain viable)"
-    ));
-    hr
-}
-
-/// Hook the `dxgi.dll!CreateDXGIFactory2` export (a fixed export address, reliable under Wine) to learn
-/// whether the game creates its DXGI factory after our install -- the precondition for the export chain
-/// (factory -> CreateSwapChainForHwnd -> swapchain -> Present) that catches the game's ACTUAL swapchain.
-fn install_dxgi_factory_export_hook() {
-    let dxgi = match unsafe { GetModuleHandleW(windows::core::w!("dxgi.dll")) } {
-        Ok(h) => h,
-        Err(_) => {
-            append_autoload_debug(format_args!("present-overlay: dxgi.dll not loaded yet"));
-            return;
-        }
-    };
-    let proc = unsafe {
-        windows::Win32::System::LibraryLoader::GetProcAddress(
-            dxgi,
-            windows::core::s!("CreateDXGIFactory2"),
-        )
-    };
-    let Some(addr) = proc else {
-        append_autoload_debug(format_args!(
-            "present-overlay: GetProcAddress(CreateDXGIFactory2) failed"
-        ));
-        return;
-    };
-    match unsafe { MhHook::new(addr as *mut c_void, factory2_hook as *mut c_void) } {
-        Ok(hook) => {
-            FACTORY2_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-            append_autoload_debug(format_args!(
-                "present-overlay: hooked dxgi.dll!CreateDXGIFactory2 export 0x{:x}",
-                addr as usize
-            ));
-        }
-        Err(e) => append_autoload_debug(format_args!(
-            "present-overlay: hook CreateDXGIFactory2 export failed: {e:?}"
-        )),
+        NATIVE_LS_GATE_COVER_STOPPED
     }
 }
 
-/// Prep the Present overlay ONCE (early): init MinHook + build a throwaway dummy swapchain only to learn
-/// the IDXGISwapChain vtable module (the same-module hint for the runtime swapchain scan). The dummy's own
+/// Prep the Present overlay ONCE (early): init MinHook + ask `er-d3d12-compositor` to build its
+/// throwaway dummy swapchain only to learn the IDXGISwapChain vtable module (the same-module hint for
+/// the runtime swapchain scan). The dummy's own
 /// vtable funcs are NOT hooked -- under vkd3d-proton the game's swapchain is a different object, so the
 /// REAL Present hook is installed later by `try_install_game_present_hook` once the GX device is up.
 pub(crate) fn install_present_overlay_hook() {
@@ -495,7 +393,7 @@ pub(crate) fn install_present_overlay_hook() {
     }
     // Module hint only: the dummy's Present addr identifies which module implements IDXGISwapChain, so the
     // runtime BFS can filter swapchain candidates by vtable-in-that-module.
-    if let Some((present_addr, present1_addr)) = unsafe { resolve_present_addrs() } {
+    if let Some((present_addr, present1_addr)) = er_d3d12_compositor::resolve_present_addrs() {
         PRESENT_RESOLVED_ADDR.store(present_addr, Ordering::SeqCst);
         PRESENT1_RESOLVED_ADDR.store(present1_addr, Ordering::SeqCst);
         append_autoload_debug(format_args!(
@@ -685,133 +583,6 @@ fn boot_present_pump() {
         }
         let _ = tick_rx.recv_timeout(frame);
     }
-}
-
-/// Build a throwaway HWND swapchain (hidden dummy window + `CreateSwapChainForHwnd` -- composition
-/// swapchains are "Not implemented" under vkd3d/Wine) and read its `Present`/`Present1` vtable entries.
-/// All resources are local and dropped at scope end; only the function pointers are kept. NOTE: on
-/// native Windows these are a REFERENCE, not ground truth -- a co-resident overlay may wrap the game's
-/// swapchain (or ours) so the game's vtable slots legitimately differ; `find_game_swapchain` treats a
-/// slot mismatch as a fallback path, not a rejection.
-unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let factory: IDXGIFactory4 = match CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) {
-            Ok(f) => f,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateDXGIFactory2 failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        let mut device_opt: Option<ID3D12Device> = None;
-        if let Err(e) = D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device_opt) {
-            append_autoload_debug(format_args!(
-                "present-overlay: D3D12CreateDevice failed: {e:?}"
-            ));
-            return None;
-        }
-        let device = device_opt?;
-        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            Priority: 0,
-            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
-            NodeMask: 0,
-        };
-        let queue: ID3D12CommandQueue = match device.CreateCommandQueue(&queue_desc) {
-            Ok(q) => q,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateCommandQueue failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        // Hidden dummy window (Wine/vkd3d has no DirectComposition, so we need a real HWND).
-        let hinstance = match GetModuleHandleW(None) {
-            Ok(h) => h,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: GetModuleHandleW failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        let class_name = w!("ErEffectsOverlayDummyWnd");
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(dummy_wndproc),
-            hInstance: hinstance.into(),
-            lpszClassName: class_name,
-            ..Default::default()
-        };
-        let _atom = RegisterClassW(&wc);
-        let hwnd = match CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            w!("er-effects-overlay"),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            64,
-            64,
-            None,
-            None,
-            Some(hinstance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateWindowExW failed: {e:?}"
-                ));
-                let _ = UnregisterClassW(class_name, Some(hinstance.into()));
-                return None;
-            }
-        };
-        let desc = DXGI_SWAP_CHAIN_DESC1 {
-            Width: 64,
-            Height: 64,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            Stereo: false.into(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
-            Scaling: DXGI_SCALING_STRETCH,
-            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            AlphaMode: DXGI_ALPHA_MODE_UNSPECIFIED,
-            Flags: 0,
-        };
-        let swapchain_res = factory.CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None);
-        let _ = DestroyWindow(hwnd);
-        let _ = UnregisterClassW(class_name, Some(hinstance.into()));
-        let swapchain: IDXGISwapChain1 = match swapchain_res {
-            Ok(s) => s,
-            Err(e) => {
-                append_autoload_debug(format_args!(
-                    "present-overlay: CreateSwapChainForHwnd failed: {e:?}"
-                ));
-                return None;
-            }
-        };
-        // The COM object's first qword is the vtable pointer; read Present(8) + Present1(22).
-        let obj = swapchain.as_raw() as *const *const usize;
-        let vtable = *obj;
-        let present_addr = *vtable.add(PRESENT_VTABLE_INDEX) as usize;
-        let present1_addr = *vtable.add(PRESENT1_VTABLE_INDEX) as usize;
-        append_autoload_debug(format_args!(
-            "present-overlay: resolved Present=0x{present_addr:x} Present1=0x{present1_addr:x}"
-        ));
-        if present_addr > 0x10000 && present1_addr > 0x10000 {
-            Some((present_addr, present1_addr))
-        } else {
-            None
-        }
-    }))
-    .ok()
-    .flatten()
 }
 
 /// Best-effort log of the swapchain's backbuffer dims/format (separate from the fired-log so a GetDesc1
@@ -1173,13 +944,4 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
         now8 == present_hook as usize,
         now22 == present1_hook as usize,
     ));
-}
-
-unsafe extern "system" fn dummy_wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }

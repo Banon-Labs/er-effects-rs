@@ -8,63 +8,21 @@
 // character applied, b80-INDEPENDENT), then `continue_confirm` 0x140b0e180 -> SetState(5).
 // All offsets VERIFIED against the on-disk decrypted exe (STAGE-2 spec 2026-06-16).
 // ============================================================================================
-/// PHASE 6 (S2 INVOKE): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
-pub(crate) const OWN_STEPPER_PHASE_S2_INVOKE: usize = OwnStepperPhase::S2Invoke as usize;
-/// PHASE 7 (S2 ACTIVATE): write the slot cursor [dialog+0xb0c]=N (bounds [dialog+0xb08]) then
-/// call the dialog's vtable-slot-20 load_activate(rcx=dialog), registering the selector step.
-pub(crate) const OWN_STEPPER_PHASE_S2_ACTIVATE: usize = OwnStepperPhase::S2Activate as usize;
-/// PHASE 8 (S2 MOUNT_POLL): pass-through each frame so the native pump ticks the selector;
-/// watch for the mount (ac0==N + io18/io20 set->clear; c30 leaving the new-game default).
-pub(crate) const OWN_STEPPER_PHASE_S2_MOUNT_POLL: usize = OwnStepperPhase::S2MountPoll as usize;
-/// PHASE 9 (S2 CONFIRM): guard (ac0==N && c30==latched-mount && io consumed) then
-/// continue_confirm -> SetState(5) so the native pump streams the real world. The ONLY
-/// save-write-risking step; gated entirely by a verified real mount (fail-closed otherwise).
-pub(crate) const OWN_STEPPER_PHASE_S2_CONFIRM: usize = OwnStepperPhase::S2Confirm as usize;
-#[repr(usize)]
-pub(crate) enum ProfileLoadMenuRva {
-    ProfileSlotActivate = 0x262250,
-    MenuItemUpdate = 0x007ad1c0,
-    ProfileLoadSelectorTick = 0x826d50,
-    MenuDeser = 0x0082c240,
-    CsMenuCtor = 0x009060d0,
-    MenuMemberFuncJobRun = 0x9aaba0,
-    MenuLoadGameFunctorVtable = 0x02ac3ea8,
-    SelectorStepVtable = 0x2ac71e0,
-    ProfileLoadDialogVtable = 0x2b229f8,
-}
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_INVOKE;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_ACTIVATE;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_MOUNT_POLL;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_CONFIRM;
+pub(crate) use er_title_flow::ProfileLoadMenuRva;
 
-/// CS::ProfileLoadDialog vtable (RVA). The dialog built by d180's functor (dialog_factory
-/// 0x14081ead0 -> ctor 0x1409a3d90 writes this vtable). Used to VALIDATE the built dialog
-/// before any dialog call (a wrong this-pointer would AV).
-pub(crate) const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
-    ProfileLoadMenuRva::ProfileLoadDialogVtable as usize;
-/// Dialog vtable slot 20 (offset 0xa0) = load_activate 0x1409a4670. Read the live slot from
-/// the dialog vtable (robust to relocation) rather than hard-calling the RVA.
-#[repr(C)]
-pub(crate) struct ProfileLoadDialogVtableLayout {
-    pub(crate) unknown_slots_00_19: [usize; 20],
-    pub(crate) load_activate: usize,
-}
+pub(crate) use er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
+pub(crate) use er_title_flow::ProfileLoadDialogVtableLayout;
 
-pub(crate) const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize =
-    core::mem::offset_of!(ProfileLoadDialogVtableLayout, load_activate);
+pub(crate) use er_title_flow::DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET;
 
-#[repr(C)]
-pub(crate) struct ProfileLoadDialogLayout {
-    pub(crate) unknown_000: [u8; 0xb08],
-    pub(crate) slot_bound: i32,
-    pub(crate) slot_cursor: i32,
-    pub(crate) unknown_b10: [u8; 0x11b8],
-    pub(crate) load_job_ctx: usize,
-}
+pub(crate) use er_title_flow::ProfileLoadDialogLayout;
 
-/// Dialog selected-list-index cursor (= [dialog+0xa38+0xd4]); load_activate reads it as the
-/// slot. WRITE the desired slot N here before calling load_activate.
-pub(crate) const DIALOG_SLOT_CURSOR_B0C_OFFSET: usize =
-    core::mem::offset_of!(ProfileLoadDialogLayout, slot_cursor);
-/// Dialog list inclusive upper bound; load_activate clamps the cursor to [0, bound).
-pub(crate) const DIALOG_SLOT_BOUND_B08_OFFSET: usize =
-    core::mem::offset_of!(ProfileLoadDialogLayout, slot_bound);
+pub(crate) use er_title_flow::DIALOG_SLOT_CURSOR_B0C_OFFSET;
+pub(crate) use er_title_flow::DIALOG_SLOT_BOUND_B08_OFFSET;
 
 /// MenuWindowJob (d180) layout: +0xa8 action std::function, +0x10 dialog ctx-out (functor
 /// fires only when ==0), +0x130 built-dialog result slot.
@@ -90,7 +48,12 @@ pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
 pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
 /// It forwards event `3` to the row result's own vtable slot `+0x60`.
-pub(crate) const MENU_ITEM_SUBMIT_RVA: usize = 0x007ac890;
+/// `f(rcx = MenuWindow*)`: calls `MenuJobResult::SetResult(&r, Failed=3, 0)` then invokes the
+/// receiver's OWN vtable slot +0x60. It is a close-with-Failed, NOT an item submit or accept
+/// (Success is 2; the sibling emits 4). Its caller is `CS::MenuWindowJob::Run`, not `::Update`.
+/// Renamed 2026-08-01 -- the old name and doc asserted three things the dump contradicts.
+pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
 /// Row-result field consumed by `MenuWindowJob::Update` to choose which native accept event branch
 /// to send to the built row result.
 pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;
@@ -119,9 +82,7 @@ pub(crate) const GAME_MAN_NEWGAME_DEFAULT_MAP: i32 = GameManMapId::NewGameDefaul
 pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OWN_STEPPER_S2_PHASE_TIMEOUT_MS;
 /// Per-phase poll counter for S2 diagnostics/log throttling, not a readiness gate.
 pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
-/// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
-pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::OWN_STEPPER_DIALOG;
 /// The CS::MenuJobWithContext<LoadJobContext> selector step (vtable 0x142ac71e0) that
 /// load_activate 0x1409a4670 builds at `dialog+0x18`. A cold standalone dialog is not ticked by
 /// the MENU task-group, so STAGE 2 reads this and SELF-PUMPS the tick 0x140826d50 each frame
@@ -149,10 +110,7 @@ pub(crate) const OWN_STEPPER_DESER_FIRED_FAIL: usize = OwnStepperDeserState::Fir
 pub(crate) const OWN_STEPPER_DESER_FIRED_OK: usize = OwnStepperDeserState::FiredOk as usize;
 /// deserialize 0x67b290 success return code (ret==1 == real char applied + c30 written from save).
 pub(crate) const OWN_STEPPER_DESER_SUCCESS_RET: i32 = true as i32;
-/// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
-/// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
-pub(crate) static OWN_STEPPER_TITLE_FIRED: AtomicUsize =
-    AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
+pub(crate) use er_title_flow::OWN_STEPPER_TITLE_FIRED;
 /// The RESOLVED target slot the mount is expected to land on: the configured `slot=N` if
 /// >=0, else (slot=-1 "most-recent") the dialog's natural highlight cursor read live at
 /// PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.

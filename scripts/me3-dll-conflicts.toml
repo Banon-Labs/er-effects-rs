@@ -1,0 +1,95 @@
+# Which ME3-loadable DLLs must never share one profile, and why.
+#
+# This table exists because the knowledge used to live ONLY as prose in a hand-written
+# profile (`~/Elden/main-all-dlls.me3`), where nothing could enforce it. A generated
+# profile that co-loads a conflicting pair produces a run that is corrupt before it
+# starts -- two MinHook instances detouring the same prologue overwrite each other's
+# trampolines, two D3D12 Present compositors fight over the swapchain -- and the
+# resulting evidence looks like a feature bug rather than a loader bug.
+#
+# CONSUMED BY  scripts/er-dll-closure.py  (refuses to emit a conflicting profile)
+# GATED BY     scripts/check-me3-dll-conflicts.py  (proves this table covers every shell
+#              in the `me3_shells` array of scripts/check-rust-build.sh, so adding a new
+#              cdylib cannot silently skip conflict analysis)
+#
+# Every package listed in `me3_shells` must appear here EITHER in a [[conflict]] pair OR
+# in [compatible] with a reason. Silence is not an answer: an unanalyzed DLL is exactly
+# the one that gets auto-included by a dependency-closure walk.
+#
+# `kind` is the failure mode, not a severity. All conflicts are blocking -- the point of
+# generating a profile is that you learn what is wrong BEFORE the run, not after.
+
+[[conflict]]
+a = "er-effects-rs"
+b = "er-save-disable-dll"
+kind = "hook-collision"
+reason = """Both carry their own MinHook instance and detour the SAME prologues \
+(0x140e6fb50 / 0x140e6e430), so each overwrites the other's trampoline. \
+er_save_disable additionally suppresses every save write, so a run that loads it \
+cannot produce save-path evidence at all."""
+evidence = "crates/er-save-disable-dll/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
+
+[[conflict]]
+a = "er-effects-rs"
+b = "er-loading-portrait-dll"
+kind = "present-compositor"
+reason = """Double D3D12 Present hook. The product already links er-loading-portrait, so \
+the standalone shell installs a second compositor over the same swapchain. The shell's own \
+header states it must NEVER be loaded alongside er_effects_rs.dll."""
+evidence = "crates/er-loading-portrait-dll/src/lib.rs:11"
+
+[[conflict]]
+a = "er-effects-rs"
+b = "er-loading-bar-dll"
+kind = "present-compositor"
+reason = """Unconditionally installs a second Present compositor with a SYNTHETIC demo frame \
+provider, painting a fake loading bar over the product's real one. Same conflict class as the \
+portrait shell."""
+evidence = "crates/er-loading-bar-dll/src/lib.rs:102"
+
+[[conflict]]
+a = "er-effects-rs"
+b = "er-input-harness-dll"
+kind = "drives-input"
+reason = """DEFAULT-ON by mere presence: it writes the game's input memory every frame, so the \
+user is not driving the session. Not a corruption conflict -- a truth conflict. A run that loads \
+this cannot be described as user-driven, and its own header says to omit it from production \
+profiles."""
+evidence = "crates/er-input-harness-dll/src/lib.rs"
+
+[[conflict]]
+a = "er-effects-rs"
+b = "er-reload-trace-dll"
+kind = "diagnostic-drive"
+reason = """Union-aware for hooks, but NOT passive: its rt5d diagnostic drive writes menuData+0x5d \
+after a stuck-load streak, so it can advance the very state machine under test. Acceptable only \
+when reload tracing IS the experiment, never in a run whose subject is something else."""
+evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll entry)"
+
+# ---------------------------------------------------------------------------
+# Shells with NO known conflict at all. A reason is mandatory: "no conflict" must be a
+# finding someone made, not a default that a new crate inherits by being forgotten.
+#
+# `er-effects-rs` is deliberately absent. It is the axis every conflict above is
+# expressed against, so it is already classified by appearing in those pairs -- and
+# listing it here would assert it is conflict-free, which is the opposite of true.
+# ---------------------------------------------------------------------------
+[compatible]
+"er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
+"er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
+"er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
+"er-inventory-sort-dll" = "Applies equipment-menu sort defaults once per process; installs no detour."
+"er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
+"er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
+"er-quit-menu-dll" = "System>Quit harness; its detours route through the er-hook union rather than a private MinHook."
+"er-save-picker-dll" = "Detects the product DLL and stays inert when it is present."
+"er-seamless-bugfixes-dll" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
+(0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
+(searched repo-wide). It cannot use the er-hook union: that handler type carries four register \
+arguments only, and SpecialEffect::Apply passes four more on the stack. Instead it byte-checks each \
+prologue immediately before hooking, so an entry another MinHook instance already claimed fails the \
+comparison and disarms with a log line rather than trampling a trampoline. Both detours are naked \
+stubs that tail-jump to the original for every non-null container, so a co-loaded run is \
+byte-for-byte vanilla unless the null case occurs."""
+"er-telemetry-dll" = "Read-only oracles on a FrameBegin task; installs no hooks."
+"mushroom-man-runtime" = "Protector param patch; touches param rows, not hook prologues."

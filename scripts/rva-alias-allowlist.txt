@@ -1,0 +1,49 @@
+# Duplicate literal declarations of one value, CLASSIFIED. Two very different things live
+# here and conflating them is what makes an allowlist feel like permanent debt:
+#
+#   exempt:*  -- legitimate and PERMANENT. Do not 'clean these up'; collapsing them destroys
+#                information. A role alias names one function from a caller's viewpoint
+#                (LEAF_UPDATE_RVA is the leaf node-kind in a vtable classifier that happens
+#                to be MenuWindowJob::Run); a not-an-address value merely collides numerically.
+#   todo:*    -- real debt. This set must only ever SHRINK. Each is adjudicated against the
+#                1.16.2 Ghidra dump, then the value is declared once and the aliases derived.
+#
+# See docs/plans/experiments-module-split-audit.md section 2.
+
+0x100001    exempt:not-an-address     # CONTEXT_CONTROL_AMD64 || Windows CONTEXT_FLAGS bitmask, not a game RVA.
+0x280000    exempt:not-an-address     # C30_WRITER_FULL_SAVE_SIZE, SLOT_BODY_LEN  || A LENGTH, not an RVA: the engine's fixed per-character-save-slot
+0x67b200    exempt:role-alias         # B80_LOAD_SAVE_DATA_INITIATOR_RVA, NATIVE_LOAD_SAVE_DATA_RVA, SYSTEM_QU  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
+0x67b290    exempt:role-alias         # DESERIALIZE_SLOT_RVA, SYSTEM_QUIT_INWORLD_LOAD_RVA  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
+0x67b750    exempt:role-alias         # SAVE_DISPATCH_CHAR_RVA, SAVE_WRITE_TO_SLOT_RVA  || FUN_14067b750(uint slot /*-1 = GameMan->saveSlot*/, char flush,
+0x67bc10    todo:centralize-function-rva  # SAVE_DISPATCH_ENTRY0B_RVA || FUN_14067bc10 allocates 0x240010, serializes via FUN_1402585c0, submits IO request kind 0xb, then sets GameMan.saveState=1.
+0x67bd70    exempt:role-alias         # C30_WRITER_RVA, SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA  || FUN_14067bd70(GameMan *gm, void *buf, int size) -- the character
+0x733150    exempt:role-alias         # PROXY_IS_BOUND_RVA, TITLE_NATIVE_READY_PREDICATE_RVA  || `bool FUN_140733150(SceneObjProxy *param_1)` -- a 21-byte generi
+0x733340    exempt:role-alias         # PROXY_SET_VISIBLE_RVA, TITLE_PRESS_START_SET_VISIBLE_RVA  || `void FUN_140733340(SceneObjProxy *param_1, undefined1 visible)`
+0x74a2f0    exempt:role-alias         # ASSIGN_COMPONENT_WITH_NAME_RVA, TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND  || `SceneObjProxy * CS::SceneObjProxy::assignComponentWithName(Scen
+0x7ad1c0    exempt:role-alias         # LEAF_UPDATE_RVA, MENU_WINDOW_JOB_RUN_RVA, PAB_NODE_UPDATE_RVA  || `CS::MenuWindowJob::Run` -- vtable slot 2 (+0x10) of the MenuWin
+0x7ad810    todo:centralize-function-rva  # MENU_ITEM_ACCEPT_NATIVE_RVA || FUN_1407ad810 returns the inverse of CSMenuMan predicate FUN_140765f20; duplicated in continue/menu-constructor probes.
+0x7add70    todo:centralize-code-label    # MENU_ITEM_ACCEPT_IDLE_RVA || LAB_1407add70 is the zero-arg std::function thunk stored by FUN_1407acf80 when constructing MenuWindowJob accept functors.
+0x81ead0    todo:centralize-function-rva  # FACTORY_RVA || FUN_14081ead0 allocates 0x1cd0, constructScaleformObject, then FUN_1409a3d90; used as LoadGame/TitleTopDialog row factory fingerprint.
+0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
+0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
+0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
+0xafb880    exempt:role-alias         # B80_DISPATCHER2_RVA, MOVEMAP_DISPATCHER_RVA  || The MoveMapStep per-tick save/load REQUEST dispatcher: `FUN_140a
+0xb0d960    exempt:role-alias         # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
+0xd7f850    exempt:role-alias         # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SC  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
+0xeb5530    exempt:role-alias         # CHILD_DONE_QUERY_RVA, MOVEMAP_CHILD_FINISHED_POLL_RVA  || Generic `EzChildStepBase` 'is the child step finished?' predicat
+0x29c8e48   todo:centralize-vtable-rva   # FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA || Ghidra decompile of NetworkCheckJob::Run writes FD4::FD4TimeTemplate<float>::vftable on all returns.
+0x2a94a70   todo:centralize-vtable-rva   # SCENE_OBJ_PROXY_VTABLE_RVA || SceneObjProxy vtable; 36 xrefs, constructor/initializer refs in FUN_14074bb50/FUN_14074cb10/FUN_14074b280.
+0x2aa97e8   exempt:role-alias         # ITEM_VTABLE_RVA, MENU_WINDOW_JOB_VTABLE_RVA  || CS::MenuWindowJob::vftable (VA 0x142aa97e8) -- the primary vtabl
+0x2aaabf8   todo:centralize-vtable-rva   # SAVE_RETRY_DIALOG_VTABLE_RVA || SaveRetry dialog vtable; two constructor refs from FUN_1407af8b0.
+0x2ac7f20   exempt:role-alias         # OWNER_OBJ_VTABLE_RVA, TITLE_FLOW_CONTEXT_VTABLE_RVA  || CS::TitleFlowContext::vftable (VA 0x142ac7f20).
+0x2b265d0   todo:centralize-vtable-rva   # MEMBERFUNCJOB_VTABLE_RVA || CS::MenuMemberFuncJob<TitleTopDialog> vtable; two refs from FUN_1409a6c70, used as row-registry node fingerprint.
+0x2b63bb0   todo:centralize-vtable-rva   # TITLE_OWNER_VTABLE_RVA || TitleStep owner vtable; refs from TitleStep ctor and FUN_140b0b440, used by title owner scanners.
+0x3000000   exempt:not-an-address     # MODULE_SPAN_FALLBACK, TEXT_SIZE  || A SPAN/EXTENT bound (0x3000000 = 48 MiB), used as a fallback for
+0x3d6c5e8   todo:centralize-global-rva   # RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA, RETURN_TITLE_REBUILD_FLAG_DAT_RVA || one-byte DAT_143d6c5e8 set by FUN_1407a3900 after CSMenuMan->menuData->field_0x5d=1.
+0x3d71580   todo:centralize-data-rva     # INNER_TITLE_STATE_TABLE_RVA || TitleStep state-name table initialized by FUN_1400a4f50; TitleStep stores a pointer to it at owner+0x10.
+0x4000000   exempt:not-an-address     # GAME_TEXT_RVA_LIMIT, SELF_DLL_SIZE_FALLBACK  || A 64 MiB LIMIT, not an RVA -- and the two names are GENUINELY DI
+0x4589ad8   todo:centralize-global-rva   # CS_FLIPPER_SINGLETON_RVA || GLOBAL_CSFlipper singleton; 116 xrefs including CleanupUpdate/MainUpdate lazy construction and timing reads/writes.
+0x4589bdc   todo:centralize-global-rva   # TITLE_GLOBAL_ACCEPT_BYTE_RVA || DAT_144589bdc is a 1-byte global with getter FUN_140e85f50 and setter FUN_140e85f70.
+0x485dc18   todo:centralize-global-rva   # DLUID_SINGLETON_RVA || GLOBAL_DLUserInputManager singleton; 84 xrefs including DLUID::DLUserInputManagerImpl::_Initialize.
+0x485dc20   todo:centralize-global-rva   # FD4_PAD_MANAGER_RVA || GLOBAL_FD4PadManager singleton; 168 xrefs including pad manager update/read paths.
+0x7230203   exempt:not-an-address     # MAGIC, SPIRV_MAGIC  || The SPIR-V module MAGIC WORD 0x07230203 (first word of every SPI

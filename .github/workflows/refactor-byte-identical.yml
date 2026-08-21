@@ -1,0 +1,206 @@
+name: refactor-byte-identical
+
+# Builds every shipped cdylib twice -- once from the merge-base, once from the PR
+# head -- and fails when they are not byte-identical after link-time noise is
+# normalized away (see scripts/check-dll-byte-identical.py for exactly which
+# three PE fields are zeroed and why).
+#
+# SCOPE: only PRs that present themselves as a refactor or a move, i.e. a branch
+# name containing "refactor", or a PR title containing "move" or "refactor".
+# Both are author-chosen, so this gate is opt-in by construction: renaming the
+# branch or retitling the PR removes it. That is a deliberate property of what
+# was asked for, not an oversight -- treat a green run as "this refactor moved no
+# bytes", never as "no refactor can reach main unchecked".
+#
+# READ THIS BEFORE EXPECTING IT TO PASS: a *pure* code move does not preserve the
+# bytes. rustc embeds the crate-relative source path and line number of every
+# panic site (core::panic::Location) and derives symbol hashes from module paths,
+# so relocating a function rewrites .rdata with identical behaviour. Measured on
+# crates/er-crash-logging-dll: moving one fn verbatim into a submodule changed
+# 41,038 bytes -- 17% of the image -- while .text size and the export table were
+# unchanged. scripts/probe-dll-build-determinism.sh reproduces that measurement.
+# So this gate passes for PRs that only touch comments, docs, tests, formatting,
+# or non-DLL crates, and fails for essentially every genuine code move.
+#
+# COST: two full release builds of 16 cdylibs, serialized, sharing one target
+# dir and the main-scoped rust-cache.
+
+on:
+  pull_request:
+    # `edited` matters: the PR title is half the trigger condition, so a retitle
+    # must be able to both arm and disarm this gate.
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Base ref to compare against"
+        required: false
+        default: main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Keep in lockstep with .github/workflows/check.yml.
+  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  CARGO_XWIN_VERSION: 0.23.0
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  # Decide whether the gate applies. Done in a shell step rather than an `if:`
+  # expression so the match is unambiguously case-insensitive, and so the PR
+  # title -- attacker-controlled text -- reaches the shell through the
+  # environment instead of being interpolated into the script body.
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      # Shallow single-commit clone; the repo packs to ~32 MiB, so scoping the
+      # checkout further would trade a verified-simple step for a saved second.
+      - uses: actions/checkout@v5
+      - id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: bash scripts/pr-refactor-scope.sh
+
+  byte-identical:
+    needs: scope
+    if: ${{ needs.scope.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Why this ran
+        run: echo "${{ needs.scope.outputs.reason }}"
+
+      # Full history: the merge-base has to be reachable. Check out the real PR
+      # head, not the default refs/pull/N/merge commit -- we want the bytes the
+      # branch produces, not the bytes of a synthetic merge.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+
+      - name: Resolve merge-base
+        id: refs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DISPATCH_BASE: ${{ inputs.base }}
+        run: |
+          set -euo pipefail
+          head_sha=$(git rev-parse HEAD)
+          if [ -n "${BASE_SHA:-}" ]; then
+            base_tip="$BASE_SHA"
+          else
+            git fetch --no-tags origin "${DISPATCH_BASE:-main}"
+            base_tip=$(git rev-parse FETCH_HEAD)
+          fi
+          merge_base=$(git merge-base "$base_tip" "$head_sha")
+          echo "head=$head_sha"            >> "$GITHUB_OUTPUT"
+          echo "merge_base=$merge_base"    >> "$GITHUB_OUTPUT"
+          echo "head       $head_sha"
+          echo "merge-base $merge_base"
+          if [ "$merge_base" = "$head_sha" ]; then
+            echo "::notice::head is an ancestor of base; nothing to compare"
+          fi
+
+      # The package set is resolved ONCE, from the head commit, and reused for
+      # both builds: the merge-base may predate scripts/me3-dll-list.py, and the
+      # two builds must cover the same set for the comparison to mean anything.
+      - name: Freeze the shipped-cdylib list
+        run: |
+          set -euo pipefail
+          python3 scripts/me3-dll-list.py --cargo-args > "$RUNNER_TEMP/cargo-args"
+          python3 scripts/me3-dll-list.py --artifacts  > "$RUNNER_TEMP/artifacts"
+          echo "packages: $(cat "$RUNNER_TEMP/cargo-args")"
+
+      - name: Check out fromsoftware-rs as sibling
+        run: |
+          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+
+      - name: Check out MinHook vendor source
+        run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
+      - name: Install Rust (stable + windows target)
+        run: |
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
+          rustup toolchain install stable --profile minimal
+          rustup target add "$TARGET"
+
+      - name: Install cargo-xwin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Base first, head second, so the tree is left at the PR head for any
+      # later step and the comparator that runs is the one the PR ships.
+      - name: Build merge-base DLLs
+        run: |
+          set -euo pipefail
+          git checkout --force --detach "${{ steps.refs.outputs.merge_base }}"
+          # shellcheck disable=SC2046
+          cargo xwin build --release --target "$TARGET" $(cat "$RUNNER_TEMP/cargo-args")
+          mkdir -p "$RUNNER_TEMP/dll-base"
+          for dll in $(cat "$RUNNER_TEMP/artifacts"); do
+            cp -f "target/$TARGET/release/$dll" "$RUNNER_TEMP/dll-base/" 2>/dev/null \
+              || echo "::warning::merge-base build produced no $dll"
+          done
+
+      - name: Build PR head DLLs
+        run: |
+          set -euo pipefail
+          git checkout --force --detach "${{ steps.refs.outputs.head }}"
+          # shellcheck disable=SC2046
+          cargo xwin build --release --target "$TARGET" $(cat "$RUNNER_TEMP/cargo-args")
+          mkdir -p "$RUNNER_TEMP/dll-head"
+          for dll in $(cat "$RUNNER_TEMP/artifacts"); do
+            cp -f "target/$TARGET/release/$dll" "$RUNNER_TEMP/dll-head/" 2>/dev/null \
+              || echo "::warning::head build produced no $dll"
+          done
+
+      - name: Compare
+        run: |
+          set -euo pipefail
+          python3 scripts/check-dll-byte-identical.py \
+            --artifacts-file "$RUNNER_TEMP/artifacts" \
+            "$RUNNER_TEMP/dll-base" "$RUNNER_TEMP/dll-head" | tee "$RUNNER_TEMP/report.txt"
+
+      - name: Publish report
+        if: always()
+        run: |
+          {
+            echo '## DLL byte-identity'
+            echo
+            echo "Scope: ${{ needs.scope.outputs.reason }}"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/report.txt" 2>/dev/null || echo '(no report produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload DLLs for local diffing
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dll-byte-identity-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/dll-base
+            ${{ runner.temp }}/dll-head
+            ${{ runner.temp }}/report.txt
+          retention-days: 7

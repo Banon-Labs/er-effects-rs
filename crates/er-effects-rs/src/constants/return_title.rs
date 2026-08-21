@@ -8,42 +8,17 @@
 /// (`CS_MENU_MAN_GLOBAL_RVA` = `[GLOBAL_CSMenuMan]` pointer global is already defined above.)
 /// `CSMenuManImp::menuData` pointer at CSMenuMan+0x8.
 pub(crate) const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
-/// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
-pub(crate) const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
-/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer FUN_140afa7c0 WRITES each
-/// frame (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`). cVar10 = "an ending/load-completion
-/// condition holds" (return-title 0x5d, warp, session WaitReload, deadReset==2, force-flag 0x3d856a0,
-/// GameMan checks, state==8). STEP_MoveMap only walks the child toward its -1 terminal when this is 1;
-/// if it stays 0 on a re-load, the child parks at resident step 18 and the InGameStep parent
-/// (finished == MoveMapStep+0x48==-1) waits forever = the 2nd (runtime-accumulation) soft-lock. The
-/// linchpin diagnostic: read 0x5e (the output) + 0x5d and the force-flag (inputs) at the lock.
-pub(crate) const CS_MENU_DATA_ENDING_FLAG_5E_OFFSET: usize = 0x5e;
-/// The force/ending latch global (BOOL_143d856a0) = one of the `cVar10` ending-request inputs.
-pub(crate) const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = 0x3d856a0;
-/// The remaining `cVar10` ending-request INPUTS that read GameMan directly (the load-in signals a
-/// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c (FUN_140679520),
-/// GameMan+0xb7d (FUN_140679530), and warpRequested at GameMan+0x10 (GameManIsWarpRequested). On the
-/// stuck re-load one of these is 0 when it should be 1 -- that's the stale runtime flag to reset.
-pub(crate) const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
-pub(crate) const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
-/// Gate used by the loading-screen mode setter at deobf `FUN_14067a410`: when this byte is 0,
-/// mode 2 is normalized to mode 0 before calling the `CSMenuMan+0x720` mode writer.
-pub(crate) const GAME_MAN_LOADING_MODE_BF5_OFFSET: usize = 0xbf5;
-pub(crate) const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
+pub(crate) use er_title_flow::CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET;
+pub(crate) use er_title_flow::CS_MENU_DATA_ENDING_FLAG_5E_OFFSET;
+pub(crate) use er_title_flow::ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA;
+pub(crate) use er_title_flow::GAME_MAN_ENDING_FLAG_B7C_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_ENDING_FLAG_B7D_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_LOADING_MODE_BF5_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_WARP_REQUESTED_10_OFFSET;
 /// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
 /// symmetry so we fully undo what the final functor set.
 pub(crate) const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d6c5e8;
-/// `CSMenuManImp::disableSaveMenu` BOOL at CSMenuMan+0x13c. RE of the 1.16.1 dump (2026-07-16, persistent
-/// Ghidra project): `CanShowSaveMenu` (dump 0x14080d150) returns `GLOBAL_CSMenuMan->disableSaveMenu != 0`,
-/// and the native quit-save (GameMan `bc4` 1->2 pump `FUN_14067b840`/`FUN_14067ba30`, and `ShouldSave`
-/// 0x1406794c0) ABORTS -- clearing `saveRequested` -- the instant this byte is non-zero. `bc4`
-/// (GameMan+0xbc4) is the return-title predicate: REQUEST `FUN_14067a490` sets it 1, the quit-save pumps
-/// 1->2, `FUN_14067aa70` pumps 2->3, and the world only tears down once it reaches 3. On a 2nd in-process
-/// System->Quit switch `disableSaveMenu` is left set from the prior switch's menu flow, so the save never
-/// runs, `bc4` freezes at 1, and the world never tears down (the observed switch-2 soft-lock). Switch 1
-/// has it 0. We clear it while the switch is active so every switch matches switch 1. `GLOBAL_CSMenuMan`
-/// (dump 0x143d6b7b0) == our `CS_MENU_MAN_GLOBAL_RVA` base+0x3d6b7b0, so the offset is version-stable.
-pub(crate) const CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET: usize = 0x13c;
+pub(crate) use er_title_flow::CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET;
 // ---- In-game session liveness gate (the post-reload bounce decision, static RE 2026-07-02) ----
 // TitleStep state 6 (STEP_GameStepWait, dump 0x140b0ced0) exits to the quit-to-title transition
 // (SetState(2) -> BeginLogo -> BeginTitle -> MenuJobWait) the first tick it sees
@@ -55,34 +30,20 @@ pub(crate) const CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET: usize = 0x13c;
 // (the stable in-world state); if that qword reads 0 it writes the request code to 0, which is what
 // STEP_GameStepWait converts into the return-to-title. So a reloaded world only STAYS up if
 // CSMenuMan+0x798 is (re)populated after the load.
-/// `TitleStep::InGameStep` pointer (TitleStep+0x2e8, read by STEP_GameStepWait at dump 0x140b0cee2).
-pub(crate) const TITLE_STEP_IN_GAME_STEP_2E8_OFFSET: usize = 0x2e8;
-/// `InGameStep` request-code register (+0xd8): 0=end session, 1=move-map pending, 2=move done /
-/// stable in-world idle (see block comment above).
-pub(crate) const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
-/// In-game menu job pointer at CSMenuMan+0x798 (unnamed in fromsoftware-rs `unk748`); nonzero while
-/// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
-/// request code 2.
-pub(crate) const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
-/// Loading-screen active bit written by `CS::InGameStep::STEP_MoveMap_Finish` before common finalize
-/// and by `STEP_RequestWait` while the in-game menu job remains alive. Field path from Ghidra decompile
-/// of dump 0x140aec140 / 0x140aecd00.
-pub(crate) const CS_MENU_MAN_FIELD_6B0_OFFSET: usize = 0x6b0;
-/// `[GLOBAL_CSDelayDeleteMan]` pointer global. Ghidra label `GLOBAL_CSDelayDeleteMan` at dump
-/// `0x1445896a8`; `scripts/dump-deobf-shift.py 0x1445896a8` reports zero-shift data-region estimate.
-pub(crate) const CS_DELAY_DELETE_MAN_GLOBAL_RVA: usize = 0x45896a8;
-/// `CSDelayDeleteMan+0x40` pending-delete count/gate checked by `InGameStep::STEP_MoveMap_Finish`.
-pub(crate) const CS_DELAY_DELETE_PENDING_40_OFFSET: usize = 0x40;
-/// `CSDelayDeleteMan+0x54` flag toggled by `InGameStep::STEP_MoveMap_Finish`: 0 while pending deletes
-/// exist, 1 immediately before `_Common_Finalize(param_1)`.
-pub(crate) const CS_DELAY_DELETE_FINALIZE_54_OFFSET: usize = 0x54;
+pub(crate) use er_title_flow::TITLE_STEP_IN_GAME_STEP_2E8_OFFSET;
+pub(crate) use er_title_flow::IN_GAME_STEP_REQUEST_CODE_D8_OFFSET;
+pub(crate) use er_title_flow::CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET;
+pub(crate) use er_title_flow::CS_MENU_MAN_FIELD_6B0_OFFSET;
+pub(crate) use er_title_flow::CS_DELAY_DELETE_MAN_GLOBAL_RVA;
+pub(crate) use er_title_flow::CS_DELAY_DELETE_PENDING_40_OFFSET;
+pub(crate) use er_title_flow::CS_DELAY_DELETE_FINALIZE_54_OFFSET;
 /// `CS::EzChildStepBase::RequestFinish` (dump `0x140eb5590` -> live `0x140eb5570`, shift -0x20,
 /// content-unique). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
 /// step's finish-requested byte at child+0xb4) then latches wrapper+0x10. The quit-to-title
 /// teardown ends the in-world MoveMapStep session through here; the post-switch reload bounce is
 /// this firing against the FRESH MoveMapStep child right after streaming completes. Read-only
 /// trace hook logs every call + caller RVA to identify the stale requester.
-pub(crate) const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = 0xeb5570;
+pub(crate) const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = EZ_CHILDSTEP_REQUEST_FINISH_RVA as u32;
 /// `EzChildStep<MoveMapStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabf3).
 pub(crate) const IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET: usize = 0xe0;
 /// `EzChildStep<InGameStayStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabc3).
@@ -93,18 +54,13 @@ pub(crate) const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT;
-/// Native builder for a MenuJob wrapping the final return-title functor (`FUN_14079f780` dump ->
-/// live/deobf `0x14079f690`). Submit this job through the native queue so the flag transition happens
-/// in menu-pump ownership, not from our game-task thread.
-pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA: u32 = 0x79f690;
-pub(crate) static SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT: AtomicUsize =
-    AtomicUsize::new(0);
+pub(crate) use er_title_flow::SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA;
+pub(crate) use er_title_flow::SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT;
 /// Count of quick-load handoffs that invoked the original native Quit Game row action trampoline
 /// instead of the low-level accepted callback alone. This is an experiment to test whether the full
 /// native return-title menu-job chain is the missing teardown boundary.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT;
-pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT: AtomicUsize =
-    AtomicUsize::new(0);
+pub(crate) use er_title_flow::SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT;
 /// Count of frames we cleared a stale `CSMenuMan->disableSaveMenu` during an active switch (the switch-2
 /// quit-save gate; see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`]). Non-zero on a switch == that switch's
 /// quit-save was being blocked and we unblocked it (the runtime semaphore for this fix).
@@ -128,8 +84,8 @@ pub(crate) use er_telemetry::counters::SWITCH_ORACLE_TRACKED_SLOT;
 /// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
 /// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
 pub(crate) const INGAMESTEP_REQUEST_CODE_NONE: i32 = 0;
-pub(crate) const INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING: i32 = 1;
-pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
+pub(crate) use er_title_flow::INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING;
+pub(crate) use er_title_flow::INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD;
 /// Human name for an InGameStep requestCode (`InGameStep + 0xd8`) value (out-of-range/unreadable -> "?").
 pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
     match v {
@@ -148,16 +104,9 @@ pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
 /// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
 /// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_STEP;
-/// Last sampled InGameStep requestCode (+0xd8) for visible loading-bar sub-milestones.
-pub(crate) static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
-/// Last sampled MoveMapStep finalize substate (+0x12a, 0..9) -- the real native sub-progression of
-/// the visible MOVE MAP (18) loading phase, published for the loading-bar parenthesized sub-milestone.
-/// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
-pub(crate) static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
-/// Last sampled GameMan load-in-progress FSM (b80, == GameMan.save_state): 0 idle/done, 2 read
-/// submitted, 3 resident. Published for the loading bar (a distinct, meaningful load-state the user
-/// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
-pub(crate) static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
+pub(crate) use er_title_flow::SWITCH_ORACLE_REQUEST_CODE;
+pub(crate) use er_title_flow::SWITCH_ORACLE_FINALIZE_12A;
+pub(crate) use er_title_flow::SWITCH_ORACLE_B80;
 /// Count of forced b80 3->0 drains at the mms18 finalize stall (reload-drain-b80 semaphore).
 pub(crate) use er_telemetry::counters::RELOAD_DRAIN_B80_COUNT;
 /// Reload epoch (fresh_deser) for which the post-finish stable-proof already fired (holds the world:
@@ -206,11 +155,10 @@ pub(crate) fn load_in_progress_b80_name(v: i32) -> &'static str {
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_PLAYER_PRESENT;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
-pub(crate) static SWITCH_ORACLE_LOADING_FIELD10: AtomicI32 = AtomicI32::new(-1);
-pub(crate) static SWITCH_ORACLE_LOADING_FIELD11: AtomicI32 = AtomicI32::new(-1);
-/// Last-seen streaming-enable bit + block count for the stall log (RAM semaphore, -1 = null chain).
-pub(crate) static SWITCH_ORACLE_MMS_B7C1: AtomicI32 = AtomicI32::new(-1);
-pub(crate) static SWITCH_ORACLE_MMS_BLOCKS: AtomicI32 = AtomicI32::new(-1);
+pub(crate) use er_title_flow::SWITCH_ORACLE_LOADING_FIELD10;
+pub(crate) use er_title_flow::SWITCH_ORACLE_LOADING_FIELD11;
+pub(crate) use er_title_flow::SWITCH_ORACLE_MMS_B7C1;
+pub(crate) use er_title_flow::SWITCH_ORACLE_MMS_BLOCKS;
 /// MoveMapStep internal step index -> name. Order from the InGameStep-analogue registrar labels
 /// (`u_MoveMapStep::STEP_*` at dump 0x142b5eb30..) and VALIDATED for 0..3 by the observed
 /// `mms_state 1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait` progression (own_stepper idx6 watch).
@@ -248,37 +196,26 @@ pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
     }
 }
 
-/// InGameStep-level load steps that run AFTER the MoveMapStep child's own FINISH (20). RE grounding
-/// (2026-07-19, InGameStep step table 0x143d70190: STEP_MoveMap_Init -> STEP_MoveMap_Update ->
-/// STEP_MoveMap_Finish): the MoveMapStep child (steps 0..20) runs entirely INSIDE the InGameStep's
-/// STEP_MoveMap_Update. So the child reaching FINISH (20) is NOT genuine world readiness -- the
-/// InGameStep must still advance STEP_MoveMap_Update -> STEP_MoveMap_Finish (the request code at
-/// InGameStep+0xd8 draining 1 -> 2) and then hand off to the resident in-world step. Those are two
-/// real "N+1" load steps the loading bar previously collapsed into "FINISH 20/20" (user 2026-07-19:
-/// "when we are at the Nth step, it is really N+1 -- add an Nth loading step"). Surface them as
-/// synthetic main steps 21/22 driven by the request code so the bar shows the true post-FINISH state
-/// (and FREEZES on the exact handoff substep during the render-handoff stall) instead of falsely
-/// resting at FINISH or dropping to the coarse ENTERING WORLD heuristic.
+/// Terminal step of the MoveMapStep child's own sequence.
 pub(crate) const MOVEMAPSTEP_STEP_FINISH_INDEX: usize = 20;
-pub(crate) const INGAMESTEP_MAP_FINISH_STEP_INDEX: usize = 21;
-pub(crate) const INGAMESTEP_INWORLD_STEP_INDEX: usize = 22;
-/// Highest load-step index for the extended (MoveMapStep child + InGameStep handoff) N/M display.
-pub(crate) const BOOT_LOAD_STEP_MAX: usize = INGAMESTEP_INWORLD_STEP_INDEX;
-/// Name any load step in the extended space (MoveMapStep child 0..20 + InGameStep handoff 21/22).
-pub(crate) fn boot_load_step_name(step: usize) -> &'static str {
-    match step {
-        s if s < MOVEMAPSTEP_STEP_NAMES.len() => MOVEMAPSTEP_STEP_NAMES[s],
-        INGAMESTEP_MAP_FINISH_STEP_INDEX => "MAP HANDOFF", // InGameStep STEP_MoveMap_Finish
-        INGAMESTEP_INWORLD_STEP_INDEX => "IN WORLD", // InGameStep in-world: player resident + control
-        _ => "?",
-    }
-}
 
-/// Byte offset of the MoveMapStep finalize SUBSTATE within the STEP_MoveMap (step 18) phase. The
-/// native advancer `FUN_140afa7c0` (dump VA) drives this `switch`-based sub-state 0..9; the load
-/// orchestrator `FUN_140afb970` treats the world as ready ONLY when it is back to 0. So this is the
-/// inner sub-progression of the visible "MOVE MAP 18" loading phase (see oracle finalize_substate_12a).
-pub(crate) const MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET: usize = 0x12a;
+/// The InGameStep request code at `InGameStep+0xd8`, which gates the load AFTER the MoveMapStep
+/// child's own FINISH (20). RE grounding (2026-07-19, InGameStep step table 0x143d70190:
+/// STEP_MoveMap_Init -> STEP_MoveMap_Update -> STEP_MoveMap_Finish): the MoveMapStep child (steps
+/// 0..20) runs entirely INSIDE the InGameStep's STEP_MoveMap_Update, so the child reaching FINISH is
+/// NOT genuine world readiness -- the InGameStep must still advance STEP_MoveMap_Update ->
+/// STEP_MoveMap_Finish (this code draining 1 -> 2) and then hand off to the resident in-world step.
+///
+/// Those two post-FINISH stages are real load progress the bar must show (user 2026-07-19: "when we
+/// are at the Nth step, it is really N+1 -- add an Nth loading step"). They are SUBSTEPS of the
+/// ENTERING WORLD phase (`MAP STEP DONE` -> `WORLD HANDOFF` -> `PLAYER IN WORLD` -> `CAN MOVE`), not
+/// main phases: promoting them to main steps gave the bar a second, longer `N/M` denominator that
+/// swapped in mid-load and let a STALE previous-epoch request code read as near-complete progress the
+/// instant a reload armed (bd er-effects-rs-ok8d).
+pub(crate) const INGAMESTEP_REQUEST_CODE_MAP_FINISH: i32 = 1;
+pub(crate) const INGAMESTEP_REQUEST_CODE_IN_WORLD: i32 = 2;
+
+pub(crate) use er_title_flow::MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET;
 
 /// Human names for the finalize substate (`MoveMapStep+0x12a`) written by the advancer FUN_140afa7c0.
 /// Grounded in the decompiled `switch(field25_0x12a)` cases (2026-07-19, bd er-effects-rs-9fmm):
@@ -311,26 +248,11 @@ pub(crate) fn movemapstep_finalize_substate_name(v: i32) -> &'static str {
 /// fires when the load completes). On the softlock INIT fires but FINISH never does = the semaphore.
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_INIT_HITS;
 pub(crate) use er_telemetry::counters::SWITCH_ORACLE_MMS_FINISH_HITS;
-/// The MoveMapStep child step index whose handler is `STEP_MoveMap` (dump registrar
-/// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the FINAL fade/finalize step; index 19 =
-/// Cleanup, 20 = Finish follow. The 3rd-load softlock parks the child here.
-pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
-/// Live/deobf RVA for `CS::MoveMapStep::STEP_MoveMap` (dump 0x140af7de0 -> deobf 0x140af7cf0,
-/// content-unique shift -0xf0). Hooked after-original to clear +0x4b8 before the state machine consumes
-/// the gate when the same-session reload has not proved movement yet.
-pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_RVA: usize = 0x00af7cf0;
+pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
+pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_MOVEMAP_RVA;
 pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::MOVEMAPSTEP_STEP_MOVEMAP_ORIG;
-/// `CS::InGameStep::STEP_MoveMap_Update` (dump 0x140aec810 -> deobf 0x140aec720, content-unique shift
-/// -0xf0). This is the PARENT step handler: it polls input/flipper, then `if (FUN_140eb5550(child)==0)
-/// return;` (its own per-frame wait), and only past that does `field24_0xd8 = 2; FUN_140eb54e0(child)`
-/// (advance requestCode to STABLE + tear the ending child down). On the warm reload FUN_140eb5550 (an
-/// outer-stepper vtable done-query, DECOUPLED from the MoveMapStep finalize substate) reports finished
-/// while the ending advancer is only at substate 8, so the teardown races ahead of case 8 (which would
-/// post substate 9) and strands the reload -> revert to title (bd er-effects-rs-9fmm, fresh
-/// load1-vs-load2 diff). The defer detour replicates the native's own "child not finished" early-return
-/// while the MoveMapStep finalize substate is in [1..=8], giving the advancer the frames to reach 9.
-pub(crate) const INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA: usize = 0x00aec720;
+pub(crate) use er_title_flow::INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA;
 pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::INGAMESTEP_STEP_MOVEMAP_UPDATE_ORIG;
 /// Consecutive frames the defer detour has held STEP_MoveMap_Update (reset when finalize leaves 1..=8).
@@ -343,29 +265,17 @@ pub(crate) use er_telemetry::counters::RELOAD_B73_HOLD_COUNT;
 /// Total menuData+0x5e/+0x5d ending-latch clears during a reload (telemetry: >0 means the session-end
 /// OUTPUT latch that STEP_EndFlow reads was held off so the reloaded world persists).
 pub(crate) use er_telemetry::counters::RELOAD_ENDING_LATCH_HOLD_COUNT;
-/// Fail-soft cap: after this many consecutive held frames, stop deferring and let native decide (so a
-/// genuine return-to-title whose finalize never completes can never be held forever). ~2s at 60fps.
-pub(crate) const INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX: usize = 120;
-/// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
-/// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
-/// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.
-pub(crate) const MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET: usize = 0x4b8;
-pub(crate) const MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET: usize = 0x4b9;
-/// STEP_MoveMap transition state (2026-07-16): after bc4 cleared, the child still parks at step 18 with
-/// the per-frame gate (+0x4b8) ready, so the real 18->19 transition is a separate finalize condition. The
-/// FD4StepTemplate "step done, advance" flag is `field8_0x50` (STEP_WorldResWait/STEP_MoveMap_Finish set
-/// it; STEP_MoveMap's handler never does -> external/fade-driven). Read the child's next-step (+0x4c),
-/// done-flag (+0x50), the fade hold-timer (+0x270, f32 bits; only counts down while the screen fade < 1.0
-/// so a stuck-opaque fade freezes it), and the finalize counters (+0x100 field17, +0x248 field298) to
-/// name the second gate at runtime.
-pub(crate) const MOVEMAPSTEP_NEXT_STEP_4C_OFFSET: usize = 0x4c;
-pub(crate) const MOVEMAPSTEP_DONE_FLAG_50_OFFSET: usize = 0x50;
-pub(crate) const MOVEMAPSTEP_HOLD_TIMER_270_OFFSET: usize = 0x270;
-pub(crate) const MOVEMAPSTEP_COUNTDOWN_100_OFFSET: usize = 0x100;
+pub(crate) use er_title_flow::INGAMESTEP_MOVEMAP_UPDATE_DEFER_MAX;
+pub(crate) use er_title_flow::MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_NEXT_STEP_4C_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_DONE_FLAG_50_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_HOLD_TIMER_270_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_COUNTDOWN_100_OFFSET;
 /// MoveMapStep+0x244 is the native completion bit consumed by InGameStep/TitleStep
 /// (`FUN_140aebe20` returns true iff MoveMapStep exists and this byte is nonzero).
 pub(crate) const MOVEMAPSTEP_TITLE_DONE_244_OFFSET: usize = 0x244;
-pub(crate) const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
+pub(crate) use er_title_flow::MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET;
 /// SAVE-DISABLED SWITCH COMPLETION (2026-07-16). By design the ONLY save writer is the in-game "Save
 /// Game" button; the game's quit-save on a System->Quit switch must NOT run. But the native return-title
 /// state machine advances `GameMan+0xbc4` 1->2->3 ONLY inside a successful quit-save write (dump
@@ -381,37 +291,15 @@ pub(crate) const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
 /// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_BC4_FORCE_READY_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT;
-/// TEARDOWN SAVE-REQUEST CLEAR (2026-07-16). The MoveMapStep ending sub-machine (FUN_140afa7c0) that
-/// walks the old world's child out of STEP_MoveMap(18) hangs at case 7 unless `ShouldSave() == false`
-/// AND `FUN_140679460() == false`. Those read `GameMan.saveRequested` (b72) and `GameMan+0xb73`, both
-/// set by our return-title REQUEST (which intends a quit-save we suppress by design). Clearing them each
-/// teardown frame makes the gate deterministically false so the world tears down with NO save. `_COUNT`
-/// = frames we cleared the flags (a switch that stalls-then-recovers shows it climbing during teardown).
-pub(crate) const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
-pub(crate) const GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET: usize = 0xb73;
+pub(crate) use er_title_flow::GAME_MAN_SAVE_REQUESTED_B72_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT;
-/// STEP-3 (WORLD RES WAIT) DETERMINANT instrumentation (2026-07-16, Ghidra-proven). STEP_WorldResWait
-/// (dump 0x140af9de0) advances 3->4 only when FUN_14066d4d0(worldInfoOwner, &currentBlockId) finds the
-/// block matching currentBlockId's areaId in the world block-list AND that block's load-state reaches
-/// +0x35==10. FieldArea = MoveMapStep+0xf0 (the oracle's `mms_wrm`); currentBlockId (BlockId u32) =
-/// FieldArea+0x2c; worldInfoOwner = FieldArea+0x10 (`mms_resmgr`); block-list = worldInfoOwner+0xb3030
-/// (array of block ptrs, count = worldInfoOwner+0xb3140 = the oracle's `blocks`). Each list entry i:
-/// block_ptr=*(u64*)(list+i*8); inner=*(u64*)(block_ptr+0x8); block areaId=*(u32*)(inner+0xc). If, on a
-/// step-3 stall, currentBlockId's areaId is NOT among the listed blocks -> the target block was never
-/// registered (teardown left the wrong block set); if present -> its stream-state is stuck below 10.
-pub(crate) const FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET: usize = 0x2c;
-pub(crate) const WORLDINFO_BLOCK_LIST_B3030_OFFSET: usize = 0xb3030;
-pub(crate) const WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET: usize = 0x8;
-pub(crate) const WORLDINFO_BLOCK_AREA_ID_C_OFFSET: usize = 0xc;
-pub(crate) const MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX: i32 = 3;
-/// `CS::WorldInfoOwner::ProcessMsbLoadLists(WorldInfoOwner*, LoadlistlistFileCap*, LoadlistlistFileCap* dlc02)`.
-/// ADDRESS CORRECTION (2026-07-17): the previous value 0x0066b2c0 was the DUMP RVA; the deobf/RUNTIME
-/// address is 0x0066b1d0 (shift -0xf0, ground-truthed by scripts/dump-deobf-shift.py 0x14066b2c0). The
-/// old value jumped 0xf0 INTO the function -> the "reactive ProcessMsbLoadLists AVs mid-stream" crash
-/// (commit c43879c) AND the init-point crash (2026-07-17) were BOTH this wrong-address bug, not a timing
-/// constraint. Runs ResetAreaResLists + PopulateLists to rebuild the per-block world-res from the loadlist;
-/// dlc02 is null-checked in the callee, so 0 is safe for base-game (non-dlc) areas.
-pub(crate) const WORLDINFO_PROCESS_MSB_LOADLISTS_RVA: u32 = 0x0066b1d0;
+pub(crate) use er_title_flow::FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET;
+pub(crate) use er_title_flow::WORLDINFO_BLOCK_LIST_B3030_OFFSET;
+pub(crate) use er_title_flow::WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET;
+pub(crate) use er_title_flow::WORLDINFO_BLOCK_AREA_ID_C_OFFSET;
+pub(crate) use er_title_flow::MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX;
+pub(crate) use er_title_flow::WORLDINFO_PROCESS_MSB_LOADLISTS_RVA;
 /// PopulateLists' per-area block-res source-builder (deobf 0x0066bb10, dump 0x14066bc00). The ONLY caller
 /// of the +0xce0 WorldBlockRes constructor. Its 2nd arg (rdx) is the input MSB block list; it early-outs
 /// on `*(rdx+0x10) == 0` (the block count) and builds nothing. On a fresh boot this list is full (incl the
@@ -482,7 +370,10 @@ pub(crate) const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
 /// the cached descriptor already equals the controller (System->Quit resets neither) -> "unchanged" ->
 /// mount SKIPPED -> the block FD4FileCap gets +0x88=4 but +0x90 stays NULL -> WORLD RES WAIT stall.
 /// singleton = *(root + 0x60); the job's cached descriptor is at singleton + 0x1200.
-pub(crate) const MOUNT_GUARD_STATE_ROOT_RVA: u32 = 0x03d5df38;
+/// The "mount guard state root" IS `GameDataMan` (1.16.2 Ghidra, 734 xrefs). Worth stating
+/// plainly because the guard below writes into a structure hanging off it (`*(root+0x60)`)
+/// and nothing here said so. Derived from `er-game-base` (2026-08-01 RVA dedupe).
+pub(crate) const MOUNT_GUARD_STATE_ROOT_RVA: u32 = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA as u32;
 /// The change-detector itself (deobf 0x14082d5b0, `fn(rcx=controller, rdx=descriptor) -> al`): al=1 CHANGED
 /// (mount runs + descriptor re-synced), al=0 UNCHANGED (mount skipped). Instrumented read-only to identify
 /// which gate instance is the m28 map-mount (al flips 1 on load1 -> 0 on load2). A clean leaf compare fn.
@@ -536,27 +427,12 @@ pub(crate) use er_telemetry::counters::SWITCH_WORLDRES_REBUILD_COUNT;
 // but its stream never completes (the WORLD RES WAIT stall). The getter/flag/phase offsets already
 // exist as BLOCK_LOADSTATE_GETTER_VT_10_OFFSET / BLOCK_LOADSTATE_FLAG_2D_OFFSET /
 // BLOCK_LOADSTATE_PHASE_35_OFFSET in constants/gaitem_restore.rs -- reused here, not redefined.
-/// Load-request flag on the load-state object (FUN_14066d8d0 sets `+0x2c = 1` to request the block's
-/// load). If the load-state exists but +0x2c is 0, the load was never requested.
-pub(crate) const BLOCK_LOADSTATE_REQUEST_2C_OFFSET: usize = 0x2c;
-/// The OVERWORLD block list on the WorldInfoOwner: `+0xb3148` = a u32 BlockId array (4-aligned),
-/// `+0xb31d0` = its entry count. FUN_14066d8d0 routes OVERWORLD blocks (areaId in [0x32,0x59)) here
-/// (via FUN_14063c5a0) instead of the +0xb3030 non-overworld path. Instrumented to confirm the
-/// residual-outgoing-overworld hypothesis: if the boot char's m60 overworld blocks (area 0x3c) are
-/// still resident here while we wait on the incoming legacy block (area 0x1c), the overworld residual
-/// is what starves the legacy load-request. Each entry's areaId is its BlockId byte[3].
-pub(crate) const WORLDINFO_OVERWORLD_LIST_B3148_OFFSET: usize = 0xb3148;
-pub(crate) const WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET: usize = 0xb31d0;
-/// LOADLIST ROOT LEAD (2026-07-16). STEP_MoveMap_LoadlistInit (InGameStep step 4, dump 0x140aec660)
-/// builds the world-res loadlist ONLY when `worldloadlistlistVirtualPath.size != 0`
-/// (`CMP qword [InGameStep+0x220], 0`); it then stores the built cap in `loadlistlistFileCap`
-/// (`MOV [InGameStep+0x238], RAX`). If the path is empty, the loadlist is never built ->
-/// `loadlistlistFileCap` stays null -> no world-res block load-states -> STEP_WorldResWait's null
-/// load-state (blk_ls=0) stall. So at the stall `ll_size==0` + `ll_fcap==0` confirms the loadlist
-/// was never built for the target area (our switch left the virtual path empty/stale).
-pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET: usize = 0x210;
-pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET: usize = 0x220;
-pub(crate) const INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET: usize = 0x238;
+pub(crate) use er_title_flow::BLOCK_LOADSTATE_REQUEST_2C_OFFSET;
+pub(crate) use er_title_flow::WORLDINFO_OVERWORLD_LIST_B3148_OFFSET;
+pub(crate) use er_title_flow::WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET;
+pub(crate) use er_title_flow::INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET;
+pub(crate) use er_title_flow::INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET;
+pub(crate) use er_title_flow::INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET;
 /// The `dlc02` loadlist file-cap arg `_Common_Initialize` passes to `ProcessMsbLoadLists` as its
 /// 3rd param: `MOV R8, [InGameStep+0x240]` (dump 0x140aed820). Null for base-game (non-DLC) areas;
 /// the callee null-checks it, so passing this field (or 0) is safe.
@@ -600,10 +476,7 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_LIST;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG;
-/// Original System dialog saved for the post-ProfileSelect quickload return-title chain.
-/// Unlike SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG, this must survive the ProfileSelect append observer reset.
-pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize =
-    AtomicUsize::new(0);
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_TOP_HIDE_LIST;
@@ -634,12 +507,7 @@ pub(crate) const C30_WRITER_LOG_MAX: usize = 8;
 /// Bytes of the resident save buffer (rdx) to dump as hex from the c30-writer ENTER,
 /// so the real target map record can be spotted offline. Read-only header window.
 pub(crate) const C30_WRITER_BUFFER_DUMP_BYTES: usize = 0x40;
-/// The live MessageBoxDialog captured at build time (the connection-error / startup popup), so
-/// the game task can force its result fields (OK + decided) each frame until the caller consumes
-/// it. The finished-getter 0x1407b0cf0 is NOT polled for this dialog, so writing the fields
-/// directly is the dismiss lever. 0 = none captured.
-pub(crate) static CONNECTION_ERROR_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::CONNECTION_ERROR_DIALOG;
 /// Last vtable-validated MessageBoxDialog built by the game. Unlike CONNECTION_ERROR_DIALOG this
 /// is never used to auto-dismiss; telemetry reads it at the end of a run to fail the oracle if a
 /// blocking dialog is still alive after character/world load.

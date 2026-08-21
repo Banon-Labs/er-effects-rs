@@ -2,5 +2,10 @@
 
 #![allow(unused_imports)]
 
-include!("gating/env_flags.rs");
-include!("gating/runtime_modes.rs");
+use super::*;
+
+mod env_flags;
+pub(crate) use env_flags::*;
+
+mod runtime_modes;
+pub(crate) use runtime_modes::*;

@@ -1,157 +1,136 @@
 #!/usr/bin/env bash
-set -u -o pipefail
+set -euo pipefail
 
-ROOT="$(pwd)"
-ACTIVE_SAVE="${ER_EFFECTS_GOLD_SAVE:-$HOME/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/76561197986456766/ER0000.sl2}"
-ARTIFACT_DIR="${ARTIFACT_DIR:-$ROOT/target/runtime-probe/samechar-3x-$(date +%Y%m%d-%H%M%S)}"
-mkdir -p "$ARTIFACT_DIR"
-
-echo "artifact_dir=$ARTIFACT_DIR"
-echo "objective=same-character load1+reload+reload, zero simulated menu/controller input for loading"
-echo "boot_save=$ACTIVE_SAVE slot=${ER_EFFECTS_GOLD_SLOT:-0}"
-
-build_rc=0
-cargo xwin build --release --target x86_64-pc-windows-msvc \
-  -p er-effects-rs -p er-reload-trace-dll -p er-input-harness-dll -p er-telemetry-dll \
-  >"$ARTIFACT_DIR/build.log" 2>&1 || build_rc=$?
-if (( build_rc != 0 )); then
-  tail -80 "$ARTIFACT_DIR/build.log" >&2 || true
-  python3 - "$ARTIFACT_DIR" <<'PY'
-import sys
-print('METRIC failure_score=1600')
-print('METRIC false_positives=0')
-print('ASI artifact_dir=' + sys.argv[1])
-print('ASI failure=build_failed')
-PY
-  exit 1
-fi
-
-run_rc=0
-CAP_SECONDS="${CAP_SECONDS:-240}" \
-BOOT_FILE="$ACTIVE_SAVE" \
-BOOT_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
-DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS:-0,0}" \
-PROVE_MOVEMENT="${PROVE_MOVEMENT:-1}" \
-STEADY_WINDOW_SECONDS="${STEADY_WINDOW_SECONDS:-3}" \
-ARTIFACT_DIR="$ARTIFACT_DIR" \
-scripts/run-samechar-3x-threedll.sh >"$ARTIFACT_DIR/runner.out" 2>"$ARTIFACT_DIR/runner.err" || run_rc=$?
-
-python3 - "$ARTIFACT_DIR" "$run_rc" <<'PY'
+python3 - <<'PY'
 from __future__ import annotations
-import json, math, re, statistics, sys
+
+import json
+import os
+import re
+import subprocess
 from pathlib import Path
-artifact = Path(sys.argv[1])
-run_rc = int(sys.argv[2])
-rows = []
-for p in [artifact/'telemetry-timeseries.jsonl', artifact/'er-telemetry-timeseries.jsonl']:
-    if p.exists():
-        for line in p.read_text(encoding='utf-8', errors='replace').splitlines():
-            try: rows.append(json.loads(line))
-            except Exception: pass
-        break
-final = {}
-for p in [artifact/'er-effects-telemetry.json', artifact/'telemetry.json']:
-    if p.exists():
-        try: final = json.loads(p.read_text(encoding='utf-8', errors='replace'))
-        except Exception: final = {}
-        break
-report = (artifact/'samechar-3x-report.md').read_text(encoding='utf-8', errors='replace') if (artifact/'samechar-3x-report.md').exists() else ''
 
-def as_int(v, d=0):
-    try:
-        if isinstance(v, bool): return int(v)
-        return int(v)
-    except Exception:
-        return d
+root = Path.cwd()
+bd = Path(os.environ.get("BD_REAL_BIN", str(Path.home() / ".local/bin/bd")))
+roadmap = (root / "docs/plans/crate-extraction-execution-roadmap.md").read_text(encoding="utf-8")
 
-def as_float(v, d=0.0):
-    try: return float(v)
-    except Exception: return d
+# Parse only authoritative work-package cells/bullets, not incidental cross-references in prose.
+# Plus-suffixed umbrellas remain nodes until R0 expands them into child labels such as R12B1.
+package_specs: set[str] = set()
+for line in roadmap.splitlines():
+    match = re.match(r"^\|\s*([RD]\d+[a-z]?(?:-[RD]?\d+[a-z]?)?\+?)\s*\|", line, re.I)
+    if match is None:
+        match = re.match(r"^- \*\*([RD]\d+[a-z]?(?:-[RD]?\d+[a-z]?)?\+?):\*\*", line, re.I)
+    if match is not None:
+        package_specs.add(match.group(1).upper())
 
-def as_bool(v):
-    return bool(v) and v not in (0, '0', 'false', 'False', None)
-
-epochs: dict[int, list[dict]] = {}
-for r in rows:
-    ep = as_int(r.get('system_quit_continue_confirm_fresh_deser_count'), 0)
-    epochs.setdefault(ep, []).append(r)
-
-score = 0
-reasons: list[str] = []
-metrics = {}
-if run_rc != 0:
-    score += 120; reasons.append(f'runner_rc={run_rc}')
-if not rows:
-    score += 900; reasons.append('missing_timeseries')
-if '## Verdict: PASS' not in report:
-    score += 100; reasons.append('report_not_pass')
-
-sim = as_int(final.get('simulated_button_presses_total', 0), 0)
-msg = max(as_int(final.get('oracle_msgbox_total_builds', 0), 0), as_int(final.get('oracle_msgbox_any_seen', 0), 0))
-metrics['simulated_button_presses_total'] = sim
-metrics['messagebox_builds_or_seen'] = msg
-if sim != 0:
-    score += 400; reasons.append(f'simulated_button_presses_total={sim}')
-if msg != 0:
-    score += 350; reasons.append(f'messagebox={msg}')
-
-required = [0,1,2]
-names = []
-move_means = []
-for ep in required:
-    samples = epochs.get(ep, [])
-    metrics[f'epoch{ep}_samples'] = len(samples)
-    if not samples:
-        score += 300; reasons.append(f'missing_epoch_{ep}'); continue
-    ep_names = sorted({str(s.get('oracle_char_name')).strip() for s in samples if s.get('oracle_char_name')})
-    names.append(ep_names[-1] if ep_names else '')
-    canmove = any(as_bool(s.get('oracle_can_move')) for s in samples)
-    didmove = max([as_int(s.get('oracle_did_move_frames'), 0) for s in samples] or [0])
-    metrics[f'epoch{ep}_did_move_frames'] = didmove
-    metrics[f'epoch{ep}_can_move'] = int(canmove)
-    supplied = max([as_int(s.get('oracle_supplied_movement_input_frames'), 0) for s in samples] or [0])
-    metrics[f'epoch{ep}_supplied_movement_frames'] = supplied
-    if not canmove or didmove < 60:
-        # If supplied reached the full ON window, input delivery is proven and the remaining failure is
-        # native movability/loading-lock, not the input path. Still a failure, but more informative.
-        score += 100 if supplied >= 30 else 150
-        reasons.append(f'epoch{ep}_movement_unproven(can_move={canmove},did={didmove},supplied={supplied})')
-    fps = [as_float(s.get('oracle_fps')) for s in samples if as_bool(s.get('oracle_can_move')) and as_float(s.get('oracle_fps')) > 0]
-    if len(fps) < 4:
-        score += 90; reasons.append(f'epoch{ep}_playable_fps_missing(n={len(fps)})')
-        metrics[f'epoch{ep}_fps_mean'] = 0
+base_ids: set[str] = set()
+umbrella_ids: set[str] = set()
+for spec in package_specs:
+    plus = spec.endswith("+")
+    spec = spec.removesuffix("+")
+    range_match = re.fullmatch(r"([RD])(\d+)([A-Z]?)-(?:[RD])?(\d+)([A-Z]?)", spec)
+    if range_match:
+        prefix, start_num_raw, start_suffix, end_num_raw, end_suffix = range_match.groups()
+        start_num, end_num = int(start_num_raw), int(end_num_raw)
+        if start_num == end_num and start_suffix and end_suffix:
+            for code in range(ord(start_suffix), ord(end_suffix) + 1):
+                base_ids.add(f"{prefix}{start_num}{chr(code)}")
+        elif not start_suffix and not end_suffix:
+            for number in range(start_num, end_num + 1):
+                base_ids.add(f"{prefix}{number}")
         continue
-    mean = statistics.mean(fps)
-    move_means.append(mean)
-    metrics[f'epoch{ep}_fps_mean'] = round(mean, 2)
-    metrics[f'epoch{ep}_fps_min'] = round(min(fps), 2)
-    metrics[f'epoch{ep}_fps_n'] = len(fps)
-if len(set(n for n in names if n)) > 1 or any(not n for n in names[:len(required)]):
-    score += 300; reasons.append(f'char_mismatch_or_missing={names}')
-if len(move_means) == 3:
-    mn, mx = min(move_means), max(move_means)
-    ratio = mn / mx if mx > 0 else 0
-    metrics['fps_parity_ratio'] = round(ratio, 4)
-    if ratio < 0.80:
-        score += int((0.80 - ratio) * 600) + 100
-        reasons.append(f'fps_unstable_ratio={ratio:.3f}')
-else:
-    metrics['fps_parity_ratio'] = 0
+    base_ids.add(spec)
+    if plus:
+        umbrella_ids.add(spec)
 
-score = min(1600, score)
-metrics['false_positives'] = 0
-print(f'METRIC failure_score={score}')
-for k,v in metrics.items():
-    print(f'METRIC {k}={v}')
-print('ASI artifact_dir=' + str(artifact.resolve()))
-print('ASI run_rc=' + str(run_rc))
-print('ASI reasons=' + ('; '.join(reasons) if reasons else 'none'))
-print('ASI report_verdict=' + (re.search(r'## Verdict: (.*)', report).group(1) if re.search(r'## Verdict: (.*)', report) else 'missing'))
-print('ASI epoch_names=' + ','.join(names))
-# Exit nonzero unless perfect. run_experiment/log_experiment status still decides keep/discard/crash.
-sys.exit(0 if score == 0 else 1)
+# R0 scouts expanded these broad roadmap rows into exact child PR nodes even though the original
+# table did not carry a `+` suffix.
+umbrella_ids.update({"R0A", "R0B", "R22"})
+
+issues = json.loads(subprocess.check_output(
+    [str(bd), "list", "--all", "-n", "0", "--json"], text=True
+))
+roadmap_issues = [issue for issue in issues if "pr193-roadmap" in (issue.get("labels") or [])]
+
+plan_to_issue: dict[str, list[dict]] = {}
+for issue in roadmap_issues:
+    for label in issue.get("labels") or []:
+        match = re.fullmatch(r"roadmap-([rd]\d+[a-z0-9]*)", label, re.I)
+        if match:
+            plan_id = match.group(1).upper()
+            plan_to_issue.setdefault(plan_id, []).append(issue)
+
+expanded_umbrellas = {
+    umbrella for umbrella in umbrella_ids
+    if any(plan_id.startswith(umbrella) and plan_id != umbrella for plan_id in plan_to_issue)
+}
+planned_ids = (base_ids - expanded_umbrellas) | set(plan_to_issue)
+
+prs = json.loads(subprocess.check_output([
+    "gh", "pr", "list", "--state", "all", "--limit", "1000",
+    "--json", "number,state,isDraft,url,headRefName,baseRefName",
+], text=True))
+pr_by_number = {int(pr["number"]): pr for pr in prs}
+
+translated: dict[str, int] = {}
+false_positive_details: list[str] = []
+pr_to_plans: dict[int, list[str]] = {}
+open_prs = merged_prs = draft_prs = 0
+
+for plan_id, mapped_issues in sorted(plan_to_issue.items()):
+    if plan_id not in planned_ids:
+        false_positive_details.append(f"unknown plan label {plan_id}")
+    if len(mapped_issues) != 1:
+        false_positive_details.append(f"plan {plan_id} maps to {len(mapped_issues)} Beads issues")
+        continue
+    issue = mapped_issues[0]
+    external_ref = issue.get("external_ref") or ""
+    match = re.search(r"(?:github\.com/Banon-Labs/er-effects-rs/(?:pull|issues)/|repo:Banon-Labs/er-effects-rs#|github:Banon-Labs/er-effects-rs#)(\d+)", external_ref)
+    if not match:
+        continue
+    number = int(match.group(1))
+    pr = pr_by_number.get(number)
+    if pr is None:
+        false_positive_details.append(f"plan {plan_id} references missing PR #{number}")
+        continue
+    if pr["state"] == "CLOSED":
+        false_positive_details.append(f"plan {plan_id} references closed-unmerged PR #{number}")
+        continue
+    translated[plan_id] = number
+    pr_to_plans.setdefault(number, []).append(plan_id)
+    if pr["state"] == "MERGED":
+        merged_prs += 1
+    else:
+        open_prs += 1
+    if pr.get("isDraft"):
+        draft_prs += 1
+
+for number, plan_ids in sorted(pr_to_plans.items()):
+    if len(plan_ids) > 1:
+        false_positive_details.append(f"PR #{number} maps to multiple plans: {','.join(plan_ids)}")
+
+ready = json.loads(subprocess.check_output([str(bd), "ready", "-n", "0", "--json"], text=True))
+ready_ids = {issue["id"] for issue in ready}
+ready_untranslated = sum(
+    1 for plan_id, mapped in plan_to_issue.items()
+    if len(mapped) == 1 and mapped[0]["id"] in ready_ids and plan_id not in translated
+)
+
+for detail in false_positive_details:
+    print(f"DETAIL false_positive {detail}")
+
+planned_total = len(planned_ids)
+translated_total = len(translated)
+completion_pct = (100.0 * translated_total / planned_total) if planned_total else 0.0
+print(f"DETAIL roadmap_ids={','.join(sorted(planned_ids))}")
+print(f"DETAIL translated={','.join(f'{key}:#{translated[key]}' for key in sorted(translated))}")
+print(f"METRIC plans_translated_to_prs={translated_total}")
+print(f"METRIC planned_nodes_total={planned_total}")
+print(f"METRIC completion_pct={completion_pct:.6f}")
+print(f"METRIC open_prs={open_prs}")
+print(f"METRIC merged_prs={merged_prs}")
+print(f"METRIC draft_prs={draft_prs}")
+print(f"METRIC ready_untranslated_plans={ready_untranslated}")
+print(f"METRIC false_positives={len(false_positive_details)}")
 PY
-score_rc=$?
-
-tail -40 "$ARTIFACT_DIR/runner.out" 2>/dev/null || true
-exit "$score_rc"

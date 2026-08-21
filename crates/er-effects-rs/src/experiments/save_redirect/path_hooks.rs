@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, Once, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -18,7 +18,29 @@ use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
+use er_game_base::fnv1a::fnv1a64;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use er_save_redirect::{
+    DIRECT_STAGE_ROOT_DIR_NAME, DirectStageNoSteamIdKind, DirectStageRequestPlan,
+    SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
+    SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
+    SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
+    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth, SaveHookInstallState, SavePathKind,
+    SavePathTelemetryBucket, StagedEntryFate, TerminalRejectionGuard, TerminalRejectionObservation,
+    classify_copyfile_endpoint, classify_save_query_path, createfile_diag_hit_should_log,
+    dedupe_dirs_by_identity, default_save_file_path, direct_stage_case_dirs,
+    is_inside_direct_stage_root, is_save_file_or_backup_path, is_staged_save_container_name,
+    plan_create_file_open, plan_direct_stage_request, plan_save_path_telemetry,
+    plan_save_query_path, plausible_steam_id64, probe_direct_stage_file_status,
+    redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
+    staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
+    wide_contains_ci_ascii, wide_ends_with_ci_ascii,
+};
+use er_telemetry::counters::{
+    SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
+    SAVE_DIRECT_STAGE_STALE_REMOVED, SAVE_REDIRECT_DETOUR_MAX_DEPTH,
+    SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
+};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
     Win32::{
@@ -30,8 +52,8 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
     core::{BOOL, PCSTR},
@@ -56,6 +78,14 @@ use super::*;
 // instead of drifting into a no-character menu. Pure telemetry/observe-only mode
 // remains the only no-load exemption.
 //
+// WHICH PICKER that is comes from `er-effects.toml`'s `os_native_save_picker`, resolved -- like
+// every other picker open -- in `save_picker_surface.rs`. Default off: the DLL-drawn overlay
+// browser (`gpu_readback/save_picker_overlay.rs`), which has NO cancel; BACK is navigation and the
+// user chooses a save or closes the game themselves. On: the OS common file dialog, opened by
+// `startup_hooks/save_picker_boot.rs` on a thread of ours, whose Cancel button is where the
+// "Cancel -> exit" half of the contract above is actually implemented (`ExitProcess(0)`, the same
+// clean kill the in-world Return to Desktop performs).
+//
 // Explicit-source mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
 // through which the game opens EVERY save artifact (verified RE: vanilla `.sl2`,
 // Seamless `.co2`, `.bak`, all funnel `MicrosoftDiskFileOperator::OpenFile` ->
@@ -66,9 +96,9 @@ use super::*;
 // shape internally. Non-save opens pass through unchanged. Stable Win32 ABI; no fixed-
 // offset code poke; mod-compatible (ERSC does not replace this open).
 
-/// Minimum plausible size (bytes) of a real ER0000.sl2/.co2: the fixed-slot BND4 container
-/// is ~28 MB even with empty slots, so anything under 1 MB is missing/truncated/garbage.
-pub(crate) const SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES: u64 = 0x10_0000;
+/// Exact byte length of a real ER0000.sl2/.co2. The shared save-redirect core owns this invariant
+/// so product and standalone planning reject the same impossible files.
+pub(crate) const SAVE_OVERRIDE_EXPECTED_BYTES: u64 = er_save_redirect::EXPECTED_SAVE_FILE_BYTES;
 
 /// Telemetry/observe-only exemption: env `ER_EFFECTS_TELEMETRY_ONLY=1` OR GAME_DIR file
 /// `er-effects-telemetry-only.txt`. The SOLE case the DLL may run without an env-provided
@@ -97,51 +127,16 @@ pub(crate) fn save_trace_enabled() -> bool {
 
 pub(crate) use er_telemetry::counters::OBSERVED_ACTIVE_STEAM_ID64;
 
-fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    let mut search_from = 0usize;
-    while search_from < path.len() {
-        let Some(rel_idx) = wide_find_ci_ascii(&path[search_from..], ELDENRING) else {
-            break;
-        };
-        let idx = search_from + rel_idx;
-        let mut pos = idx + ELDENRING.len();
-        while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
-            pos += 1;
-        }
-        let start = pos;
-        let mut steam_id = 0u64;
-        while let Some(&c) = path.get(pos) {
-            if !(b'0' as u16..=b'9' as u16).contains(&c) {
-                break;
-            }
-            steam_id = steam_id
-                .saturating_mul(10)
-                .saturating_add((c - b'0' as u16) as u64);
-            pos += 1;
-        }
-        let digits = pos.saturating_sub(start);
-        if (16..=20).contains(&digits) && steam_id != 0 {
-            return Some(steam_id);
-        }
-        search_from = idx + 1;
-    }
-    None
-}
-
-fn observe_steam_id64_from_save_path(path: &[u16]) {
+pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        // Latching the observed id is a pure store and always safe. The two calls below are NOT:
+        // both open files, which re-enters the detour this observation was made from. They are
+        // individually guarded (`save_detour_disk_io_allowed`), so a nested observation records
+        // the id and does nothing else -- and the outer one, once it unwinds, still performs the
+        // work. This is the SEED half of the 2026-07-30 recursion: this call site is reached from
+        // the CreateFileW detour before its own diagnostics, which is why the seeding open never
+        // appeared in the log.
         if let Ok(base) = game_module_base() {
             normalize_env_save_file_to_active_steam_id_once(base, "observed-steamid-before-stage");
         }
@@ -155,15 +150,6 @@ fn observe_steam_id64_from_save_path(path: &[u16]) {
 pub(crate) unsafe fn active_steam_id64(_base: usize) -> Option<u64> {
     let observed = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
     (observed != 0).then_some(observed)
-}
-
-fn save_normalize_hash_bytes(bytes: &[u8]) -> u64 {
-    let mut h = 0xcbf29ce484222325u64;
-    for b in bytes.iter().copied() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
 }
 
 fn log_save_steam_id_locations(bytes: &[u8], target: u64, source: &str) {
@@ -227,24 +213,9 @@ pub(crate) fn normalize_save_bytes_to_active_steam_id(
     }
 }
 
-fn path_eq_ignore_ascii_case(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy()
-        .replace('/', "\\")
-        .trim_end_matches('\\')
-        .eq_ignore_ascii_case(
-            b.to_string_lossy()
-                .replace('/', "\\")
-                .trim_end_matches('\\'),
-        )
-}
-
 fn save_file_writeback_allowed(path: &Path) -> bool {
-    let Some(default_root) = default_save_root() else {
-        return false;
-    };
-    path.parent()
-        .and_then(|steam_dir| steam_dir.parent())
-        .is_some_and(|root| path_eq_ignore_ascii_case(root, &default_root))
+    let default_root = default_save_root();
+    er_save_redirect::save_file_writeback_allowed(path, default_root.as_deref())
 }
 
 fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
@@ -255,7 +226,7 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
         ));
         return;
     };
-    let before = save_normalize_hash_bytes(&bytes);
+    let before = fnv1a64(&bytes);
     log_save_steam_id_locations(&bytes, steam_id, reason);
     match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
         Ok(report) => {
@@ -274,7 +245,7 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
             }
             match fs::write(path, &bytes) {
                 Ok(()) => {
-                    let after = save_normalize_hash_bytes(&bytes);
+                    let after = fnv1a64(&bytes);
                     append_autoload_debug(format_args!(
                         "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                         path.display()
@@ -292,30 +263,57 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
     }
 }
 
+/// One-shot latch for the "no configured save file" line above (see its comment).
+pub(crate) static SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reason: &str) {
     if SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst) != 0
         || OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst) == 0
     {
         return;
     }
+    // This one-shot reads a save container off disk, and both of its call sites are inside a
+    // `CreateFileW`/`NtCreateFile` detour -- so the read re-enters the caller. Refuse from a nested
+    // context; the outer detour entry performs it once its own I/O has unwound.
+    if !save_detour_disk_io_allowed() {
+        return;
+    }
     let Some(path) = configured_save_file() else {
-        append_autoload_debug(format_args!(
-            "save-steamid-normalize: no configured save file for one-shot disk normalize reason={reason}"
-        ));
+        // FIRST OCCURRENCE ONLY. There is no configured save file in default (game-owned APPDATA)
+        // mode, and since save-game-flow WP3 the CreateFileW detour is installed in EVERY mode --
+        // so this call site now runs on every save-container open. One line says everything; a
+        // line per open is the unbounded-repetition noise the log policy forbids.
+        if SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: no configured save file for one-shot disk normalize reason={reason} (logged once)"
+            ));
+        }
         return;
     };
+    // CLAIM the one-shot BEFORE the read, not after it succeeds. The old order left the latch at 0
+    // for the whole duration of `fs::read`, so the open that read re-entered this function with the
+    // one-shot still unclaimed -- the recursion edge itself. Claiming first also means a read that
+    // FAILS disables the normalize permanently, which is the honest semantic: the configured path is
+    // fixed for the process (env/TOML, never rewritten at runtime), so a path that cannot be read now
+    // cannot be read later, and retrying it on every save-container open is pure re-entrant waste.
+    // `compare_exchange` rather than a store so two threads cannot both run the body.
+    if SAVE_STEAM_ID_ENV_NORMALIZE_DONE
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
     let Ok(mut bytes) = fs::read(&path) else {
         append_autoload_debug(format_args!(
-            "save-steamid-normalize: failed to read configured save file for one-shot disk normalize reason={reason} path='{}'",
+            "save-steamid-normalize: failed to read configured save file for one-shot disk normalize reason={reason} path='{}' (one-shot consumed; not retried)",
             path.display()
         ));
         return;
     };
-    let before = save_normalize_hash_bytes(&bytes);
+    let before = fnv1a64(&bytes);
     let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
         return;
     };
-    SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
     if !report.changed() || !save_file_writeback_allowed(&path) {
         append_autoload_debug(format_args!(
             "save-steamid-normalize: one-shot source normalize reason={reason} path='{}' changed={} writeback_allowed={}",
@@ -327,7 +325,7 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     }
     match fs::write(&path, &bytes) {
         Ok(()) => {
-            let after = save_normalize_hash_bytes(&bytes);
+            let after = fnv1a64(&bytes);
             append_autoload_debug(format_args!(
                 "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                 path.display()
@@ -342,28 +340,92 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
 
 /// Redirect directory (UTF-16, NUL-free, no trailing separator) computed from the parent of
 /// `ER_EFFECTS_SAVE_FILE`. Set once at init, BEFORE the CreateFileW hook is armed.
-static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
+pub(super) static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged under
 /// `EldenRing/<steamid>`. It is a read-only source copied into the private native save tree; save opens
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
-pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry::counters::SAVE_DIRECT_STAGE_NO_STEAMID_HITS;
 static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
-    AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
-const DIRECT_STAGE_NO_STEAMID_KIND_NONE: usize = 0;
-const DIRECT_STAGE_NO_STEAMID_KIND_ROOT: usize = 1;
-const DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS: usize = 2;
-const DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE: usize = 3;
-const DIRECT_STAGE_NO_STEAMID_KIND_OTHER: usize = 4;
+    AtomicUsize::new(DirectStageNoSteamIdKind::None.as_usize());
 static SAVE_REDIRECT_MODE: AtomicUsize = AtomicUsize::new(SAVE_REDIRECT_MODE_UNSET);
 const SAVE_REDIRECT_MODE_UNSET: usize = 0;
 const SAVE_REDIRECT_MODE_STAGED_ROOT: usize = 1;
 const SAVE_REDIRECT_MODE_DIRECT_FILE: usize = 2;
 const SAVE_REDIRECT_MODE_DEFAULT_USER: usize = 3;
+
+/// Terminal own-load save-resolution rejection. Once the picker gate has released, a missing active
+/// container cannot become valid without replacing the staged source, which this process cannot do
+/// (`SAVE_DIRECT_SOURCE_FILE` is deliberately write-once). The first rejection therefore fails
+/// closed; a second identical observation is a recurrence bug and sets a nonzero semaphore.
+static OWN_LOAD_SAVE_REJECTION: TerminalRejectionGuard = TerminalRejectionGuard::new();
+static OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS: AtomicU64 = AtomicU64::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_ARMED: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_FIRED: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT: AtomicU64 = AtomicU64::new(0);
+const OWN_LOAD_UNRESOLVABLE_PROBE_ENV: &str = "ER_EFFECTS_PROBE_OWN_LOAD_UNRESOLVABLE";
+
+pub(crate) fn own_load_save_rejection_terminal() -> bool {
+    OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS.fetch_add(1, Ordering::SeqCst);
+    OWN_LOAD_SAVE_REJECTION.is_terminal()
+}
+
+pub(crate) fn own_load_save_rejection_fingerprint() -> u64 {
+    OWN_LOAD_SAVE_REJECTION.fingerprint()
+}
+
+pub(crate) fn own_load_save_repeated_identical_rejections() -> u64 {
+    OWN_LOAD_SAVE_REJECTION.repeated_identical()
+}
+
+pub(crate) fn record_own_load_save_rejection(fingerprint: u64) -> TerminalRejectionObservation {
+    OWN_LOAD_SAVE_REJECTION.record(fingerprint)
+}
+
+pub(crate) fn own_load_save_rejection_signature(dir: &Path, candidates: &[&str]) -> u64 {
+    let mut identity = dir.as_os_str().to_string_lossy().into_owned();
+    for candidate in candidates {
+        identity.push('|');
+        identity.push_str(candidate);
+    }
+    fnv1a64(identity.as_bytes()).max(1)
+}
+
+/// Arm and fire the deterministic YK0J runtime proof seam exactly once.
+///
+/// This is diagnostic-only: it makes the Rust-side own-load resolver reject the configured source
+/// while the game's native save path continues reading the private staged copy. The configured/user
+/// source remains read-only, the active target remains the only write target, and the run can still
+/// prove a live player after exercising the fail-closed transition.
+pub(crate) fn own_load_save_rejection_probe(
+    source: &Path,
+    candidates: &[&str],
+) -> Option<(u64, TerminalRejectionObservation)> {
+    // ENV-GATE RATIONALE: targeted runtime proof must deterministically exercise the otherwise
+    // invariant-violation-only rejection without corrupting/removing a real save or adding sleeps.
+    if !matches!(
+        std::env::var(OWN_LOAD_UNRESOLVABLE_PROBE_ENV).as_deref(),
+        Ok("1")
+    ) || !direct_save_file_source_active()
+        || missing_save_selection_pending()
+    {
+        return None;
+    }
+    let fingerprint = own_load_save_rejection_signature(source, candidates);
+    OWN_LOAD_SAVE_REJECTION_PROBE_ARMED.store(1, Ordering::SeqCst);
+    OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT.store(fingerprint, Ordering::SeqCst);
+    if OWN_LOAD_SAVE_REJECTION_PROBE_FIRED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return None;
+    }
+    Some((fingerprint, record_own_load_save_rejection(fingerprint)))
+}
 
 pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let mode = match SAVE_REDIRECT_MODE.load(Ordering::SeqCst) {
@@ -403,11 +465,16 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let last_save_like_kind =
         save_path_kind_label(SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst));
     body.push_str(&format!(
-        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n",
+        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_max_depth\": {},\n  \"oracle_save_redirect_createfilew_reentrant_passthroughs\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n  \"oracle_save_redirect_direct_stage_containers_written\": {},\n  \"oracle_save_redirect_direct_stage_stale_removed\": {},\n  \"oracle_save_redirect_direct_stage_stale_remove_failed\": {},\n  \"oracle_own_load_save_rejection_state\": {},\n  \"oracle_own_load_save_rejection_fingerprint\": {},\n  \"oracle_own_load_save_rejection_attempts\": {},\n  \"oracle_own_load_save_rejection_guard_checks\": {},\n  \"oracle_own_load_save_rejection_probe_armed\": {},\n  \"oracle_own_load_save_rejection_probe_fired\": {},\n  \"oracle_own_load_save_rejection_probe_expected_fingerprint\": {},\n  \"oracle_own_load_save_repeated_identical_rejections\": {},\n  \"oracle_own_load_save_repeated_different_rejections\": {},\n",
         SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst),
         SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_CALLS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_DIAG_HITS.load(Ordering::SeqCst),
+        // THE stack-overflow semaphore. > 2 means a save-redirect detour re-entered itself without
+        // being passed through -- the unbounded recursion of 2026-07-30, which manifests as the
+        // game's main thread simply exiting with an empty crash log. See `reentry.rs`.
+        SAVE_REDIRECT_DETOUR_MAX_DEPTH.load(Ordering::SeqCst),
+        SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.load(Ordering::SeqCst),
         SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.load(Ordering::SeqCst),
@@ -420,187 +487,91 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
         SAVE_NTCREATE_DIAG_LOGGED.load(Ordering::SeqCst),
         SAVE_DIRECT_STAGE_DIAG_HITS.load(Ordering::SeqCst),
         SAVE_DIRECT_STAGE_NO_STEAMID_HITS.load(Ordering::SeqCst),
-        direct_stage_file_bytes.map_or_else(|| "null".to_owned(), |bytes| bytes.to_string())
+        direct_stage_file_bytes.map_or_else(|| "null".to_owned(), |bytes| bytes.to_string()),
+        SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN.load(Ordering::SeqCst),
+        SAVE_DIRECT_STAGE_STALE_REMOVED.load(Ordering::SeqCst),
+        // THE stale-serve semaphore: nonzero means a leftover container survived the sweep and the
+        // game may open it instead of the configured source.
+        SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.load(Ordering::SeqCst),
+        usize::from(OWN_LOAD_SAVE_REJECTION.is_terminal()),
+        OWN_LOAD_SAVE_REJECTION.fingerprint(),
+        OWN_LOAD_SAVE_REJECTION.attempts(),
+        OWN_LOAD_SAVE_REJECTION_GUARD_CHECKS.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_ARMED.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_FIRED.load(Ordering::SeqCst),
+        OWN_LOAD_SAVE_REJECTION_PROBE_EXPECTED_FINGERPRINT.load(Ordering::SeqCst),
+        // Both recurrence fields MUST remain zero. The first valid fail-closed transition publishes
+        // state=1, a nonzero fingerprint and attempts=1; any later resolver entry makes the defect
+        // machine-readable instead of silently churning.
+        OWN_LOAD_SAVE_REJECTION.repeated_identical(),
+        OWN_LOAD_SAVE_REJECTION.repeated_different()
     ));
 }
 
 fn save_path_kind_label(kind: usize) -> &'static str {
-    match kind {
-        SAVE_PATH_KIND_ELDENRING_ROOT => "eldenring_root",
-        SAVE_PATH_KIND_GRAPHICS_CONFIG => "graphics_config",
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => "stage_steamid_dir",
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => "stage_save_file",
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => "configured_save_file",
-        SAVE_PATH_KIND_OTHER_SAVE_LIKE => "other_save_like",
-        _ => "none",
-    }
-}
-
-fn classify_save_like_createfile_path(path: &[u16]) -> usize {
-    let no_steamid_kind = direct_stage_no_steamid_kind(path);
-    if steam_id64_from_wide_save_path(path).is_some() {
-        const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-        const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-        if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
-            SAVE_PATH_KIND_STAGE_SAVE_FILE
-        } else {
-            SAVE_PATH_KIND_STAGE_STEAMID_DIR
-        }
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE {
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS {
-        SAVE_PATH_KIND_GRAPHICS_CONFIG
-    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_ROOT {
-        SAVE_PATH_KIND_ELDENRING_ROOT
-    } else {
-        SAVE_PATH_KIND_OTHER_SAVE_LIKE
-    }
+    SavePathKind::from_usize(kind).label()
 }
 
 fn record_save_like_createfile_path_kind(path: &[u16]) {
-    let kind = classify_save_like_createfile_path(path);
-    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
-    match kind {
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+    let plan = plan_save_path_telemetry(path);
+    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(plan.kind.as_usize(), Ordering::SeqCst);
+    match plan.bucket {
+        Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+        Some(SavePathTelemetryBucket::StageSaveFile) => {
             SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+        Some(SavePathTelemetryBucket::ConfiguredSaveFile) => {
             SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        _ => {}
+        None => {}
     }
 }
 
 fn record_save_like_query_path_kind(path: &[u16]) {
-    let kind = classify_save_like_createfile_path(path);
-    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
-    match kind {
-        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+    let plan = plan_save_path_telemetry(path);
+    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(plan.kind.as_usize(), Ordering::SeqCst);
+    match plan.bucket {
+        Some(SavePathTelemetryBucket::StageSteamIdDir) => {
             SAVE_QUERY_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+        Some(SavePathTelemetryBucket::StageSaveFile) => {
             SAVE_QUERY_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+        Some(SavePathTelemetryBucket::ConfiguredSaveFile) => {
             SAVE_QUERY_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        _ => {}
+        None => {}
     }
 }
 
 fn direct_stage_no_steamid_kind_label(kind: usize) -> &'static str {
-    match kind {
-        DIRECT_STAGE_NO_STEAMID_KIND_ROOT => "eldenring_root",
-        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS => "graphics_config",
-        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE => "configured_save_without_steamid",
-        DIRECT_STAGE_NO_STEAMID_KIND_OTHER => "other",
-        _ => "none",
-    }
+    DirectStageNoSteamIdKind::from_usize(kind).label()
 }
 
-fn direct_stage_no_steamid_kind(path: &[u16]) -> usize {
-    const GRAPHICS_XML: &[u16] = &[
-        b'g' as u16,
-        b'r' as u16,
-        b'a' as u16,
-        b'p' as u16,
-        b'h' as u16,
-        b'i' as u16,
-        b'c' as u16,
-        b's' as u16,
-        b'c' as u16,
-        b'o' as u16,
-        b'n' as u16,
-        b'f' as u16,
-        b'i' as u16,
-        b'g' as u16,
-        b'.' as u16,
-        b'x' as u16,
-        b'm' as u16,
-        b'l' as u16,
-    ];
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    if wide_ends_with_ci_ascii(path, GRAPHICS_XML) {
-        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS
-    } else if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
-        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE
-    } else if wide_ends_with_separator_or_eldenring(path) {
-        DIRECT_STAGE_NO_STEAMID_KIND_ROOT
-    } else {
-        DIRECT_STAGE_NO_STEAMID_KIND_OTHER
-    }
-}
-
-fn wide_ends_with_separator_or_eldenring(path: &[u16]) -> bool {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    let trimmed_len = path
-        .iter()
-        .rposition(|&c| c != b'\\' as u16 && c != b'/' as u16)
-        .map_or(0, |idx| idx + 1);
-    wide_ends_with_ci_ascii(&path[..trimmed_len], ELDENRING)
-}
-
+/// Report the staged container the runtime will actually LOAD, resolved from the ACTIVE MODE's
+/// candidate list. Probing by the SOURCE file's extension made this oracle confirm a staging that
+/// had in fact written a different container (2026-08-11).
 fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
-    if steam_id == 0 {
-        return (false, None);
-    }
-    let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
-        return (false, None);
-    };
-    let staged_is_co2 = SAVE_DIRECT_SOURCE_FILE
-        .get()
-        .and_then(|source| source.extension())
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
-    let candidates = if staged_is_co2 {
-        [("eldenring", "er0000.co2"), ("EldenRing", "ER0000.co2")]
-    } else {
-        [("eldenring", "er0000.sl2"), ("EldenRing", "ER0000.sl2")]
-    };
-    for (dir_name, file_name) in candidates {
-        let path = root
-            .join(dir_name)
-            .join(steam_id.to_string())
-            .join(file_name);
-        if let Ok(meta) = std::fs::metadata(path)
-            && meta.is_file()
-        {
-            return (true, Some(meta.len()));
-        }
-    }
-    (false, None)
+    let status = probe_direct_stage_file_status(
+        SAVE_DIRECT_STAGE_ROOT.get().map(PathBuf::as_path),
+        active_default_save_file_names(),
+        steam_id,
+    );
+    (status.exists, status.bytes)
 }
-/// Original CreateFileW / CopyFileW (MinHook trampolines). 0 = not hooked.
-static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Save-existence-check redirects: the game stats/enumerates the save file BEFORE opening it; if
 /// these hit the (wiped) default dir the game concludes "no save" and never CreateFileW's it.
-static SAVE_REDIRECT_ORIG_GETATTRW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_GETATTREXW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+///
 /// PRIMARY redirect: the save-dir builder (FUN_140e0e680) calls SHGetFolderPathW(CSIDL_APPDATA) to
 /// get %APPDATA%, then formats `%APPDATA%/EldenRing/<steamid>/`. Returning OUR staged root here makes
 /// the game build AND open the full save path under our tree NATIVELY (Wine does case-insensitive
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
-static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS;
+pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_LOGGED;
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS;
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
@@ -612,29 +583,29 @@ pub(crate) static SAVE_FIRST_LOAD_DONE: std::sync::atomic::AtomicBool =
 /// ntdll NtCreateFile diagnostic: the boot save read happens BELOW Win32 (no CreateFileW/
 /// GetFileAttributesW/FindFirstFileW hit the save), so hook the ntdll chokepoint to SEE the actual
 /// open of ER0000.sl2 -- its NT path form and whether it is relative to a RootDirectory handle.
-static SAVE_REDIRECT_ORIG_NTCREATEFILE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_NTCREATE_DIAG_LOGGED;
-const SAVE_NTCREATE_DIAG_MAX: usize = 120;
+pub(super) const SAVE_NTCREATE_DIAG_MAX: usize = 120;
 /// THE corruption fix (corrupted-save-re-findings): the save commit prechecks free space via
 /// GetDiskFreeSpaceExW(saveDir), which on the Wine Z:->/home drive mapping returns bogus/ZERO free
 /// space -> `free < needed` -> the write aborts BEFORE any byte ("Failed to save game / corrupted").
 /// We hook it to report ample free space for the save dir so the game's OWN save flow writes our
 /// staged save (no hardcoded paths, no Steam Cloud).
-static SAVE_REDIRECT_ORIG_GETDISKFREEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_DISKFREE_LOGGED;
 /// The game doesn't call kernel32!GetDiskFreeSpaceExW from our hook (no fire) -- under Wine all
 /// free-space queries funnel to ntdll!NtQueryVolumeInformationFile. Override the AVAILABLE allocation
 /// units for FileFsSizeInformation(3)/FileFsFullSizeInformation(7) so the save-commit free-space
 /// precheck sees ample space regardless of the bogus Z:-drive report. THE corruption fix, robust.
-static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SAVE_VOLINFO_LOGGED;
-static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
-pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
-pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+/// One-shot/idempotency state for the core and redirect save-hook installers. The shared
+/// `er-save-redirect` type owns this contract so later standalone hook-owner code does not invent a
+/// second install state machine.
+pub(super) static SAVE_HOOK_INSTALL_STATE: SaveHookInstallState = SaveHookInstallState::new();
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
 pub(crate) use er_telemetry::counters::SAVE_REDIRECT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_API_STEAM_ID_LOGGED;
+pub(crate) use er_telemetry::counters::SAVE_STEAM_ID_ENV_NORMALIZE_DONE;
 const SAVE_REDIRECT_LOG_MAX: usize = 8;
 /// Diagnostic: total CreateFileW calls our detour observed (proves the hook is live at all under
 /// Wine's kernel32->kernelbase forwarding), and a bounded log of save-LIKE paths so we can see the
@@ -647,23 +618,23 @@ const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
 /// keeps its early window and a sparse tail without flooding the debug log.
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_DIAG_HITS;
-static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize =
+    AtomicUsize::new(SavePathKind::None.as_usize());
 pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_CONFIGURED_FILE_HITS;
-const MISSING_SAVE_DIALOG_IDLE: usize = 0;
-const MISSING_SAVE_DIALOG_PENDING: usize = 1;
-const MISSING_SAVE_DIALOG_READY: usize = 2;
-static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS;
+static MISSING_SAVE_DIALOG_GATE: er_save_redirect::MissingSaveGate =
+    er_save_redirect::MissingSaveGate::new();
 pub(crate) use er_telemetry::counters::MISSING_SAVE_BLOCKED_IO_LOGGED;
-static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize =
+    AtomicUsize::new(SavePathKind::None.as_usize());
 
-fn set_missing_save_dialog_state(state: usize) {
-    MISSING_SAVE_DIALOG_STATE.store(state, Ordering::SeqCst);
+fn set_missing_save_dialog_state(state: er_save_redirect::MissingSaveState) {
+    MISSING_SAVE_DIALOG_GATE.set(state);
 }
 
 pub(crate) fn missing_save_selection_pending() -> bool {
-    MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING
+    MISSING_SAVE_DIALOG_GATE.is_pending()
 }
 
 /// True after an explicit loose save source (`er-effects.toml save_file` / ER_EFFECTS_SAVE_FILE) or
@@ -674,16 +645,9 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
-pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
-const SAVE_PATH_KIND_NONE: usize = 0;
-const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
-const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
-const SAVE_PATH_KIND_STAGE_STEAMID_DIR: usize = 3;
-const SAVE_PATH_KIND_STAGE_SAVE_FILE: usize = 4;
-const SAVE_PATH_KIND_CONFIGURED_SAVE_FILE: usize = 5;
-const SAVE_PATH_KIND_OTHER_SAVE_LIKE: usize = 6;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
+pub(crate) use er_telemetry::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
 /// DEDICATED budget for save-FILE queries (paths ending .sl2 / .co2 or containing ER0000): the shared
 /// CreateFileW/existence-check diag cap above is exhausted by early-boot `eldenring\` dir churn
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
@@ -691,39 +655,12 @@ const SAVE_PATH_KIND_OTHER_SAVE_LIKE: usize = 6;
 /// the exact `EldenRing\<steamid>\ER0000.sl2` path the game builds (steamid match vs the staged 766).
 pub(crate) use er_telemetry::counters::SAVE_SL2_QUERY_LOGGED;
 const SAVE_SL2_QUERY_MAX: usize = 40;
-/// Log EVERY CreateFileW path for the first N calls (the whole early-boot save-detection window), so
-/// we can see exactly what the game opens after our staged EldenRing\ dir (why it never reads the
-/// save). Beyond this, only save-LIKE paths are logged.
-const SAVE_CREATEFILEW_DIAG_ALL_BELOW: usize = 120;
 
 /// Frames of "profile summary present but ZERO active slots" tolerated before the save-load watchdog
 /// aborts. ~15s at 60fps -- long enough to ignore the boot transient before the summary is parsed,
 /// short enough to fast-fail well under the runtime cap instead of stalling on the privacy policy.
 pub(crate) use er_telemetry::counters::SAVE_WATCHDOG_ZERO_FRAMES;
 pub(crate) const SAVE_WATCHDOG_ZERO_BUDGET: usize = 900;
-
-/// Convert a configured path root to the Wine drive form the in-process `CreateFileW` accepts.
-/// Unix absolute paths become `Z:\...`; already-Windows/Wine paths like `Z:\...` or `C:\...` are
-/// preserved. Backslash separators, no trailing separator. Returns a wide string.
-fn path_root_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
-    // to_string_lossy: building a path string, not decoding game memory (the from_utf8_lossy ban
-    // targets in-process telemetry; OsStr->String here is fine).
-    let win: String = root
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' { '\\' } else { c })
-        .collect();
-    let has_drive_prefix = win.as_bytes().get(1).copied() == Some(b':');
-    let mut out: Vec<u16> = if has_drive_prefix {
-        win.encode_utf16().collect()
-    } else {
-        "Z:".encode_utf16().chain(win.encode_utf16()).collect()
-    };
-    while matches!(out.last(), Some(&c) if c == b'\\' as u16) {
-        out.pop();
-    }
-    out
-}
 
 /// Resolve configured save file -> the staged save ROOT (the ancestor directory that CONTAINS the
 /// `EldenRing` folder) in Wine `Z:\...` wide form, or None if config/env is unset/blank/not a readable
@@ -734,38 +671,90 @@ fn env_save_file_path() -> Option<PathBuf> {
     configured_save_file()
 }
 
-enum SaveRedirectSource {
-    /// Configured save is already staged under `<root>/EldenRing/<steamid>/ER0000.sl2`; preserve
-    /// native directory/profile discovery by redirecting the whole save root.
-    StagedRoot {
-        file: PathBuf,
-        steam_id: u64,
-        root_w: Vec<u16>,
-    },
-    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Copy it into a private staged native
-    /// save tree; do not require the user path to mirror Elden Ring's SteamID folder layout, and never
-    /// redirect gameplay writes back to the source file.
-    DirectFile {
-        file: PathBuf,
-        stage_root: PathBuf,
-        root_w: Vec<u16>,
-    },
-}
+type SaveRedirectSource = er_save_redirect::SaveSourcePlan;
 
 fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
-    let meta = std::fs::metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() < SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES {
-        return None;
+    match er_save_redirect::validate_save_file_path(path) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-override: rejected save source during shared validation: {err:?}"
+            ));
+            None
+        }
     }
-    Some(path)
+}
+
+fn picker_status_for_save_source_rejection(
+    err: er_save_redirect::SaveSourceRejection,
+) -> er_save_picker::PickerStatusMessage {
+    match err {
+        er_save_redirect::SaveSourceRejection::MissingOrNotFile => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE NOT FOUND",
+                "The selected path is missing or is not a file.",
+            )
+        }
+        er_save_redirect::SaveSourceRejection::WrongSize { len, expected } => {
+            er_save_picker::PickerStatusMessage::new(
+                "WRONG SAVE SIZE",
+                format!("Expected {expected} bytes, but this file is {len} bytes."),
+            )
+        }
+        er_save_redirect::SaveSourceRejection::NotBnd4 => er_save_picker::PickerStatusMessage::new(
+            "NOT AN ELDEN RING SAVE",
+            "The file is not a readable BND4 save container.",
+        ),
+        er_save_redirect::SaveSourceRejection::Unreadable => {
+            er_save_picker::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            )
+        }
+    }
+}
+
+/// Read-only is NEVER a reason to refuse a save, at any surface. Loading is a pure READ and succeeds
+/// on a `0444` file; the bit can only bite later, at the first WRITE.
+///
+/// For a PICKED or CONFIGURED save it cannot bite at all: those are staged into a private native tree
+/// and `save_redirect_target_for_path` sends reads *and writes* to the staged copy, so the source is
+/// never a write target (the repo corpus is `0444` and loads fine). Those paths call
+/// `validated_save_file_path` directly and never reach this function.
+///
+/// For the DEFAULT save the bit is worth REPAIRING, because `DEFAULT-USER-SAVE` mode writes the active
+/// Steam user's APPDATA save in place, and Elden Ring owns that file and requires it writable -- a
+/// stray read-only bit (botched copy/restore, bd `er-save-files-readonly-staging-2026-06-26`) makes the
+/// title-flow "Updating save data" write fail with "Failed to save game. Save data is corrupted.". So
+/// clear it when we can, exactly as staging does for its own copies.
+///
+/// When we CANNOT clear it, still load. Refusing repairs nothing: the APPDATA save stays unwritable
+/// either way, and the only alternative on offer -- bouncing to the picker -- is strictly worse,
+/// because any save picked there is STAGED, so the user's progress would silently land in the staged
+/// tree instead of the save they meant to play. The game's own save-failure popup, on the save they
+/// actually asked for, beats a silent substitution.
+fn validated_default_save_file(path: PathBuf, source_label: &str) -> Option<PathBuf> {
+    let validated = validated_save_file_path(path)?;
+    if save_file_is_readonly(&validated) {
+        make_file_writable(&validated);
+        if save_file_is_readonly(&validated) {
+            append_autoload_debug(format_args!(
+                "save-override: DEFAULT save '{}' source={source_label} is read-only and could NOT be made writable -- LOADING IT ANYWAY (the load is a pure read); expect the game's own save-failure popup at the first autosave/quit-save until the file is made writable",
+                validated.display()
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "save-override: cleared a stray read-only bit on the game-owned DEFAULT save '{}' source={source_label} (Elden Ring writes this file in place and requires it writable)",
+                validated.display()
+            ));
+        }
+    }
+    Some(validated)
 }
 
 fn validated_configured_save_file() -> Option<PathBuf> {
+    // Staged, never written in place -- read-only is valid, so no writability check here.
     validated_save_file_path(env_save_file_path()?)
-}
-
-fn plausible_steam_id64(value: u64) -> Option<u64> {
-    (value >= 10_000_000_000_000_000 && value <= 99_999_999_999_999_999).then_some(value)
 }
 
 fn configured_active_steam_id64_env() -> Option<u64> {
@@ -819,6 +808,21 @@ fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
         })
 }
 
+/// The GAME-SIDE save directory whose write-opens this crate's general save redirect maps into
+/// the staged tree, or `None` when no general redirect is installed (the default game-owned
+/// APPDATA mode, where the game already opens the live save directly).
+///
+/// The save-destination commit needs this to match write-opens by their FULL path. In staged /
+/// direct-file mode the loaded save lives under the staged root, but the native writer still
+/// opens `...\Roaming\EldenRing\<steamid>\ER0000.sl2`, and that open IS the loaded save's --
+/// `save_redirect_path` rewrites it a moment later. Matching only the leaf caught it by
+/// accident; matching the full path has to know about the mapping.
+pub(crate) fn save_redirect_native_source_dir() -> Option<PathBuf> {
+    SAVE_REDIRECT_DIR_W.get()?;
+    let steam_id = plausible_steam_id64(OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst))?;
+    Some(default_save_root()?.join(steam_id.to_string()))
+}
+
 pub(crate) fn default_save_root() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
@@ -829,18 +833,131 @@ pub(crate) fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
-/// Default save file name for the active runtime mode. Seamless Co-op (ERSC) keeps co-op progress in
-/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is deliberately
-/// mode-locked: a Seamless launch must not silently load a vanilla `.sl2` just because it is the only
-/// appdata save present, and a vanilla launch must not silently load a Seamless `.co2`. If the active
-/// mode's file is absent, default-save discovery returns "no save" and the normal missing-save picker
-/// asks the user for the correct save flavor.
+/// The container name the active runtime WRITES to. Seamless Co-op (ERSC) keeps co-op progress in
+/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is the single native
+/// write target: it names the staged copy and the `%APPDATA%` path our hook redirects, so the
+/// container that gets loaded and the container that gets written are always the same file.
+///
+/// The Seamless co-op container ERSC is CONFIGURED with, read from its own `ersc_settings.ini`.
+///
+/// `ER0000.co2` is ERSC's shipped default, NOT a fixed name: the ini says "Your save file extension
+/// (in the vanilla game this is .sl2). Use any alphanumeric characters (limit = 120)". A user who
+/// changes it gets a differently-named container, and every hard-coded `.co2` in a save path would
+/// then name a file the runtime never opens -- the same failure as staging under the wrong name.
+///
+/// Resolved ONCE and cached, because unlike the ERSC module latch this answer is available
+/// immediately: the ini is on disk before the process starts, so staging can use it at
+/// DllMain+~190ms while `seamless_coop_loaded()` is still false. The settings file sits beside
+/// `ersc.dll`; when that module is not resident yet we fall back to the game's own
+/// `SeamlessCoop/` directory, then to ERSC's default extension.
+pub(crate) fn seamless_save_container_name() -> &'static str {
+    static NAME: OnceLock<&'static str> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let (extension, source) = ersc_settings_path()
+            .and_then(|path| {
+                let ini = fs::read_to_string(&path).ok()?;
+                let extension = er_save_redirect::parse_ersc_save_file_extension(&ini)?.to_owned();
+                Some((extension, path.display().to_string()))
+            })
+            .unwrap_or_else(|| {
+                (
+                    er_save_redirect::DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION.to_owned(),
+                    "ersc default (no readable ersc_settings.ini)".to_owned(),
+                )
+            });
+        let name = er_save_redirect::save_container_name_for_extension(&extension);
+        append_autoload_debug(format_args!(
+            "save-override: Seamless save container resolved to '{name}' from {source}"
+        ));
+        Box::leak(name.into_boxed_str())
+    })
+}
+
+/// On-disk path of an already-loaded module, or None when it is not resident.
+fn resident_module_path(module_name: &[u8]) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    let module = unsafe { GetModuleHandleA(PCSTR::from_raw(module_name.as_ptr())) }.ok()?;
+    if module.0 as usize == 0 {
+        return None;
+    }
+    let mut buf = [0u16; 1024];
+    let len = unsafe {
+        crate::ffi::GetModuleFileNameW(module.0 as isize, buf.as_mut_ptr(), buf.len() as u32)
+    };
+    if len == 0 || len as usize >= buf.len() {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_wide(
+        &buf[..len as usize],
+    )))
+}
+
+/// `ersc_settings.ini` beside the resident `ersc.dll`, else under the game's `SeamlessCoop/`.
+fn ersc_settings_path() -> Option<PathBuf> {
+    const SETTINGS_FILE: &str = "ersc_settings.ini";
+    let beside_module = resident_module_path(b"ersc.dll\0")
+        .and_then(|path| path.parent().map(|dir| dir.join(SETTINGS_FILE)))
+        .filter(|path| path.is_file());
+    beside_module.or_else(|| {
+        let path = game_directory_path()?
+            .join("SeamlessCoop")
+            .join(SETTINGS_FILE);
+        path.is_file().then_some(path)
+    })
+}
+
+/// This is NOT the acceptance predicate -- see [`active_default_save_file_names`] -- and it is NOT
+/// the staging name either. Staging cannot use it: it runs at DllMain+~190ms, before me3 has loaded
+/// `ersc.dll`, so the ERSC latch below still answers "vanilla" on a Seamless launch. Staging writes
+/// every container name instead (`staged_save_container_names`); this one names the WRITE target,
+/// which is resolved later, once the latch has settled.
 pub(crate) fn active_default_save_file_name() -> &'static str {
     if save_picker_seamless_mode_after_settle("active-default-save-file-name") {
-        "ER0000.co2"
+        seamless_save_container_name()
     } else {
-        "ER0000.sl2"
+        er_save_redirect::VANILLA_SAVE_CONTAINER_NAME
     }
+}
+
+/// Every container name a staging pass writes, cached for the process.
+pub(crate) fn staged_save_container_names() -> &'static [&'static str] {
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        er_save_redirect::staged_save_container_names_for(seamless_save_container_name())
+            .into_iter()
+            .map(|name| &*Box::leak(name.into_boxed_str()))
+            .collect()
+    })
+}
+
+/// Container names the active runtime will LOAD, in priority order.
+///
+/// The mode lock is deliberately ASYMMETRIC (user spec 2026-08-02), matching what every picker
+/// surface already offers (`save_picker_boot.rs`, `save_picker_menu.rs`,
+/// `system_quit_dialog_handlers.rs` all use `if seamless { ["co2","sl2"] } else { ["sl2"] }`):
+///
+/// * **Seamless** takes BOTH the co-op container and `ER0000.sl2`, preferring the co-op one when
+///   both exist. Refusing a vanilla `.sl2` here is what softlocked the loading screen on
+///   2026-08-02 (bd `er-effects-rs-h6sh`): the picker legitimately accepted one and nothing
+///   downstream would load it. The co-op container is whatever ERSC is CONFIGURED with -- see
+///   [`seamless_save_container_name`] -- not a fixed `ER0000.co2`.
+/// * **Vanilla** takes ONLY `ER0000.sl2`. A vanilla launch must never silently load the Seamless
+///   container, because that would advance co-op progress in an offline session.
+///
+/// If none of these is present, default-save discovery returns "no save" and the missing-save
+/// picker asks the user for a file.
+pub(crate) fn active_default_save_file_names() -> &'static [&'static str] {
+    static VANILLA_ONLY: [&str; 1] = [er_save_redirect::VANILLA_SAVE_CONTAINER_NAME];
+    static SEAMLESS: OnceLock<Vec<&'static str>> = OnceLock::new();
+    if !save_picker_seamless_mode_after_settle("active-default-save-file-names") {
+        return &VANILLA_ONLY;
+    }
+    SEAMLESS.get_or_init(|| {
+        er_save_redirect::active_save_container_names_for(true, seamless_save_container_name())
+            .into_iter()
+            .map(|name| &*Box::leak(name.into_boxed_str()))
+            .collect()
+    })
 }
 
 /// Accept a default-save candidate only when it holds at least one readable character. The game
@@ -860,16 +977,23 @@ fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
 }
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
-    let dir = default_save_root()?.join(steam_id.to_string());
-    validated_save_file_path(dir.join(active_default_save_file_name()))
+    let root = default_save_root()?;
+    // Asymmetric mode lock: Seamless takes `.co2` then falls back to `.sl2`; vanilla takes only
+    // `.sl2`. First candidate that holds a readable character wins.
+    active_default_save_file_names().iter().find_map(|name| {
+        validated_default_save_file(
+            default_save_file_path(&root, steam_id, name),
+            "active-default-save",
+        )
         .and_then(default_save_with_character)
+    })
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
     let Some(root) = default_save_root() else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = std::fs::read_dir(&root) else {
         return Vec::new();
     };
     entries
@@ -878,13 +1002,16 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
             let steam_id = entry
                 .file_name()
                 .to_str()
-                .filter(|name| (16..=20).contains(&name.len()))
-                .filter(|name| name.as_bytes().iter().all(u8::is_ascii_digit))
-                .and_then(|name| name.parse::<u64>().ok())
-                .and_then(plausible_steam_id64)?;
-            let dir = entry.path();
-            validated_save_file_path(dir.join(active_default_save_file_name()))
-                .and_then(default_save_with_character)
+                .and_then(steam_id64_from_dir_name)?;
+            active_default_save_file_names()
+                .iter()
+                .find_map(|name| {
+                    validated_default_save_file(
+                        default_save_file_path(&root, steam_id, name),
+                        "default-save-candidate",
+                    )
+                    .and_then(default_save_with_character)
+                })
                 .map(|path| (path, steam_id))
         })
         .collect()
@@ -923,11 +1050,11 @@ fn direct_mode_native_active_save_file() -> Option<PathBuf> {
     let steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
     plausible_steam_id64(steam_id)?;
     ensure_direct_stage_for_steam_id(steam_id);
-    Some(
-        default_save_root()?
-            .join(steam_id.to_string())
-            .join(active_default_save_file_name()),
-    )
+    Some(default_save_file_path(
+        &default_save_root()?,
+        steam_id,
+        active_default_save_file_name(),
+    ))
 }
 
 /// Runtime-active save file for System->Quit character switching. A direct/picked save is a READ-ONLY
@@ -941,53 +1068,12 @@ pub(crate) fn active_save_file_for_system_quit() -> Option<PathBuf> {
     configured_or_default_save_file()
 }
 
-fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
-    let mut root = PathBuf::new();
-    let mut comps = path.components().peekable();
-    while let Some(comp) = comps.next() {
-        let text = comp.as_os_str().to_string_lossy();
-        if text.eq_ignore_ascii_case("EldenRing") {
-            let Some(steam_id_comp) = comps.peek() else {
-                return None;
-            };
-            let steam_id = steam_id_comp.as_os_str().to_string_lossy();
-            let is_steam_id = (16..=20).contains(&steam_id.len())
-                && steam_id.as_bytes().iter().all(u8::is_ascii_digit);
-            if is_steam_id {
-                return steam_id
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|value| *value != 0)
-                    .map(|value| (root, value));
-            }
-            return None;
-        }
-        root.push(comp);
-    }
-    None
-}
-
 fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource {
-    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path)
-        && save_file_writeback_allowed(&path)
-    {
-        return SaveRedirectSource::StagedRoot {
-            file: path,
-            steam_id,
-            root_w: path_root_to_wine_wide(&staged_root),
-        };
-    }
     // Explicit/user-picked non-default saves are read-only sources, even if they already live under an
-    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy.
-    let stage_root = path
-        .parent()
-        .map(|parent| parent.join("er-effects-save-redirect-stage"))
-        .unwrap_or_else(|| PathBuf::from("er-effects-save-redirect-stage"));
-    SaveRedirectSource::DirectFile {
-        file: path.clone(),
-        root_w: path_root_to_wine_wide(&stage_root),
-        stage_root,
-    }
+    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy unless
+    // the shared planner proves this is the current game-owned default-save root and writeback is safe.
+    let writeback_allowed = save_file_writeback_allowed(&path);
+    er_save_redirect::plan_validated_save_source(path, writeback_allowed)
 }
 
 fn save_override_redirect_source() -> Option<SaveRedirectSource> {
@@ -1012,14 +1098,14 @@ fn activate_save_redirect_source(
         SaveRedirectSource::StagedRoot {
             file,
             steam_id,
-            root_w,
+            root_wide,
         } => {
             OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
             normalize_env_save_file_to_known_steam_id(&file, steam_id, source_label);
             SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             // UTF-8 Lossy: log-only decode of configured Windows wide path for probe confirmation.
-            let shown = String::from_utf16_lossy(&root_w);
-            let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            let shown = String::from_utf16_lossy(root_wide.as_slice());
+            let _ = SAVE_REDIRECT_DIR_W.set(root_wide.into_vec());
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_STAGED_ROOT, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "save-override: ENFORCED -- redirecting native save root to staged root '{shown}' source={source_label}"
@@ -1029,18 +1115,19 @@ fn activate_save_redirect_source(
         SaveRedirectSource::DirectFile {
             file,
             stage_root,
-            root_w,
+            root_wide,
         } => {
-            let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
-            let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
+            for dir in direct_stage_case_dirs(&stage_root) {
+                let _ = std::fs::create_dir_all(dir);
+            }
             // UTF-8 Lossy: log-only decode of configured source/stage paths for probe confirmation.
             let shown = file.display().to_string();
-            let stage_shown = String::from_utf16_lossy(&root_w);
+            let stage_shown = String::from_utf16_lossy(root_wide.as_slice());
             let configured_file = file.clone();
             let explicit_steam_id = configured_active_steam_id64();
             let _ = SAVE_DIRECT_SOURCE_FILE.set(file);
             let _ = SAVE_DIRECT_STAGE_ROOT.set(stage_root);
-            let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            let _ = SAVE_REDIRECT_DIR_W.set(root_wide.into_vec());
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DIRECT_FILE, Ordering::SeqCst);
             if let Some((steam_id, reason)) = explicit_steam_id {
                 OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
@@ -1082,12 +1169,12 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default {} (>= {} bytes). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
-        active_default_save_file_name(),
-        SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
+        "save-override: no usable autoload save (configured save missing/invalid, or no readable active default among {:?} exactly {} bytes; read-only is NOT a rejection reason). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
+        active_default_save_file_names(),
+        SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
-    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_PENDING);
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
     SaveOverrideMode::Redirect
 }
 
@@ -1116,32 +1203,57 @@ pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
 /// picked container (size floor + BND4 parse -- stronger than the old OS flow's size-only check),
 /// persists the picked directory, activates the save-redirect source, installs the Win32 redirect
 /// hooks synchronously (idempotent -- the install is Once-guarded), and releases every waiter on
-/// the missing-save gate. Returns false (state unchanged, picker stays up) on an invalid pick.
-pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
-    let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
-        append_autoload_debug(format_args!(
-            "save-override: title picker rejected non-plausible save '{}' (missing or under {} bytes)",
-            path.display(),
-            SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
-        ));
-        return false;
+/// the missing-save gate. A rejection carries the user-facing reason and leaves state unchanged so
+/// the picker stays up.
+pub(crate) fn complete_missing_save_selection_from_picker(
+    path: &Path,
+) -> er_save_picker::MissingSaveSelectionOutcome {
+    use er_save_picker::MissingSaveSelectionOutcome;
+    // NO writability check: the pick is staged into a private native tree and the source is never a
+    // write target, so a read-only save (the norm for the `0444` repo corpus) loads exactly like a
+    // writable one. Rejecting those was a false negative that looked to the user like the picker
+    // simply refusing to open the save.
+    let validated = match er_save_redirect::validate_save_file_path(path.to_path_buf()) {
+        Ok(path) => path,
+        Err(err) => {
+            let message = picker_status_for_save_source_rejection(err);
+            append_autoload_debug(format_args!(
+                "save-override: title picker rejected invalid save '{}' -- {err:?} visible='{}: {}'",
+                path.display(),
+                message.headline(),
+                message.detail()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
     };
     match fs::read(&validated) {
         Ok(bytes) if er_save_loader::bnd4::parse_entries(&bytes).is_ok() => {}
         Ok(bytes) => {
+            let message = er_save_picker::PickerStatusMessage::new(
+                "NOT AN ELDEN RING SAVE",
+                "The file is not a readable BND4 save container.",
+            );
             append_autoload_debug(format_args!(
-                "save-override: title picker rejected non-BND4 file '{}' len={}",
+                "save-override: title picker rejected non-BND4 file '{}' len={} visible='{}: {}'",
                 validated.display(),
-                bytes.len()
+                bytes.len(),
+                message.headline(),
+                message.detail()
             ));
-            return false;
+            return MissingSaveSelectionOutcome::Rejected(message);
         }
         Err(err) => {
+            let message = er_save_picker::PickerStatusMessage::new(
+                "SAVE UNREADABLE",
+                "The save exists, but could not be read.",
+            );
             append_autoload_debug(format_args!(
-                "save-override: title picker could not read '{}': {err}",
-                validated.display()
+                "save-override: title picker could not read '{}': {err} visible='{}: {}'",
+                validated.display(),
+                message.headline(),
+                message.detail()
             ));
-            return false;
+            return MissingSaveSelectionOutcome::Rejected(message);
         }
     }
     if autoupdate_preferred_picker_dir_enabled()
@@ -1152,12 +1264,12 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
     let source = save_redirect_source_for_validated_file(validated.clone());
     let _ = activate_save_redirect_source(source, "title-picker-selection");
     install_save_redirect_hooks();
-    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Ready);
     append_autoload_debug(format_args!(
         "save-override: title picker selected save '{}'; redirect active, missing-save gate released",
         validated.display()
     ));
-    true
+    MissingSaveSelectionOutcome::Completed
 }
 
 /// Diagnostic-only observer for save-like IO while the missing-save selection is pending. The
@@ -1166,8 +1278,8 @@ pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
 /// blocking here re-creates the input-dead title the old OS dialog existed to paper over. The
 /// pick later installs/activates the redirect and fires a title reload, so nothing read during
 /// the pending window is ever committed.
-fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
-    if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
+pub(super) fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
+    if !MISSING_SAVE_DIALOG_GATE.is_pending() {
         return;
     }
     let hit = MISSING_SAVE_BLOCKED_IO_LOGGED.fetch_add(1, Ordering::SeqCst);
@@ -1180,17 +1292,8 @@ fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     }
 }
 
-fn is_save_file_or_backup_path(path: &[u16]) -> bool {
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
-    wide_ends_with_ci_ascii(path, SL2D)
-        || wide_ends_with_ci_ascii(path, CO2D)
-        || wide_ends_with_ci_ascii(path, BAKD)
-}
-
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
-unsafe fn wide_len(ptr: *const u16) -> usize {
+pub(super) unsafe fn wide_len(ptr: *const u16) -> usize {
     if ptr.is_null() {
         return 0;
     }
@@ -1206,79 +1309,30 @@ unsafe fn wide_len(ptr: *const u16) -> usize {
     len
 }
 
-/// ASCII-lowercase a UTF-16 code unit (leaves non-ASCII untouched).
-fn wide_ascii_lower(c: u16) -> u16 {
-    if (b'A' as u16..=b'Z' as u16).contains(&c) {
-        c + 0x20
-    } else {
-        c
-    }
-}
-
-/// True if `hay` contains `needle` (ASCII, case-insensitive). `needle` must be ASCII lowercase.
-fn wide_contains_ci_ascii(hay: &[u16], needle: &[u16]) -> bool {
-    if needle.is_empty() || needle.len() > hay.len() {
-        return false;
-    }
-    let last = hay.len() - needle.len();
-    (0..=last).any(|start| {
-        needle
-            .iter()
-            .enumerate()
-            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
-    })
-}
-
-/// First index in `hay` where `needle` occurs (ASCII, case-insensitive). `needle` must be ASCII
-/// lowercase. None if absent.
-fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > hay.len() {
-        return None;
-    }
-    let last = hay.len() - needle.len();
-    (0..=last).find(|&start| {
-        needle
-            .iter()
-            .enumerate()
-            .all(|(i, &n)| wide_ascii_lower(hay[start + i]) == n)
-    })
-}
-
-/// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
-fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
-    if suffix.len() > hay.len() {
-        return false;
-    }
-    let start = hay.len() - suffix.len();
-    suffix
-        .iter()
-        .enumerate()
-        .all(|(i, &s)| wide_ascii_lower(hay[start + i]) == s)
-}
-
 /// Index just after the last path separator in `path` (0 if none) -- the basename start.
 fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
         return;
     };
-    let Some(steam_id) = steam_id64_from_wide_save_path(path) else {
-        let kind = direct_stage_no_steamid_kind(path);
-        SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
-        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind, Ordering::SeqCst);
-        let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
-        if hit < 8 {
-            // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
-            let shown = String::from_utf16_lossy(path);
-            let kind_label = direct_stage_no_steamid_kind_label(kind);
-            append_autoload_debug(format_args!(
-                "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
-            ));
+    match plan_direct_stage_request(path) {
+        DirectStageRequestPlan::SteamId(steam_id) => ensure_direct_stage_for_steam_id(steam_id),
+        DirectStageRequestPlan::NoSteamId(kind) => {
+            SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
+            SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind.as_usize(), Ordering::SeqCst);
+            let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+            if hit < 8 {
+                // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+                let shown = String::from_utf16_lossy(path);
+                let kind_label = kind.label();
+                append_autoload_debug(format_args!(
+                    "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
+                ));
+            }
+            for dir in direct_stage_case_dirs(root) {
+                let _ = std::fs::create_dir_all(dir);
+            }
         }
-        let _ = std::fs::create_dir_all(root.join("eldenring"));
-        let _ = std::fs::create_dir_all(root.join("EldenRing"));
-        return;
-    };
-    ensure_direct_stage_for_steam_id(steam_id);
+    }
 }
 
 fn make_file_writable(path: &Path) {
@@ -1300,31 +1354,46 @@ fn remove_file_for_overwrite(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn copy_save_for_overwrite(source: &Path, target: &Path, steam_id: u64) -> std::io::Result<u64> {
+/// Read the configured source once and stamp the active account's SteamID into it.
+///
+/// One read for the whole staging pass: the same bytes go to every container name, and re-reading
+/// and re-normalizing a 28 MB save per target would multiply the DllMain staging cost by the size
+/// of the name set.
+fn read_normalized_save_for_stage(source: &Path, steam_id: u64) -> std::io::Result<Vec<u8>> {
     let mut bytes = std::fs::read(source)?;
     match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
         Ok(report) if report.changed() => append_autoload_debug(format_args!(
-            "save-override: direct-file staging normalized private copy source='{}' target='{}' steam_id={steam_id} char_patched={} user_data10_patched={} md5_rewritten={}",
+            "save-override: direct-file staging normalized private copy source='{}' steam_id={steam_id} char_patched={} user_data10_patched={} md5_rewritten={}",
             source.display(),
-            target.display(),
             report.character_slots_patched,
             report.user_data10_patched,
             report.md5_rewritten
         )),
         Ok(_) => {}
         Err(err) => append_autoload_debug(format_args!(
-            "save-override: direct-file staging normalization skipped source='{}' target='{}' steam_id={steam_id}: {err:?}",
-            source.display(),
-            target.display()
+            "save-override: direct-file staging normalization skipped source='{}' steam_id={steam_id}: {err:?}",
+            source.display()
         )),
     }
+    Ok(bytes)
+}
+
+fn write_staged_save(bytes: &[u8], target: &Path) -> std::io::Result<u64> {
     remove_file_for_overwrite(target)?;
-    std::fs::write(target, &bytes)?;
+    std::fs::write(target, bytes)?;
     make_file_writable(target);
     Ok(bytes.len() as u64)
 }
 
 fn ensure_direct_stage_for_steam_id(steam_id: u64) {
+    // Staging is a read of the source plus two writes of the staged copies -- three opens that
+    // re-enter whichever detour asked for the staging. The `SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID`
+    // latch below happens to swallow a re-entry for the SAME id, but not for a different one, and
+    // relying on that accident is how this file grew a stack overflow. Refuse outright from a
+    // nested context: the outer detour entry stages it once its own I/O has unwound.
+    if !save_detour_disk_io_allowed() {
+        return;
+    }
     let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
         if hit < 8 {
@@ -1373,23 +1442,25 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
             root.display()
         ));
     }
-    let staged_is_co2 = source
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
-    let staged_basename_lower = if staged_is_co2 {
-        "er0000.co2"
-    } else {
-        "er0000.sl2"
-    };
-    let staged_basename_native = if staged_is_co2 {
-        "ER0000.co2"
-    } else {
-        "ER0000.sl2"
-    };
-    let lower_dir = root.join("eldenring").join(steam_id.to_string());
-    let native_dir = root.join("EldenRing").join(steam_id.to_string());
-    for dir in [&lower_dir, &native_dir] {
+    // Stage the source under EVERY container name (`STAGED_SAVE_CONTAINER_NAMES`), never under a
+    // name derived from the source's own extension and never under one derived from the Seamless
+    // mode. This code runs inside the `CreateFileW` detour at DllMain+~190ms, and me3 loads
+    // `ersc.dll` AFTER that, so `active_default_save_file_name()` here still answers "vanilla" on a
+    // Seamless launch -- measured 2026-08-11, the same run that logged
+    // `seamless=false reason=active-default-save-file-name` at +191ms reported
+    // `seamless_coop_loaded=true` in its telemetry. Naming the staged copy from that unsettled
+    // latch put the save at `ER0000.sl2` while `own_load::drive` and the native writer later asked
+    // for `ER0000.co2`; the two never met and the boot cover parked forever.
+    //
+    // Restamping the name is byte-safe: `.sl2` and `.co2` are the same 28 MB BND4 container and
+    // the copy below rewrites the embedded Steam ID either way. `active_default_save_file_name()`
+    // keeps its job of naming the WRITE target, which is resolved later, once the latch has
+    // settled.
+    let stage_dirs: Vec<PathBuf> = direct_stage_case_dirs(root)
+        .into_iter()
+        .map(|dir| dir.join(steam_id.to_string()))
+        .collect();
+    for dir in &stage_dirs {
         if let Err(err) = std::fs::create_dir_all(dir) {
             append_autoload_debug(format_args!(
                 "save-override: direct-file stage failed creating '{}': {err}",
@@ -1399,40 +1470,119 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
             return;
         }
     }
-    let lower_target = lower_dir.join(staged_basename_lower);
-    let native_target = native_dir.join(staged_basename_native);
-    match copy_save_for_overwrite(source, &lower_target, steam_id) {
-        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target, steam_id) {
-            Ok(native_bytes) => {
-                SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "save-override: direct-file staged lower={} native={} bytes for SteamID64 {steam_id}: '{}' -> '{}' + '{}'",
-                    lower_bytes,
-                    native_bytes,
-                    source.display(),
-                    lower_target.display(),
-                    native_target.display()
-                ));
+    // Under Wine the two case spellings resolve to ONE directory, so writing each 28 MB container
+    // once per spelling would double the DllMain staging cost for no extra coverage.
+    let stage_dirs = dedupe_dirs_by_identity(stage_dirs, |dir| std::fs::canonicalize(dir).ok());
+
+    let bytes = match read_normalized_save_for_stage(source, steam_id) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-override: direct-file stage could NOT read the configured source '{}' for SteamID64 {steam_id}: {err} -- nothing was staged; the runtime will open whatever is already in the staged tree",
+                source.display()
+            ));
+            SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
+            return;
+        }
+    };
+    let container_names = staged_save_container_names();
+    let mut staged: Vec<PathBuf> = Vec::new();
+    for dir in &stage_dirs {
+        for name in container_names {
+            let target = dir.join(name);
+            match write_staged_save(&bytes, &target) {
+                Ok(bytes) => {
+                    SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "save-override: direct-file staged {bytes} bytes for SteamID64 {steam_id}: '{}' -> '{}'",
+                        source.display(),
+                        target.display()
+                    ));
+                    staged.push(target);
+                }
+                Err(err) => {
+                    // LOUD: a container the runtime may open does NOT hold the configured source.
+                    // Leaving the done-latch unset lets a later save-path observation retry.
+                    append_autoload_debug(format_args!(
+                        "save-override: direct-file stage copy FAILED for SteamID64 {steam_id}: '{}' -> '{}': {err} -- the runtime may open a container that is NOT the configured save",
+                        source.display(),
+                        target.display()
+                    ));
+                    SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
+                    return;
+                }
             }
-            Err(err) => append_autoload_debug(format_args!(
-                "save-override: direct-file native stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
-                source.display(),
-                native_target.display()
-            )),
-        },
-        Err(err) => append_autoload_debug(format_args!(
-            "save-override: direct-file stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
-            source.display(),
-            lower_target.display()
-        )),
+        }
     }
+    for dir in &stage_dirs {
+        remove_stale_staged_saves(dir, source, container_names);
+    }
+    SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "save-override: direct-file staging DONE for SteamID64 {steam_id}: '{}' now backs {} staged container(s) {:?}; stale_removed={} stale_remove_failed={}",
+        source.display(),
+        staged.len(),
+        staged
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+        SAVE_DIRECT_STAGE_STALE_REMOVED.load(Ordering::SeqCst),
+        SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.load(Ordering::SeqCst)
+    ));
     SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
 }
 
-fn wide_with_nul(path: &[u16]) -> Vec<u16> {
-    let mut out = path.to_vec();
-    out.push(0);
-    out
+/// Delete every save artifact in a staged SteamID directory that this pass did not just write.
+///
+/// A staged `.co2` from an earlier run, or a `.bak` companion the game left behind, is a save the
+/// user did not configure -- and the loader prefers whichever container the active mode names, not
+/// whichever is newest. Measured 2026-08-11: a `100-Lilbro` run was served an `ER0000.co2` written
+/// 33 minutes earlier from a DIFFERENT source ('angrE' level 120 vs the configured level 100), the
+/// slot read back blank, and the autoload guard refused to continue -- a silent soft lock at the
+/// boot cover with nothing in the log naming the file actually loaded.
+///
+/// Only the private stage tree is ever touched: the configured source lives one directory ABOVE
+/// the stage root and is read-only by contract, and `is_inside_direct_stage_root` fails the whole
+/// sweep closed if a caller ever hands over a directory outside it.
+fn remove_stale_staged_saves(dir: &Path, source: &Path, container_names: &[&str]) {
+    if !is_inside_direct_stage_root(dir) {
+        append_autoload_debug(format_args!(
+            "save-override: REFUSING to sweep stale saves in '{}' -- not inside a '{DIRECT_STAGE_ROOT_DIR_NAME}' tree",
+            dir.display()
+        ));
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        // UTF-8 Lossy: staged file-name classification only; a name whose host bytes are not valid
+        // UTF-8 was not written by staging and is classified from its lossy form deterministically.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if staged_entry_fate(&name, container_names) != StagedEntryFate::StaleRemove {
+            continue;
+        }
+        let path = entry.path();
+        match remove_file_for_overwrite(&path) {
+            Ok(()) => {
+                SAVE_DIRECT_STAGE_STALE_REMOVED.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-override: removed STALE staged save '{}' -- it is a leftover from an earlier run, not the configured source '{}'",
+                    path.display(),
+                    source.display()
+                ));
+            }
+            Err(err) => {
+                // LOUD: the leftover is still on disk and the game can still open it.
+                SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-override: FAILED to remove STALE staged save '{}': {err} -- the game may load THIS file instead of the configured source '{}'",
+                    path.display(),
+                    source.display()
+                ));
+            }
+        }
+    }
 }
 
 /// If `path` is anywhere under the game's `%APPDATA%\Roaming\EldenRing` save root, return a
@@ -1444,56 +1594,15 @@ fn wide_with_nul(path: &[u16]) -> Vec<u16> {
 /// opens redirect to the configured file itself so users do NOT need to stage their path under
 /// `EldenRing` or include a SteamID folder.
 fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
-    const ELDENRING: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    const ROAMING: &[u16] = &[
-        b'r' as u16,
-        b'o' as u16,
-        b'a' as u16,
-        b'm' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    // Always learn the native `<steamid>` segment from save-like paths; this is the safest
-    // current-account oracle because the native save-dir builder already called Steam before the path
-    // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
-    observe_steam_id64_from_save_path(path);
-    // Anchor on `Roaming` + `EldenRing` so a coincidental "eldenring" elsewhere -- and our already-
-    // redirected target (`Z:\...\save\EldenRing\...`, no "Roaming") -- never re-redirects.
-    if !wide_contains_ci_ascii(path, ROAMING) {
-        return None;
-    }
-    let idx = wide_find_ci_ascii(path, ELDENRING)?;
     // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
     // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
     // so readonly/user-provided source saves are never modified by gameplay or profile switching.
-    let root = SAVE_REDIRECT_DIR_W.get()?;
-    let suffix = &path[idx..]; // "EldenRing\<id>\ER0000.sl2" (or "EldenRing\" for the dir open)
-    ensure_direct_stage_for_requested_path(path);
-    let mut out = Vec::with_capacity(root.len() + 1 + suffix.len() + 1);
-    out.extend_from_slice(root);
-    out.push(b'\\' as u16);
-    // ASCII-lowercase the suffix: the game opens the save root in MIXED case ("EldenRing\" for the
-    // dir handle, "eldenring\graphicsconfig.xml" elsewhere). Our staged tree is on a CASE-SENSITIVE
-    // Linux filesystem, so we normalize every case-variant to lowercase and stage the tree lowercase
-    // (eldenring/<steamid>/er0000.sl2). The game reads through the returned HANDLE -- it does not care
-    // about the redirected filename's case; the Windows-side case-insensitive name compare still
-    // matches the enumerated lowercase entries.
-    for &c in suffix {
-        out.push(wide_ascii_lower(c));
-    }
-    out.push(0);
-    Some(out)
+    redirect_wide_save_path_with_side_effects(
+        path,
+        SAVE_REDIRECT_DIR_W.get().map(Vec::as_slice),
+        observe_steam_id64_from_save_path,
+        ensure_direct_stage_for_requested_path,
+    )
 }
 
 type CreateFileWFn =
@@ -1502,7 +1611,7 @@ type CopyFileWFn = unsafe extern "system" fn(*const u16, *const u16, i32) -> i32
 
 /// CreateFileW detour: redirect save-file opens to the env dir; pass everything else through.
 /// Covers BOTH read and write (the returned HANDLE is reused by ReadFile/WriteFile).
-unsafe extern "system" fn save_redirect_createfilew_hook(
+pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
     lp_file_name: *const u16,
     access: u32,
     share: u32,
@@ -1513,10 +1622,52 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
 ) -> isize {
     let orig = SAVE_REDIRECT_ORIG_CREATEFILEW.load(Ordering::SeqCst);
     let call: CreateFileWFn = unsafe { std::mem::transmute::<usize, CreateFileWFn>(orig) };
-    let len = unsafe { wide_len(lp_file_name) };
+    // RE-ENTRANCY (see `reentry.rs`): this detour body does its own file I/O -- the SteamID
+    // normalize's `fs::read`, direct-file staging's read+writes, the debug log's own open -- and
+    // every one of those comes back through `CreateFileW`, i.e. right back here on this thread.
+    // A nested entry is OUR open of a path WE computed, so it wants the original API untouched and
+    // none of the observation/redirect/staging/diagnostic work. Doing that work again is what
+    // recursed 510 frames deep into the guard page on 2026-07-30.
+    // `SAVE_CREATEFILEW_CALLS` counts every entry, nested ones included: its job is to prove the
+    // hook is live at all, and a run whose nested count runs away is itself evidence.
     let calls = SAVE_CREATEFILEW_CALLS.fetch_add(1, Ordering::SeqCst);
+    let depth = SaveDetourDepth::enter();
+    if depth.is_reentrant() {
+        return unsafe {
+            call(
+                lp_file_name,
+                access,
+                share,
+                security,
+                disposition,
+                flags,
+                template,
+            )
+        };
+    }
+    let len = unsafe { wide_len(lp_file_name) };
     if len != 0 {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
+        // SAVE-DESTINATION WRITE-OPEN REDIRECT (save-game-flow WP3), checked FIRST and only inside
+        // the armed commit window: the native BND4 writer emits the whole rebuilt container in one
+        // write-open, so diverting exactly that open writes the current save state to the folder
+        // the user chose while the loaded save is never opened for write. Read-opens (the writer's
+        // own read-modify-write base) and the `.bak` CopyFileW deliberately pass through.
+        if let Some(destination) = save_dest_redirect_for_open(path, access) {
+            let ret = unsafe {
+                call(
+                    destination.as_ptr(),
+                    access,
+                    share,
+                    security,
+                    disposition,
+                    flags,
+                    template,
+                )
+            };
+            save_dest_note_redirect_hit(ret != -1);
+            return ret;
+        }
         // Observe/stage before any redirect decision. Direct-file mode needs the native path builder's
         // `<steamid>` component to populate the private discovery tree, and some paths are diagnostic
         // only (not redirected) but still carry the account id.
@@ -1524,50 +1675,43 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
         // Diagnostic: confirm the hook is live (log the very first call), then log save-LIKE paths
         // (contain "eldenring" or end .sl2/.co2/.bak) so we can see the exact save path form even when
         // the redirect filter does NOT match -- distinguishes "hook never fires" from "filter misses".
-        const ELDENRING_SEG: &[u16] = &[
-            b'e' as u16,
-            b'l' as u16,
-            b'd' as u16,
-            b'e' as u16,
-            b'n' as u16,
-            b'r' as u16,
-            b'i' as u16,
-            b'n' as u16,
-            b'g' as u16,
-        ];
-        const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-        const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-        const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
-        let save_like = wide_contains_ci_ascii(path, ELDENRING_SEG)
-            || wide_ends_with_ci_ascii(path, SL2D)
-            || wide_ends_with_ci_ascii(path, CO2D)
-            || wide_ends_with_ci_ascii(path, BAKD);
-        if save_like {
+        let plan = plan_create_file_open(path, save_redirect_path);
+        let diag = plan.diag;
+        if diag.save_like {
             record_save_like_createfile_path_kind(path);
+            // ATTRIBUTION, not a gate. A modal OS file dialog enumerates folders on THIS thread, so
+            // its shell traffic re-enters this detour and any path containing "eldenring" or ending
+            // .sl2/.co2/.bak counts as save-like -- polluting the save CreateFileW diagnostics with
+            // browsing. Counting the ones seen while a dialog was open makes that noise
+            // attributable instead of indistinguishable from the game's own save I/O. These are
+            // READ opens that pass through unredirected; the shell does not write the loaded save,
+            // so this is a reporting concern, not a corruption one -- but it must be visible.
+            if er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN.load(Ordering::SeqCst) != 0 {
+                er_telemetry::counters::SAVE_PICKER_OS_SAVELIKE_OPENS
+                    .fetch_add(1, Ordering::SeqCst);
+            }
         }
-        if calls == 0 || save_like {
+        if diag.should_capture_diag_log(calls) {
             // Rate-limit: log the first 8 save-LIKE opens, then only at power-of-two hit counts.
             let hits = SAVE_CREATEFILEW_DIAG_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-            if hits <= 8 || hits.is_power_of_two() {
+            if createfile_diag_hit_should_log(hits) {
                 // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
                 let p = String::from_utf16_lossy(path);
                 append_autoload_debug(format_args!(
-                    "save-override: CreateFileW diag call#{calls} save_like={save_like} diag_hits={hits} '{p}'"
+                    "save-override: CreateFileW diag call#{calls} save_like={} diag_hits={hits} '{p}'",
+                    diag.save_like
                 ));
             }
         }
-        let is_save_file =
-            wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
-        if is_save_file || wide_ends_with_ci_ascii(path, BAKD) {
+        if plan.should_wait_for_missing_save_dialog() {
             wait_for_missing_save_dialog_if_pending(path);
         }
-        let redirected_path = save_redirect_path(path);
-        if is_save_file {
+        if plan.should_normalize_on_save_open() {
             if let Ok(base) = game_module_base() {
                 normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
             }
         }
-        if let Some(redirected) = redirected_path {
+        if let Some(redirected) = plan.redirected {
             let ret = unsafe {
                 call(
                     redirected.as_ptr(),
@@ -1615,36 +1759,42 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
 /// CopyFileW detour: redirect either endpoint that is a save artifact (the `.bak` backup routine
 /// copies ER0000.sl2 -> ER0000.sl2.bak), so backups follow the save into the env dir and never
 /// touch the default user directory.
-unsafe extern "system" fn save_redirect_copyfilew_hook(
+pub(super) unsafe extern "system" fn save_redirect_copyfilew_hook(
     existing: *const u16,
     new_file: *const u16,
     fail_if_exists: i32,
 ) -> i32 {
     let orig = SAVE_REDIRECT_ORIG_COPYFILEW.load(Ordering::SeqCst);
     let call: CopyFileWFn = unsafe { std::mem::transmute::<usize, CopyFileWFn>(orig) };
+    // RE-ENTRANCY (see `reentry.rs`): `save_redirect_path` observes, stages and normalizes, all of
+    // which open files. Nested entries pass straight through with the caller's own endpoints.
+    let depth = SaveDetourDepth::enter();
+    if depth.is_reentrant() {
+        return unsafe { call(existing, new_file, fail_if_exists) };
+    }
     let existing_red = {
         let len = unsafe { wide_len(existing) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(existing, len) })
-            .map(|path| {
-                if is_save_file_or_backup_path(path) {
+            .and_then(|path| {
+                let plan = classify_copyfile_endpoint(path, save_redirect_path);
+                if plan.should_wait_for_missing_save_dialog {
                     wait_for_missing_save_dialog_if_pending(path);
                 }
-                path
+                plan.redirected
             })
-            .and_then(save_redirect_path)
     };
     let new_red = {
         let len = unsafe { wide_len(new_file) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(new_file, len) })
-            .map(|path| {
-                if is_save_file_or_backup_path(path) {
+            .and_then(|path| {
+                let plan = classify_copyfile_endpoint(path, save_redirect_path);
+                if plan.should_wait_for_missing_save_dialog {
                     wait_for_missing_save_dialog_if_pending(path);
                 }
-                path
+                plan.redirected
             })
-            .and_then(save_redirect_path)
     };
     let existing_ptr = existing_red.as_ref().map_or(existing, |v| v.as_ptr());
     let new_ptr = new_red.as_ref().map_or(new_file, |v| v.as_ptr());
@@ -1655,37 +1805,22 @@ unsafe extern "system" fn save_redirect_copyfilew_hook(
 /// "eldenring"-containing paths (capped, shared budget) so we see the exact existence-check path
 /// form, and returns the redirected NUL-terminated path when the save filter matches (else None).
 fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
-    const ELDENRING_SEG: &[u16] = &[
-        b'e' as u16,
-        b'l' as u16,
-        b'd' as u16,
-        b'e' as u16,
-        b'n' as u16,
-        b'r' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'g' as u16,
-    ];
-    let redirected = save_redirect_path(path);
+    let plan = plan_save_query_path(path, save_redirect_path);
+    let diag = plan.diag;
     // DEDICATED save-FILE query log (own budget; immune to the early-boot churn that exhausts the
     // shared cap below) -- captures the exact ER0000.sl2 existence/enum path + its <steamid> component.
-    const ER0000: &[u16] = &[
-        b'e' as u16,
-        b'r' as u16,
-        b'0' as u16,
-        b'0' as u16,
-        b'0' as u16,
-        b'0' as u16,
-    ];
-    if wide_contains_ci_ascii(path, ELDENRING_SEG) || wide_contains_ci_ascii(path, ER0000) {
+    if diag.should_record_path_kind() {
         record_save_like_query_path_kind(path);
     }
-    if wide_contains_ci_ascii(path, ER0000) {
+    if diag.should_capture_save_file_query_log(
+        SAVE_SL2_QUERY_LOGGED.load(Ordering::SeqCst),
+        SAVE_SL2_QUERY_MAX,
+    ) {
         let d = SAVE_SL2_QUERY_LOGGED.fetch_add(1, Ordering::SeqCst);
         if d < SAVE_SL2_QUERY_MAX {
             // UTF-8 Lossy: log-only decode of the save-file query path for probe diagnosis.
             let p = String::from_utf16_lossy(path);
-            let did = if redirected.is_some() {
+            let did = if plan.redirected.is_some() {
                 "REDIRECT"
             } else {
                 "pass"
@@ -1693,13 +1828,16 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
             append_autoload_debug(format_args!("save-override: {api} SL2-QUERY {did} '{p}'"));
         }
     }
-    if wide_contains_ci_ascii(path, ELDENRING_SEG) {
+    if diag.should_capture_general_query_log(
+        SAVE_CREATEFILEW_DIAG_LOGGED.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_DIAG_MAX,
+    ) {
         let d = SAVE_CREATEFILEW_DIAG_LOGGED.load(Ordering::SeqCst);
         if d < SAVE_CREATEFILEW_DIAG_MAX {
             SAVE_CREATEFILEW_DIAG_LOGGED.store(d + 1, Ordering::SeqCst);
             // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
             let p = String::from_utf16_lossy(path);
-            let did = if redirected.is_some() {
+            let did = if plan.redirected.is_some() {
                 "REDIRECT"
             } else {
                 "pass"
@@ -1707,16 +1845,19 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
             append_autoload_debug(format_args!("save-override: {api} diag {did} '{p}'"));
         }
     }
-    redirected
+    plan.redirected
 }
 
 /// GetFileAttributesW detour: redirect save-path existence checks to the env dir.
-unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) -> u32 {
+pub(super) unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) -> u32 {
     let orig = SAVE_REDIRECT_ORIG_GETATTRW.load(Ordering::SeqCst);
     let call: unsafe extern "system" fn(*const u16) -> u32 =
         unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(*const u16) -> u32>(orig) };
+    // RE-ENTRANCY (see `reentry.rs`): `save_path_api_redirect` -> `save_redirect_path` observes,
+    // stages and normalizes, all of which open files and land back in this detour family.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("GetFileAttributesW", path) {
             return unsafe { call(red.as_ptr()) };
@@ -1726,7 +1867,7 @@ unsafe extern "system" fn save_redirect_getattrw_hook(lp_file_name: *const u16) 
 }
 
 /// GetFileAttributesExW detour: same redirect for the Ex existence check.
-unsafe extern "system" fn save_redirect_getattrexw_hook(
+pub(super) unsafe extern "system" fn save_redirect_getattrexw_hook(
     lp_file_name: *const u16,
     info_level: i32,
     info: *mut c_void,
@@ -1737,8 +1878,10 @@ unsafe extern "system" fn save_redirect_getattrexw_hook(
             orig,
         )
     };
+    // RE-ENTRANCY (see `reentry.rs`): same hazard as `GetFileAttributesW` above.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("GetFileAttributesExW", path) {
             return unsafe { call(red.as_ptr(), info_level, info) };
@@ -1748,7 +1891,7 @@ unsafe extern "system" fn save_redirect_getattrexw_hook(
 }
 
 /// FindFirstFileW detour: redirect save-path enumeration/existence checks to the env dir.
-unsafe extern "system" fn save_redirect_findfirstw_hook(
+pub(super) unsafe extern "system" fn save_redirect_findfirstw_hook(
     lp_file_name: *const u16,
     find_data: *mut c_void,
 ) -> isize {
@@ -1758,12 +1901,126 @@ unsafe extern "system" fn save_redirect_findfirstw_hook(
             orig,
         )
     };
+    // RE-ENTRANCY (see `reentry.rs`): same hazard as `GetFileAttributesW` above.
+    let depth = SaveDetourDepth::enter();
     let len = unsafe { wide_len(lp_file_name) };
-    if len != 0 {
+    if len != 0 && !depth.is_reentrant() {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
         if let Some(red) = save_path_api_redirect("FindFirstFileW", path) {
             return unsafe { call(red.as_ptr(), find_data) };
         }
     }
     unsafe { call(lp_file_name, find_data) }
+}
+
+#[cfg(test)]
+mod save_container_mode_lock_tests {
+    use super::*;
+
+    /// The mode lock is ASYMMETRIC and must stay that way (user spec 2026-08-02). A symmetric
+    /// one-container-per-mode rule is what softlocked the loading screen for 46s on 2026-08-02
+    /// (bd `er-effects-rs-h6sh`): a picked `.sl2` staged under a Seamless run that then refused
+    /// to load anything but `.co2`.
+    ///
+    /// Under test there is no live ERSC module, so `save_picker_seamless_mode_after_settle` is
+    /// false and this pins the VANILLA half -- the half where a wrong answer is dangerous, because
+    /// loading a Seamless `.co2` offline would advance co-op progress in the wrong container.
+    #[test]
+    fn vanilla_loads_only_sl2_and_never_a_seamless_co2() {
+        let names = active_default_save_file_names();
+        assert_eq!(
+            names,
+            &["ER0000.sl2"],
+            "vanilla must accept exactly one container and it must be .sl2"
+        );
+        assert!(
+            !names.iter().any(|n| n.eq_ignore_ascii_case("ER0000.co2")),
+            "a vanilla run must never load a Seamless .co2"
+        );
+    }
+
+    /// The write target is a SINGLE container, always drawn from the same mode decision as the
+    /// load candidates, and it must be the first (preferred) candidate. That equality is what
+    /// guarantees the staged copy, the loaded container and the native write path are one file --
+    /// the invariant whose violation caused the softlock.
+    #[test]
+    fn the_write_target_is_the_preferred_load_candidate() {
+        let names = active_default_save_file_names();
+        assert_eq!(
+            active_default_save_file_name(),
+            names[0],
+            "the staged/native write name must be the preferred load candidate"
+        );
+        assert!(
+            !names.is_empty(),
+            "every mode must name at least one loadable container"
+        );
+    }
+
+    /// Staging cannot read the mode -- it runs before `ersc.dll` is resident -- so it writes every
+    /// container name instead. Whatever this run's mode resolves to, the staged set must already
+    /// cover it, or the runtime opens a container staging never wrote (the 2026-08-11 soft lock).
+    #[test]
+    fn staging_covers_every_container_the_active_mode_can_ask_for() {
+        let staged = staged_save_container_names();
+        assert!(
+            is_staged_save_container_name(active_default_save_file_name(), staged),
+            "staging must write the container the native writer targets"
+        );
+        for name in active_default_save_file_names() {
+            assert!(
+                is_staged_save_container_name(name, staged),
+                "staging must write every container the loader may open: {name}"
+            );
+        }
+        assert!(
+            staged.contains(&er_save_redirect::VANILLA_SAVE_CONTAINER_NAME),
+            "the vanilla container is always staged, whatever ERSC is configured with"
+        );
+    }
+}
+
+#[cfg(test)]
+mod save_redirect_product_reentry_tests {
+    use super::*;
+
+    /// The production one-shot must refuse to touch the disk from inside a detour. With no
+    /// configured save file it normally reaches the "no configured save file" one-shot log; held
+    /// inside a depth token it must bail before even resolving the path, so that latch stays 0.
+    #[test]
+    fn normalize_one_shot_bails_before_resolving_a_path_inside_a_detour() {
+        if configured_save_file().is_some() {
+            // A save file is configured in this environment, so the one-shot would take the
+            // read-the-file arm and the latch this test reads is not the observable. Skip rather
+            // than assert against a different code path.
+            return;
+        }
+        let prior_steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+        let prior_done = SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst);
+        let prior_logged = SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst);
+        // The preconditions the one-shot needs before it does anything at all.
+        OBSERVED_ACTIVE_STEAM_ID64.store(76_561_197_960_265_729, Ordering::SeqCst);
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(0, Ordering::SeqCst);
+        SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.store(0, Ordering::SeqCst);
+
+        {
+            let _inside_detour = SaveDetourDepth::enter();
+            normalize_env_save_file_to_active_steam_id_once(0, "unit-test-reentrant");
+            assert_eq!(
+                SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst),
+                0,
+                "the one-shot ran its body from inside a save-redirect detour"
+            );
+        }
+        normalize_env_save_file_to_active_steam_id_once(0, "unit-test-outside-detour");
+        assert_eq!(
+            SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.load(Ordering::SeqCst),
+            1,
+            "the one-shot did not run its body outside a detour"
+        );
+
+        OBSERVED_ACTIVE_STEAM_ID64.store(prior_steam_id, Ordering::SeqCst);
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(prior_done, Ordering::SeqCst);
+        SAVE_STEAM_ID_NORMALIZE_NO_SOURCE_LOGGED.store(prior_logged, Ordering::SeqCst);
+    }
 }

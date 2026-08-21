@@ -1,17 +1,4 @@
 // ---- CS::PlayerGameData correctness oracle (read at in-world) ----
-/// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
-/// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
-/// at +0x08. CORRECTED 2026-06-17: the prior value 0x4588268 was the WRONG global (read garbage:
-/// level=805829232, name="翿"). The real GameDataMan is 0x3d5df38 -- confirmed by fromsoftware-rs
-/// (`rva::game_data_man = 0x3d5df38`, `GameDataMan::main_player_game_data` at struct +0x08) and the
-/// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
-/// sites). Validated against the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
-/// GameDataMan -> PlayerGameData (the active/main player's save data) sub-object pointer.
-/// Offsets are bound to the upstream `eldenring` typed layout via `offset_of!` so they
-/// track `fromsoftware-rs` automatically and fail the build if the struct layout drifts
-/// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
-pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
-    core::mem::offset_of!(GameDataMan, main_player_game_data);
 /// `GameDataMan::play_time` (u32, in-game play time in milliseconds, maxed at 999:59:59.999).
 /// WORLD-LIVE LIVENESS signal for the render gate: the game advances this clock only while the
 /// world simulation is actually stepping; it is PAUSED during loads/menus/frozen-world states.
@@ -22,23 +9,16 @@ pub(crate) const GAME_DATA_MAN_PLAY_TIME_A0_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, play_time);
 pub(crate) const PGD_CURRENT_HP_10_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_hp);
-pub(crate) const PGD_CURRENT_MAX_HP_14_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_hp);
 pub(crate) const PGD_BASE_MAX_HP_18_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_hp);
 pub(crate) const PGD_CURRENT_FP_1C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_fp);
-pub(crate) const PGD_CURRENT_MAX_FP_20_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_fp);
 pub(crate) const PGD_BASE_MAX_FP_24_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_fp);
 pub(crate) const PGD_CURRENT_STAMINA_2C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, current_stamina);
-pub(crate) const PGD_CURRENT_MAX_STAMINA_30_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, current_max_stamina);
 pub(crate) const PGD_BASE_MAX_STAMINA_34_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_max_stamina);
-pub(crate) const PGD_LEVEL_68_OFFSET: usize = core::mem::offset_of!(PlayerGameData, level);
 pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_count);
 pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
@@ -57,7 +37,6 @@ pub(crate) const CHR_ASM_GAITEM_HANDLES_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, gaitem_handles);
 pub(crate) const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, equipment_param_ids);
-pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
 pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, voice_type);
@@ -92,7 +71,85 @@ pub(crate) const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
 pub(crate) const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
 /// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
 /// the source the profile renderer reads to dress the portrait model.
+///
+/// NOT A MEMCPY (byte-verified 2026-07-31 at deobf 0x140245c00, 1.16.2 zero shift): it runs
+/// `GaitemHandle::copy` (0x140682580) 22 times over `+0x24`, i.e. a REFCOUNTING assign that
+/// increments the incoming handle and releases the previous occupant, and only then does a plain
+/// 22-entry u32 copy of `equipment_param_ids` at `+0x7c`. Feeding it a FOREIGN save's handles
+/// therefore touches live refcount state on a `gaitemInsTable` this process owns -- which is why
+/// `SerializedSaveSlot::runtime_chr_asm_image` zeroes the handle array instead of copying it.
+///
+/// It also copies `unk0` (+0x00), `unkd4` (+0xd4) and `unkd8` (+0xd8) VERBATIM (`field0_0x0 =
+/// *param_2; field5_0xd4 = param_2[0x35]; field6_0xd8 = param_2[0x36]`), and the profile pipeline
+/// runs it twice more (record +0x1a8 -> renderer +0x548 -> +0x33c -> +0x130). A wrong value in those
+/// three therefore reaches the model build unaltered -- see `CHR_ASM_OVERRIDE_ABSENT`.
 pub(crate) const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+/// Index of `ProtectorHead` within `ChrAsm::gaitem_handles` / `ChrAsm::equipment_param_ids`; the four
+/// armor slots are head/chest/hands/legs at `+0..+3`. Grounded in the disassembly, not assumed:
+/// `CS::ChrAsm::EquipProtectorOrAccessory` (deobf 0x1403bf490) is literally `add $0xc,%edx; jmp
+/// EquipItem`, and `CS::ChrAsm::GetProtectorParamIdBySlot` (deobf 0x1403be950) is `lea 0xc(%rdx),%eax
+/// ; movslq %eax,%rdx ; mov 0x7c(%rcx,%rdx,4),%eax ; ret`.
+pub(crate) const CHR_ASM_PROTECTOR_HEAD_INDEX: usize = 12;
+/// Number of protector (armor) slots the portrait resolution oracle covers: head, chest, hands, legs.
+pub(crate) const CHR_ASM_PROTECTOR_SLOT_COUNT: usize = 4;
+/// Entries in `ChrAsm::gaitem_handles` and in `ChrAsm::equipment_param_ids`. The ctor pins it: after
+/// `lea 0x7c(%rsi),%rdi` it runs `mov $0x16,%ecx ; rep stos %eax,(%rdi)` with `eax = -1`
+/// (deobf 0x1403be213..0x1403be222), i.e. 0x16 = 22 dwords.
+pub(crate) const CHR_ASM_EQUIPMENT_ENTRY_COUNT: usize = 22;
+/// `ChrAsm::unk0` (+0x00). Together with `unkd4`/`unkd8` this is a WHOLE-OUTFIT OVERRIDE input, not
+/// padding: see `CHR_ASM_OVERRIDE_ABSENT`. Its typed field is private in `fromsoftware-rs`, so the
+/// offset is spelled out here rather than taken from `offset_of!`; the ctor writes it first
+/// (`movl $0xffffffff,(%rcx)` at deobf 0x1403be1d0), which is what pins it to +0.
+pub(crate) const CHR_ASM_UNK0_OFFSET: usize = 0x00;
+/// `ChrAsm::unkd4` (+0xd4) -- the HEAD whole-outfit override. Derived from the typed layout rather
+/// than hard-coded: the param-id array is the last public field, so `unkd4` is exactly one array past
+/// it. The ctor's `movq $-1,0xd4(%rsi)` (deobf 0x1403be208) is the independent confirmation, and it
+/// writes EIGHT bytes -- so that one instruction sets both `unkd4` and `unkd8`.
+pub(crate) const CHR_ASM_UNKD4_OFFSET: usize = CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
+    + CHR_ASM_EQUIPMENT_ENTRY_COUNT * core::mem::size_of::<i32>();
+/// `ChrAsm::unkd8` (+0xd8) -- the CHEST/HANDS/LEGS whole-outfit override.
+pub(crate) const CHR_ASM_UNKD8_OFFSET: usize =
+    CHR_ASM_UNKD4_OFFSET + core::mem::size_of::<i32>();
+/// The value `unk0`/`unkd4`/`unkd8` must hold for the renderer to dress a character from its per-slot
+/// `equipment_param_ids`. These three fields are read with SIGNED tests by the model-resource request
+/// `FUN_1409e6fb0` (deobf 0x1409e7553..0x1409e75b6, every branch a `js`), and a NON-NEGATIVE value in
+/// any of them FORCES the whole outfit from arithmetic on that value instead:
+///
+/// ```text
+///   head  (category 1): unkd4 >= 0 -> unkd4
+///   chest (category 2): unkd8 >= 0 -> unkd8 + 100
+///   hands (category 3): unkd8 >= 0 -> unkd8 + 200 ; else unk0 >= 0 -> unk0 + 200
+///   legs  (category 4): unkd8 >= 0 -> unkd8 + 300
+/// ```
+///
+/// A zero-initialised image therefore renders param ids 0/100/200/300 -- rows that do not exist -- so
+/// NOTHING resolves, not even the bare-body defaults the native profile feed equips into hands and
+/// legs. That is the entirely-nude portrait (bd er-effects-rs-wncc). The ctor
+/// `CS::ChrAsm::ChrAsm` (deobf 0x1403be1b0) sets all three to -1, which is why a ctor-built ChrAsm
+/// never hits the override path and our hand-built image must match it.
+pub(crate) const CHR_ASM_OVERRIDE_ABSENT: i32 = -1;
+/// The per-category addends `FUN_1409e6fb0` applies to a non-negative `unkd8`/`unk0`
+/// (`lea 0x64(%rax),%ebx`, `lea 0xc8(%rax),%ebx`, `lea 0x12c(%rax),%ebx`). Head takes the override
+/// value verbatim, so it has no addend.
+pub(crate) const CHR_ASM_OVERRIDE_CHEST_ADDEND: i32 = 100;
+pub(crate) const CHR_ASM_OVERRIDE_HANDS_ADDEND: i32 = 200;
+pub(crate) const CHR_ASM_OVERRIDE_LEGS_ADDEND: i32 = 300;
+/// `CS::ChrAsm::GetDefaultProtectorParamId` (deobf 0x140d47420) is a pure switch:
+/// 0 -> 10000, 1 -> 10100, 2 -> 10200, 3 -> 10300, anything else -> -1. The profile feed
+/// `set_model_source` calls it only with 2 and 3, so a portrait's HANDS and LEGS are always these
+/// bare-body rows -- vanilla behaviour, not a defect.
+pub(crate) const PROTECTOR_DEFAULT_PARAM_ID_BASE: i32 = 10000;
+pub(crate) const PROTECTOR_DEFAULT_PARAM_ID_STRIDE: i32 = 100;
+/// `CSMenuProfModelRend` -> its LIVE stage-0 `ChrAsm`, the one the model build actually reads.
+///
+/// DO NOT SUBSTITUTE +0x548. The renderer holds THREE `ChrAsm` stages: +0x548 is the INBOX that
+/// `set_model_source` writes, +0x33c is the staged copy, and +0x130 is live. `STEP_Init_Setup`
+/// (0x140bb9ca0) snapshots the inbox into +0x33c exactly ONCE and never dereferences it again, while
+/// `STEP_Wait_Play` (0x140bba080) re-runs the model-resource request `FUN_1409e6fb0` against +0x130
+/// EVERY frame a model instance exists. An oracle reading +0x548 therefore reports what we handed the
+/// renderer, not what it is rendering -- which is precisely how the PR #128 oracle passed a run the
+/// user saw as nude (bd er-effects-rs-91l5).
+pub(crate) const PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET: usize = 0x130;
 /// Face-body values are the face payload that begins at FaceDataBuffer::buffer.
 pub(crate) const FACE_BODY_FIELD_FACE_MODEL_OFFSET: usize = FACE_DATA_BUFFER_PAYLOAD_OFFSET;
 pub(crate) const FACE_BODY_FIELD_HAIR_MODEL_OFFSET: usize =
@@ -140,14 +197,7 @@ pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET + core::mem::size_of::<u8>();
 pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_B_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET + core::mem::size_of::<u8>();
-/// `character_name` is private upstream, so compute its start from the preceding public `chr_type`
-/// field and its length from the following public `gender` field.
-pub(crate) const PGD_NAME_9C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type)
-    + core::mem::size_of::<eldenring::cs::ChrType>();
-pub(crate) const PGD_NAME_LEN_U16: usize =
-    (PGD_GENDER_BE_OFFSET - PGD_NAME_9C_OFFSET) / core::mem::size_of::<u16>();
 /// Base/end of the contiguous stat block; upstream's first post-stat field is `base_hero_point`.
-pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 pub(crate) const PGD_STAT_END_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, base_hero_point);
 pub(crate) const PGD_STAT_COUNT: usize =
@@ -166,10 +216,9 @@ pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
 /// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
 pub(crate) use er_telemetry::counters::OBSERVE_T0_EMITTED;
-pub(crate) static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize =
-    AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
-pub(crate) const OBSERVE_MARKER_NOT_EMITTED: usize = 0;
-pub(crate) const OBSERVE_MARKER_EMITTED: usize = 1;
+pub(crate) use er_title_flow::OBSERVE_MENU_OPEN_EMITTED;
+pub(crate) use er_title_flow::OBSERVE_MARKER_NOT_EMITTED;
+pub(crate) use er_title_flow::OBSERVE_MARKER_EMITTED;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
@@ -178,7 +227,7 @@ pub(crate) const OWN_STEPPER_PATCHED_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_PATCHED_YES: usize = true as usize;
 /// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.
 pub(crate) static OWN_STEPPER_ORIG_IDX10: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::OWN_STEPPER_BASE;
 pub(crate) static OWN_STEPPER_PATCHED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PATCHED_NO);
 pub(crate) static OWN_STEPPER_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 

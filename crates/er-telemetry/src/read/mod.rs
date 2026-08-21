@@ -45,17 +45,16 @@ fn marker_exists(name: &str) -> bool {
 /// Append one already-newline-terminated JSON line to `file` in the game dir
 /// (falling back to CWD). Open/append/close per write, matching the crate's
 /// `standalone_tick` json-append idiom.
+///
+/// Fresh per run: truncated by this process's first line to that path (previous run kept one
+/// generation as `.prev`), so each read-side oracle's jsonl covers exactly one launch.
 #[cfg(windows)]
 fn append_line(file: &str, line: &str) {
     use std::io::Write as _;
     let path = er_game_base::log::game_directory_path()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(file);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
+    if let Some(mut f) = er_game_base::log::open_fresh_run_append(&path) {
         let _ = f.write_all(line.as_bytes());
     }
 }

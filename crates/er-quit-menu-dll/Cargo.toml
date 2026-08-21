@@ -1,0 +1,34 @@
+# Optional standalone ME3-loadable HARNESS for the `er-quit-menu` feature crate (product B):
+# own DllMain and own log file for isolated/coexistence tests. Required product behavior is
+# statically linked into er_effects_rs.dll; the shipped product profile never lists this DLL.
+#
+# Harness matrices may explicitly load this DLL alone or alongside companions. That does not
+# make it a second product artifact or a dependency of the supported product profile.
+# This one DOES contend on real game addresses (0x920c90 AddCancelButton, 0x9a4670
+# ProfileLoad activate, 0x875590 the ProfileSelect list builder, 0x7ac720 ~MenuWindowJob,
+# 0xd3ed90 the quit clean-kill, ...), several of which the product DLL also hooks. So every
+# detour it installs MUST go through the `er-hook` union rather than a bare `MhHook::new`,
+# and the union owner is elected at load time instead of being assumed to be the product.
+# See docs/plans/save-picker-crate-extraction.md, "Hook-ownership election".
+#
+# It links `er-save-picker` with `default-features = false` so the OS-native fallback
+# surface is available without (A)'s boot missing-save behavior. That isolation is
+# compile-time only where the graph allows it; the runtime guarantee is that (A)'s boot
+# flow arms only from an explicit entry point this crate never calls.
+[package]
+name = "er-quit-menu-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_quit_menu_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-quit-menu = { path = "../er-quit-menu" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }

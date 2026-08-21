@@ -54,7 +54,9 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
     // `fd4_stream_task_present` signal is meaningless. Resolve it through fromsoftware-rs.
     const FD4_IO_POOL_RVA: usize = RuntimeGlobalRva::Fd4IoPool as usize;
-    const FD4_IO_WORKER_MANAGER_RVA: usize = RuntimeGlobalRva::Fd4IoWorkerManager as usize;
+    // Kept under the local name for its call sites; the object is SaveLoad2::SLSystemImpl,
+    // not an FD4 IO worker manager (corrected 2026-08-01).
+    const FD4_IO_WORKER_MANAGER_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
     const IO_DEVICE_SINGLETON_RVA: usize = RuntimeGlobalRva::IoDeviceSingleton as usize;
     const IO_DEVICE_INFLIGHT_10_OFFSET: usize =
         core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);
@@ -202,12 +204,10 @@ pub(crate) fn write_policy_oracle_snapshot(reason: &str) {
     let seamless_loaded = seamless_coop_loaded();
     let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
     let policy_any_seen = policy_total_builds != MENU_TRACE_UNSEEN_SEQ;
-    let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-    let msgbox_any_seen = msgbox_total_builds != MENU_TRACE_UNSEEN_SEQ;
     let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
     let server_status_any_seen = server_status_total_seen != MENU_TRACE_UNSEEN_SEQ;
     let body = format!(
-        "{{\n  \"player_available\": false,\n  \"player_seen\": false,\n  \"runtime_mode\": \"{}\",\n  \"seamless_coop_loaded\": {},\n  \"telemetry_source\": \"policy_oracle_snapshot\",\n  \"telemetry_snapshot_reason\": \"{}\",\n  \"simulated_button_presses_total\": 0,\n  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {}\n}}\n",
+        "{{\n  \"player_available\": false,\n  \"player_seen\": false,\n  \"runtime_mode\": \"{}\",\n  \"seamless_coop_loaded\": {},\n  \"telemetry_source\": \"policy_oracle_snapshot\",\n  \"telemetry_snapshot_reason\": \"{}\",\n  \"simulated_button_presses_total\": 0,\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {}\n}}\n",
         if seamless_loaded {
             RUNTIME_MODE_SEAMLESS
         } else {
@@ -215,12 +215,6 @@ pub(crate) fn write_policy_oracle_snapshot(reason: &str) {
         },
         seamless_loaded,
         json_escape(reason),
-        msgbox_total_builds,
-        msgbox_any_seen,
-        MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst),
-        MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst),
         policy_total_builds,
         policy_any_seen,
         POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst),
@@ -403,28 +397,31 @@ fn log_line_prefix() -> String {
 
 /// One-time self-describing header written the first time a given log file is opened this run: the
 /// full DLL md5 + path + wall-clock, so the build and start time are unambiguous even when many runs
-/// accumulate in the same file.
-fn write_log_header(file: &mut std::fs::File) {
+/// accumulate in the same file. `resolved_path` is the ABSOLUTE path this handle actually opened, so
+/// a log found on disk states where it came from and no reader has to guess the process CWD.
+fn write_log_header(file: &mut std::fs::File, resolved_path: &std::path::Path) {
     use std::io::Write;
     let _ = writeln!(
         file,
-        "===== er-effects log opened {} dll_md5={} (per-line tag `dll:{}`); [+Nms] = elapsed since this process's first log line =====",
+        "===== er-effects log opened {} dll_md5={} (per-line tag `dll:{}`) path={}; [+Nms] = elapsed since this process's first log line =====",
         wall_clock_stamp(),
         dll_md5_hex(),
-        dll_md5_short()
+        dll_md5_short(),
+        resolved_path.display()
     );
 }
 
+/// Fresh per process, like `append_autoload_debug`: the first line of a run truncates the file
+/// (the previous run's survives one generation as `.log.prev`), later lines append. A crash log
+/// that accumulated across runs would sit crashes from builds that no longer exist next to the
+/// one under test, with only the header line to tell them apart.
 pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     static HEADER: std::sync::Once = std::sync::Once::new();
     let prefix = log_line_prefix();
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(crash_log_path())
-    {
-        HEADER.call_once(|| write_log_header(&mut file));
+    let path = crash_log_path();
+    if let Some(mut file) = er_game_base::log::open_fresh_run_append(&path) {
+        HEADER.call_once(|| write_log_header(&mut file, &path));
         let _ = writeln!(file, "{prefix} {args}");
     }
 }
@@ -500,8 +497,74 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let publishable = !is_neutral;
     if !publishable {
         LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
+        // ATTRIBUTION (er-effects-rs-k979). A bare reject count cannot distinguish the gate doing
+        // its job from the pipeline breaking, so a proof gating on "zero rejects" failed healthy
+        // runs. Stamp WHY (the neutral share that tripped it) and WHEN (this capture's version),
+        // and split on whether anything has ever published cleanly: before the first clean publish
+        // this is warm-up -- the offscreen RT is still the blank background and refusing it is
+        // correct -- while after it means the pipeline began emitting blanks mid-window.
+        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.store(version, Ordering::SeqCst);
+        er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT
+            .store(neutral_pct, Ordering::SeqCst);
+        let warmup = reject_is_warmup(
+            LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+            er_telemetry::counters::LS_PORTRAIT_REJECT_PUBLISH_BASELINE.load(Ordering::SeqCst),
+        );
+        if warmup {
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH
+                .fetch_add(1, Ordering::SeqCst);
+        } else {
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH
+                .fetch_add(1, Ordering::SeqCst);
+        }
     }
     publishable
+}
+
+/// Is a rejected capture pipeline WARM-UP rather than a fault? (er-effects-rs-k979)
+///
+/// Split on whether THIS WINDOW has published cleanly yet. Before its first clean publish the
+/// offscreen RT is still the blank background, so a >=90%-neutral frame is expected and refusing it
+/// is the gate working -- measured in run slot-portrait-proof-20260731-130803, where the neutral
+/// frame was capture version 1, 2 of 1542 were refused, and all 1540 publishes were clean. After a
+/// clean publish the same refusal means the pipeline started emitting blanks mid-window, which is a
+/// real defect and the thing a proof should fail on.
+///
+/// The baseline is essential, not decoration: `LOADING_BG_PORTRAIT_RGBA_VERSION` is cumulative for
+/// the whole PROCESS (that 3-window run ended at 1540 and never reset), so comparing it against 0
+/// would mark every window after the first as "already published" and misfile its warm-up reject as
+/// a fault -- reintroducing the very failure this change removes, one window later.
+///
+/// Pure so the distinction is unit-testable: the live event is intermittent and did not recur on
+/// the validation run, so waiting for it would leave the classification unproven.
+fn reject_is_warmup(published_rgba_version: usize, window_baseline: usize) -> bool {
+    published_rgba_version <= window_baseline
+}
+
+#[cfg(test)]
+mod portrait_reject_attribution_tests {
+    use super::reject_is_warmup;
+
+    #[test]
+    fn a_reject_before_this_window_published_is_warmup() {
+        assert!(reject_is_warmup(0, 0));
+    }
+
+    #[test]
+    fn a_reject_after_this_window_published_is_not_warmup() {
+        // The defect this split exists to surface: the window published fine, then began
+        // producing blank frames.
+        assert!(!reject_is_warmup(1, 0));
+        assert!(!reject_is_warmup(1540, 1400));
+    }
+
+    #[test]
+    fn a_later_windows_warmup_is_still_warmup() {
+        // The regression this baseline exists to prevent. Window 2 opens at cumulative version
+        // 1400; a reject before it publishes anything is warm-up, NOT a fault, even though the
+        // process-wide counter is long past zero.
+        assert!(reject_is_warmup(1400, 1400));
+    }
 }
 
 /// DEFAULT-OFF marker gate for the `append_autoload_debug` firehose (Phase B decoupled diagnostics,
@@ -519,11 +582,101 @@ fn autoload_debug_log_enabled() -> bool {
     })
 }
 
+/// Bare file name of the autoload debug log, used both for the resolved path and for the
+/// last-resort relative fallback.
+const AUTOLOAD_DEBUG_LOG_FILE_NAME: &str = "er-effects-autoload-debug.log";
+
+/// Deterministic location for the autoload debug log.
+///
+/// The old default was the RELATIVE `er-effects-autoload-debug.log`, so under me3/Proton the trace
+/// landed in whatever the process CWD happened to be -- measured, that was the APPDATA SAVE
+/// directory, nowhere near the game dir. A diagnosis run whose log cannot be found is a wasted user
+/// press, so the default now resolves next to the marker file that ENABLES the log
+/// (`game_directory_path()`, the same directory `autoload_debug_log_enabled` probes). The explicit
+/// `ER_EFFECTS_AUTOLOAD_DEBUG_PATH` override still wins, and the bare relative name survives only as
+/// a last resort for the case where the game directory cannot be resolved at all.
+fn autoload_debug_log_path() -> PathBuf {
+    if let Ok(explicit) = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    game_directory_path()
+        .map(|dir| dir.join(AUTOLOAD_DEBUG_LOG_FILE_NAME))
+        .unwrap_or_else(|| PathBuf::from(AUTOLOAD_DEBUG_LOG_FILE_NAME))
+}
+
+/// Nested `append_autoload_debug` calls the re-entrancy guard refused. Non-zero proves the
+/// recursion described on [`AutoloadDebugReentryGuard`] is live in this process -- the logger's own
+/// file open came back through the logger -- and that the guard, not luck, is what stopped it.
+static AUTOLOAD_DEBUG_REENTRANT_DROPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+std::thread_local! {
+    /// True while THIS thread is somewhere inside `append_autoload_debug`.
+    static AUTOLOAD_DEBUG_IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks a thread as being inside `append_autoload_debug` for as long as the guard is alive.
+///
+/// # Why a logger of all things needs a re-entrancy guard
+///
+/// Both file operations `append_autoload_debug` performs reach the OS through
+/// `kernel32!CreateFileW`: the marker gate's `.exists()` probe (`std::fs::metadata` opens the path
+/// with `FILE_FLAG_BACKUP_SEMANTICS` before it will answer), and the log handle's own
+/// `OpenOptions::open`. `install_save_file_core_hooks` detours that export in EVERY save mode, and
+/// the detour LOGS -- its very first call, and every save-like path -- so the logger's own open
+/// arrives straight back in the logger ON THE SAME THREAD.
+///
+/// Neither primitive the outer call holds at that moment is re-entrant:
+///
+///   * the marker gate is a `OnceLock` whose initializer is what performs the `.exists()` probe, and
+///     re-entering `get_or_init` from inside its own initializer never returns;
+///   * the log handle lives behind a `std::sync::Mutex`, and a second `lock()` on one thread never
+///     returns either.
+///
+/// The thread that hits this is the one installing the hook, during DLL attach, and every other
+/// thread that logs afterwards queues behind it -- so the symptom is the game hanging at boot having
+/// written nothing. Nested lines are DROPPED and counted: a line describing the opening of the log
+/// is worth nothing, and the outer line it interrupted is still written normally.
+struct AutoloadDebugReentryGuard;
+
+impl AutoloadDebugReentryGuard {
+    /// `None` when this thread is already inside `append_autoload_debug`, or when the thread-local
+    /// flag cannot be reached at all (thread teardown). An unanswerable "am I nested?" counts as
+    /// nested: dropping a diagnostic line costs nothing, and guessing wrong hangs the game.
+    fn enter() -> Option<Self> {
+        let entered = AUTOLOAD_DEBUG_IN_PROGRESS
+            .try_with(|in_progress| !in_progress.replace(true))
+            .unwrap_or(false);
+        if entered {
+            Some(Self)
+        } else {
+            AUTOLOAD_DEBUG_REENTRANT_DROPS.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    }
+}
+
+impl Drop for AutoloadDebugReentryGuard {
+    fn drop(&mut self) {
+        let _ = AUTOLOAD_DEBUG_IN_PROGRESS.try_with(|in_progress| in_progress.set(false));
+    }
+}
+
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     // PHASE B DECOUPLED DIAGNOSTICS: this per-frame firehose is DEFAULT-OFF. Return before ANY file I/O
     // unless the `er-effects-autoload-debug.txt` marker is present, so the armed-vs-disarmed A/B baseline
     // has a ZERO-LOG cost in both arms (no per-frame log-file-I/O confound). Cached; no game behavior.
+    // RE-ENTRANCY, checked BEFORE the marker gate: the gate's own `.exists()` probe is a
+    // `CreateFileW` and therefore re-enters the save-destination detour, so the recursion is
+    // reachable before the gate has even decided whether logging is on. See
+    // `AutoloadDebugReentryGuard`.
+    let Some(_not_nested) = AutoloadDebugReentryGuard::enter() else {
+        return;
+    };
     if !autoload_debug_log_enabled() {
         return;
     }
@@ -534,28 +687,116 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     // framerate exactly when the user sees it. Keep ONE persistent handle: open+truncate+header once, then
     // only writeln thereafter -- no per-call open/close. Same output, a fraction of the syscalls.
     static LOG: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+    // Serializes the ONE truncating open so `LOG` is never held across file I/O and two threads can
+    // never both truncate the file. Taken only after `LOG` was found empty.
+    static LOG_OPEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let prefix = log_line_prefix();
-    let mut guard = match LOG.lock() {
-        Ok(g) => g,
-        Err(p) => p.into_inner(),
-    };
-    if guard.is_none() {
-        // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
-        let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
-        if let Ok(mut file) = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-        {
-            write_log_header(&mut file);
-            *guard = Some(file);
+    let write_through_open_handle = || -> bool {
+        let mut guard = LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match guard.as_mut() {
+            Some(file) => {
+                let _ = writeln!(file, "{prefix} {args}");
+                true
+            }
+            None => false,
         }
+    };
+    if write_through_open_handle() {
+        return;
     }
-    if let Some(file) = guard.as_mut() {
-        let _ = writeln!(file, "{prefix} {args}");
+    // NO FILE I/O UNDER `LOG` -- the open below re-enters the `CreateFileW` detour, which takes
+    // locks of its own (the save-destination redirect lock, during an armed commit), so holding
+    // `LOG` across it invites the reverse lock order from any thread that logs while holding one of
+    // them. The guard above stops the same-thread recursion; keeping the open outside `LOG` stops
+    // that inversion.
+    let _opening = LOG_OPEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Another thread may have opened the log while this one waited for the gate.
+    if write_through_open_handle() {
+        return;
+    }
+    // TRUNCATE ONCE per process so each run starts a CLEAN log (matches the trace DLL's reset-on-attach).
+    let path = autoload_debug_log_path();
+    // Keep the PREVIOUS run one generation as `.log.prev` instead of destroying it -- this is the
+    // most-read log in the repo and the truncation below is otherwise final. Safe under `LOG_OPEN`:
+    // `begin_fresh_run` never holds its own registry lock across file I/O (so there is no reverse
+    // order against `LOG_OPEN`), and the re-entrancy guard held by this thread makes the rename's
+    // trip through the `CreateFileW` detour come straight back out of this function.
+    er_game_base::log::begin_fresh_run(&path);
+    let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    else {
+        // Deliberately not latched: a directory that is not writable yet may be later, and the next
+        // line retries. Nothing is published, so no reader sees a half-opened log.
+        return;
+    };
+    write_log_header(&mut file, &path);
+    let _ = writeln!(file, "{prefix} {args}");
+    *LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(file);
+}
+
+#[cfg(test)]
+mod autoload_debug_log_tests {
+    use super::*;
+
+    /// The drop counter and the thread-local flag are process-global, so these tests take turns.
+    static AUTOLOAD_DEBUG_GUARD_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize() -> std::sync::MutexGuard<'static, ()> {
+        AUTOLOAD_DEBUG_GUARD_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn nested_drops() -> usize {
+        AUTOLOAD_DEBUG_REENTRANT_DROPS.load(Ordering::SeqCst)
+    }
+
+    /// One entry per thread at a time, and the flag must clear when the guard dies -- a guard that
+    /// leaked its flag would silence every later line on that thread instead of deadlocking, which
+    /// is a quieter version of the same bug.
+    #[test]
+    fn a_second_entry_on_the_same_thread_is_refused_until_the_first_is_dropped() {
+        let _serialized = serialize();
+        let before = nested_drops();
+        let outer = AutoloadDebugReentryGuard::enter().expect("a fresh thread is not nested");
+        assert!(AutoloadDebugReentryGuard::enter().is_none());
+        assert_eq!(nested_drops(), before + 1);
+        drop(outer);
+        assert!(AutoloadDebugReentryGuard::enter().is_some());
+        assert_eq!(nested_drops(), before + 1);
+    }
+
+    /// The guard must be per THREAD: the game logs from the task thread, the save worker and the
+    /// hook installer at once, and a process-wide flag would drop most of the log.
+    #[test]
+    fn the_guard_is_per_thread_not_per_process() {
+        let _serialized = serialize();
+        let outer = AutoloadDebugReentryGuard::enter().expect("a fresh thread is not nested");
+        let other_thread_entered =
+            std::thread::spawn(|| AutoloadDebugReentryGuard::enter().is_some())
+                .join()
+                .expect("thread joins");
+        assert!(other_thread_entered);
+        drop(outer);
+    }
+
+    /// The real logger's FIRST action is the guard, so a line arriving from inside itself -- which is
+    /// what the `CreateFileW` detour does when the log's own open re-enters it -- returns without
+    /// reaching the marker gate's `OnceLock` or the log `Mutex`. Before this, that call re-locked
+    /// both and hung the calling thread.
+    #[test]
+    fn append_autoload_debug_drops_a_line_that_arrives_from_inside_itself() {
+        let _serialized = serialize();
+        let before = nested_drops();
+        let outer = AutoloadDebugReentryGuard::enter().expect("stand in for the outer log call");
+        append_autoload_debug(format_args!("nested line from inside the logger"));
+        assert_eq!(nested_drops(), before + 1);
+        drop(outer);
     }
 }
 
@@ -605,14 +846,8 @@ pub(crate) fn game_directory_path() -> Option<PathBuf> {
         .and_then(|path| path.parent().map(PathBuf::from))
 }
 
+/// Fresh per process: one Continue trace per run. Two runs' traces in one file cannot be told
+/// apart by a reader counting transitions, which is the whole use of this file.
 pub(crate) fn append_continue_trace(args: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(continue_trace_log_path())
-    {
-        let _ = writeln!(file, "{args}");
-    }
+    er_game_base::log::append_line(&continue_trace_log_path(), args);
 }

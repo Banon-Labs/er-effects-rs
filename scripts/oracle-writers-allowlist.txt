@@ -1,0 +1,42 @@
+# Counters that are READ to emit telemetry but written NOWHERE -- known debt, tracked by
+# er-effects-rs-56fx. Enforced by scripts/check-oracle-writers.py.
+#
+# THIS LIST MAY ONLY SHRINK. The checker fails on any offender NOT listed here, so no new one can
+# land; it ALSO fails on any name listed here that is no longer an offender, so fixing a counter is
+# not finished until its line is deleted. That keeps the file an honest running count instead of a
+# graveyard nobody prunes.
+#
+# To clear an entry, pick one:
+#   WIRE   -- the feature exists and the signal is wanted: increment/store at the real site.
+#   DELETE -- the feature is unbuilt or was removed: delete the counter AND the oracle it emits.
+# Never leave it emitting. A permanently-0 (or sentinel-valued) counter is indistinguishable from a
+# feature that ran and did nothing, which is how oracle_title_overlay_cover_render_calls=0 was once
+# cited as proof the title cover painted no pixels.
+#
+# Classification evidence already gathered (see er-effects-rs-56fx for the full notes):
+#   RAWINPUT_BLOCKED_UNFOCUSED_EVENTS       DELETE -- input_block.rs:806-816 records that the
+#                                           unfocused keyboard drop was deliberately removed; this
+#                                           counts a behaviour that no longer exists.
+#   SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS  DELETE -- with it, the unreachable
+#                                           'blocked_direct_file_mode' arm of the shgfp_decision
+#                                           string (path_hooks.rs). Its siblings ARE written.
+#   MSGBOX_TOTAL_BUILDS                     a DISTINCT dead static from the live
+#                                           oracle_msgbox_total_builds in er-effects-rs-mtq: same
+#                                           name, different counter, no writer.
+#   PROFILE_BOUND_GX_RGB_MAX / _ALPHA_MAX   sentinel-initialised (0xffff), so they emit a
+#                                           plausible-looking value forever rather than 0.
+
+MSGBOX_TOTAL_BUILDS
+OWN_LOAD_M28_DISPATCH_FIRED
+PROFILE_BOUND_GX_ALPHA_MAX
+PROFILE_BOUND_GX_RGB_MAX
+PROFILE_PERFRAME_SPARED_DRAWS
+PROFILE_READBACK_DEFERRED_NONBLACK
+PROFILE_READBACK_DEFERRED_SOME
+RAWINPUT_BLOCKED_UNFOCUSED_EVENTS
+SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS
+SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT
+TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER
+TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR
+TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR
+TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES

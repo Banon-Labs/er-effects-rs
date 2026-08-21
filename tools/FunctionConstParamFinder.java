@@ -112,7 +112,8 @@ public class FunctionConstParamFinder extends GhidraScript {
         var currentInstruction = this.getInstructionBeforeIncludingJmpsFrom(callInstruction);
 
         for (int i = 0; i < MAX_LOOKBACK; i++) {
-            // TODO: reverse opcode stream so we can apply more intelligent register tracking
+            // Tracked in bd er-effects-rs-372x: reverse opcode stream so register tracking can
+            // account for intervening writes and reduce false attribution.
             for (PcodeOp pcodeOp : currentInstruction.getPcode()) {
                 // Yeet everything that isn't touching the register
                 if (pcodeOp.getOutput() == null || !this.isRegister(pcodeOp.getOutput(), register)) {

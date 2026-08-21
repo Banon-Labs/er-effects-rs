@@ -14,7 +14,20 @@ signals:
   current_branch:
     command: 'printf "%s" "${CUPCAKE_CURRENT_BRANCH_OVERRIDE:-$(git branch --show-current)}"'
     timeout_seconds: 2
+
+  # Registered worktrees and their branches (git worktree list --porcelain).
+  # Lets the main-commit/main-push guards recognize `git -C <worktree>` commands
+  # that explicitly target a registered non-main worktree even when the session
+  # checkout (which current_branch reads) sits on main. The override mirrors
+  # CUPCAKE_CURRENT_BRANCH_OVERRIDE and exists for the policy regression tests.
+  worktree_branches:
+    command: 'printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
+    timeout_seconds: 2
   
+  origin_main_oids:
+    command: 'if [ -n "${CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE:-}" ]; then printf "%s" "$CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"; else local_oid="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"; remote_oid="$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | cut -f1)"; printf "%s %s" "$local_oid" "$remote_oid"; fi'
+    timeout_seconds: 8
+
   # Example: Structured JSON signal
   # system_info:
   #   command: 'echo "{\"os\": \"$(uname)\", \"user\": \"$(whoami)\"}"'

@@ -4,8 +4,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -13,7 +13,7 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -21,20 +21,20 @@ use eldenring::{
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -53,18 +53,6 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 }
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
-}
-/// Portrait render window: hold the autoload's own load-commit at the open main menu until the loaded
-/// character's profile portrait has rendered, so the now-loading screen can show it.
-///
-/// DISABLED (2026-06-29): a runtime probe proved this BREAKS the core char-load -- kicking the refresh
-/// (0x9aa680) at menu-open + holding the commit crashed during world-load (access-violation, run
-/// product-continue-direct-20260629-104328), and the refresh gate fails there anyway (req754 stayed 0:
-/// the ProfileSummary slot entry is not loaded at the open main menu, only when navigating to the
-/// Load-Game/ProfileSelect submenu). The proven now-loading injection mechanism is unaffected. Leaving
-/// the (gated-off) implementation in place for the record; do not re-enable without a safe render path.
-pub(crate) fn portrait_render_window_enabled() -> bool {
-    false
 }
 /// DEFAULT-OFF gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
 /// takes the PROVEN native Continue char-load commit, byte-for-byte unchanged. When the human flips
@@ -242,18 +230,8 @@ pub(crate) fn continue_trace_disabled() -> bool {
 pub(crate) fn trace_continue_enabled() -> bool {
     product_autoload_enabled()
 }
-/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): the menu-task-update trace was a
-/// diagnostic env/marker probe. Env/marker feature gates are forbidden, so this passive trace is
-/// retired (permanently off); re-add via a non-env/marker diagnostic mechanism if needed.
-pub(crate) fn trace_menu_task_update_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_title_job_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn force_play_game_enabled() -> bool {
     false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_SELECTBOT_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
@@ -265,19 +243,8 @@ pub(crate) fn selectbot_probe_enabled() -> bool {
 pub(crate) fn title_accept_byte_gate_enabled() -> bool {
     false
 }
-/// Operator gate for lever-3 (narrow registrar advance): set the menu-transition singleton flag
-/// 0x143d5dea8->+0=1 before the validated open-menu self-fire, replicating the native title
-/// press-accept handler so the menu opens in place without the ToS over-trigger. Default OFF;
-/// used together with own_stepper + self-fire.
-pub(crate) fn title_registrar_advance_gate_enabled() -> bool {
-    false
-}
 // ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_proceed_gate_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_PUMP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn ingamestep_pump_enabled() -> bool {
     false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_AUTOLOAD is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
@@ -616,28 +583,6 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
         && er_telemetry::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
             .load(std::sync::atomic::Ordering::SeqCst)
             == 0
-}
-/// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
-///
-/// The own_stepper "title-confirm" Load drive (fire_titletop_load_entry + the d180-locate walk) was
-/// built on a MISIDENTIFIED function: RTTI on the dearxan-deobfuscated image proved 0x14078e1c0 is
-/// `CommandSelectDialog::Update` (an in-game dialog), NOT the title menu's confirm router, so its
-/// offsets (cursor [+0xb0c], rows [+0x1290]) do NOT apply to the TitleTopDialog at owner+0xe0
-/// (RTTI vt 0x142b26468). See bd rtti-correction-0x14078e1c0-is-commandselectdialog-not-title-
-/// confirm-2026. We keep the code (it still has diagnostic value) but it must NEVER be the default
-/// path: a fresh session running plain own_stepper must not take this wrong route. The trigger name
-/// is intentionally obscure so it cannot be stumbled into -- enable ONLY to revisit the dead path.
-pub(crate) fn legacy_menu_drive_enabled() -> bool {
-    false
-}
-/// WORLD-RES STREAMING-DRIVER COLD-BUILD PROBE gate (env ER_EFFECTS_WORLDRES_COLDBUILD /
-/// er-effects-worldres-coldbuild.txt). OFF by default. When on, own_stepper runs a ONE-SHOT,
-/// SAVE-SAFE probe at the parked title that cold-builds the CSEmkResManImp streaming driver
-/// (0x143d7c088) + registers the stream worker (0x144842d40) via the CSResStep tick getter
-/// 0x140cd6c50 with a stub `this` -- NO SetState, NO world load, zero save-write risk. See bd
-/// emk-resman-streaming-driver-coldbuild-stub-lever-2026.
-pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
-    false
 }
 /// COLD CHAR-MOUNT experiment gate (env ER_EFFECTS_COLD_CHAR_MOUNT / er-effects-cold-char-mount.txt,
 /// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-

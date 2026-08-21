@@ -101,15 +101,16 @@ halt contains decision if {
 	# This is populated for commands like rm -rf, chmod -R, etc.  Treat it as
 	# advisory and require an independently destructive shell verb so parser
 	# uncertainty (for example a read-only Python heredoc) does not make root (/)
-	# look like a dangerous parent operation.
-	command := lower(input.tool_input.command)
+	# look like a dangerous parent operation.  Only the command REGION can carry
+	# a verb or an operand; heredoc payload is data (see the block below).
+	command := lower(command_operand_region)
 	parent_destructive_command_detected(command)
 	affected_dirs := input.affected_parent_directories
 	count(affected_dirs) > 0
 
 	# Check if any protected path is a CHILD of an affected directory
 	some affected_dir in affected_dirs
-	not safe_mktemp_file_parent_overapprox(command, affected_dir)
+	affected_dir_is_destructive_target(command, affected_dir)
 	some protected_path in get_protected_paths
 	protected_is_child_of_affected(protected_path, affected_dir)
 
@@ -136,9 +137,13 @@ halt contains decision if {
 	some interp in interpreters
 	regex.match(concat("", ["(^|\\s)", interp, "\\s+(-c|-e)\\s"]), lower_cmd)
 
-	# Check if any protected path is mentioned anywhere in the command
+	# Check if any protected path is mentioned anywhere in the command.  Uses the
+	# same path-boundary matcher as the Bash reference rule: a bare substring test
+	# made every repo-relative `.cupcake/system/...` argument look like the
+	# absolute protected path `/System/` after case folding (false positive
+	# 2026-07-29: `python3 -c "...glob('.cupcake/system/commands.rego')..."`).
 	some protected_path in get_protected_paths
-	contains(lower_cmd, lower(protected_path))
+	contains_protected_reference(lower_cmd, protected_path)
 
 	message := get_configured_message
 
@@ -381,6 +386,100 @@ destructive_command_mentions_absolute_path(cmd) if {
 	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
 	some verb in destructive_parent_verbs
 	regex.match(concat("", [`(^|[[:space:];|&])`, verb, `[[:space:]][^\n;|&]*[[:space:]]/`]), cmd)
+}
+
+# The command's SHELL region: every line except heredoc payload.
+#
+# Heredoc payload is DATA, never a verb or a path operand.  A `git commit -q -F -
+# <<'EOF'` message that happens to contain the prose word "install" and a bare `/`
+# between two code spans was being read as a destructive root operation, because
+# the preprocessor tokenizes the whole command and reports `/` among the affected
+# parent directories.  Stripping payload removes the verb AND the operand, so the
+# advisory `/` no longer has anything to attach to.
+#
+# Shell either side of the payload is preserved: the opening line still counts (it
+# is a real command), and so does anything after the terminator -- a `rm -rf /`
+# following an `EOF` line is exactly as dangerous as one on its own.  An
+# UNTERMINATED heredoc swallows the rest of the command, which is correct: those
+# lines never reach the shell.
+command_operand_region := region if {
+	lines := split(input.tool_input.command, "\n")
+	shell_lines := [line |
+		some i, line in lines
+		not line_is_heredoc_payload(lines, i)
+	]
+	region := concat("\n", shell_lines)
+}
+
+# Line `i` sits inside a heredoc body: some earlier line opened a heredoc whose
+# tag has not appeared on its own line since.
+line_is_heredoc_payload(lines, i) if {
+	some s
+	s < i
+	tag := heredoc_tag(lines[s])
+	not heredoc_terminated_between(lines, s, i, tag)
+}
+
+heredoc_terminated_between(lines, s, i, tag) if {
+	some t
+	t > s
+	t < i
+	trim_space(lines[t]) == tag
+}
+
+# Tag from `<<TAG`, `<<'TAG'`, `<<"TAG"` or `<<-TAG`.  Only the FIRST token after
+# the operator is the tag: `<<'EOF' && git log ...` opens `EOF` and the rest of
+# that line stays shell.
+heredoc_tag(line) := tag if {
+	parts := split(line, "<<")
+	count(parts) > 1
+	after := trim_left(parts[1], "-")
+	tokens := split(trim_space(after), " ")
+	tag := trim(tokens[0], "'\"")
+	tag != ""
+}
+
+# Require the affected directory to be the GENUINE target of a destructive verb in
+# this command before parent protection fires.
+#
+# `input.affected_parent_directories` is advisory: the shell preprocessor
+# over-approximates on shell forms it cannot fully parse, and the usual
+# over-approximation is `/` -- which makes EVERY protected absolute path look like
+# a child of an endangered parent.  The PARENT rule above therefore pairs the
+# advisory list with this predicate so a command that merely MENTIONS a path (a
+# read-only `python3 - <<'EOF'` heredoc, an inspection pipeline) cannot be read as
+# a recursive delete of the filesystem root.
+#
+# It holds when one shell segment BOTH carries a destructive verb AND names a path
+# at or beneath `affected_dir` -- checked per segment so a destructive verb in one
+# segment cannot borrow an unrelated path operand from another.  The narrow
+# mktemp-cleanup over-approximation keeps its existing exemption.
+affected_dir_is_destructive_target(command, affected_dir) if {
+	not safe_mktemp_file_parent_overapprox(command, affected_dir)
+	some segment in shell_command_segments(command)
+	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
+	some verb in destructive_parent_verbs
+	commands.has_verb(segment, verb)
+	segment_targets_affected_dir(segment, affected_dir)
+}
+
+# `find ... -delete/-exec` is destructive without one of the verbs above, so mirror
+# the second `parent_destructive_command_detected` clause rather than letting a
+# recursive find escape parent protection.
+affected_dir_is_destructive_target(command, affected_dir) if {
+	some segment in shell_command_segments(command)
+	commands.has_verb(segment, "find")
+	regex.match(`(^|[[:space:]])-(delete|exec|execdir)([[:space:]]|$)`, segment)
+	segment_targets_affected_dir(segment, affected_dir)
+}
+
+# The segment names the affected directory itself, or something inside it.
+segment_targets_affected_dir(segment, affected_dir) if {
+	shell_path_reference_matches(lower(segment), lower(affected_dir))
+}
+
+segment_targets_affected_dir(segment, affected_dir) if {
+	shell_path_prefix_reference_matches(lower(segment), lower(ensure_trailing_slash(affected_dir)))
 }
 
 # Check if command references a protected path

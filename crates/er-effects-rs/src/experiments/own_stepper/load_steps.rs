@@ -1,106 +1,5 @@
-/// MODEL B orchestrator (gated by live_dialog_enabled(), OFF by default). At the rendered title
-/// menu: (1) do the wall-clock-bounded active-screen scan to acquire the live TitleTopDialog* +
-/// MenuWindow*, (2) call the dialog factory 0x14081ead0(rcx=title_dialog+0xa38, rdx=menu_window)
-/// ONCE -- which builds + registers the LIVE ProfileLoadDialog into the active-screen set, then (3)
-/// wait for that ProfileLoadDialog (vtable 0x142b229f8) to appear in the active-screen array, latch
-/// it as OWN_STEPPER_DIALOG, and hand it to STAGE2 ACTIVATE (which fires load_activate -> native pump
-/// mount -> guarded, char-fingerprint-gated continue_confirm). One-shot fire latch; bounded wait.
-/// FAIL-CLOSED at every step (no acquisition -> stay; bad vtable -> no call; dialog not live yet ->
-/// wait then DONE on timeout). The forge path is untouched.
-pub(crate) unsafe fn own_stepper_live_dialog_fire(
-    owner: usize,
-    base: usize,
-    waits: u64,
-    timed_out: bool,
-    elapsed_ms: u64,
-) {
-    // FIX 2 (probe-6): the factory 0x14081ead0 RETURNS the new dialog in rax. fire_live_loadgame_node
-    // validates that return == ProfileLoadDialog (vt 0x142b229f8) and, on a match, stores it as
-    // OWN_STEPPER_DIALOG + transitions own_stepper to STAGE2 ACTIVATE on THAT pointer. We no longer
-    // scan the active-screen array 0x143d6d8d0 here (probe-2 proved it holds MODEL-RENDERERS, never
-    // the PLD -> it would never confirm). Once fired+verified the orchestrator routes to STAGE2.
-    if OWN_STEPPER_LIVE_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_LIVE_FIRED_NO {
-        let Some(ready) = (unsafe { title_live_dialog_fire_ready(owner, base) }) else {
-            if timed_out {
-                append_autoload_debug(format_args!(
-                    "live-dialog: factory args never became semantically ready after {waits} polls/{elapsed_ms}ms -- STAY at menu (NO-WRITE), DONE"
-                ));
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-            }
-            return;
-        };
-        append_autoload_debug(format_args!(
-            "live-dialog: factory args ready title_dialog=0x{:x} vt=0x{:x} capture_slot=0x{:x} capture=0x{:x} capture_vt=0x{:x} registry_vt=0x{:x} latch={} menu_window=0x{:x} menu_window_vt=0x{:x} -- firing live factory",
-            ready.title_dialog,
-            ready.title_dialog_vt,
-            ready.capture_slot,
-            ready.capture,
-            ready.capture_vt,
-            ready.registry_vt,
-            ready.menu_opened_latch,
-            ready.menu_window,
-            ready.menu_window_vt
-        ));
-        // fire_live_loadgame_node returns true ONLY when the factory returned a verified
-        // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
-        if unsafe { fire_live_loadgame_node(ready.title_dialog, ready.menu_window, base, true) } {
-            OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
-        } else if timed_out {
-            append_autoload_debug(format_args!(
-                "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls/{elapsed_ms}ms -- STAY at menu (NO-WRITE), DONE"
-            ));
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-        }
-        return;
-    }
-    // Fired + verified: own_stepper is already in STAGE2 ACTIVATE driving the returned PLD. If we are
-    // somehow still here (phase not advanced), bound the wait and stop without writing.
-    if timed_out {
-        append_autoload_debug(format_args!(
-            "live-dialog: fired factory but STAGE2 did not advance after {waits} polls/{elapsed_ms}ms -- STAY (NO-WRITE), DONE"
-        ));
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-    }
-}
-/// Fire a captured MenuWindowJob's `+0xa8` action std::function in-context, mirroring the
-/// native leaf Update's functor-invoke at `0x1407ad2b9`:
-///   rcx = `[item+0xa8]` (the std::function obj); rax = `[rcx]` (`_Func_impl_no_alloc`
-///   vtable, no RTTI); rdx = `item+0x10` (the dialog ctx out-slot, the single arg);
-///   call `[rax+0x10]` (`_Do_call`: `add rcx,8; jmp <lambda>`).
-/// Returns the lambda result (e.g. the built dialog), which the native Update stores to
-/// `[item+0x130]`. Guarded EXACTLY like the native BUILD path: only fires when
-/// `[item+0xa8]!=0` AND `[item+0x10]==0`, so we never re-invoke an already-built item
-/// (which would leak/overwrite `item+0x130`). This is the game's OWN menu-action functor
-/// (NOT input synthesis) -- compliant with the zero-input standard. NOTE: this performs a
-/// native call, so it is only used once the live item/owner are validated; it is NOT a
-/// save-write by itself (the Load-entry/dialog functors build UI, not save state).
-pub(crate) unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
-    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
-    const ITEM_CTX_10: usize = 0x10;
-    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }?;
-    if functor == null {
-        return None;
-    }
-    // BUILD-path precondition: the native Update fires the functor only when item+0x10==0.
-    let ctx_slot = unsafe { safe_read_usize(item + ITEM_CTX_10) }?;
-    if ctx_slot != null {
-        return None;
-    }
-    let functor_vtable = unsafe { safe_read_usize(functor) }?;
-    if functor_vtable == null {
-        return None;
-    }
-    let do_call = unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }?;
-    if do_call == null {
-        return None;
-    }
-    let f: unsafe extern "system" fn(usize, usize) -> usize =
-        unsafe { std::mem::transmute(do_call) };
-    let ctx_out = item + ITEM_CTX_10;
-    Some(unsafe { f(functor, ctx_out) })
-}
+use super::*;
+
 /// Drive the NATIVE MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
 /// BUILD the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
 /// WIRES the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
@@ -205,7 +104,7 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
     const NODE_CHILDREN_BASE_18: usize = 0x18;
     const NODE_COUNT_60: usize = 0x60;
     const NODE_HOLDER_ROOT_18: usize = 0x18;
-    const SEQ_UPDATE_RVA: usize = 0x07aa1f0;
+    const SEQ_UPDATE_RVA: usize = SEQUENCE_ITER_RVA as usize;
     const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
     // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are NOT at the sequence
     // [+0x18]/[+0x60] layout; that mis-read is the "garbage count" the generic walk hit.

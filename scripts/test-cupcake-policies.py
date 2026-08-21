@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,18 @@ class PolicyCase:
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
 
+# `git worktree list --porcelain`-shaped fixture for the worktree-target
+# exception cases in the main-commit/main-push guards.
+WORKTREE_FIXTURE = (
+    "worktree /home/banon/projects/er-effects-rs\n"
+    "HEAD 0000000000000000000000000000000000000000\n"
+    "branch refs/heads/main\n"
+    "\n"
+    "worktree /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate\n"
+    "HEAD 1111111111111111111111111111111111111111\n"
+    "branch refs/heads/feature/portrait-stats-crate\n"
+)
+
 
 def run_case(case: PolicyCase) -> None:
     tool_input: dict[str, object] = {"command": case.command}
@@ -43,6 +56,41 @@ def run_case(case: PolicyCase) -> None:
     }
     if case.extra_event:
         event.update(case.extra_event)
+    env = {**os.environ}
+    # CI checks out detached commits, making `git branch --show-current` empty.
+    # Policy-regression allow-cases should model a normal feature branch by default, but
+    # cases that explicitly set or remove the current_branch signal must control the
+    # override too; otherwise live Cupcake eval cannot exercise main/missing-branch guards.
+    signals = event.get("signals")
+    if isinstance(signals, dict) and "current_branch" in signals:
+        branch_signal = signals["current_branch"]
+        if isinstance(branch_signal, dict):
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal.get("output", ""))
+        else:
+            env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = str(branch_signal)
+    elif isinstance(signals, dict):
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = ""
+    else:
+        env["CUPCAKE_CURRENT_BRANCH_OVERRIDE"] = "feature/policy-regression"
+    # Same live-signal control for the worktree_branches signal (worktree-target
+    # exception in the main-commit/main-push guards): cases that model worktree
+    # state must pin it, everything else runs with an empty worktree list so the
+    # exception can never fire by accident.
+    if isinstance(signals, dict) and "worktree_branches" in signals:
+        wt_signal = signals["worktree_branches"]
+        if isinstance(wt_signal, dict):
+            env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = str(wt_signal.get("output", ""))
+        else:
+            env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = str(wt_signal)
+    else:
+        env["CUPCAKE_WORKTREE_BRANCHES_OVERRIDE"] = ""
+
+    if isinstance(signals, dict) and "origin_main_oids" in signals:
+        oid_signal = signals["origin_main_oids"]
+        env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = str(oid_signal.get("output", "") if isinstance(oid_signal, dict) else oid_signal)
+    else:
+        env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = "a" * 40 + " " + "a" * 40
+
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -51,13 +99,7 @@ def run_case(case: PolicyCase) -> None:
         capture_output=True,
         check=False,
         timeout=30,
-        env={
-            **os.environ,
-            # CI checks out detached commits, making `git branch --show-current` empty.
-            # Policy-regression allow-cases should model a normal feature branch; direct
-            # OPA tests cover missing/empty branch signal fail-closed behavior.
-            "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/policy-regression",
-        },
+        env=env,
     )
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
@@ -133,6 +175,76 @@ def main() -> int:
             "allow-repo-cupcake-system-path-not-absolute-system",
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
             True,
+        ),
+        PolicyCase(
+            "deny-git-push-on-main",
+            "git push",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-git-push-main-from-feature",
+            "git push origin HEAD:main",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "allow-git-push-feature-branch",
+            "git push -u origin guard/no-direct-main-push",
+            True,
+        ),
+        PolicyCase("deny-stale-origin-main-rebase", "git rebase origin/main", False, "origin/main is stale or could not be verified", extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}}),
+        PolicyCase("allow-fresh-origin-main-rebase", "git rebase origin/main", True, extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "a" * 40}}),
+        PolicyCase("deny-stale-force-with-lease", "git push --force-with-lease origin feature/x", False, "origin/main is stale or could not be verified", extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}}),
+        # Worktree-target exception: `git -C <registered non-main worktree>`
+        # commit/push is allowed even when the session checkout sits on main
+        # (bd guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29).
+        PolicyCase(
+            "allow-git-c-commit-nonmain-worktree-from-main-session",
+            'git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m "ok"',
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "deny-git-c-commit-unregistered-path-from-main-session",
+            'git -C /tmp/not-a-worktree commit -m "bad"',
+            False,
+            "Do not commit unless",
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "allow-git-c-push-feature-from-nonmain-worktree-main-session",
+            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        PolicyCase(
+            "deny-git-c-push-main-refspec-from-nonmain-worktree",
+            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
+            False,
+            "Do not push directly to main",
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
         ),
         PolicyCase(
             "deny-destructive-parent-root",
@@ -285,6 +397,109 @@ def main() -> int:
             "bash scripts/steam-running.sh",
             True,
         ),
+        # bd only records text: a single, non-chained bd invocation whose pgrep
+        # token sits entirely inside quoted issue-tracker text is exempt
+        # (2026-07-29 false positive, bd er-effects-rs-uxyz: a bd close --reason
+        # describing launch-guard allow-tests was denied).
+        PolicyCase(
+            "allow-bd-close-reason-mentioning-pgrep",
+            '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "launch-guard'
+            ' allow-test keeps pgrep -x start_protected_game.exe detection green"',
+            True,
+        ),
+        # The ORIGINAL denied shape -- a chained bash -c batch of bd closes --
+        # stays denied by design (not a single bd invocation).
+        PolicyCase(
+            "deny-chained-bash-c-bd-close-batch-mentioning-pgrep",
+            "bash -c '\"$HOME/.local/bin/bd\" close er-effects-rs-aaa --reason"
+            ' "keeps pgrep -x start_protected_game.exe detection green" &&'
+            " \"$HOME/.local/bin/bd\" close er-effects-rs-bbb --reason \"second\"'",
+            False,
+            "manual pgrep is blocked",
+        ),
+        # ... and a bd text command chained with a REAL pgrep still denies.
+        PolicyCase(
+            "deny-bd-close-then-chained-pgrep",
+            '$HOME/.local/bin/bd close er-effects-rs-aaa --reason "done" && pgrep -x steam',
+            False,
+            "manual pgrep is blocked",
+        ),
+        # git records the commit MESSAGE, it never executes it. A commit whose
+        # prose describes removing a raw process-name probe is documentation
+        # (2026-08-12 false positive: `git commit -F - <<'EOF' ... EOF` was
+        # denied for the message body, and the agent escape-hatched around the
+        # guard by writing the message to a file). The live engine collapses
+        # heredoc newlines to spaces, so these must run end-to-end here, not
+        # only under `opa test`.
+        PolicyCase(
+            "allow-git-commit-heredoc-message-mentioning-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "preflight: stop probing the process table by name\n\n"
+            "The preflight called pgrep -x steam directly, which false-negatives\n"
+            "on this WSL2 + Windows-Steam box. It now sources\n"
+            "scripts/steam-running.sh and calls steam_running instead.\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-dash-m-message-mentioning-pgrep",
+            'git commit -m "preflight: drop the raw pgrep -x steam probe in'
+            ' favour of scripts/steam-running.sh"',
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-cat-heredoc-substitution-mentioning-pgrep",
+            "git add -A && git commit -m \"$(cat <<'EOF'\n"
+            "guard: stop calling pgrep -x steam in the runtime preflight\n\n"
+            "scripts/steam-running.sh is the sanctioned WSL-aware check.\n"
+            'EOF\n)"',
+            True,
+        ),
+        # ... and the message carve-out must never launder an executing probe.
+        PolicyCase(
+            "deny-git-commit-heredoc-then-chained-pgrep",
+            "git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            "pgrep -x steam",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-heredoc-unquoted-tag",
+            "git commit -F - <<EOF\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF",
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-bash-c-wrapped-git-commit-heredoc-pgrep",
+            "bash -c \"git commit -F - <<'EOF'\n"
+            "guard: drop the raw pgrep -x steam probe\n"
+            "EOF\n"
+            '"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-message-command-substitution-pgrep",
+            'git commit -m "$(pgrep -x steam)"',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-dash-m-then-chained-pgrep",
+            'git commit -m "guard: drop the raw process probe" && pgrep -x steam',
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "deny-git-commit-unquoted-pgrep-token",
+            "git commit -am pgrep",
+            False,
+            "manual pgrep is blocked",
+        ),
         # Word-boundary: a filename/word merely CONTAINING "pgrep" is not a pgrep
         # command token and must not be denied.
         PolicyCase(
@@ -313,6 +528,52 @@ def main() -> int:
         PolicyCase(
             "deny-dot-slash-start-protected-game",
             "./start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        # 2026-08-04 false positive: NAMING the EAC launcher as data was denied.
+        # The blocked command recorded a memory ABOUT the launcher (that
+        # /proc/<pid>/comm truncates at 15 chars, so an exact-match entry for
+        # the 24-char name could never match a process). The substring fallback
+        # asked only "payload contains the name" plus a generic marker word,
+        # and "bash" in prose is such a word; the bd text exemption could not
+        # rescue it because its shape did not anticipate a QUOTED binary path.
+        # Deny now needs the name to occur somewhere it could be executed.
+        PolicyCase(
+            "allow-bd-remember-quoted-binary-path-naming-eac-launcher",
+            '"$HOME/.local/bin/bd" remember "er-stale-run-sentinel compared'
+            " start_protected_game.exe (24 chars) verbatim against"
+            " /proc/<pid>/comm, which the kernel truncates at 15 chars, so that"
+            " entry could never match any process; run bash"
+            ' scripts/er-stale-run-sentinel.sh --selftest" --key'
+            " stale-sentinel-comm-truncation-2026-08-04",
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-prose-naming-eac-launcher",
+            "echo 'the sentinel detects start_protected_game.exe; never launch"
+            " it from bash or proton wrappers'",
+            True,
+        ),
+        PolicyCase(
+            "allow-python-c-string-literal-naming-eac-launcher",
+            "python3 -c \"print('sentinel comm entry:"
+            " start_protected_game.exe truncated to 15 chars')\"",
+            True,
+        ),
+        # ... and naming-as-data must not become a launch bypass: an inert first
+        # statement does not launder a launch in the second, and an inert head
+        # does not make a PIPE inert.
+        PolicyCase(
+            "deny-echo-prose-then-setsid-bare-launcher",
+            "echo 'do not run start_protected_game.exe from bash'; setsid"
+            " start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-echo-launcher-name-piped-into-shell",
+            "echo 'start_protected_game.exe' | bash",
             False,
             "blocked this Elden Ring EAC launcher command",
         ),
@@ -369,6 +630,50 @@ def main() -> int:
             "                pass\n"
             "PY",
             True,
+        ),
+        # Editing a repo file whose TEXT names the EAC launcher is not a launch
+        # (2026-08-04 false positive: removing one sentence from a module
+        # docstring was denied because the raw marker fallback saw the name plus
+        # the word "python" from the interpreter's own invocation). This repo
+        # deliberately writes refusal logic and safety docs that NAME the
+        # forbidden binary, so that text has to stay editable.
+        PolicyCase(
+            "allow-python-heredoc-editing-docstring-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "p = Path('scripts/frida-dump-module.py')\n"
+            "s = p.read_text(encoding='utf-8')\n"
+            'old = """* Offline `eldenring.exe` ONLY. Refuses'
+            " `start_protected_game.exe` / EAC, like the sibling\n"
+            "  `frida-nudge.py`.\n"
+            '"""\n'
+            "assert old in s\n"
+            "p.write_text(s.replace(old, ''), encoding='utf-8')\n"
+            "PY",
+            True,
+            extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
+        ),
+        # ... but the exemption must not become a launch bypass. A pipe on the
+        # heredoc REDIRECTION LINE feeds the program's OUTPUT to a shell, so a
+        # path the program merely prints really executes.
+        PolicyCase(
+            "deny-python-heredoc-edit-piped-into-shell",
+            "python3 - <<'PY' | bash\n"
+            "print(\"'/opt/er/start_protected_game.exe'\")\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-python-heredoc-edit-plus-subprocess-launch",
+            "python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            "import subprocess\n"
+            "Path('scripts/frida-dump-module.py').write_text('# start_protected_game.exe')\n"
+            "subprocess.run(['wine', '/opt/er/start_protected_game.exe'])\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
         ),
         # ... but the /proc mention must never become a launch bypass.
         PolicyCase(
@@ -428,6 +733,132 @@ def main() -> int:
         PolicyCase(
             "deny-git-commit-chained-quoted-ersc-copy",
             "git commit -m \"note\" && cp 'SeamlessCoop/ersc.dll' dist/",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # 2026-07-28 false positive: the bundling rule denied a `bd remember`
+        # whose quoted memory body merely MENTIONS ersc.dll while documenting
+        # Seamless compatibility. Two defects: the bd text exemption matched only
+        # a hard-coded /home/banon path (not the `$HOME/.local/bin/bd` form
+        # AGENTS.md documents), and the fallback fired on "ersc.dll" plus any of
+        # the substrings stage/bundle/archive/tar/rar -- which hide inside
+        # "target"/"startup"/"library"/"staged". Deny now needs a real verb.
+        PolicyCase(
+            "allow-bd-remember-home-var-mentioning-ersc-dll",
+            "$HOME/.local/bin/bd remember \"SAVE-DISABLE INTERCEPTION STRATEGY:"
+            " swallow the SL submit and fake the status poll. Also above any path"
+            " redirection so it works identically under Seamless Co-op (ersc.dll"
+            " redirects paths, not the SL submit). Nothing is staged into the"
+            ' target/ bundle." --key'
+            " save-disable-strategy-swallow-SL-submit-fake-status-poll-2026-07-28",
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-message-mentioning-ersc-dll-seamless-compat",
+            'git commit -m "docs: record that ersc.dll redirects save paths under'
+            ' Seamless Co-op; nothing is staged into target/"',
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-prose-mentioning-ersc-dll",
+            "echo 'ersc.dll is a compatibility target; it is never archived into"
+            " the target/ bundle'",
+            True,
+        ),
+        # ... while real staging/packaging stays denied.
+        PolicyCase(
+            "deny-cp-ersc-dll-into-me3-profile",
+            'cp -f "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"'
+            " /home/banon/Elden/profile/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "deny-mv-quoted-ersc-dll-into-target-bundle",
+            "mv 'SeamlessCoop/ersc.dll' target/release-bundle/",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "deny-redirect-write-target-ersc-dll",
+            "cat vendor/seamless-coop-v1.9.9/SeamlessCoop/ersc.dll > target/release/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # Restoring the USER's game-installed co-op DLL (same-path rename that
+        # only strips the repo's .er-effects-staged suffix) is the opposite of
+        # bundling and is allowed (bd er-effects-rs-gkqa).
+        PolicyCase(
+            "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
+            True,
+        ),
+        # ... but the same staged source moved to any OTHER destination denies.
+        PolicyCase(
+            "deny-mv-staged-ersc-dll-into-target-bundle",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " 'target/release-bundle/ersc.dll'",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # A read-only interpreter scan of the INSTALLED DLL with the path as an
+        # unquoted operand is allowed (bd er-effects-rs-gkqa: arm (a) counted
+        # python/bash as bundling verbs).
+        PolicyCase(
+            "allow-python-scan-gameinstall-ersc-dll-unquoted-operand",
+            "python3 scripts/pe_export_dump.py"
+            " /mnt/c/SteamLibrary/steamapps/common/ELDEN\\ RING/Game/SeamlessCoop/ersc.dll",
+            True,
+        ),
+        # ... while a repo-relative operand (the staging-script shape) denies.
+        PolicyCase(
+            "deny-python-script-repo-relative-ersc-dll-operand",
+            "python3 scripts/pe_export_dump.py SeamlessCoop/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        # False positive fixed 2026-08-15 (arm (a')): neither the copy/archive
+        # verb list (a) nor the interpreter word list (a') required a WORD
+        # boundary after the matched token, so `[^;|&()]*` let the match start
+        # partway through an unrelated word whose PREFIX happened to equal one
+        # of those tokens. `sha256sum` starts with `sh` (an (a') interpreter
+        # token), so a read-only hash compare of two files -- one path staged
+        # inside quotes, the other an unquoted game-install operand, piped
+        # through `sed` to redact the home directory -- denied as if it were a
+        # bundling command. It copies, moves, and writes nothing.
+        PolicyCase(
+            "allow-sha256sum-compare-staged-and-gameinstall-ersc-dll",
+            'G="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop"\n'
+            'sha256sum "$G/ersc.dll.er-effects-staged" /home/banon/Elden/ersc.dll'
+            " | sed 's|/home/banon|~|'",
+            True,
+        ),
+        # A bare read-only stat/listing of an ersc.dll path (no copy/archive
+        # verb, no interpreter, no redirect) must always allow.
+        PolicyCase(
+            "allow-stat-gameinstall-ersc-dll",
+            'stat "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll"',
+            True,
+        ),
+        PolicyCase(
+            "allow-ls-la-gameinstall-ersc-dll",
+            "ls -la /home/banon/Elden/ersc.dll",
+            True,
+        ),
+        # Chaining a second command onto the restore-rename deliberately
+        # forfeits the same-path user-restore exemption -- the exemption's
+        # fail-closed shape requires the WHOLE command to be a single `mv`
+        # with exactly two quoted operands, so anything appended (even a
+        # read-only `ls -la`) drops back to the plain file-moving arms, which
+        # deny with no destination scoping. This is intentional and must not
+        # regress: an exempted restore command is not a place to smuggle a
+        # second statement.
+        PolicyCase(
+            "deny-mv-restore-staged-ersc-dll-chained-with-ls",
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'"
+            " && ls -la '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
@@ -558,16 +989,21 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
-        # AskUserQuestion (the multiple-choice questionnaire tool) is HARD-BLOCKED
-        # unconditionally (block_askuserquestion): the user does not want
-        # questionnaire prompts surfaced during /goal work -- the agent must
-        # proceed autonomously and state blockers/recommendations in prose. There
-        # is no reliable goal-active signal to gate on, so the block is always-on.
+        # AskUserQuestion (the multiple-choice questionnaire tool). CORRECTED 2026-08-15: the prior
+        # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
+        # design-interview question from the `grilling` skill was blocked while NOT in any /goal work.
+        # User verdict: "That cupcake policy is not triggered correctly." Re-investigation found no
+        # reliable goal-active signal to gate a conditional deny on, and PreToolUse cannot carry a
+        # non-blocking advisory in this build either (empirically confirmed: add_context/ask both no-op
+        # to Allow on PreToolUse), so the deny is removed outright. AskUserQuestion now proceeds
+        # unconditionally through this file; the advisory reminder lives in the companion
+        # block_askuserquestion_reminder.rego (UserPromptSubmit/add_context, exercised via opa test, not
+        # this live-engine harness).
         PolicyCase(
-            "deny-askuserquestion-questionnaire",
+            "allow-askuserquestion-questionnaire",
             "",
-            False,
-            "blocked the AskUserQuestion questionnaire tool",
+            True,
+            None,
             {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
             include_timeout=False,
             tool_name="AskUserQuestion",
@@ -622,8 +1058,11 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    for case in cases:
-        run_case(case)
+    max_workers = min(8, max(1, len(cases)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(run_case, case): case for case in cases}
+        for future in as_completed(futures):
+            future.result()
     print("cupcake policy regression tests passed")
     return 0
 

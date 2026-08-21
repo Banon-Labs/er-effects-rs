@@ -1,3 +1,62 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use er_loading_portrait::TITLE_PROFILE_SLOT_COUNT;
+
+use crate::experiments::trace::native_result_map_hooks::menu_item_action_summary;
+use crate::{
+    CAP_APPEND_ONE_ORIG, CAP_BUILDER_ORIG, CAP_CSMENU_CTOR_COUNT, CAP_CSMENU_CTOR_LOG_FIRST,
+    CAP_CSMENU_CTOR_ORIG, CAP_DIALOG_FACTORY_ORIG, CAP_LOAD_ACTIVATE_ORIG, CAP_LOAD_ACTIVATE2_ORIG,
+    CAP_MENU_DESER_ORIG, CAP_MENU_INSERT_COUNT, CAP_MENU_INSERT_LOG_FIRST,
+    CAP_MENU_INSERT_QWORD_8_OFFSET, CAP_MENU_INSERT_QWORD_10_OFFSET,
+    CAP_MENU_INSERT_QWORD_18_OFFSET, CAP_MENU_INSERT_QWORD_38_OFFSET,
+    CAP_MENU_INSERT_QWORD_50_OFFSET, CAP_MENU_INSERT_VTABLE_OFFSET, CAP_REBUILD_ROWS_ORIG,
+    CAP_ROW_PUSH_ALLFIRE_COUNT, CAP_ROW_PUSH_ALLFIRE_LOG_FIRST, CAP_ROW_PUSH_COUNT,
+    CAP_ROW_PUSH_LOG_FIRST, CAP_SELECTOR_TICK_COUNT, CAP_SELECTOR_TICK_LOG_FIRST,
+    CAP_SELECTOR_TICK_LOG_INTERVAL, CAP_SELECTOR_TICK_ORIG, CAP_SETSTATE_ORIG,
+    CONTINUE_CONFIRM_RVA, HOOK_ORIGINAL_UNSET, IN_WORLD_REACHED, IN_WORLD_REACHED_YES,
+    INPUT_PROBE_ACTIVE, IODEV_GLOBAL_RVA, IODEV_REQHANDLE_18_OFFSET, IODEV_REQHANDLE_20_OFFSET,
+    LIVE_DIALOG_FACTORY_RVA, LOADGAME_BUILDER_LAST_NATIVE_SLOT, LOADGAME_BUILDER_SLOT_OVERRIDES,
+    MENU_CONTINUE_ITEM, MENU_CONTINUE_ITEM_FIELD_LOG_COUNT, MENU_CONTINUE_ROW_ENTRY,
+    MENU_D180_LEAF_TICKED, MENU_ENTRIES_SEEN, MENU_ENTRIES_SEEN_YES, MENU_ITEM_FUNCTOR_A8_OFFSET,
+    MENU_ITEM_UPDATE_CAPTURE_COUNT, MENU_ITEM_UPDATE_HITS, MENU_ITEM_UPDATE_LAST,
+    MENU_ITEM_UPDATE_LAST_ACCEPT, MENU_ITEM_UPDATE_LAST_DOCALL, MENU_ITEM_UPDATE_LAST_FUNCTOR,
+    MENU_ITEM_UPDATE_LAST_ITEM, MENU_ITEM_UPDATE_LAST_VT, MENU_ITEM_UPDATE_LOG_MAX,
+    MENU_ITEM_UPDATE_ORIG, MENU_ITEM_UPDATE_SEMANTIC_HITS, MENU_LOAD_GAME_ITEM,
+    MENU_LOADGAME_ROW_ENTRY, MENU_ROUTER_THIS, MENU_TITLE_CONTINUE_DOCALL_RVA,
+    MENU_WINDOW_JOB_CTOR_HITS, MENU_WINDOW_JOB_CTOR_LAST_ACCEPT, MENU_WINDOW_JOB_CTOR_LAST_DOCALL,
+    MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR, MENU_WINDOW_JOB_CTOR_LAST_ITEM,
+    MENU_WINDOW_JOB_CTOR_LAST_VT, MENU_WINDOW_JOB_CTOR_ORIG, MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS,
+    MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS, MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT,
+    MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA,
+    MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL, MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM,
+    MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT, MENU_WINDOW_JOB_IDLE_CTOR_HITS,
+    MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT, MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA,
+    MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL, MENU_WINDOW_JOB_IDLE_CTOR_LAST_FUNCTOR,
+    MENU_WINDOW_JOB_IDLE_CTOR_LAST_ITEM, MENU_WINDOW_JOB_IDLE_CTOR_LAST_VT,
+    MENU_WINDOW_JOB_IDLE_CTOR_ORIG, MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS, MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_CALLER_RVA, MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR, MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ITEM,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_OUT_SLOT, MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_VT,
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG, MENU_WINDOW_JOB_VTABLE_RVA, OWN_STEPPER_BASE,
+    OWN_STEPPER_CALL_INC, OWN_STEPPER_DIALOG, OWN_STEPPER_EXPECTED_SLOT, OWN_STEPPER_PHASE,
+    OWN_STEPPER_PHASE_MENU, OWN_STEPPER_PHASE_S2_ACTIVATE, OWN_STEPPER_SELECTOR_CTX,
+    OWN_STEPPER_SELECTOR_STEP, OWN_STEPPER_TITLE_FIRED, PROFILE_LOAD_DIALOG_VTABLE_RVA,
+    ProfileLoadMenuRva, ROUTER_THIS_VTABLE_RVA, ROW_CONTAINER_BACKPTR_8,
+    SELECTOR_STEP_INSTALL_FLAG_68_OFFSET, SEQ_ITER_CHILD_LAST, SEQ_ITER_CHILD_LOG_COUNT,
+    SEQ_ITER_CHILD_LOG_MAX, SEQ_ITER_DEBUG_COUNT, SEQ_ITER_DEBUG_MAX, SEQUENCE_CHILD_COUNT_MAX,
+    SEQUENCE_CHILD_COUNT_MIN, SEQUENCE_CHILDREN_BASE_18_OFFSET, SEQUENCE_COUNT_60_OFFSET,
+    SEQUENCE_ITER_ORIG, TITLE_NATIVE_READY_PREDICATE_HITS,
+    TITLE_NATIVE_READY_PREDICATE_LAST_CALLER_RVA, TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS,
+    TITLE_NATIVE_READY_PREDICATE_LAST_GETTER, TITLE_NATIVE_READY_PREDICATE_LAST_MASKED,
+    TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT, TITLE_NATIVE_READY_PREDICATE_LAST_RET,
+    TITLE_NATIVE_READY_PREDICATE_LAST_THIS, TITLE_NATIVE_READY_PREDICATE_LAST_VTABLE,
+    TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, append_autoload_debug,
+    append_continue_trace, b80_mount_trace_summary, decode_thunk_hop, functor_chain_hits_factory,
+    game_module_base, live_dialog_enabled, own_stepper_enter_s2_phase, product_autoload_enabled,
+    profile_select_load_flow_enabled, record_continue_candidate, safe_read_usize,
+    trace_callers_summary, trace_first_game_caller_rva,
+};
 
 /// Forward a captured menu-UI call through its trampoline. Uniform 4-arg fastcall: the
 /// integer arg registers (rcx/rdx/r8/r9) pass through; callees taking fewer args ignore the
@@ -220,7 +279,7 @@ unsafe fn log_row_push_caller(tag: &str, container: usize) {
 /// the exact objects TitleTopDialog::open_menu inserts. This is intentionally generic: log the
 /// original return plus a few qwords around rcx/rdx so the next static/runtime step can identify the
 /// registry storage without guessing dialog fields or generic Sequence trees.
-unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: usize) {
+pub(super) unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: usize) {
     let n = CAP_MENU_INSERT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     if n < CAP_MENU_INSERT_LOG_FIRST {
         let q = |addr: usize, off: usize| -> usize {
@@ -350,6 +409,24 @@ pub(crate) unsafe extern "system" fn cap_load_activate2_hook(
     unsafe { call_cap_original(&CAP_LOAD_ACTIVATE2_ORIG, this, b, c, d) }
 }
 
+/// Resolve the explicit boot slot that must beat the save container's persisted last-used slot.
+/// The user's picker choice has precedence over the configured autoload default, matching the
+/// full-read resolver. Invalid slots are ignored rather than forwarded into the native builder.
+fn explicit_boot_loadgame_slot(
+    picked: Option<i32>,
+    configured: Option<i32>,
+) -> Option<(i32, &'static str)> {
+    let valid = |slot: i32| (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot);
+    picked
+        .filter(|&slot| valid(slot))
+        .map(|slot| (slot, "user pick"))
+        .or_else(|| {
+            configured
+                .filter(|&slot| valid(slot))
+                .map(|slot| (slot, "configured autoload slot"))
+        })
+}
+
 /// Enter-Load-Game builder 0x140826510(owner, rdx, r8d=slot, r9) -> selector step.
 pub(crate) unsafe extern "system" fn cap_builder_hook(
     owner: usize,
@@ -359,13 +436,71 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
 ) -> usize {
     let slot_i32 = slot as i32;
     let expected_slot = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-    let effective_slot = slot;
+    // THE EXPLICIT BOOT SLOT BEATS THE CONTAINER'S STORED SLOT (bd er-effects-rs-daq7 / 91zb).
+    //
+    // This builder's `r8d` slot argument is what the LoadGame job is built for, and on the
+    // TitleTopDialog Continue path it comes from `CSMenuSystemSaveLoad+0x1200` -- the last-used
+    // slot PERSISTED INSIDE THE SAVE CONTAINER, restored by the system-save chunk deserialize
+    // (`CSMenuSimpleSaveDataChunk<1, MENU_TITLEFLOW_SAVEDATA, 0>`, ctor 0x14081af80). Nothing about
+    // it knows what the user clicked, so a container whose stored slot differs from the pick loads
+    // the WRONG CHARACTER. Runtime proof 2026-08-03: user picked slot 0 of
+    // save-files/45-Slots/ER0000.sl2, this hook logged `built for slot=2`, and slot 2 of that
+    // container is the Vagabond that loaded while the user had clicked Hero.
+    //
+    // Steering it HERE, at the instruction that consumes the value, rather than by writing
+    // mss+0x1200 earlier: an earlier write is overwritten by the container's own chunk deserialize
+    // (measured -- our SUBMIT read mss+0x1200 as 0 before the chunk landed, and the builder then
+    // saw the stored 2). This is also the least invasive point available: the hook already forwards
+    // `effective_slot` to the original, and nothing in the deserialize/warp machinery is touched
+    // (an earlier attempt to fix this via `own_load_feed_deserialize` set `warp_requested` on a path
+    // that disarms the warp target and softlocked -- see loaders.rs:361-368).
+    //
+    // BOUNDED to boot: only while no world has existed. A System->Quit switch names its own slot
+    // through a different path and must not be overridden here. The picker wins when present; an
+    // explicit `er-effects.toml slot` is the fallback. Before this fallback, a configured boot of
+    // slot 0 in 45-Slots still built the native job for the container's persisted slot 9, so the
+    // game loaded The GImp while the portrait correctly showed slot 0 Hero.
+    let before_world = IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
+    let picked = before_world
+        .then(crate::experiments::missing_save_picker_selected_slot)
+        .flatten();
+    let configured = before_world
+        .then(crate::config::configured_autoload_slot)
+        .flatten();
+    let explicit = explicit_boot_loadgame_slot(picked, configured);
+    let effective_slot = match explicit {
+        Some((requested, source)) if requested != slot_i32 => {
+            LOADGAME_BUILDER_SLOT_OVERRIDES.fetch_add(1, Ordering::SeqCst);
+            LOADGAME_BUILDER_LAST_NATIVE_SLOT.store(slot_i32 as u32 as usize, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "loadgame-builder: OVERRIDE slot {slot_i32} -> {requested} -- the container's stored slot (mss+0x1200) named {slot_i32}, but the {source} named {requested}; building the LoadGame job for the explicit boot slot"
+            ));
+            requested as usize
+        }
+        _ => slot,
+    };
     append_continue_trace(format_args!(
         "CAP builder owner=0x{owner:x} slot={} effective_slot={} rdx=0x{rdx:x} r9=0x{r9:x} {} {}",
         slot_i32,
         effective_slot as i32,
         trace_callers_summary(),
         b80_mount_trace_summary()
+    ));
+    // WHAT SLOT DID THE GAME WANT? Logged unconditionally (not just on override) so a run where the
+    // native slot already equals the pick is distinguishable from one where the hook never fired.
+    // `append_continue_trace` above carries the same data plus a backtrace, but that sink is not
+    // among the preserved run artifacts, which is why the 2026-08-02 repro could not settle where
+    // the slot came from.
+    //
+    // Reading CSMenuSystemSaveLoad+0x1200 here was tried and REMOVED: it resolved to `None` on every
+    // call across two runs, so it cost a singleton walk per build and told us nothing. The value is
+    // still the origin of `slot` on the TitleTopDialog Continue path (FUN_1409ac760 @0x1409ac9e1:
+    // `CALL GetMenuSystemSaveLoad; MOV R8D,[RAX+0x1200]; CALL 0x140826510`) -- that is established by
+    // static RE plus the on-disk chunk, and does not need re-deriving per frame.
+    append_autoload_debug(format_args!(
+        "loadgame-builder: 0x140826510 built for slot={slot_i32} (expected={expected_slot}) effective={} owner=0x{owner:x} {}",
+        effective_slot as i32,
+        trace_callers_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
     if (live_dialog_enabled() || product_autoload_enabled())
@@ -399,6 +534,32 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
         ));
     }
     ret
+}
+
+#[cfg(test)]
+mod cap_builder_tests {
+    use super::explicit_boot_loadgame_slot;
+
+    #[test]
+    fn picker_beats_configured_slot() {
+        assert_eq!(
+            explicit_boot_loadgame_slot(Some(8), Some(3)),
+            Some((8, "user pick"))
+        );
+    }
+
+    #[test]
+    fn configured_slot_beats_container_when_no_picker_exists() {
+        assert_eq!(
+            explicit_boot_loadgame_slot(None, Some(0)),
+            Some((0, "configured autoload slot"))
+        );
+    }
+
+    #[test]
+    fn invalid_explicit_slots_are_not_forwarded() {
+        assert_eq!(explicit_boot_loadgame_slot(Some(10), Some(-1)), None);
+    }
 }
 
 /// Selector-owner step tick 0x140826d50(step, ctx, result). Rate-limited (it ticks every

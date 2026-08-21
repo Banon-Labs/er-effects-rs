@@ -1,3 +1,67 @@
+use std::{ffi::c_void, sync::atomic::Ordering};
+
+use er_game_base::mem::{game_module_base, safe_read_usize};
+
+use crate::{
+    constants::{
+        CAP_MENU_INSERT_LOG_FIRST, COMBINED_LOAD_ORIG, CONTINUE_LOAD_ORIG, CURRENT_SLOT_LOAD_ORIG,
+        HOOK_FALSE_RETURN, HOOK_ORIGINAL_UNSET, MAP_LOAD_ORIG, MEMBERFUNCJOB_VTABLE_RVA,
+        MENU_CONTINUE_MEMBER_NODE, MENU_CONTINUE_TASK_NODE, NATIVE_SUBMIT_HITS,
+        NATIVE_SUBMIT_LAST_RESULT, NATIVE_SUBMIT_ORIG, NO_SAFE_INPUT_CONFIRM_FRAMES,
+        OWN_STEPPER_CALL_INC, PE_DOS_LFANEW_OFFSET, PE_FILE_NUM_SECTIONS_OFFSET,
+        PE_FILE_SIZE_OPT_HEADER_OFFSET, PE_OPT_HEADER_OFFSET, PE_SECTION_HEADER_SIZE,
+        PE_SECTION_SCAN_START, PE_SECTION_VADDR_OFFSET, PE_SECTION_VSIZE_OFFSET,
+        PE_TEXT_SECTION_NAME, PE_U16_MASK, PE_U32_MASK, REQUEST_SAVE_ORIG,
+        RESULT_ACTION_BUILDER_HITS, RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA,
+        RESULT_ACTION_INSERT_HITS, RESULT_ACTION_LAST_EVENT, RESULT_ACTION_LAST_INSERT_ARG0,
+        RESULT_ACTION_LAST_INSERT_ARG1, RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA,
+        RESULT_ACTION_LAST_INSERT_RET, RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA,
+        RESULT_ACTION_LAST_RESULT, RESULT_ACTION_LAST_WORD0, RESULT_ACTION_LAST_WORD1,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_R8, RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX, RESULT_ACTION_LAST_WRAPPER_BUILDER_RET,
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA, RESULT_ACTION_WRAPPER_BUILDER_HITS,
+        RESULT_EVENT_HANDLER_HITS, RESULT_EVENT_HANDLER_ORIG, RESULT_EVENT_LAST_EVENT,
+        RESULT_EVENT_LAST_FD4_ARG, RESULT_EVENT_LAST_FD4_CODE, RESULT_EVENT_LAST_RAW_QWORD0,
+        RESULT_EVENT_LAST_RESULT, SAFE_INPUT_CONFIRM_FRAMES_REMAINING,
+        SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG, SAVE_REQUEST_PROFILE_ORIG,
+        SET_SAVE_SLOT_ORIG, TASK_ENQUEUE_TRACE_COUNT, TASK_ENQUEUE_TRACE_INCREMENT,
+        TASK_ENQUEUE_TRACE_LIMIT, TITLE_HANDOFF_COMPLETE, TITLE_HANDOFF_COMPLETE_VALUE,
+        TITLE_OWNER_SCAN_START_ADDRESS, TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
+    },
+    crashlog::{
+        callstack_contains_game_rva, object_vtable_summary, trace_callers_summary,
+        trace_first_game_caller_rva,
+    },
+    experiments::{
+        menu_diag::decode_thunk_hop,
+        product_core_own_stepper::{
+            MENU_CONTINUE_IDLE_INSERT_HITS, MENU_CONTINUE_IDLE_INSERT_LAST_ARG0,
+            MENU_CONTINUE_IDLE_INSERT_LAST_ARG1, MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA,
+            MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA, MENU_CONTINUE_IDLE_INSERT_LAST_RET,
+            MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA,
+            MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM,
+            MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT, TASK_ENQUEUE_GENERIC_HITS,
+            TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND,
+            TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS, TASK_ENQUEUE_GENERIC_LAST_ARG0,
+            TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE, TASK_ENQUEUE_GENERIC_LAST_ARG1,
+            TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA, TASK_ENQUEUE_GENERIC_LAST_RET,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0, TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1, TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA,
+            TASK_ENQUEUE_GENERIC_SAMPLE0_RET, TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0,
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE, TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1,
+            TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA, TASK_ENQUEUE_GENERIC_SAMPLE1_RET,
+        },
+    },
+    telemetry::{append_autoload_debug, append_continue_trace},
+};
+
+use crate::experiments::trace::{
+    menu_constructor_capture::log_menu_insert_details,
+    menu_trace_hooks::{
+        call_bool3_original, call_result_void1_original, call_result_void2_original,
+        call_task_enqueue_original, call_wrapper_builder_original, game_man_trace_summary,
+    },
+};
 
 fn format_optional_usize_hex(value: usize) -> String {
     if value == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -165,32 +229,6 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, e
     }
 }
 
-pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
-    this: *mut c_void,
-) -> *mut c_void {
-    unsafe {
-        append_menu_semaphore_trace(
-            "menu_task_update_wrapper",
-            "ENTER",
-            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
-            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
-            this,
-        )
-    };
-    let result =
-        unsafe { call_wrapper_original(&MENU_TASK_UPDATE_WRAPPER_ORIG, this) }.unwrap_or(this);
-    unsafe {
-        append_menu_semaphore_trace(
-            "menu_task_update_wrapper",
-            "LEAVE",
-            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
-            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
-            result,
-        )
-    };
-    result
-}
-
 unsafe fn text_section_bounds(base: usize) -> Option<(usize, usize)> {
     let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
     let nt = base + e_lfanew;
@@ -264,7 +302,7 @@ unsafe fn qword_window_summary(ptr: usize) -> String {
     out
 }
 
-unsafe fn menu_item_action_summary(ptr: usize) -> String {
+pub(super) unsafe fn menu_item_action_summary(ptr: usize) -> String {
     const OFFSETS: [usize; 14] = [
         0x0, 0x8, 0x10, 0x40, 0x50, 0x68, 0xa8, 0xb0, 0xe8, 0xf0, 0xf8, 0x100, 0x130, 0x138,
     ];

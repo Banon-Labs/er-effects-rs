@@ -1,3 +1,5 @@
+use super::*;
+
 /// Crash-on-not-loaded watchdog (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
 /// the Bandai-Namco privacy policy / new-game state shows ONLY when the active profile has no
 /// character (profile_slot_active == 0). When a load is expected (not telemetry-only) and the profile
@@ -160,7 +162,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
     if gm == NULL {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
-            let (node, registry) = action.as_ref().map_or((NULL, NULL), |a| (a.node, a.registry));
+            let (node, registry) = action
+                .as_ref()
+                .map_or((NULL, NULL), |a| (a.node, a.registry));
             append_autoload_debug(format_args!(
                 "native-fullread: waiting for GameMan after menu ready node=0x{node:x} registry=0x{registry:x} (#{n})"
             ));
@@ -276,6 +280,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             unsafe { own_load_reset_gaitem_singleton(base) };
             if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+                // Which slot's deserialize completed (slot+1) -- ground truth for the
+                // published-vs-loaded portrait oracle. See er_telemetry counters.
+                er_telemetry::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
+                    .store(picked + 1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
                 ));
@@ -417,10 +425,6 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
     const ZERO_U32: u32 = 0;
     const NAME_LEN_NONE: usize = 0;
     const MIN_REAL_LEVEL: u32 = 1;
-    const PROFILE_RECORD_BASE: usize = 0x18;
-    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
-    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
-    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
     if slot < OWN_STEPPER_SLOT_ZERO {
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
@@ -433,12 +437,11 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
     if profile_summary == NULL {
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
-    let slot_index = slot as usize;
-    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+    let rec = profile_summary_record_address(profile_summary, slot as usize);
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
         .map(|value| value as u32 as i32)
         .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
         .map(|value| value as u32)
         .unwrap_or(ZERO_U32);
     let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
@@ -485,10 +488,6 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     const BAD_I32: i32 = -1;
     const ZERO_U32: u32 = 0;
     const NAME_LEN_NONE: usize = 0;
-    const PROFILE_RECORD_BASE: usize = 0x18;
-    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
-    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
-    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
     let mut result = RequestedSlotIdentity {
         matches: false,
         profile_summary: NULL,
@@ -513,12 +512,11 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     if pgd == NULL || profile_summary == NULL {
         return result;
     }
-    let slot_index = slot as usize;
-    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
-    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+    let rec = profile_summary_record_address(profile_summary, slot as usize);
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_MAP_OFFSET) }
         .map(|value| value as u32 as i32)
         .unwrap_or(BAD_I32);
-    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }
         .map(|value| value as u32)
         .unwrap_or(ZERO_U32);
     let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
@@ -541,34 +539,9 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
         && utf16_names_equal(&profile_name, &pgd_name, pgd_name_len);
     result
 }
-/// CHAR-FINGERPRINT save-write gate: returns (is_real, level, name_len) by reading the live
-/// CS::PlayerGameData (GameDataMan `[base+0x3d5df38]` -> +0x08 -> PlayerGameData), the validated
-/// reading (the same chain dump_load_correctness uses). A REAL mounted character has level>=1 AND
-/// a non-empty-like 16-bit name (`"_"`, empty, and all-spaces are empty-like). Pure
-/// fault-tolerant safe_read_usize -> never faults. Used to FAIL-CLOSED SetState(5): the c30
-/// oracle is ambiguous (m10_01 collision), so the character actually present in PlayerGameData is
-/// the decisive signal.
-pub(crate) unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const ZERO_U32: u32 = 0;
-    const MIN_REAL_LEVEL: u32 = 1;
-    const NAME_LEN_NONE: usize = 0;
-    let gdm = game_data_man_ptr_or_null();
-    let pgd = if gdm != NULL {
-        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    if pgd == NULL {
-        return (false, ZERO_U32, NAME_LEN_NONE);
-    }
-    let level = unsafe { safe_read_usize(pgd + PGD_LEVEL_68_OFFSET) }
-        .map(|v| v as u32)
-        .unwrap_or(ZERO_U32);
-    let (name_units, name_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
-    let is_real = level >= MIN_REAL_LEVEL && !utf16_name_empty_like(&name_units, name_len);
-    (is_real, level, name_len)
-}
+// Character identity now belongs to the loading-portrait feature crate, which already owns the
+// PlayerGameData layout and GameDataMan host seam. Preserve the historical flat product name.
+pub(crate) use er_loading_portrait::char_fingerprint;
 /// Read the load-correctness invariants at the in-world transition and log a single greppable
 /// `LOAD-CORRECTNESS` record: GameMan c30/ac0/name_is_empty + the CS::PlayerGameData
 /// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,

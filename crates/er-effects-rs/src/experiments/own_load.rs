@@ -2,5 +2,10 @@
 
 #![allow(unused_imports)]
 
-include!("own_load/drive.rs");
-include!("own_load/loaders.rs");
+use super::*;
+
+mod drive;
+pub(crate) use drive::*;
+
+mod loaders;
+pub(crate) use loaders::*;

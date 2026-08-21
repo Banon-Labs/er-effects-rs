@@ -1,0 +1,161 @@
+name: release
+
+# Every main commit gets an immutable prerelease containing every ME3-loadable
+# DLL. Release Please separately creates draft versioned releases from
+# conventional commits; those receive the exact same staged, attested files
+# before this workflow publishes them.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize runs on main so two merges cannot race release bookkeeping or create
+# conflicting release assets concurrently.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep in lockstep with .github/workflows/check.yml.
+  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  CARGO_XWIN_VERSION: 0.23.0
+
+jobs:
+  release-please:
+    # A manually dispatched workflow from another branch must never open a
+    # release PR or alter a release sourced from that branch.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push release branch, create tags/releases
+      pull-requests: write # open/update the release PR
+      issues: write # apply autorelease labels
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          # Draft first: immutable releases allow asset changes only before
+          # publication. upload-versioned-release publishes after attaching the
+          # staged, attested DLLs.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Build once per main commit, then publish the staged files to its immutable
+  # user prerelease and, when Release Please creates a draft, to that release.
+  # amd_ags_x64.dll is deliberately excluded: er-ags-stub impersonates AMD's
+  # vendor DLL filename and is only a local RenderDoc-capture swap-in.
+  build-attest-publish-main:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/edit rolling release and upload its assets
+      id-token: write # sign attestations (Sigstore OIDC)
+      attestations: write # persist attestations
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out fromsoftware-rs as sibling
+        run: |
+          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+
+      - name: Check out MinHook vendor source
+        run: git clone --depth 1 --branch v1.3.4 https://github.com/TsudaKageyu/minhook.git vendor/minhook
+
+      - name: Install Rust (stable + windows target)
+        run: |
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install cargo-xwin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+
+      # Same cache key as check.yml so this job rides the already-warmed
+      # main-scoped CRT/SDK cache instead of re-downloading ~1 GB.
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # scripts/me3-dll-list.py is the single source of truth for every
+      # shippable ME3 native. er-build-dlls also records source/artifact
+      # provenance beside each DLL while the source tree is still available.
+      - name: Build every distributable DLL
+        run: bash scripts/er-build-dlls.sh --all
+
+      - name: Stage release assets
+        run: |
+          mkdir dist
+          while IFS=: read -r _ artifact; do
+            cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll" dist/
+            cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll.provenance.json" dist/
+          done < <(python3 scripts/me3-dll-list.py --pairs)
+          (cd dist && sha256sum -- *.dll > SHA256SUMS)
+
+      # Attest every distributable DLL, not merely the archive/container that
+      # carries it, so `gh attestation verify <downloaded-dll>` remains useful.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.dll
+            dist/SHA256SUMS
+
+      # Transfer the exact staged files to the conditional versioned-release
+      # job. Users download from Releases; this one-day Actions artifact exists
+      # only to avoid a second build when a main commit creates a version tag.
+      - name: Preserve staged files for versioned release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+      # Immutable Releases are enabled for this repository, so published
+      # releases and their tags cannot be changed. Each main commit therefore
+      # receives its own immutable prerelease rather than a mutable latest tag.
+      - name: Publish immutable main prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rolling_tag="main-${GITHUB_SHA}"
+          notes="Development build from commit ${GITHUB_SHA}. Every main build has its own immutable prerelease; use a numbered release for an immutable stable version."
+          gh release create "$rolling_tag" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Main build ${GITHUB_SHA::12}" \
+            --notes "$notes" \
+            --prerelease
+
+  # Release Please creates the versioned release as a draft. Attach the files
+  # built from that same main commit, then publish the immutable release.
+  upload-versioned-release:
+    needs: [release-please, build-attest-publish-main]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload release assets
+    steps:
+      - name: Retrieve staged release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Populate and publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_name="${{ needs.release-please.outputs.tag_name }}"
+          gh release upload "$tag_name" dist/*
+          gh release edit "$tag_name" --draft=false

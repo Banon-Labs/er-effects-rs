@@ -10,17 +10,35 @@ crate-type = ["cdylib"]
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
 er-telemetry = { path = "../er-telemetry" }
+er-title-flow = { path = "../er-title-flow" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 # Shared MinHook FFI + hook union (compiles the vendored MinHook C once; this crate defines the
 # `er_effects_union_register` export over `er_hook::register_union_hook`).
 er-hook = { path = "../er-hook" }
+# Native Scaleform hook mechanisms. Product policy/logging remains in this crate.
+er-scaleform-hooks = { path = "../er-scaleform-hooks" }
 # Shared low-level foundation (fault-safe RAM readers, game base/rva, stable
 # singleton RVA table, logger core). Source of truth for primitives previously
 # defined in experiments/mem.rs. game-types re-exports the typed game bindings.
 er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# Diagnostic-only boot CPU/RIP sampler. The product starts it at the existing early attach point;
+# the crate owns its opt-in policy, sampling mechanism, and NDJSON output.
+er-boot-profiler = { path = "../er-boot-profiler" }
 er-save-loader = { path = "../er-save-loader" }
+# Host-runnable save-source/redirect planner. Process-wide hooks stay in this product crate until
+# the later save-redirect owner slice.
+er-save-redirect = { path = "../er-save-redirect" }
+er-save-picker = { path = "../er-save-picker", default-features = false, features = ["boot-flow", "os-dialog"] }
+# Customized System>Quit decision core. Hooked surfaces stay in this crate until S8.
+er-quit-menu = { path = "../er-quit-menu" }
+# Save-write suppression core, shared with the standalone er-save-disable-dll (save-game-flow
+# WP1): swallow every SL save enqueue + rewrite the status poll from boot, plus the one-shot
+# bypass token that makes the System->Quit "Save Game" row the ONLY path that really writes.
+# NEVER load er_save_disable.dll alongside this DLL in one me3 profile (two MinHook instances
+# would double-detour 0xe6fb50/0xe6e430).
+er-save-suppress = { path = "../er-save-suppress" }
 # In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
 # fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
 er-tpf = { path = "../er-tpf" }
@@ -31,6 +49,14 @@ er-gfx = { path = "../er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
 # portrait/debug proof tooling writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "../erpx-rs", default-features = false }
+# Backend-neutral loading-bar labels/font/raster primitives. Runtime adapters in this crate still own
+# Elden Ring semaphores, D3D12 swapchains, and ME3/product integration.
+er-loading-bar = { path = "../er-loading-bar" }
+# Loading-screen portrait + stats feature (path B capture pipeline + compositors + native
+# overlay host), extracted in the portrait crate split. The product keeps bundling it;
+# product state crosses the seam via `er_loading_portrait::install_host` in bootstrap.rs.
+er-loading-portrait = { path = "../er-loading-portrait" }
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 pelite = "0.10"
 bitflags = "2"
@@ -42,16 +68,19 @@ iced-x86 = { version = "1.21", default-features = false, features = [
   "std",
   "decoder",
 ] }
-# Boot profiler, Win32 process/window helpers, and MinHook target resolution.
+# Win32 process/window helpers and MinHook target resolution.
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Threading",
   "Win32_System_Performance",
-  "Win32_System_WindowsProgramming",
   "Win32_System_Kernel",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Diagnostics_Debug",
-  "Win32_System_SystemInformation",
+  # SystemTimeToTzSpecificLocalTime: the save picker's file rows show when each file was last
+  # written, and a user-facing timestamp is local time. This applies the zone's DST rules for the
+  # instant being rendered, so a save from the other side of a boundary keeps the wall-clock time it
+  # was written at (comparing GetLocalTime to GetSystemTime would only give the offset for NOW).
+  "Win32_System_Time",
   "Win32_Devices_HumanInterfaceDevice",
   "Win32_System_Com",
   "Win32_System_LibraryLoader",
@@ -70,10 +99,20 @@ windows = { version = "0.62", features = [
   # harness: native ER reads keyboard via RawInput (not DInput, ignores posted WM_KEYDOWN), so the
   # autopilot forces the window foreground and injects real OS keystrokes (diagnostic path only).
   "Win32_UI_Input_KeyboardAndMouse",
-  # Common file-open dialog lets System -> Quit -> Load Save Profiles pick a replacement SL2.
+  # comdlg32 (GetOpenFileNameW / GetSaveFileNameW / CommDlgExtendedError) for the OPT-IN OS file
+  # picker: `er-effects.toml os_native_save_picker = true` routes BOTH System -> Quit surfaces --
+  # "Load Character from File" and the Save Game destination list -- to the OS dialog instead of the
+  # in-game 05_010 browser. The reusable mechanism lives in er-save-picker::os_dialog; the product
+  # entrypoints still live in startup_hooks/save_picker/save_picker_os_dialog.rs.
   "Win32_UI_Controls_Dialogs",
   # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
   "Win32_Security",
+  # GetFileInformationByHandle: SAME-FILE identity (volume serial + file index) for the save
+  # destination commit. Two spellings of one file -- `C:\users\steamuser\...` and
+  # `Z:\...\pfx\drive_c\users\steamuser\...` under Wine -- must not read as two files, because
+  # redirecting the loaded save onto itself makes the safety net restore a pre-save snapshot over
+  # the save that just succeeded.
+  "Win32_Storage_FileSystem",
   # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
   # forge can display the real rendered character head instead of the placeholder checker.
   "Win32_Graphics_Direct3D12",

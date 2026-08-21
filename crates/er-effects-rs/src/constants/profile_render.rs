@@ -81,7 +81,8 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
 /// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
 /// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
-pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
+pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
 /// Native ProfileLoadDialog in-place list rebuild `FUN_1409a5020` (dump `0x1409a5020` -> live/deobf
 /// `0x9a4ed0`, content-unique via dump-deobf-shift). `fn(rcx = dialog)`. The game's own
 /// records-changed refresh, used by the delete-save flow: re-runs the item-list builder
@@ -92,6 +93,21 @@ pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
 /// reads per-row SNAPSHOTS, so bare record writes are invisible without this rebuild). RE 2026-07-07,
 /// adversarially verified (see bd save-picker RE notes).
 pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
+/// Native ProfileSelect item-list builder `FUN_140875590` (1.16.2 dump VA == deobf/live VA, shift 0;
+/// entry bytes `48 8b c4 56 57 41 56 48 81 ec d0 0b 00 00` byte-verified in `eldenring-deobf.bin`).
+/// `fn(rcx = out BasicViewItemList<MenuSaveDataSummary,10>*) -> out`. Builds the visible 10-row list
+/// STRAIGHT from the live ProfileSummary: occupancy via `FUN_140261cd0` (`saveSlotsStates[slot]`,
+/// summary+0x8+slot) and record pointer via `FUN_140261b80` (summary+0x18+slot*0x2a0). Every point
+/// where records become visible rows funnels through this one function: the ProfileLoadDialog
+/// ctor/bind paths AND the delete-flow in-place rebuild (`PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA`)
+/// all call it, so the save-picker re-stage hook at its entry covers every build site.
+pub(crate) const PROFILE_SELECT_LIST_BUILDER_RVA: u32 = 0x875590;
+pub(crate) static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_INSTALLED;
+/// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
+/// re-stage repairs any game-save record stomp that landed since the previous staging).
+pub(crate) use er_telemetry::counters::SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED;
@@ -157,11 +173,8 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLE
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_ADDR;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_ADDR;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
@@ -181,6 +194,8 @@ pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
@@ -271,12 +286,20 @@ pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_PRIMED;
 /// character and the post-load autosave would then write it back to the picked slot.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT;
 /// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
+/// This is the AUTHORITATIVE total world-load count for a session, boot included -- unlike the load
+/// epoch, which skips the boot load. See `er_telemetry::load_count`.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
+/// Bucket: forwards from outside the switch machine (the boot/title Continue).
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_NON_SWITCH_COUNT;
+/// Bucket: forwards that arrived while the previous world was still up.
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT;
+/// Switch forwards whose native requested-slot proof did not fire (carries the `FORWARD #n` label).
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
-pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN;
+pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// Continuous in-world game-task frames observed while a return-title reload is still ARMED
 /// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
@@ -331,23 +354,16 @@ pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
+pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_INGAME_PTR;
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
-/// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
-/// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
-/// stranding the reload. The MoveMapStep child's EzChildStepBase = MoveMapStep + 0x108 (isolates its
-/// call from the generic query's other callers). We hold its result not-done while the finalize is
-/// mid-walk on a committed reload, so the child survives and the advancer completes.
-pub(crate) const CHILD_DONE_QUERY_RVA: usize = 0xeb5530;
-pub(crate) const MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET: usize = 0x108;
+pub(crate) use er_title_flow::CHILD_DONE_QUERY_RVA;
+pub(crate) use er_title_flow::MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
 pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_ORIG;
 pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_HOOK_INSTALLED;
 pub(crate) use er_telemetry::counters::CHILD_DONE_HELD_COUNT;
 pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
-/// Held frozen-signature frames before the in-world drive fires. ~2s at load2's ~20fps; short so the
-/// RAM-gated drive completes before an incidental unfocused-mouse click can contaminate the run.
-pub(crate) const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
-/// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
-pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
+pub(crate) use er_title_flow::INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES;
+pub(crate) use er_title_flow::ENDING_REQUEST_STALL_RELEASE_FRAMES;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);

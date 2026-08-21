@@ -24,6 +24,13 @@ def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
     assert "crate::win32::write_u8(pad + off, val)" in src
 
 
+def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None:
+    src = (REPO_ROOT / "crates/er-input-harness-dll/src/pad_inject.rs").read_text()
+    assert "TO" + "DO(id-map)" not in src
+    assert "all ids\n/// 1000..1080 producing no reproducible job/flags/tab/return-title response" in src
+    assert "PadButton::TabRight => 0" in src
+
+
 def test_input_harness_manifest_names_actual_hook_layer() -> None:
     manifest = (REPO_ROOT / "crates/er-input-harness-dll/Cargo.toml").read_text()
     assert "FD4PadDevice::poll" not in manifest
@@ -44,7 +51,7 @@ def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver()
 
 
 def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
-    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/system_quit_hooks.rs").read_text()
+    hooks = (REPO_ROOT / "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
     assert "let boot_epoch = epoch == 0;" in hooks
     assert "if boot_epoch {" in hooks
     assert "mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX" in hooks
@@ -148,6 +155,7 @@ def main() -> int:
     tests = [
         test_pad_inject_uses_both_cs_ingame_pad_typeids,
         test_pad_inject_direct_stamp_writes_are_enabled,
+        test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids,
         test_input_harness_manifest_names_actual_hook_layer,
         test_samechar_runner_arms_product_movement_for_deterministic_reload_driver,
         test_boot_autoload_mms18_can_force_stuck_testnet_step,

@@ -1,15 +1,15 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/choza/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/choza/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-/home/choza/.local/bin/bd ready              # Find available work
-/home/choza/.local/bin/bd show <id>          # View issue details
-/home/choza/.local/bin/bd update <id> --claim  # Claim work atomically
-/home/choza/.local/bin/bd close <id>         # Complete work
-/home/choza/.local/bin/bd dolt push          # Push beads data to remote
+$HOME/.local/bin/bd ready              # Find available work
+$HOME/.local/bin/bd show <id>          # View issue details
+$HOME/.local/bin/bd update <id> --claim  # Claim work atomically
+$HOME/.local/bin/bd close <id>         # Complete work
+$HOME/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
 ## Offline Game-Asset Investigation Boundary
@@ -30,11 +30,22 @@ When user feedback shows that offline slider changes are not producing the inten
 
 When the issue becomes visual/material-specific (for example texture placement, UVs, seams, normals, or lighting), do not continue blind exporter changes from verbal descriptions alone. Ask for a focused, non-desktop visual artifact/crop as the fastest evidence path, while respecting screenshot sensitivity: request the smallest crop that shows the defect and avoid full-desktop capture unless the user explicitly permits it.
 
-For task startup in this repo, read relevant `bd` memories (`/home/choza/.local/bin/bd memories <topic>` and `/home/choza/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
+For task startup in this repo, read relevant `bd` memories (`$HOME/.local/bin/bd memories <topic>` and `$HOME/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
 ## Elden Ring Runtime Probe Hygiene
 
-When using Frida or the injected DLL to scrape runtime Elden Ring data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
+**Do NOT `frida.attach()` the running Elden Ring. It KILLS the game.** On this Wine/Proton target the
+attach injects a bootstrapper that segfaults *inside* `eldenring.exe` -- it reports `frida.NotSupportedError:
+bootstrapper crashed with signal 11` and the process dies instantly (the DLL debug log stops mid-line with no
+shutdown sequence; only `wineserver`/`winedevice.exe` survive). Measured 2026-08-12, destroying a live session
+that was being held open for inspection. For a **read-only** question about live memory ("what is this pointer
+now", "which field is the caret") use `scripts/er-live-fields.py`, which reads `/proc/<pid>/mem` -- no injection,
+no thread suspension, nothing runs in the target. To learn **which code writes** a field, use the
+`linux-x86-debug` toolkit's `tracebreakpoint` (winedbg --gdb attach) described below, never Frida. See bd
+`frida-attach-kills-wine-eldenring-use-proc-mem-2026-08-12`.
+
+When using Frida (only where it is already proven to work) or the injected DLL to scrape runtime Elden Ring
+data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
 
 When a runtime probe is explicitly meant to stay live for manual interaction / `read` follow-up, do **not** use a watcher path that owns process shutdown (`.auto/runtime_probe.sh`, `er-readiness-watch.py`, or helpers that wait on them) unless the user explicitly asks for an agent-owned bounded run. A user-inspection probe must be genuinely live: launch the approved offline/direct `eldenring.exe` path and leave it running for the user.
 
@@ -48,7 +59,7 @@ If a live user-inspection Elden Ring run becomes invalid because the agent finds
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
-Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL at `C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL.
+Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles. For er-net-effects ME3 profiles, still include a `[[natives]]` entry that references the game-installed Seamless Co-op DLL under the Elden Ring install's `Game/SeamlessCoop/ersc.dll`; this is a runtime profile reference, not bundling or staging the DLL. **Resolve that install path, do not copy one from these notes.** This machine now runs a NATIVE LINUX Steam install -- `$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/` -- which is what every `.me3` profile in `~/Elden/` actually references, and `$HOME/Elden/launch.sh` derives from `ME3_STEAM_DIR`. The `C:\SteamLibrary\...` path this line used to name belongs to the retired WSL2 setup: there is no `/mnt/c` here (the Windows partitions mount as `/mnt/win-c`, `/mnt/win-d`), so every such path silently resolves to nothing and a `find` over it returns empty rather than erroring -- which reads as "the file is missing" instead of "you looked in the wrong place".
 
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
@@ -88,6 +99,19 @@ Standing user order (2026-07-19, LOOSENED 2026-07-20): during loading-bar runtim
 
 Standing user order (2026-07-19): the loading-bar progress oracle and user-visible loading-bar label must use the shape `<text label> N/M (<sub milestone label> X/Y)` for every loading-screen phase. The main `N/M` is the current visible/semantic loading phase sequence. The parenthesized subprogression belongs to that active main phase and must use labels that correspond to substeps of that phase. If a phase has known granular RAM/native substeps, expose them as distinct labels in the parentheses as they are reached; if a phase has no known substep granularity, codify that ignorance with a single explicit parenthesized step for that phase (for example `<phase-specific label> 1/1`) rather than borrowing unrelated labels. Sub-milestone labels must be phase-relevant: do not show a label whose prerequisite semantics cannot apply in the current main phase (for example `PLAYER PRESENT` is not a relevant substep during boot/resource acquisition before the player can exist, and a label like `Some label 1/Y (PLAYER PRESENT 1/N)` is invalid). Do not use one generic repeated label such as `HANDOFF` or `WAIT ...` for every phase or every substep. Prefer concrete field/owner labels such as `INGAMESTEP+0xD8 REQUEST`, `MOVEMAPSTEP+0x244 DONE`, or another real RAM/native semaphore only inside phases where that field/owner is actually the current phase's loading/handoff gate. Keep the machine-readable loading-progress signature aligned with the visible main/subprogression steps, and do not treat a visible phase's nominal final frame as total completion if its phase-relevant parenthesized substeps remain.
 
+### Autoload Identity Launch Gate
+
+If a launch is expected to autoload, do not launch Elden Ring until the exact active character identity and slot are known from current save evidence. `ER0000.sl2` / the default APPDATA save path alone is not sufficient: record the decoded character name and slot used by the autoload. If either is unknown, stop before the launch boundary and say it is unknown. Do not substitute post-load menu automation, picker navigation, or a generic `Continue` action for this pre-launch identity check.
+
+#### Autoload discovery before every launch
+
+Read the game-directory `er-effects.toml` and the newest `er-effects-autoload-debug.log` before an expected-autoload launch. The two decisive log records are:
+
+- `runtime-config: loaded ... save_file=... slot=...` -- the configured source/slot request;
+- `save-override: DEFAULT-USER-SAVE` or an explicit staged source -- a usable autoload source was selected; `no usable autoload save ... Arming the IN-GAME missing-save picker` means **no save will autoload**.
+
+To select another save, set `save_file` and `slot` in `er-effects.toml`; the source stays read-only and is staged privately. `os_native_save_picker = true` chooses the OS picker surface only after a missing-save picker is triggered. There is no `require_save_picker` setting: never fake one by configuring an invalid source. The shipped README's `Save-source behavior` section and the DLL-generated config comments are the detailed reference.
+
 Steam MUST be running before every agent-owned Elden Ring runtime proof/probe by default, but agents must not use raw `pgrep -x steam` for that check. Use the sanctioned helper path instead: source `scripts/steam-running.sh` and call `steam_running`, or run a repo script whose preflight already does that. If the helper reports Steam absent, ask the user to start Steam (interactive login) before launching that proof/probe. Reason: manual `pgrep -x steam` false-negatives on this WSL2 + Windows Steam setup, and the Cupcake/Claude `block_manual_pgrep` Rego policy that catches it is wired into Pi/Claude shell calls and will block raw pgrep. The offline `eldenring.exe` Proton launch reuses Steam's environment (wineprefix, CWD, account/save-dir id); with Steam down the game still boots but in a different environment, so the DLL debug log lands elsewhere and Steam-dependent state degrades into a non-representative run (observed 2026-06-21: a run came back `cold_char_mount_phase=5` yet appended zero debug lines and the default level-9 character). `scripts/run-product-continue-direct-probe.sh` now fails closed in `preflight()` when Steam is down. Narrow exception: when the user explicitly requests the main/user product ME3 profile launch for live inspection or log gathering and explicitly says to launch anyway / skip the Steam check in the current turn, treat that as a launch-environment override for that run only. In that case do **not** run raw `pgrep`, `scripts/steam-running.sh`, or any other Steam-process check, do not block launch on Steam absence, launch the prepared ME3 profile directly, and record in the artifact/summary that Steam preflight was intentionally skipped by user order and the resulting logs may be non-representative as product proof.
 
 Standing runtime-validation order: after a successful build that materially increases confidence in a runtime-affecting Elden Ring change and the next proof requires live validation, launch the approved direct/offline Elden Ring probe immediately (after the applicable preflight for that run, or after recording a current-turn user override of that preflight) instead of waiting for another prompt. Still use the loud launch banner and exact artifact reporting.
@@ -99,6 +123,10 @@ Release/default behavior must not depend on agent-only environment variables. An
 Default runtime research mode is telemetry-only/non-fatal diagnostics. Treat deliberate fail-fast faults on semaphore mismatch as "release-mode" proof gates, not the default research/debug posture. Unless the user explicitly asks for fail-fast/release behavior, runtime probes should collect/report semaphores and leave diagnosable evidence without intentionally crashing the game. Do not confuse this workflow rule with the existing `ER_EFFECTS_TELEMETRY_ONLY=1` save-source exemption, which currently means no character load; if needed, add/enable a separate non-fatal semaphore mode rather than abusing no-load telemetry-only.
 
 User steering is not evidence. When the user proposes a concrete technical hypothesis or fallback during RE/runtime work, treat it as a lead to verify, not as ground truth and not as permission to skip research. Before implementing a user-steered objective claim, inspect the current static/runtime evidence that could confirm or falsify it, state the verified delta in the work artifacts/logs, and only then choose the next code change. If the evidence contradicts part of the steering, preserve the valid intent but correct the mechanism instead of reflexively agreeing.
+
+### Prose-to-knowledge gate
+
+If and only if the agent's recent user-facing prose referred to an entity, identifier, plan node, claim, or term as meaningful but the agent did not have enough information to communicate what that prose meant, the agent must say plainly that it does not know what the referenced thing is **before** starting any search, lookup, or inspection to clarify it. The admission must be user-visible in the same turn and precede every relevant tool call. Do not replace it with a tentative definition, a plan built on the unknown term, or search narration. If that admission was not made first, do not perform the clarifying lookup in that turn.
 
 ## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)
 
@@ -118,10 +146,19 @@ Persistent user directive (2026-07-17): when a tool, script, helper, or document
 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
 
-- Dump file: `pc_eldenring_runtime.1.16.1.exe.gzf` (a pre-analyzed, named export of the live 1.16.1 process; ~1.5 GB). Resolve paths through the current machine's configured Ghidra setup instead of hard-coding a username. Common locations are `$HOME/projects/reverse/ghidra-projects/pc_eldenring_runtime.1.16.1.exe.gzf` or a legacy `/home/banon/...` path; the current wrapper also supports explicit `GHIDRA_HEADLESS`, `GHIDRA_INSTALL_DIR`, `GHIDRA_PROJ_DIR`, `GHIDRA_PROJ_NAME`, and `GHIDRA_TMPDIR` overrides.
-- **CRITICAL -- dump is for SEMANTICS, the deobf binary is for ADDRESSES.** The dump and the deobf/live binary (`eldenring-deobf.bin`, == what the DLL patches/calls at runtime, base `0x140000000`) are NOT byte-identical: the same function sits at a different VA in each. The offset (`shift = deobf_va - dump_va`) is **piecewise-constant PER CODE REGION and NOT a single constant** -- measured: `0` near the base, an irregular `-0x80..-0x120` staircase through the low `.text` (`0x1401-0x140d`), a rock-solid `-0x20` across `0x140e-0x141e`, a rock-solid `+0x10` across `0x141f-0x1426` (e.g. dump `IsGameInForeground 0x14266def0` -> deobf `0x14266df00`, `+0x10` -- this is just THAT region's value), messy tail beyond. So use the dump for function *names*, decompiled C, struct/RTTI/field layouts, and *what code does* -- but NEVER call or patch a dump address directly (it lands mid-function and crashes). For any address you will CALL or PATCH, ground-truth it with **`scripts/dump-deobf-shift.py 0x<dump_va>`** (relocation-aware content matcher; `--reverse` for deobf->dump). It returns the exact deobf VA + shift, or a clearly-flagged region estimate to verify with disasm. The shift is NOT driven by Arxan (proven: step boundaries don't coincide with Arxan stubs, and regenerating the deobf via dearxan yields a byte-identical file), so there is no dearxan/formula shortcut. The deobf binary is authoritative for addresses; the dump is authoritative for meaning.
+- **CANONICAL DUMP IS 1.16.2 (matches the game; use this).** The running game is ELDEN RING **1.16.2.0**, so the RE dump MUST be 1.16.2, NOT 1.16.1 (a 1.16.1 dump gives drifted addresses that crash-hook -- see bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`). Dump file: `pc_eldenring_runtime.1.16.2.exe.gzf` (~3.6 GB) at `/mnt/c/Users/choza/pc_eldenring_runtime.1.16.2.exe.gzf`, imported into the persistent project `ermaporch1162` @ `$HOME/ghidra_maporch/proj1162`. It **requires Ghidra 12.1.2** (x86 language V4.7+ -- 12.1 fails, bd `1162-gzf-needs-ghidra-1212-not-121-2026-07-20`). The 12.1.2 install lives at `$HOME/tools/ghidra_12.1.2_PUBLIC`; the previously-documented `/mnt/d/ghidra/ghidra_12.1.2_PUBLIC` **no longer exists** (`/mnt/d` is unmounted), so set `GHIDRA_INSTALL_DIR` or rely on `scripts/ghidra/mcp-up-1162.sh`, which resolves env-first then falls back through `$HOME/tools` -> `/mnt/d` -> `/opt`.
+- **The MCP daemon on `localhost:8765` serves 1.16.2.** Bring it up / validate with `bash scripts/ghidra/mcp-up-1162.sh` (pins 12.1.2 + `ermaporch1162`). Query lock-free with `python3 scripts/ghidra/mcp_query.py <method>` -- daemon methods are **camelCase**: `getContext`, `getDecompiledCode`, `decompileFunctionByName`, `disassembleFunction`, `getFunctionByAddress`, `getXrefsTo/From`, `searchFunctionsByName`, `getStructure`, ... (NOT snake_case `get_program_info`). The Pi `ghidra` MCP bridge forwards to :8765, so its tools also serve 1.16.2. To switch the daemon: `scripts/ghidra/mcp-ghidra-daemon.sh stop` (frees :8765) then `mcp-up-1162.sh`.
+- **SUPERSEDED FOR 1.16.2 (2026-07-28) -- THE SHIFT IS ZERO; DO NOT RUN `dump-deobf-shift.py`.** For the 1.16.2 dump now served by the MCP, the dump VA, the `eldenring-deobf.bin` VA, and the **live runtime** VA are all **identical** (image base `0x140000000`, shift `0`). Byte-verified independently on 30+ functions spanning `0x14025xxxx`-`0x14266xxxx`, plus a live capture: a runtime stack walk out of the game's save-write path resolved all 8 frames through the 1.16.2 MCP `getFunctionByAddress` onto clean functions (`TryWrite`, `WriteBytes`, `ThreadFunction(DLThread*)`, ...) with no adjustment. Practical consequences, in order of how badly each bites:
+  1. **`scripts/dump-deobf-shift.py` is now actively WRONG and will crash-hook you.** Its DUMP side (`dump-exec.bin`) is still the 1.16.1 image, so it maps 1.16.1-dump -> 1.16.2-deobf and invents a nonzero shift where none exists. Measured failures: it reported `0x142413860 -> 0x142413870` (+0x10) and flagged `0x142410830` as a "+0x10 estimate"; **both land mid-instruction**. Trust a byte check, never this tool, until `dump-exec.bin` is regenerated from the 1.16.2 dump.
+  2. **An address observed at RUNTIME needs no translation at all.** A stack-capture return address, a hook callback's caller, a pointer read out of live memory -- feed it straight to the 1.16.2 MCP (`getFunctionByAddress` / `getDecompiledCode`). Putting it through the shift tooling corrupts a correct address.
+  3. The piecewise `-0x20`/`-0xf0`/`+0x10` staircase described below was real, but it was an artifact of the **old 1.16.1 dump vs the 1.16.2 deobf**. Concrete confirmation: bd `fe-autosave-icon-boot-overlay-mechanism-2026-07-08` records `CSFeManImp::Update` as 1.16.1-dump `0x140771cc0` -> deobf `0x140771bd0` (shift `-0xf0`); in the **1.16.2** dump that function's entry simply *is* `0x140771bd0`.
+  4. Still byte-check anything you will CALL or PATCH -- `scripts/find-deobf-bytes.py '<hex, ?? wildcards>'` searches `eldenring-deobf.bin` and prints matching VAs in one command. The check is now cheap and confirms shift-0 rather than discovering a shift.
+  - **`.rdata` IS shift-0 too (corrected 2026-08-01).** The previous note here claimed string literals sat at deobf = dump `+0xE00`. That is wrong, and it is falsified by its own cited example: `u"%s/EldenRing/%s/"` occurs exactly once in `eldenring-deobf.bin`, at file offset `0x2bda858` -> VA `0x142bda858`, which is the address the old note called the DUMP address. Reading its claimed deobf address `0x142bdb658` yields pointers, not the string. Independently confirmed on four more literals, each landing exactly at `offset == RVA`: `0x2a8f9e8` `"Loop"`, `0x2a8fa00` `"Grayout"`, `0x2a90508` `"FadeOut"`, `0x2b264f0` `"TextFadeOut"`. The `+0xE00` was manufactured by applying a PE section raw-pointer mapping to a file that does not need one -- `eldenring-deobf.bin` is a FLAT image, so **file offset == RVA for every section**, and `VA = 0x140000000 + file_offset` everywhere. Anyone who followed the old note when resolving a string or vtable operand read `0xE00` bytes off target, which is hook-adjacent rather than cosmetic.
+- **HISTORICAL (pre-1.16.2 dump; kept for context, see the superseding entry above) -- dump is for SEMANTICS, the deobf binary is for ADDRESSES.** The dump and the deobf/live binary (`eldenring-deobf.bin`, == what the DLL patches/calls at runtime, base `0x140000000`) are NOT byte-identical: the same function sits at a different VA in each. The offset (`shift = deobf_va - dump_va`) is **piecewise-constant PER CODE REGION and NOT a single constant** -- measured: `0` near the base, an irregular `-0x80..-0x120` staircase through the low `.text` (`0x1401-0x140d`), a rock-solid `-0x20` across `0x140e-0x141e`, a rock-solid `+0x10` across `0x141f-0x1426` (e.g. dump `IsGameInForeground 0x14266def0` -> deobf `0x14266df00`, `+0x10` -- this is just THAT region's value), messy tail beyond. So use the dump for function *names*, decompiled C, struct/RTTI/field layouts, and *what code does* -- but NEVER call or patch a dump address directly (it lands mid-function and crashes). For any address you will CALL or PATCH, ground-truth it with **`scripts/dump-deobf-shift.py 0x<dump_va>`** (relocation-aware content matcher; `--reverse` for deobf->dump). It returns the exact deobf VA + shift, or a clearly-flagged region estimate to verify with disasm. The shift is NOT driven by Arxan (proven: step boundaries don't coincide with Arxan stubs, and regenerating the deobf via dearxan yields a byte-identical file), so there is no dearxan/formula shortcut. The deobf binary is authoritative for addresses; the dump is authoritative for meaning.
+- **VERSION REALITY (2026-07-23) -- `dump-deobf-shift.py` is CROSS-VERSION; verify CALL/PATCH addrs against the 1.16.2 deobf.** `eldenring-deobf.bin` is now **1.16.2** (PE FileVersion 2.6.2.0, == the installed game), so its addresses ARE the 1.16.2 runtime addresses. BUT `dump-exec.bin` (the shift tool's DUMP) is still the **1.16.1** runtime dump, and the MCP now serves the **1.16.2** dump -- so a dump VA taken from the 1.16.2 MCP does NOT correspond to `dump-exec.bin`, and `dump-deobf-shift.py` maps 1.16.1-dump->1.16.2-deobf. It is reliable ONLY for functions unchanged across the patch; for a function that changed 1.16.1->1.16.2 (e.g. the Scaleform `GFxLoader::CreateMovie`/`GetOrAdd` cache path) it silently returns a WRONG deobf VA that crash-hooks. For any address you will CALL or PATCH: take the target function's opening bytes from the **1.16.2 MCP** (`disassembleFunction`), then confirm the SAME bytes sit at the candidate VA in `eldenring-deobf.bin` (e.g. `scripts/disas-deobf.sh 0x<va>`) before hooking. If they don't match, the shift lied -- find the real deobf VA by that byte signature. Follow-up tracked in bd `er-effects-rs-q9jd`: regenerate `dump-exec.bin` from the 1.16.2 dump so the shift is intra-version, or disable the obsolete cross-version tool.
 - The standalone `.gzf` is separate from the shared `From Software.rep` project, which is often open in the user's Ghidra GUI (locked). NEVER open `.rep` headless; import the `.gzf` into a throwaway temp project instead. This is also why the dump is "user-approved single program," not the forbidden whole-repo scan.
-- **PERSISTENT PROJECT (use this; no re-import).** The gzf is imported+analyzed into a persistent project at `$HOME/ghidra_maporch/proj` by default (program `ermaporch`; legacy `/home/banon/ghidra_maporch/proj` is only a fallback when it actually exists). Query it via the wrapper `scripts/ghidra-query.sh <postScript>.java [args...]`, which resolves the current user's project/tool paths, runs `analyzeHeadless <project> ermaporch -process -noanalysis -readOnly -postScript ...`, and reopens in **~5s** (vs the ~2-min import; ~20x faster). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra). Batch all lookups/decompiles for a question into one script anyway. The persistent project is the single approved bounded target (no whole-repo scan).
+- **PERSISTENT PROJECT (use this; no re-import).** The gzf is imported+analyzed into a persistent project at `$HOME/ghidra_maporch/proj` by default (program `ermaporch`; legacy `/home/banon/ghidra_maporch/proj` is only a fallback when it actually exists). Query it via the wrapper `scripts/ghidra-query.sh <postScript>.java [args...]`, which resolves the current user's project/tool paths, runs `analyzeHeadless <project> ermaporch -process -noanalysis -readOnly -postScript ...`, and reopens in **~5s** (vs the ~2-min import; ~20x faster). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra). Batch all lookups/decompiles for a question into one script anyway. The persistent project is the single approved bounded target (no whole-repo scan). NOTE: `ghidra-query.sh` still DEFAULTS to the 1.16.1 `ermaporch` project on Ghidra 12.1 -- for 1.16.2 prefer the MCP (`mcp_query.py`, primary), or pass `GHIDRA_INSTALL_DIR=$HOME/tools/ghidra_12.1.2_PUBLIC GHIDRA_PROJ_DIR=$HOME/ghidra_maporch/proj1162 GHIDRA_PROJ_NAME=ermaporch1162`.
+- **If EVERY decompile returns "Decompilation failed" but disasm/xrefs/symbols still work**, the cause is the install's native `decompile` helper losing its executable bit (a re-copied Ghidra tree restores `+x` on the shell scripts but not on `Ghidra/Features/Decompiler/os/linux_x86_64/decompile`). `DecompInterface` spawns it per request, so the exec failure fails every decompile uniformly while pure-Java queries are unaffected, and the GhidraMCP extension swallows the real cause so nothing appears in `daemon.log`. `scripts/ghidra/mcp-ghidra-daemon.sh start` now re-applies `+x` across `*/os/linux_x86_64/` on every start (live-effective, no restart needed). Ignore the recurring `MissingBuiltInDataType.<init>()` log error -- it is cosmetic and decompilation works with it present.
   - If `scripts/ghidra-query.sh` or headless Ghidra reports the persistent project is locked, **do not fall back to offline scans/disassembly just because of the lock**. Use the Ghidra MCP tools against the already-open project first (`ghidra_decompile_function_by_address`, xrefs, disassembly, etc.). If the MCP is unavailable or stale, fix/reconnect the MCP bridge as the next step; only use offline disassembly as a fallback after the MCP path is proven unavailable for the specific query.
   - The earlier "a `BadDataType` JPMS save error prevents persisting" claim was **WRONG**: the real blocker was `/tmp` (a near-full 32G tmpfs) running out of space while unpacking the gzf. Fix (baked into the wrapper): force `java.io.tmpdir` onto a current-user writable directory such as `$HOME/ghidra_maporch/tmp` via `GHIDRA_JAVA_OPTIONS`; plain `TMPDIR` is ignored for `java.io.tmpdir`. The `BadDataType`/`IllegalAccessException` log line still prints on JDK 26 but is **cosmetic/non-fatal** (Save + Import both succeed). See bd `ghidra-persistent-project-reuse-2026-06-22`.
   - To re-import from scratch (rarely needed, e.g. a new dump version): use the current user's `ghidra_maporch/scripts/import_persistent.sh` if present, or set explicit paths rather than hard-coding `/home/banon`.
@@ -197,9 +234,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `/home/choza/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `/home/choza/.local/bin/bd prime` for detailed command reference and session close protocol
-- Use `/home/choza/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/choza/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+- Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `$HOME/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
 
@@ -263,29 +300,29 @@ run. See bd commit-immediately-after-runtime-validation-2026-07-17 (revised).
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until the agent-owned branch is pushed. Do **not** push directly to `main`.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+4. **PUSH THE WORK BRANCH TO REMOTE** - This is MANDATORY, but direct pushes to `main` are forbidden:
    ```bash
-   git pull --rebase
-   /home/choza/.local/bin/bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
+   git pull --rebase origin main
+   "$HOME/.local/bin/bd" dolt push
+   git push -u origin <feature-or-tooling-branch>
+   git status  # MUST show the branch is clean and tracking its remote
    ```
 5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+6. **Verify** - All changes committed AND the work branch pushed
+7. **Hand off** - Provide context for next session / review path
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- Work is NOT complete until the work branch is pushed
+- NEVER push directly to `main` from an agent session
+- NEVER say "ready to push when you are" - push the work branch yourself
+- If branch push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
 
 ## Runtime-Affecting Refactor Feasibility
@@ -295,8 +332,25 @@ When the user asks whether a runtime-affecting refactor is possible/easy/safe, i
 ## No Compromises
 
 We accept **no compromises** on the stated objective: a same-character repeat load
-(System->Quit->Load Profile) that reaches **genuine world readiness** (character rendered
-AND the player can move). Do not settle for a weaker solution that technically "works"
+(System->Quit->**Load Character**) that reaches **genuine world readiness** (character rendered
+AND the player can move).
+
+**THE BUTTON NAMES, AND THE OLD ONES THIS REPO IS STILL FULL OF.** Both load rows on the
+Quit Game tab are OURS -- vanilla ships only *Save Game* and *Return to Desktop*, and the
+mod clones the row twice. They were renamed on 2026-07-31 after a review found the original
+pair indistinguishable, but the old words survive in prose, in `bd` memories and in the
+constant names, so read them as synonyms rather than as a second feature:
+
+| old name (still in memories/symbols) | ON SCREEN since 2026-07-31 | takes as input |
+|---|---|---|
+| Load Profile | **Load Character** | a character from the save container already loaded |
+| Load Save Profiles | **Load Character from File** | a save file off the disk |
+
+The label bytes live in `SYSTEM_QUIT_LOAD_PROFILE_LABEL_W` and
+`SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W` (`system_quit_dialog_handlers.rs`) -- the symbols
+kept the old names while their contents changed, which is exactly the trap this table
+exists to close. An agent that quotes the old name "Load Profile" at the user is naming a
+button that has not been on screen since July. Do not settle for a weaker solution that technically "works"
 but does not actually reach that bar. When a path looks blocked, that is a signal to
 find the *real* solution at a deeper layer -- not to lower the bar.
 
@@ -350,7 +404,20 @@ cargo check -p er-soulsformats -p er-param-inspect
 # The game DLL itself (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
 cargo xwin build --release --target x86_64-pc-windows-msvc
 # Output: target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+
+# ...but that builds ONLY er-effects-rs. The workspace sets
+#     default-members = ["crates/er-effects-rs"]
+# so the bare command above silently skips EVERY other DLL crate -- er-invasion-warp-dll,
+# er-loading-portrait-dll, er-save-picker-dll, and the rest. It exits 0 in a fraction of a
+# second having compiled nothing, which reads exactly like a successful incremental build.
+# For any other DLL, name it:
+cargo xwin build --release --target x86_64-pc-windows-msvc -p er-invasion-warp-dll
 ```
+
+**Check the output hash before staging or launching.** A build that "succeeded" without
+recompiling leaves the previous DLL in place, and a runtime run against it produces evidence for
+code that is not the code under test -- a failure mode indistinguishable from the feature not
+working. `sha256sum target/x86_64-pc-windows-msvc/release/<name>.dll` before and after is enough.
 
 ## Architecture Overview
 

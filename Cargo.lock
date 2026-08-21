@@ -2728,10 +2728,60 @@ name = "er-ags-stub"
 version = "0.1.0"
 
 [[package]]
+name = "er-armament-icons"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-better-refills-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+]
+
+[[package]]
 name = "er-bevy-shader-lab"
 version = "0.1.0"
 dependencies = [
  "bevy",
+]
+
+[[package]]
+name = "er-boot-profiler"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-crash-logging"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+]
+
+[[package]]
+name = "er-crash-logging-dll"
+version = "0.1.0"
+dependencies = [
+ "er-crash-logging",
+]
+
+[[package]]
+name = "er-d3d12-compositor"
+version = "0.1.0"
+dependencies = [
+ "er-hook",
+ "er-loading-bar",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2756,11 +2806,21 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "eldenring",
+ "er-boot-profiler",
+ "er-d3d12-compositor",
  "er-game-base",
  "er-gfx",
  "er-hook",
+ "er-loading-bar",
+ "er-loading-portrait",
+ "er-quit-menu",
  "er-save-loader",
+ "er-save-picker",
+ "er-save-redirect",
+ "er-save-suppress",
+ "er-scaleform-hooks",
  "er-telemetry",
+ "er-title-flow",
  "er-tpf",
  "erpx-rs",
  "fromsoftware-shared",
@@ -2791,6 +2851,7 @@ name = "er-gfx"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
+ "er-game-base",
 ]
 
 [[package]]
@@ -2805,9 +2866,32 @@ name = "er-input-harness-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-hook",
  "fromsoftware-shared",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "er-invasion-warp"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-telemetry",
+ "fromsoftware-shared",
+]
+
+[[package]]
+name = "er-invasion-warp-dll"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-invasion-warp",
+ "fromsoftware-shared",
 ]
 
 [[package]]
@@ -2820,11 +2904,41 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-menu-sort"
+name = "er-loading-bar"
+version = "0.1.0"
+
+[[package]]
+name = "er-loading-bar-dll"
 version = "0.1.0"
 dependencies = [
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-loading-bar",
+]
+
+[[package]]
+name = "er-loading-portrait"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
  "eldenring",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
+ "erpx-rs",
  "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-loading-portrait-dll"
+version = "0.1.0"
+dependencies = [
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-loading-bar",
+ "er-loading-portrait",
 ]
 
 [[package]]
@@ -2833,6 +2947,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-effects-data",
+ "er-game-base",
  "er-hook",
  "fromsoftware-shared",
  "hudhook",
@@ -2864,9 +2979,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-quit-menu"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-save-loader",
+ "er-save-picker",
+ "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-quit-menu-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-quit-menu",
+]
+
+[[package]]
 name = "er-reload-trace-dll"
 version = "0.1.0"
 dependencies = [
+ "er-game-base",
  "er-hook",
 ]
 
@@ -2875,11 +3013,77 @@ name = "er-safe-input"
 version = "0.1.0"
 
 [[package]]
+name = "er-save-disable-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+ "er-save-suppress",
+]
+
+[[package]]
 name = "er-save-loader"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-safe-input",
+]
+
+[[package]]
+name = "er-save-picker"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar",
+ "er-save-loader",
+ "er-telemetry",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-save-picker-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-save-picker",
+ "er-save-redirect",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-save-redirect"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+ "er-save-loader",
+ "er-telemetry",
+]
+
+[[package]]
+name = "er-save-suppress"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
+]
+
+[[package]]
+name = "er-scaleform-hooks"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-telemetry",
+]
+
+[[package]]
+name = "er-seamless-bugfixes-dll"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
 ]
 
 [[package]]
@@ -2935,7 +3139,23 @@ name = "er-telemetry-dll"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-hook",
  "er-telemetry",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-title-flow"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-loading-portrait",
+ "er-save-loader",
+ "er-telemetry",
+ "er-tpf",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
@@ -4222,6 +4442,7 @@ name = "mushroom-man-runtime"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "fromsoftware-shared",
 ]
 

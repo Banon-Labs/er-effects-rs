@@ -1,3 +1,18 @@
+/// A completed self-pump draw can lose the handoff race before it is presented, so successful
+/// draws must be compared with self-attributed full clears rather than submitted self-presents.
+fn boot_view_present_cover_failed(
+    pump_stop_reason: usize,
+    boot_view_stopped: usize,
+    draws: usize,
+    self_full_clears: usize,
+    present_full_clears: usize,
+) -> bool {
+    pump_stop_reason == 1
+        && boot_view_stopped == 0
+        && draws > self_full_clears
+        && present_full_clears == 0
+}
+
 fn write_game_module_oracles(body: &mut String) {
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). Current EMA fps + the
     // per-epoch WORST-frame fps (min), written each game-task frame by lifecycle from delta_time.
@@ -63,13 +78,18 @@ fn write_game_module_oracles(body: &mut String) {
                 sw_last_slot as i64
             };
             body.push_str(&format!(
-                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
+                "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_b78_guard_standdowns\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_menu_window_finalize_guards\": {},\n  \"oracle_menu_window_finalize_last_window\": \"0x{:x}\",\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
                 swctr::SWITCH_TRIGGER_ARM_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_TEARDOWN_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_TRIGGER_DEFERRED_COUNT.load(SwOrd::SeqCst),
                 swctr::SWITCH_RELOAD_FD4IO_PHASE.load(SwOrd::SeqCst),
                 swctr::SWITCH_RELOAD_FD4IO_DRAIN_WAITS.load(SwOrd::SeqCst),
                 swctr::SWITCH_RELOAD_FD4IO_COMMITTED.load(SwOrd::SeqCst),
+                // b78 guard ENGAGEMENT oracle (bd er-effects-rs-9jbe): frames the guard stood down
+                // because reload_phase was non-IDLE and fd4io owned GameMan+0xb78 as the warp
+                // target. 0 on a run means the black-screen race never presented, so that run is
+                // non-regression evidence only; > 0 means the stand-down actually fired.
+                swctr::SWITCH_RELOAD_B78_GUARD_STANDDOWNS.load(SwOrd::SeqCst),
                 swctr::SWITCH_SLOT_CONTROL_MTIME.load(SwOrd::SeqCst),
                 swctr::SWITCH_SLOT_CONTROL_PRIMED.load(SwOrd::SeqCst),
                 swctr::SWITCH_ORACLE_PLAYER_PRESENT.load(SwOrd::SeqCst),
@@ -78,6 +98,8 @@ fn write_game_module_oracles(body: &mut String) {
                 // PHASE-3 outgoing-world teardown oracles (bd PHASE3-render-release-is-CommonFinalize):
                 // common_finalize_count is THE render-release oracle (flat=in-place bug, +1/switch=fixed).
                 swctr::COMMON_FINALIZE_CALLS.load(SwOrd::SeqCst),
+                swctr::MENU_WINDOW_JOB_FINALIZE_GUARDS.load(SwOrd::SeqCst),
+                swctr::MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_BASELINE.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_DONE.load(SwOrd::SeqCst),
                 swctr::OUTGOING_TEARDOWN_WAIT_TICKS.load(SwOrd::SeqCst),
@@ -103,7 +125,7 @@ fn write_game_module_oracles(body: &mut String) {
         // this type; layout from the WIP worktree: current_state at stepper+0x40, verified by the unk48
         // field naming). current_state is the low 4 bytes (requested_state is the adjacent +0x44).
         {
-            const CS_SYSTEM_STEP_GLOBAL_RVA: usize = 0x3d85680;
+            const CS_SYSTEM_STEP_GLOBAL_RVA: usize = er_game_base::rva::CS_SYSTEM_STEP_GLOBAL_RVA;
             const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x40;
             const SYSTEM_STEP_LABELS: [&str; 21] = [
                 "Init",
@@ -237,6 +259,14 @@ fn write_game_module_oracles(body: &mut String) {
             use std::sync::atomic::Ordering as CoOrd;
             let composite_us = er_telemetry::counters::COMPOSITE_LAST_US.load(CoOrd::SeqCst);
             let bv_epoch = crate::constants::BOOT_VIEW_EPOCH_WORLD_LIVE.load(CoOrd::Relaxed);
+            // `oracle_current_load_epoch` IS NOT A LOAD COUNT. It counts fresh deserializes committed
+            // INSIDE the switch machine, so the boot load never increments it: a session that loaded
+            // three worlds (boot + two reloads) reports 2. It is fine as a within-run slicing key
+            // (what every analyze-* script uses it for) and as a zero-based load index while exactly
+            // one non-switch load occurred -- and it says NOTHING about whether those loads
+            // succeeded: two captured runs both read 2, one reaching world residency three times and
+            // the other once before a softlock. For the total, read `oracle_total_world_loads`; for
+            // agreement across every load witness, read `oracle_load_count_mismatches`.
             let cur_epoch =
                 crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(CoOrd::SeqCst);
             body.push_str(&format!(
@@ -301,11 +331,19 @@ fn write_game_module_oracles(body: &mut String) {
         let pt_epoch = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(std::sync::atomic::Ordering::SeqCst);
         if PT_ORACLE_EPOCH.swap(pt_epoch, std::sync::atomic::Ordering::Relaxed) != pt_epoch {
-            // New load epoch -> reset the baseline to this load's first-seen play_time.
-            PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
-        } else if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0
-            && play_time_ms >= 0
-        {
+            // New load epoch -> re-arm; the baseline re-latches on the epoch's first REAL reading below.
+            PT_ORACLE_FIRST.store(PLAY_TIME_READ_FAIL, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Baseline only on a LOADED-character playtime (> 0), mirroring the input-trace fix
+        // (`PLAY_TIME_TRACE_FIRST` in input_trace.rs). On the BOOT epoch GameDataMan exists with
+        // play_time == 0 long before the Continue deserialize, so baselining at 0 made the first
+        // post-deserialize sample report the save's ENTIRE stored playtime as "advance" (measured run
+        // product-continue-direct-20260729-205115: oracle_play_time_advanced_ms == oracle_play_time_ms
+        // == 388876164, ~108h) -> play_time_live falsely latched BOOT_VIEW_EPOCH_WORLD_LIVE for epoch 0
+        // at ~+16s, mid boot loading screen, freezing the loading-portrait drive tick (bd
+        // er-effects-rs-io53). Requiring > 0 latches the baseline at the character's real loaded
+        // playtime, so `advanced` measures only genuine world-sim stepping.
+        if PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed) < 0 && play_time_ms > 0 {
             PT_ORACLE_FIRST.store(play_time_ms, std::sync::atomic::Ordering::Relaxed);
         }
         let pt_first = PT_ORACLE_FIRST.load(std::sync::atomic::Ordering::Relaxed);
@@ -602,6 +640,7 @@ fn write_game_module_oracles(body: &mut String) {
             format_optional_ptr(rend_slot_78),
             format_optional_ptr(csgraphics_field68),
         ));
+        let msgbox_total_builds = MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
             NULL_PTR
@@ -617,19 +656,11 @@ fn write_game_module_oracles(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        const NO_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
-        let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let msgbox_postload_builds = MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst);
-        let msgbox_any_seen = msgbox_total_builds != NO_MSGBOX_BUILDS;
-        let postload_modal_seen = msgbox_postload_builds != NO_MSGBOX_BUILDS;
         let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
             && msgbox_closing_latch != MSGBOX_CLOSING_YES;
-        let msgbox_arg_rcx = MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst);
-        let msgbox_arg_rdx = MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst);
-        let msgbox_arg_r8 = MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst);
-        let msgbox_arg_r9 = MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst);
+        const NO_POLICY_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
         let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
-        let policy_any_seen = policy_total_builds != NO_MSGBOX_BUILDS;
+        let policy_any_seen = policy_total_builds != NO_POLICY_BUILDS;
         let policy_ptr = POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst);
         let policy_vtable = POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst);
         let policy_arg_rdx = POLICY_TOS_TITLE_LAST_ARG_RDX.load(Ordering::SeqCst);
@@ -707,7 +738,7 @@ fn write_game_module_oracles(body: &mut String) {
         let policy_flag_setter_caller_rva =
             POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
-        let server_status_any_seen = server_status_total_seen != NO_MSGBOX_BUILDS;
+        let server_status_any_seen = server_status_total_seen != NO_POLICY_BUILDS;
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
         let title_visual_suppress_installed = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED
@@ -828,14 +859,14 @@ fn write_game_module_oracles(body: &mut String) {
             TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.load(Ordering::SeqCst);
         let title_scaleform_file_open_last_caller_rva =
             TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA.load(Ordering::SeqCst);
-        let title_scaleform_memory_gfx_bytes =
-            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst);
+        // PINNED: the env-driven memory-GFX loader that fed these two is deleted (it had been an
+        // inert no-op since 2026-07-19), so both have always emitted 0.
+        let title_scaleform_memory_gfx_bytes = 0usize;
         let title_scaleform_memory_gfx_replacements =
             TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
         let title_scaleform_05_000_memory_gfx_replacements =
             TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
-        let title_scaleform_memory_gfx_failures =
-            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_failures = 0usize;
         let title_scaleform_memory_gfx_last_file =
             TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
         let title_scaleform_resource_ctor_installed =
@@ -884,25 +915,15 @@ fn write_game_module_oracles(body: &mut String) {
             TITLE_PRESS_START_BIND_LAST_CONTEXT.load(Ordering::SeqCst);
         let title_press_start_bind_hide_calls =
             TITLE_PRESS_START_BIND_HIDE_CALLS.load(Ordering::SeqCst);
-        // Real false until a later mutation binds the post-SL2 profile/SYSTEX portrait to the
-        // 05_001_Title_Logo root-depth-3 surface. `05_010_ProfileSelect` dummy faces are exported
-        // bitmap classes only (0 timeline placements), so profile_summary readiness alone is not a
-        // visible cover binding.
-        let title_profile_cover_bound_to_logo_surface = false;
-        let title_overlay_cover_render_calls =
-            TITLE_OVERLAY_COVER_RENDER_CALLS.load(Ordering::SeqCst);
-        let title_overlay_cover_last_display_w =
-            TITLE_OVERLAY_COVER_LAST_DISPLAY_W.load(Ordering::SeqCst);
-        let title_overlay_cover_last_display_h =
-            TITLE_OVERLAY_COVER_LAST_DISPLAY_H.load(Ordering::SeqCst);
-        let title_overlay_cover_display_sane =
-            title_overlay_cover_last_display_w >= 200 && title_overlay_cover_last_display_h >= 200;
-        let title_overlay_cover_texture_bound =
-            TITLE_OVERLAY_COVER_TEXTURE_BOUND.load(Ordering::SeqCst) != 0;
-        let title_overlay_cover_last_gx_texture =
-            TITLE_OVERLAY_COVER_LAST_GX_TEXTURE.load(Ordering::SeqCst);
-        let title_overlay_cover_last_texture_resource =
-            TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE.load(Ordering::SeqCst);
+        // REMOVED (2026-07-31): the `oracle_title_overlay_cover_*` family and
+        // `oracle_title_profile_cover_bound_to_logo_surface`. All six backing counters had ZERO
+        // writers anywhere in the tree and the bound-to-logo-surface value was a hard-coded
+        // `false` -- they were placeholders for the unbuilt custom title render surface
+        // (er-effects-rs-trp). Emitting them made an ABSENT feature look like a FAILING one: a
+        // reader could not tell "the title cover rendered nothing" from "nothing was ever wired to
+        // count", and that is exactly how they misread -- an agent cited render_calls=0 as proof
+        // the title cover painted no pixels during a loading-screen gap. When trp lands its real
+        // surface, add these back WITH writers at the actual render site.
         let title_logo_profile_summary = {
             let game_data_man = crate::game_data_man_ptr_or_null();
             if game_data_man != NULL_PTR {
@@ -929,10 +950,15 @@ fn write_game_module_oracles(body: &mut String) {
         }
         .is_some();
         let title_profile_face_bind_hits = TITLE_PROFILE_FACE_BIND_HITS.load(Ordering::SeqCst);
-        let title_profile_face_transform_applied =
-            TITLE_PROFILE_FACE_TRANSFORM_APPLIED.load(Ordering::SeqCst) != 0;
-        let title_profile_face_other_hidden =
-            TITLE_PROFILE_FACE_OTHER_HIDDEN.load(Ordering::SeqCst);
+        // PINNED TO THEIR SHIPPED VALUES (bd er-effects-rs-57fw). The only writer of
+        // TITLE_PROFILE_FACE_TRANSFORM_APPLIED / TITLE_PROFILE_FACE_OTHER_HIDDEN was
+        // title_custom_cover_menu_window_run_hook, whose only address-taker
+        // (install_title_custom_cover_run_hook) had no callers -- so rustc never codegen'd either and
+        // both counters read 0 in every build that has ever shipped. Emitting the same literals keeps
+        // this JSON byte-identical while the counters go away. Consequence, tracked separately:
+        // `title_loaded_character_portrait_rendered` below is STRUCTURALLY false, not merely unobserved.
+        let title_profile_face_transform_applied = false;
+        let title_profile_face_other_hidden = 0usize;
         let title_profile_face_last_proxy = TITLE_PROFILE_FACE_LAST_PROXY.load(Ordering::SeqCst);
         let title_profile_face_last_value = TITLE_PROFILE_FACE_LAST_VALUE.load(Ordering::SeqCst);
         let title_loaded_character_portrait_rendered = title_profile_face_bind_hits != 0
@@ -980,18 +1006,7 @@ fn write_game_module_oracles(body: &mut String) {
         let now_loading_helper_last_requested_replace_tex_info =
             NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.load(Ordering::SeqCst);
         let now_loading_helper_last_flags = NOW_LOADING_HELPER_LAST_FLAGS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_installed =
-            LOADING_BG_TEXTURE_REDIRECT_INSTALLED.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_attempts =
-            LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_commits =
-            LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst);
-        let loading_bg_live_gx_rebinds = LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst);
         let loadscreen_table_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_last_symbol_match =
-            LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.load(Ordering::SeqCst);
-        let loading_bg_portrait_redirect_last_portrait =
-            LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
         let loading_bg_portrait_gx_nonblack =
             LOADING_BG_PORTRAIT_NONBLACK.load(Ordering::SeqCst) != 0;
         let loading_bg_portrait_is_checker =
@@ -1048,14 +1063,13 @@ fn write_game_module_oracles(body: &mut String) {
         let title_custom_cover_black_last_caller_rva =
             TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let title_custom_cover_run_calls = TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_native_job =
-            TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_cover_job =
-            TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_cover_window =
-            TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.load(Ordering::SeqCst);
-        let title_custom_cover_run_last_ret =
-            TITLE_CUSTOM_COVER_RUN_LAST_RET.load(Ordering::SeqCst);
+        // PINNED, same reason as the face counters above: their sole writer
+        // (title_custom_cover_menu_window_run_hook) was never codegen'd, so these have always
+        // emitted 0.
+        let title_custom_cover_run_last_native_job = 0usize;
+        let title_custom_cover_run_last_cover_job = 0usize;
+        let title_custom_cover_run_last_cover_window = 0usize;
+        let title_custom_cover_run_last_ret = 0usize;
         let title_pab_information_visual_builds =
             TITLE_PAB_INFORMATION_VISUAL_BUILDS.load(Ordering::SeqCst);
         let title_pab_information_visual_last_job =
@@ -1094,12 +1108,9 @@ fn write_game_module_oracles(body: &mut String) {
             && title_custom_cover_black_cover_draw_bit_set
             && !title_visual_current_draw_bit_set
             && !title_pab_information_visual_current_draw_bit_set;
-        // Latched peak-load proof + derived load-time msgbox count (bd er-effects-rs-ns4n follow-up).
-        // `oracle_load_correctness_seen > 0` proves a REAL character reached the world this run, latched
-        // so a quit-to-title (which resets the live oracle_char_* fields) cannot erase it.
-        // `oracle_msgbox_loadtime_builds` = total - postload isolates the load-time msgbox count (the
-        // hard crash/investigation trigger) from benign in-world/quit-confirm dialogs, which the total
-        // alone conflates.
+        // Latched peak-load proof. `oracle_load_correctness_seen > 0` proves a REAL character
+        // reached the world this run, latched so a quit-to-title (which resets the live
+        // oracle_char_* fields) cannot erase it.
         let loaded_peak_seen = LOADED_PEAK_SEEN_COUNT.load(Ordering::SeqCst);
         let loaded_peak_level = LOADED_PEAK_LEVEL.load(Ordering::SeqCst);
         let loaded_peak_c30 = LOADED_PEAK_C30.load(Ordering::SeqCst) as u32;
@@ -1108,26 +1119,17 @@ fn write_game_module_oracles(body: &mut String) {
             .lock()
             .map(|latched| latched.clone())
             .unwrap_or_default();
-        let msgbox_loadtime_builds = msgbox_total_builds.saturating_sub(msgbox_postload_builds);
         body.push_str(&format!(
-            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n  \"oracle_msgbox_loadtime_builds\": {msgbox_loadtime_builds},\n  \"oracle_msgbox_loadtime_seen\": {},\n",
-            json_escape(&loaded_peak_name),
-            msgbox_loadtime_builds != 0
+            "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n",
+            json_escape(&loaded_peak_name)
         ));
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             msgbox_total_builds,
-            msgbox_any_seen,
-            msgbox_postload_builds,
-            postload_modal_seen,
             blocking_modal_present,
             msgbox_dialog,
             msgbox_vtable,
             msgbox_closing_latch,
-            msgbox_arg_rcx,
-            msgbox_arg_rdx,
-            msgbox_arg_r8,
-            msgbox_arg_r9,
             policy_total_builds,
             policy_any_seen,
             policy_ptr,
@@ -1192,7 +1194,7 @@ fn write_game_module_oracles(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_logo_gfx_hide_calls\": {},\n  \"oracle_title_logo_gfx_any_hidden\": {},\n  \"oracle_title_logo_gfx_hide_last_dialog\": {},\n  \"oracle_title_logo_gfx_hide_last_logo\": {},\n  \"oracle_title_logo_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_logo_gfx_hide_last_requested_visible\": {},\n  \"oracle_title_press_start_surface_name\": \"PressStart\",\n  \"oracle_title_press_start_text_name\": \"StaticSystemText_101000\",\n  \"oracle_title_press_start_text_initial\": \"PRESS BUTTON\",\n  \"oracle_title_press_start_gfx_hide_calls\": {},\n  \"oracle_title_press_start_gfx_any_hidden\": {},\n  \"oracle_title_press_start_gfx_hide_last_dialog\": {},\n  \"oracle_title_press_start_gfx_hide_last_proxy\": {},\n  \"oracle_title_press_start_gfx_hide_last_context\": {},\n  \"oracle_title_press_start_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_press_start_gfx_value\": {},\n  \"oracle_title_press_start_gfx_force_false_calls\": {},\n  \"oracle_title_press_start_gfx_force_false_any\": {},\n  \"oracle_title_press_start_gfx_force_false_last_value\": {},\n  \"oracle_title_press_start_gfx_force_false_last_requested\": {},\n  \"oracle_title_press_start_bind_hits\": {},\n  \"oracle_title_press_start_bind_any\": {},\n  \"oracle_title_press_start_bind_last_parent\": {},\n  \"oracle_title_press_start_bind_last_out\": {},\n  \"oracle_title_press_start_bind_last_name\": {},\n  \"oracle_title_press_start_bind_last_context\": {},\n  \"oracle_title_press_start_bind_hide_calls\": {},\n  \"oracle_title_press_start_bind_any_hidden\": {},\n  \"oracle_title_profile_cover_bound_to_logo_surface\": {},\n  \"oracle_title_overlay_cover_render_calls\": {},\n  \"oracle_title_overlay_cover_rendered\": {},\n  \"oracle_title_overlay_cover_last_display_size\": [{}, {}],\n  \"oracle_title_overlay_cover_display_sane\": {},\n  \"oracle_title_overlay_cover_texture_bound\": {},\n  \"oracle_title_overlay_cover_last_gx_texture\": {},\n  \"oracle_title_overlay_cover_last_texture_resource\": {},\n  \"oracle_title_profile_face_bind_hits\": {},\n  \"oracle_title_profile_face_transform_applied\": {},\n  \"oracle_title_profile_face_other_hidden\": {},\n  \"oracle_title_profile_face_last_proxy\": {},\n  \"oracle_title_profile_face_last_value\": {},\n  \"oracle_title_loaded_character_portrait_rendered\": {},\n  \"oracle_title_loaded_character_portrait_visible_during_boot\": {},\n  \"oracle_title_loaded_character_portrait_held_until_loading_takeover\": {},\n  \"oracle_title_scaleform_bind_observer_hits\": {},\n  \"oracle_title_scaleform_bind_observer_systex_hits\": {},\n  \"oracle_title_scaleform_bind_observer_last_owner\": {},\n  \"oracle_title_scaleform_bind_observer_last_pair\": {},\n  \"oracle_title_scaleform_bind_observer_last_symbol_ptr\": {},\n  \"oracle_title_scaleform_bind_observer_last_target_ptr\": {},\n  \"oracle_title_portrait_visible_surface_symbol\": \"{}\",\n  \"oracle_title_portrait_visible_surface_bind_rewrites\": {},\n  \"oracle_title_portrait_visible_surface_bound\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_owner\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_pair\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_symbol_ptr\": {},\n  \"oracle_title_now_loading_helper_hooks_installed\": {},\n  \"oracle_title_now_loading_helper_ctor_hits\": {},\n  \"oracle_title_now_loading_helper_update_hits\": {},\n  \"oracle_title_now_loading_helper_last_this\": {},\n  \"oracle_title_now_loading_helper_last_menu_index\": {},\n  \"oracle_title_now_loading_helper_last_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_requested_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_flags\": {},\n  \"oracle_loading_bg_portrait_redirect_installed\": {},\n  \"oracle_loading_bg_portrait_redirect_attempts\": {},\n  \"oracle_loading_bg_portrait_redirect_commits\": {},\n  \"oracle_loading_bg_live_gx_rebinds\": {},\n  \"oracle_loadscreen_table_builds\": {},\n  \"oracle_loading_bg_portrait_redirect_last_symbol_match\": {},\n  \"oracle_loading_bg_portrait_redirect_last_portrait\": {},\n  \"oracle_loading_bg_portrait_gx_nonblack\": {},\n  \"oracle_loading_bg_portrait_is_checker\": {},\n  \"oracle_portrait_render_drive_hits\": {},\n  \"oracle_loading_bg_portrait_gx_dims\": {},\n  \"oracle_loading_bg_portrait_gx_format\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_profile_render_refresh_gate_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_source_sample_calls\": {},\n  \"oracle_title_custom_cover_profile_source_slot\": {},\n  \"oracle_title_custom_cover_profile_source_renderer\": {},\n  \"oracle_title_custom_cover_profile_source_renderer_vtable\": {},\n  \"oracle_title_custom_cover_profile_source_offscreen_rend\": {},\n  \"oracle_title_custom_cover_profile_source_tex_rescap\": {},\n  \"oracle_title_custom_cover_profile_source_tex_index\": {},\n  \"oracle_title_custom_cover_profile_source_ready_754\": {},\n  \"oracle_title_custom_cover_profile_source_ready_755\": {},\n  \"oracle_title_custom_cover_profile_source_ready\": {},\n  \"oracle_title_custom_cover_profile_source_name\": \"{}\",\n  \"oracle_title_custom_cover_profile_renderer_class\": \"{}\",\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n  \"oracle_title_custom_cover_black_surface_name\": \"{}\",\n  \"oracle_title_custom_cover_black_builds\": {},\n  \"oracle_title_custom_cover_black_any_built\": {},\n  \"oracle_title_custom_cover_black_last_ret\": {},\n  \"oracle_title_custom_cover_black_last_job\": {},\n  \"oracle_title_custom_cover_black_last_caller_rva\": {},\n  \"oracle_title_custom_cover_run_calls\": {},\n  \"oracle_title_custom_cover_run_any\": {},\n  \"oracle_title_custom_cover_run_last_native_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_window\": {},\n  \"oracle_title_custom_cover_run_last_ret\": {},\n  \"oracle_title_pab_information_visual_name\": \"{}\",\n  \"oracle_title_pab_information_visual_builds\": {},\n  \"oracle_title_pab_information_visual_any_built\": {},\n  \"oracle_title_pab_information_visual_last_job\": {},\n  \"oracle_title_pab_information_visual_last_window\": {},\n  \"oracle_title_pab_information_visual_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_logo_gfx_hide_calls\": {},\n  \"oracle_title_logo_gfx_any_hidden\": {},\n  \"oracle_title_logo_gfx_hide_last_dialog\": {},\n  \"oracle_title_logo_gfx_hide_last_logo\": {},\n  \"oracle_title_logo_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_logo_gfx_hide_last_requested_visible\": {},\n  \"oracle_title_press_start_surface_name\": \"PressStart\",\n  \"oracle_title_press_start_text_name\": \"StaticSystemText_101000\",\n  \"oracle_title_press_start_text_initial\": \"PRESS BUTTON\",\n  \"oracle_title_press_start_gfx_hide_calls\": {},\n  \"oracle_title_press_start_gfx_any_hidden\": {},\n  \"oracle_title_press_start_gfx_hide_last_dialog\": {},\n  \"oracle_title_press_start_gfx_hide_last_proxy\": {},\n  \"oracle_title_press_start_gfx_hide_last_context\": {},\n  \"oracle_title_press_start_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_press_start_gfx_value\": {},\n  \"oracle_title_press_start_gfx_force_false_calls\": {},\n  \"oracle_title_press_start_gfx_force_false_any\": {},\n  \"oracle_title_press_start_gfx_force_false_last_value\": {},\n  \"oracle_title_press_start_gfx_force_false_last_requested\": {},\n  \"oracle_title_press_start_bind_hits\": {},\n  \"oracle_title_press_start_bind_any\": {},\n  \"oracle_title_press_start_bind_last_parent\": {},\n  \"oracle_title_press_start_bind_last_out\": {},\n  \"oracle_title_press_start_bind_last_name\": {},\n  \"oracle_title_press_start_bind_last_context\": {},\n  \"oracle_title_press_start_bind_hide_calls\": {},\n  \"oracle_title_press_start_bind_any_hidden\": {},\n  \"oracle_title_profile_face_bind_hits\": {},\n  \"oracle_title_profile_face_transform_applied\": {},\n  \"oracle_title_profile_face_other_hidden\": {},\n  \"oracle_title_profile_face_last_proxy\": {},\n  \"oracle_title_profile_face_last_value\": {},\n  \"oracle_title_loaded_character_portrait_rendered\": {},\n  \"oracle_title_loaded_character_portrait_visible_during_boot\": {},\n  \"oracle_title_loaded_character_portrait_held_until_loading_takeover\": {},\n  \"oracle_title_scaleform_bind_observer_hits\": {},\n  \"oracle_title_scaleform_bind_observer_systex_hits\": {},\n  \"oracle_title_scaleform_bind_observer_last_owner\": {},\n  \"oracle_title_scaleform_bind_observer_last_pair\": {},\n  \"oracle_title_scaleform_bind_observer_last_symbol_ptr\": {},\n  \"oracle_title_scaleform_bind_observer_last_target_ptr\": {},\n  \"oracle_title_portrait_visible_surface_symbol\": \"{}\",\n  \"oracle_title_portrait_visible_surface_bind_rewrites\": {},\n  \"oracle_title_portrait_visible_surface_bound\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_owner\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_pair\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_symbol_ptr\": {},\n  \"oracle_title_now_loading_helper_hooks_installed\": {},\n  \"oracle_title_now_loading_helper_ctor_hits\": {},\n  \"oracle_title_now_loading_helper_update_hits\": {},\n  \"oracle_title_now_loading_helper_last_this\": {},\n  \"oracle_title_now_loading_helper_last_menu_index\": {},\n  \"oracle_title_now_loading_helper_last_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_requested_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_flags\": {},\n  \"oracle_loadscreen_table_builds\": {},\n  \"oracle_loading_bg_portrait_gx_nonblack\": {},\n  \"oracle_loading_bg_portrait_is_checker\": {},\n  \"oracle_portrait_render_drive_hits\": {},\n  \"oracle_loading_bg_portrait_gx_dims\": {},\n  \"oracle_loading_bg_portrait_gx_format\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_profile_render_refresh_gate_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_source_sample_calls\": {},\n  \"oracle_title_custom_cover_profile_source_slot\": {},\n  \"oracle_title_custom_cover_profile_source_renderer\": {},\n  \"oracle_title_custom_cover_profile_source_renderer_vtable\": {},\n  \"oracle_title_custom_cover_profile_source_offscreen_rend\": {},\n  \"oracle_title_custom_cover_profile_source_tex_rescap\": {},\n  \"oracle_title_custom_cover_profile_source_tex_index\": {},\n  \"oracle_title_custom_cover_profile_source_ready_754\": {},\n  \"oracle_title_custom_cover_profile_source_ready_755\": {},\n  \"oracle_title_custom_cover_profile_source_ready\": {},\n  \"oracle_title_custom_cover_profile_source_name\": \"{}\",\n  \"oracle_title_custom_cover_profile_renderer_class\": \"{}\",\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n  \"oracle_title_custom_cover_black_surface_name\": \"{}\",\n  \"oracle_title_custom_cover_black_builds\": {},\n  \"oracle_title_custom_cover_black_any_built\": {},\n  \"oracle_title_custom_cover_black_last_ret\": {},\n  \"oracle_title_custom_cover_black_last_job\": {},\n  \"oracle_title_custom_cover_black_last_caller_rva\": {},\n  \"oracle_title_custom_cover_run_calls\": {},\n  \"oracle_title_custom_cover_run_any\": {},\n  \"oracle_title_custom_cover_run_last_native_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_window\": {},\n  \"oracle_title_custom_cover_run_last_ret\": {},\n  \"oracle_title_pab_information_visual_name\": \"{}\",\n  \"oracle_title_pab_information_visual_builds\": {},\n  \"oracle_title_pab_information_visual_any_built\": {},\n  \"oracle_title_pab_information_visual_last_job\": {},\n  \"oracle_title_pab_information_visual_last_window\": {},\n  \"oracle_title_pab_information_visual_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1249,15 +1251,6 @@ fn write_game_module_oracles(body: &mut String) {
             title_press_start_bind_last_context,
             title_press_start_bind_hide_calls,
             title_press_start_bind_hide_calls != 0,
-            title_profile_cover_bound_to_logo_surface,
-            title_overlay_cover_render_calls,
-            title_overlay_cover_render_calls != 0,
-            title_overlay_cover_last_display_w,
-            title_overlay_cover_last_display_h,
-            title_overlay_cover_display_sane,
-            title_overlay_cover_texture_bound,
-            title_overlay_cover_last_gx_texture,
-            title_overlay_cover_last_texture_resource,
             title_profile_face_bind_hits,
             title_profile_face_transform_applied,
             title_profile_face_other_hidden,
@@ -1286,13 +1279,7 @@ fn write_game_module_oracles(body: &mut String) {
             now_loading_helper_last_replace_tex_info,
             now_loading_helper_last_requested_replace_tex_info,
             now_loading_helper_last_flags,
-            loading_bg_portrait_redirect_installed,
-            loading_bg_portrait_redirect_attempts,
-            loading_bg_portrait_redirect_commits,
-            loading_bg_live_gx_rebinds,
             loadscreen_table_builds,
-            loading_bg_portrait_redirect_last_symbol_match,
-            loading_bg_portrait_redirect_last_portrait,
             loading_bg_portrait_gx_nonblack,
             loading_bg_portrait_is_checker,
             portrait_render_drive_hits,
@@ -1600,44 +1587,12 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_title_scaleform_resource_ctor_last_caller_rva",
             title_scaleform_resource_ctor_last_caller_rva,
         );
-        // er-tpf Tier-4 in-memory cover wire-up oracles (memory-read telemetry, NOT screenshot): a
-        // runtime watcher can observe build/register/bind progress + failures without an image.
-        push_json_bool(
-            body,
-            "oracle_tpf_texture_built",
-            ER_TPF_COVER_TEXTURE_BUILT.load(Ordering::SeqCst) != 0,
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_blob_len",
-            ER_TPF_COVER_BLOB_LEN.load(Ordering::SeqCst),
-        );
-        push_json_str(body, "oracle_tpf_texture_key", ER_TPF_COVER_SYSTEX_KEY);
-        push_json_bool(
-            body,
-            "oracle_tpf_texture_registered",
-            ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0,
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_last_rescap",
-            ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_bound",
-            ER_TPF_COVER_BOUND.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_failures",
-            ER_TPF_COVER_FAILURES.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_tpf_texture_last_error",
-            ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
-        );
+        // REMOVED 2026-07-31 (er-effects-rs-56fx): oracle_tpf_texture_registered / _last_rescap /
+        // _bound / _failures / _last_error. All five counters had zero writers -- the TPF cover
+        // texture path never reports through them -- and three carried sentinel initialisers
+        // (ER_TPF_COVER_ERR_NONE and friends), so they emitted a plausible-looking value forever
+        // rather than an obviously-absent 0. `oracle_tpf_texture_key` stays: it is a static string,
+        // not a counter. Re-add these WITH writers at the register/bind sites if that path is built.
         // Stats-panel neutral-background wire-up oracles (memory-read telemetry, NOT screenshot). A
         // runtime watcher confirms the character render is blanked, each per-slot neutral bg registered
         // into the repos, and each visible face bind redirected to our key -- all without an image.
@@ -1697,6 +1652,21 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_stats_text_push_failures",
             PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_attempts",
+            PROFILE_PLAYER_NAME_PUSH_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_settext_subs",
+            PROFILE_PLAYER_NAME_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_push_failures",
+            PROFILE_PLAYER_NAME_PUSH_FAILURES.load(Ordering::SeqCst),
+        );
         // 7e7 fail-closed guard: pushes skipped because the resolved component was stale (crash
         // avoided), plus the last stale component/vtable pointers for root-causing the bad link.
         push_json_usize(
@@ -1726,6 +1696,11 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_stats_text_slot_decoded",
             PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_player_name_slot_decoded",
+            PROFILE_SLOT_NAMES_DECODED.load(Ordering::SeqCst),
         );
         // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
         push_json_usize(
@@ -1866,11 +1841,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_backbuffer_format",
             PRESENT_BACKBUFFER_FORMAT.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_present_composite_build_skips",
-            PRESENT_COMPOSITE_BUILD_SKIPS.load(Ordering::SeqCst),
-        );
         // Presents where we skipped ALL compositing because the now-loading display window had not opened
         // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
         // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
@@ -1912,118 +1882,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_alpha_cover_pct",
             PORTRAIT_ALPHA_COVER_PCT.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_overlay_draw_hits",
-            OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reuploads",
-            OVERLAY_REUPLOADS.load(Ordering::SeqCst),
-        );
-
-        let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
-        let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);
-        let overlay_draw_last_ms = OVERLAY_DRAW_LAST_MS.load(Ordering::SeqCst);
-        let overlay_reuploads = OVERLAY_REUPLOADS.load(Ordering::SeqCst);
-        let overlay_reupload_first_ms = OVERLAY_REUPLOAD_FIRST_MS.load(Ordering::SeqCst);
-        let overlay_reupload_last_ms = OVERLAY_REUPLOAD_LAST_MS.load(Ordering::SeqCst);
-        let fps_x1000 = |frames: usize, first_ms: usize, last_ms: usize| -> usize {
-            let dt = last_ms.saturating_sub(first_ms);
-            if frames < 2 || dt == 0 {
-                0
-            } else {
-                (frames - 1).saturating_mul(1_000_000) / dt
-            }
-        };
-        push_json_usize(body, "oracle_overlay_draw_first_ms", overlay_draw_first_ms);
-        push_json_usize(body, "oracle_overlay_draw_last_ms", overlay_draw_last_ms);
-        push_json_usize(
-            body,
-            "oracle_overlay_draw_fps_x1000",
-            fps_x1000(
-                overlay_draw_hits,
-                overlay_draw_first_ms,
-                overlay_draw_last_ms,
-            ),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_first_ms",
-            overlay_reupload_first_ms,
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_last_ms",
-            overlay_reupload_last_ms,
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_reupload_fps_x1000",
-            fps_x1000(
-                overlay_reuploads,
-                overlay_reupload_first_ms,
-                overlay_reupload_last_ms,
-            ),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stale_present_current",
-            OVERLAY_STALE_PRESENT_RUN.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stale_present_max",
-            OVERLAY_STALE_PRESENT_MAX.load(Ordering::SeqCst),
-        );
-        let avg_x1000 = |sum_ms: usize, count: usize| -> usize {
-            if count == 0 {
-                0
-            } else {
-                sum_ms.saturating_mul(1000) / count
-            }
-        };
-        let rb_count = OVERLAY_STAGE_READBACK_WAIT_COUNT.load(Ordering::SeqCst);
-        let rb_sum = OVERLAY_STAGE_READBACK_WAIT_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_readback_wait_count", rb_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_readback_wait_avg_ms_x1000",
-            avg_x1000(rb_sum, rb_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_readback_wait_max_ms",
-            OVERLAY_STAGE_READBACK_WAIT_MS_MAX.load(Ordering::SeqCst),
-        );
-        let blend_count = OVERLAY_STAGE_BLEND_COUNT.load(Ordering::SeqCst);
-        let blend_sum = OVERLAY_STAGE_BLEND_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_blend_count", blend_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_blend_avg_ms_x1000",
-            avg_x1000(blend_sum, blend_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_blend_max_ms",
-            OVERLAY_STAGE_BLEND_MS_MAX.load(Ordering::SeqCst),
-        );
-        let up_count = OVERLAY_STAGE_UPLOAD_WAIT_COUNT.load(Ordering::SeqCst);
-        let up_sum = OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM.load(Ordering::SeqCst);
-        push_json_usize(body, "oracle_overlay_upload_wait_count", up_count);
-        push_json_usize(
-            body,
-            "oracle_overlay_upload_wait_avg_ms_x1000",
-            avg_x1000(up_sum, up_count),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_upload_wait_max_ms",
-            OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX.load(Ordering::SeqCst),
-        );
-
         // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
         // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
         // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,
@@ -2047,6 +1905,20 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_boot_view_milestone_idx",
             BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
+        );
+        // LOAD EPOCH identity (bd er-effects-rs-ok8d): seq increments on every bar rearm, kind selects
+        // which phase sequence the bar publishes (0 = process boot, 1 = character reload). Together
+        // they make "did the bar actually start a fresh epoch, with the right phase set?" a RAM oracle
+        // instead of something only inferable from the debug log.
+        push_json_usize(
+            body,
+            "oracle_boot_view_epoch_seq",
+            BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_epoch_kind",
+            BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
@@ -2086,6 +1958,63 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_boot_view_dark_gap_last_native_hits",
             BOOT_VIEW_DARK_GAP_LAST_NATIVE_HITS.load(Ordering::SeqCst),
+        );
+        // Cover-window measurability (bd er-effects-rs-dpf6 Phase 1): why the cover last stopped
+        // (0 armed/none, 1 release-fade, 2 fps-bail, 3 can-move world handoff), the last window's
+        // rearm->stop duration, and how many times the fps-bail was resumed by a fresh publish.
+        push_json_usize(
+            body,
+            "oracle_boot_view_stop_reason",
+            er_telemetry::counters::BOOT_VIEW_STOP_REASON.load(Ordering::SeqCst),
+        );
+        // Cover END-CONDITION health (er-effects-rs-drb7). semantic_releases should equal the load
+        // window count; the two latches say WHICH half is missing when it does not.
+        push_json_usize(
+            body,
+            "oracle_boot_view_semantic_releases",
+            er_telemetry::counters::BOOT_VIEW_SEMANTIC_RELEASES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_render_ready_seen",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_RENDER_READY_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_native_done_seen",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_ready_ms",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst),
+        );
+        // q6vk character-load gate. held_for_confirm > 0 proves the gate engaged on a switch;
+        // before_confirm MUST stay 0 -- a release without its character load is the defect back.
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_held_for_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_before_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_BEFORE_CONFIRM.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_release_require_confirm",
+            er_telemetry::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_cover_window_ms",
+            er_telemetry::counters::BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_fps_bail_resumes",
+            er_telemetry::counters::BOOT_VIEW_FPS_BAIL_RESUMES.load(Ordering::SeqCst),
         );
         let native_loading_updates = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
         let forced_continue_observed = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
@@ -2162,16 +2091,33 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_winreconfig_early_apply_rect",
             WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
         );
+        let pump_stop_reason = BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst);
+        let boot_view_stopped = BOOT_VIEW_STOPPED.load(Ordering::SeqCst);
+        // A composite attributes its clear before incrementing DRAW_HITS. Read draws first so a
+        // concurrent composite can only make attribution newer than draws, never the reverse tuple
+        // that would latch a false failure while the Present-path clear is still in flight.
+        let draws = BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst);
         let self_presents = BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst);
+        let self_full_clears = BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         let present_full_clears = BOOT_VIEW_PRESENT_FULL_CLEAR_HITS.load(Ordering::SeqCst);
         push_json_usize(body, "oracle_boot_view_self_presents", self_presents);
-        push_json_usize(body, "oracle_boot_view_self_full_clear_hits", BOOT_VIEW_SELF_FULL_CLEAR_HITS.load(Ordering::SeqCst));
-        push_json_usize(body, "oracle_boot_view_present_full_clear_hits", present_full_clears);
-        if BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst) == 1
-            && BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0
-            && BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) > self_presents
-            && present_full_clears == 0
-        {
+        push_json_usize(
+            body,
+            "oracle_boot_view_self_full_clear_hits",
+            self_full_clears,
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_present_full_clear_hits",
+            present_full_clears,
+        );
+        if boot_view_present_cover_failed(
+            pump_stop_reason,
+            boot_view_stopped,
+            draws,
+            self_full_clears,
+            present_full_clears,
+        ) {
             BOOT_VIEW_PRESENT_COVER_FAILURES.store(1, Ordering::SeqCst);
         }
         let cur_deser = crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
@@ -2282,6 +2228,53 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_ls_portrait_rejected_publishes",
             LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
         );
+        // Reject ATTRIBUTION (er-effects-rs-k979). The bare count above cannot say whether the
+        // neutral gate was doing its job or the pipeline broke. `_after_window_publish` is the one
+        // a proof should gate on; `_before_window_publish` is warm-up and expected. Both are scoped
+        // to the CURRENT window -- the version counter they derive from is process-cumulative.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejects_before_window_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_BEFORE_WINDOW_PUBLISH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejects_after_window_publish",
+            er_telemetry::counters::LS_PORTRAIT_REJECTS_AFTER_WINDOW_PUBLISH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_reject_last_version",
+            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_reject_last_neutral_pct",
+            er_telemetry::counters::LS_PORTRAIT_REJECT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
+        );
+        // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
+        // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
+        // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_slot",
+            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_name_hash",
+            er_telemetry::counters::LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_confirm_to_publish_ms",
+            er_telemetry::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_bridge_same_identity_holds",
+            er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.load(Ordering::SeqCst),
+        );
         // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
         // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
         // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
@@ -2314,6 +2307,84 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_foreign_models",
             PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
         );
+        // NUDE-PORTRAIT ARMOR ORACLE (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
+        // Sampled every game tick off the profile renderer's LIVE stage-0 ChrAsm (+0x130 -- NOT the
+        // +0x548 inbox), replicating FUN_1409e6fb0's override arithmetic, so these are the
+        // EquipParamProtector rows the model build actually requests.
+        //
+        // READ IT LIKE THIS. `bad_frames > 0` = FAIL, and no later frame can erase it.
+        // `sampled_frames == 0` = ALSO FAIL: the oracle never got to look. `capture_verdict` is
+        // tri-state on purpose -- 0 means "no capture-frame sample", which is not a pass. The raw
+        // unk0/unkd4/unkd8 must all read -1; any non-negative value is the whole-outfit override that
+        // rendered the character nude. Param-id fields read -2147483648 when never sampled, which is
+        // distinct from the -1 that means "this slot is legitimately empty".
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_window",
+            PORTRAIT_EQUIP_ORACLE_WINDOW.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_slot",
+            PORTRAIT_EQUIP_ORACLE_SLOT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_sampled_frames",
+            PORTRAIT_EQUIP_SAMPLED_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_frames",
+            PORTRAIT_EQUIP_BAD_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_frames_total",
+            PORTRAIT_EQUIP_BAD_FRAMES_TOTAL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_bad_mask",
+            PORTRAIT_EQUIP_BAD_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_windows_sampled",
+            PORTRAIT_EQUIP_WINDOWS_SAMPLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_windows_bad",
+            PORTRAIT_EQUIP_WINDOWS_BAD.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_equip_capture_verdict",
+            PORTRAIT_EQUIP_CAPTURE_VERDICT.load(Ordering::SeqCst),
+        );
+        {
+            let unpack = crate::experiments::portrait_equip_unpack;
+            let effective = |slot: usize| unpack(PORTRAIT_EQUIP_FIRST_EFFECTIVE_ID[slot].load(Ordering::SeqCst));
+            let captured = |slot: usize| unpack(PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID[slot].load(Ordering::SeqCst));
+            let recorded = |slot: usize| unpack(PORTRAIT_EQUIP_RECORD_PARAM_ID[slot].load(Ordering::SeqCst));
+            body.push_str(&format!(
+                "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n",
+                effective(0),
+                effective(1),
+                effective(2),
+                effective(3),
+                captured(0),
+                captured(1),
+                captured(2),
+                captured(3),
+                recorded(0),
+                recorded(1),
+                unpack(PORTRAIT_EQUIP_FIRST_UNK0.load(Ordering::SeqCst)),
+                unpack(PORTRAIT_EQUIP_FIRST_UNKD4.load(Ordering::SeqCst)),
+                unpack(PORTRAIT_EQUIP_FIRST_UNKD8.load(Ordering::SeqCst)),
+            ));
+        }
         // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
         // proves the guard caught+skipped the crash; ctors/dtors give the churn context.
         push_json_usize(
@@ -2781,7 +2852,7 @@ fn write_game_module_oracles(body: &mut String) {
         // already emitted (oracle_wcm_*/oracle_worldchrman_* in write_player_presence_oracle) and are flat
         // per AC-2, so they are not duplicated here.
         {
-            const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+            const G_GX_DRAW_CONTEXT_RVA: usize = er_loading_portrait::GX_DRAW_CONTEXT_RVA;
             const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
             const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
             const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;
@@ -2875,6 +2946,27 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_face_identity_mismatches",
             PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
         );
+        // PUBLISHED-vs-LOADED identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
+        // Asserted at every loading-window close. The face-identity pair above catches a record
+        // whose FACE was rewritten under a slot; these catch the portrait being built for the
+        // WRONG SLOT entirely -- the class that put slot 9's head on screen for 29.7s while slot 5
+        // loaded with every other oracle reporting ok. Read `_checks` first: 0 mismatches with 0
+        // checks is an unexercised path, not a pass.
+        push_json_usize(
+            body,
+            "oracle_portrait_published_identity_checks",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_IDENTITY_CHECKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_slot_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_SLOT_MISMATCHES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_published_name_hash_mismatches",
+            er_telemetry::counters::PORTRAIT_PUBLISHED_NAME_HASH_MISMATCHES.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_portrait_pump_draws",
@@ -2955,19 +3047,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_luma_flicker_max",
             PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
         );
-        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = load-done bridge
-        // elapsed; 3 = anti-runaway backstop; 4 = legacy Gauge_3 terminal frame; 5 = native LoadingScreen
-        // close/result handoff after the post-100%-bar countdown).
-        push_json_usize(
-            body,
-            "oracle_overlay_window_stops",
-            OVERLAY_WINDOW_STOPS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_stop_reason",
-            OVERLAY_STOP_REASON.load(Ordering::SeqCst),
-        );
         push_json_usize(
             body,
             "oracle_loading_bar_hook_installed",
@@ -3046,84 +3125,6 @@ fn write_game_module_oracles(body: &mut String) {
         push_json_usize(body, "oracle_loading_screen_gfx_fadeout_last_ms", LOADING_SCREEN_GFX_FADEOUT_LAST_MS.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_loading_screen_update_last_ms", LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst));
         push_json_usize(body, "oracle_loading_screen_close_sent_first_ms", LOADING_SCREEN_CLOSE_SENT_FIRST_MS.load(Ordering::SeqCst));
-        // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
-        // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`
-        // proves the Present-overlay demoted (stopped drawing over the tips); `demote_credit` is the live
-        // handoff level; `last_error` names the current fail-open reason (0 = ok).
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_uploads",
-            GFX_PORTRAIT_UPLOADS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_resolves",
-            GFX_PORTRAIT_RESOLVES.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_resolve_fails",
-            GFX_PORTRAIT_RESOLVE_FAILS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_overlay_yields",
-            GFX_PORTRAIT_OVERLAY_YIELDS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_demote_credit",
-            GFX_PORTRAIT_DEMOTE_CREDIT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_hal_dims",
-            GFX_PORTRAIT_HAL_DIMS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_cached_hal",
-            GFX_PORTRAIT_CACHED_HAL.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_last_error",
-            GFX_PORTRAIT_LAST_ERROR.load(Ordering::SeqCst),
-        );
-        // BAKE path: head baked into the forged now-loading background (proven display), and whether a
-        // baked artwork was actually DISPLAYED (overlay demoted -> tips render above the in-movie head).
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_baked",
-            GFX_PORTRAIT_BAKED.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_baked_displayed",
-            GFX_PORTRAIT_BAKED_DISPLAYED.load(Ordering::SeqCst),
-        );
-        // PIXEL ORACLE: did the head actually reach the loading screen (backbuffer readback vs the
-        // captured head, excluding the tip/bar rects)? Resource-agnostic regression guard.
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_on_screen",
-            GFX_PORTRAIT_HEAD_ON_SCREEN.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_match_pct",
-            GFX_PORTRAIT_HEAD_MATCH_PCT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_probe_count",
-            GFX_PORTRAIT_HEAD_PROBE_COUNT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gfx_portrait_head_ever",
-            GFX_PORTRAIT_HEAD_EVER.load(Ordering::SeqCst),
-        );
         // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
         // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
         // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
@@ -3168,30 +3169,9 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_scaleform_desc_provider_null_hits",
             SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_count",
-            OVERLAY_GPU_FAIL_COUNT.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_code",
-            OVERLAY_GPU_FAIL_CODE.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_overlay_gpu_fail_version",
-            OVERLAY_GPU_FAIL_VERSION.load(Ordering::SeqCst),
-        );
         body.push_str(&format!(
-            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
+            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),
-            NATIVE_LOAD_FIRED.load(Ordering::SeqCst) == NATIVE_LOAD_FIRED_YES,
-            NATIVE_LOAD_LAST_NODE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_NODE_VTABLE.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_DIALOG.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_FN.load(Ordering::SeqCst),
-            NATIVE_LOAD_LAST_MEMBER_ADJUST.load(Ordering::SeqCst),
             title_custom_cover_profile_source_ready,
             TITLE_CUSTOM_COVER_SYSTEX_TARGET,
             TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,

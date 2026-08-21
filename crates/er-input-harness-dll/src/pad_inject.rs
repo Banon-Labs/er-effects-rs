@@ -81,8 +81,13 @@ pub fn pad_snapshot() -> (u32, u32, usize, usize, [u32; 3]) {
     )
 }
 
-/// Menu-nav buttons -> DLUID virtual-key ids. UNKNOWN until the probe sweep discovers them; filled in
-/// after the id->action map is recovered. Until then only the probe (`set_vk_id`) can drive.
+/// Menu-nav buttons -> DLUID virtual-key ids.
+///
+/// The planned source+0x88 id map was never recovered: the only concrete probe evidence is negative for
+/// the in-world pause menu (`DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep...`), with all ids
+/// 1000..1080 producing no reproducible job/flags/tab/return-title response. Keep the typed API inert
+/// instead of inventing ids; `set_vk_id` remains available for diagnostic raw-id probes if a later RE pass
+/// finds the real consumer.
 #[derive(Clone, Copy)]
 pub enum PadButton {
     None,
@@ -96,16 +101,21 @@ pub enum PadButton {
 
 impl PadButton {
     fn vk_id(self) -> u32 {
-        // TODO(id-map): fill from the probe id-sweep discovery (bd MENU-INPUT-LAYER...).
         match self {
-            PadButton::None => 0,
-            _ => 0,
+            PadButton::None
+            | PadButton::Up
+            | PadButton::Down
+            | PadButton::Confirm
+            | PadButton::Cancel
+            | PadButton::TabLeft
+            | PadButton::TabRight => 0,
         }
     }
 }
 
-/// Drive API: set the button to inject (`None` = release, for a clean edge). No-op until the id map is
-/// filled in `PadButton::vk_id`.
+/// Drive API: set the button to inject (`None` = release, for a clean edge). This typed source+0x88 path
+/// is intentionally inert because the id sweep produced no concrete pause-menu action map; use
+/// `set_vk_id` only for explicit raw-id diagnostics.
 pub fn set_pad_button(button: PadButton) {
     DESIRED_VK_ID.store(button.vk_id(), Ordering::SeqCst);
 }

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
+CHECK_SCRIPT = REPO_ROOT / "scripts" / "check-autoload-happy-path.py"
 
 EXPECTED_PROFILE = """profileVersion = "v1"
 
@@ -41,7 +43,73 @@ EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to
 """
 
 
+def load_checker():
+    spec = importlib.util.spec_from_file_location("check_autoload_happy_path", CHECK_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise SystemExit("could not load check-autoload-happy-path.py")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    return checker
+
+
+def require_attach_order_uses_runtime_calls() -> None:
+    checker = load_checker()
+
+    # Logical-module concatenation order is not runtime order: a split may put the latch source
+    # alphabetically before the visual source while DllMain still installs visuals first.
+    assert not checker.calls_in_order(
+        "START_MENU_WINDOW_LATCH.call_once(); START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once();",
+        "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once();",
+        "START_MENU_WINDOW_LATCH.call_once();",
+    )
+    assert checker.calls_in_order(
+        "install_title_visual_startup_hooks(); install_boot_diagnostics_and_trace_hooks();",
+        "install_title_visual_startup_hooks();",
+        "install_boot_diagnostics_and_trace_hooks();",
+    )
+    assert not checker.calls_in_order(
+        "install_boot_diagnostics_and_trace_hooks(); install_title_visual_startup_hooks();",
+        "install_title_visual_startup_hooks();",
+        "install_boot_diagnostics_and_trace_hooks();",
+    )
+
+
+def require_split_runtime_path_is_followed() -> None:
+    checker = load_checker()
+    source = """
+fn own_stepper_idx10() {
+    own_stepper_idx10_fallbacks!();
+}
+macro_rules! own_stepper_idx10_fallbacks {
+    () => {{
+        title_boot_ready();
+        startup_modal_blocking_state();
+    }};
+}
+"""
+    path = "\n".join(
+        [
+            checker.rust_fn_body(source, "own_stepper_idx10"),
+            checker.rust_macro_body(source, "own_stepper_idx10_fallbacks"),
+        ]
+    )
+    assert "title_boot_ready" in path
+    assert "startup_modal_blocking_state" in path
+
+    incomplete = source.replace("startup_modal_blocking_state();", "")
+    incomplete_path = "\n".join(
+        [
+            checker.rust_fn_body(incomplete, "own_stepper_idx10"),
+            checker.rust_macro_body(incomplete, "own_stepper_idx10_fallbacks"),
+        ]
+    )
+    assert "startup_modal_blocking_state" not in incomplete_path
+
+
 def main() -> int:
+    require_attach_order_uses_runtime_calls()
+    require_split_runtime_path_is_followed()
+
     with tempfile.TemporaryDirectory(prefix="er-effects-autoload-stage-") as tmp:
         tmp_path = Path(tmp)
         er_dll = tmp_path / "er_effects_rs.dll"

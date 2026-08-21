@@ -25,7 +25,7 @@ where
 {
     // The menu wrapper's state pointer is stable across collected title-menu
     // traces. Calling the native wrapper preserves its task-state write at
-    // 0x1407a91e0 instead of calling map_load in isolation.
+    // 0x1407a91e0 instead of calling save_write_entry_0b in isolation.
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
@@ -86,13 +86,16 @@ where
     // Runtime/static RE shows the real Continue path is not a direct call to
     // the load primitives. Menu code queues GameMan flags, and the MoveMapList
     // task consumes those flags at safe scheduler points.
-    const MAP_LOAD_RVA: u32 = 0x0067bc10;
+    // 0x67bc10 WRITES save-container entry 0xb (allocates 0x240010, DLMemoryOutputStream,
+// submits through the write lane, sets GameMan->saveState = 1). It does not load.
+// Renamed 2026-08-01.
+const SAVE_DISPATCH_ENTRY0B_RVA: u32 = 0x0067bc10;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
-    type MapLoad = unsafe extern "system" fn() -> u8;
-    type CombinedLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type SaveWriteEntry0b = unsafe extern "system" fn() -> u8;
+    type CombinedSaveWrite = unsafe extern "system" fn(i32, u8, u8) -> u8;
     type MarkTitleBootstrap = unsafe extern "system" fn();
     type SaveLoadPumpDefault = unsafe extern "system" fn();
 
@@ -145,17 +148,17 @@ where
     unsafe { request_save(REQUEST_SAVE_ENABLED) };
     unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
     if call_combined_load && !call_map_load {
-        let combined_load: CombinedLoad =
-            unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
+        let combined_save_write: CombinedSaveWrite =
+            unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_COMBINED_RVA)?) };
         let combined_ret = unsafe {
-            combined_load(
+            combined_save_write(
                 CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                 LOAD_ARG_FALSE,
                 LOAD_ARG_TRUE,
             )
         };
         debug(format!(
-            "attempt {attempt}: direct combined_load returned {combined_ret}"
+            "attempt {attempt}: direct combined_save_write returned {combined_ret}"
         ));
         if call_save_load_pump {
             return Ok(false);
@@ -163,25 +166,25 @@ where
         return Ok(combined_ret != MAP_LOAD_FALSE_RETURN);
     }
     if call_map_load {
-        let map_load: MapLoad =
-            unsafe { std::mem::transmute(game_rva(module_base, MAP_LOAD_RVA)?) };
-        let ret = unsafe { map_load() };
-        debug(format!("attempt {attempt}: direct map_load returned {ret}"));
+        let save_write_entry_0b: SaveWriteEntry0b =
+            unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_ENTRY0B_RVA)?) };
+        let ret = unsafe { save_write_entry_0b() };
+        debug(format!("attempt {attempt}: direct save_write_entry_0b returned {ret}"));
         if ret == MAP_LOAD_FALSE_RETURN {
             return Ok(false);
         }
         if call_combined_load {
-            let combined_load: CombinedLoad =
-                unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
+            let combined_save_write: CombinedSaveWrite =
+                unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_COMBINED_RVA)?) };
             let combined_ret = unsafe {
-                combined_load(
+                combined_save_write(
                     CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                     LOAD_ARG_FALSE,
                     LOAD_ARG_TRUE,
                 )
             };
             debug(format!(
-                "attempt {attempt}: direct combined_load returned {combined_ret}"
+                "attempt {attempt}: direct combined_save_write returned {combined_ret}"
             ));
             if call_save_load_pump {
                 return Ok(false);
@@ -205,13 +208,31 @@ where
     G: GameManSaveAccess,
     F: FnMut(String),
 {
-    const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
+    // WARNING (corrected 2026-08-01 against the 1.16.2 Ghidra dump): 0x67b750 is
+    // `GameMan::WriteSaveToSlot(slot, flushToDisk, blankSlot)` -- it WRITES a save, it does
+    // not read one. It was named `CONTINUE_LOAD_RVA` here and in er-effects-rs, but
+    // `SAVE_DISPATCH_CHAR_RVA` in er-save-suppress (which hooks it precisely to SWALLOW
+    // saves); er-save-suppress had it right. Decompile: bails on `CanShowSaveMenu()`,
+    // requires `saveState == 0`, resolves slot -1 to `GameMan->saveSlot`, allocates
+    // 0x280000, calls `MarkProfileIndexAsUsed`, serializes game state into the buffer via
+    // 0x14067dc00 (`DLMemoryOutputStream` + `Write`), stamps `DLDateTime`, writes the buffer
+    // through the IO device (0xe6e060 -> 0x140e6ec70), then sets `saveState = 1`.
+    //
+    // CONSEQUENCE, NOT YET CHANGED: the DIRECT_SEQUENCE_PHASE_CONTINUE arm below invokes it
+    // as `(-1, 0, 0)`, which resolves to the ACTIVE save slot and takes the serialize branch
+    // -- i.e. this "load method" writes current game state over the player's active slot.
+    // `blankSlot == 1` would instead write a zeroed 0x280000 buffer (an erased slot); this
+    // call passes 0, so it is a state overwrite rather than an erase. Left in place because
+    // removing it is a behavior change that needs a runtime proof run, not a rename pass.
+    // `DirectTraceSequence` is opt-in (default is `SaveLoadMethod::SaveRequested`), selected
+    // only via config/request `method = direct_trace_sequence`. Tracked in bd.
+    const SAVE_WRITE_TO_SLOT_RVA: u32 = 0x0067b750;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
-    type CombinedLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
-    type ContinueLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type CombinedSaveWrite = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type SaveWriteToSlot = unsafe extern "system" fn(i32, u8, u8) -> u8;
     type MarkTitleBootstrap = unsafe extern "system" fn();
     type SaveLoadPumpDefault = unsafe extern "system" fn();
 
@@ -240,10 +261,10 @@ where
         unsafe { std::mem::transmute(game_rva(module_base, REQUEST_SAVE_RVA)?) };
     let save_request_profile: SaveRequestProfile =
         unsafe { std::mem::transmute(game_rva(module_base, SAVE_REQUEST_PROFILE_RVA)?) };
-    let combined_load: CombinedLoad =
-        unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
-    let continue_load: ContinueLoad =
-        unsafe { std::mem::transmute(game_rva(module_base, CONTINUE_LOAD_RVA)?) };
+    let combined_save_write: CombinedSaveWrite =
+        unsafe { std::mem::transmute(game_rva(module_base, SAVE_DISPATCH_COMBINED_RVA)?) };
+    let save_write_to_slot: SaveWriteToSlot =
+        unsafe { std::mem::transmute(game_rva(module_base, SAVE_WRITE_TO_SLOT_RVA)?) };
 
     match *phase {
         DIRECT_SEQUENCE_PHASE_COMBINED => {
@@ -254,14 +275,14 @@ where
             unsafe { request_save(REQUEST_SAVE_ENABLED) };
             unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
             let ret = unsafe {
-                combined_load(
+                combined_save_write(
                     CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                     LOAD_ARG_FALSE,
                     LOAD_ARG_TRUE,
                 )
             };
             debug(format!(
-                "attempt {attempt}: direct trace phase 0 combined_load returned {ret}"
+                "attempt {attempt}: direct trace phase 0 combined_save_write returned {ret}"
             ));
             if ret != MAP_LOAD_FALSE_RETURN {
                 *phase = DIRECT_SEQUENCE_PHASE_CONTINUE;
@@ -269,15 +290,19 @@ where
         }
         DIRECT_SEQUENCE_PHASE_CONTINUE => {
             unsafe { save_request_profile(MAP_LOAD_FALSE_RETURN) };
+            // NOTE: despite the phase name, this CALLS THE SAVE WRITER (see the warning on
+            // SAVE_WRITE_TO_SLOT_RVA above). `-1` resolves to GameMan->saveSlot and the
+            // third arg 0 selects the serialize-real-state branch, so this overwrites the
+            // active slot with current game state.
             let ret = unsafe {
-                continue_load(
+                save_write_to_slot(
                     CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                     LOAD_ARG_FALSE,
                     MAP_LOAD_FALSE_RETURN,
                 )
             };
             debug(format!(
-                "attempt {attempt}: direct trace phase 1 continue_load returned {ret}"
+                "attempt {attempt}: direct trace phase 1 save_write_to_slot(-1,0,0) returned {ret}"
             ));
             if ret != MAP_LOAD_FALSE_RETURN {
                 *phase = DIRECT_SEQUENCE_PHASE_FINAL_COMBINED;
@@ -286,14 +311,14 @@ where
         DIRECT_SEQUENCE_PHASE_FINAL_COMBINED => {
             unsafe { request_save(MAP_LOAD_FALSE_RETURN) };
             let ret = unsafe {
-                combined_load(
+                combined_save_write(
                     CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                     LOAD_ARG_FALSE,
                     LOAD_ARG_TRUE,
                 )
             };
             debug(format!(
-                "attempt {attempt}: direct trace phase 2 combined_load returned {ret}"
+                "attempt {attempt}: direct trace phase 2 combined_save_write returned {ret}"
             ));
             if ret != MAP_LOAD_FALSE_RETURN {
                 *phase = DIRECT_SEQUENCE_PHASE_FINAL_COMBINED + LOAD_ARG_TRUE;
@@ -303,14 +328,14 @@ where
             unsafe { request_save(REQUEST_SAVE_ENABLED) };
             unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
             let ret = unsafe {
-                combined_load(
+                combined_save_write(
                     CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                     LOAD_ARG_FALSE,
                     LOAD_ARG_TRUE,
                 )
             };
             debug(format!(
-                "attempt {attempt}: direct trace repeat combined_load returned {ret}"
+                "attempt {attempt}: direct trace repeat combined_save_write returned {ret}"
             ));
         }
     }
@@ -318,7 +343,9 @@ where
 }
 
 unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String> {
-    const SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA: u32 = 0x03d872e0;
+    // This is GLOBAL_MainHeapAllocator, not a save-specific allocator (1.16.2 dump: 1821
+    // xrefs across CSTaskImp/CSWindowImp/CSEzWork). Name kept for its call site.
+    const SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA: u32 = er_game_base::rva::GLOBAL_MAIN_HEAP_ALLOCATOR_RVA as u32;
 
     let save_buffer_allocator_global = game_rva(module_base, SAVE_BUFFER_ALLOCATOR_GLOBAL_RVA)?;
     let save_buffer_allocator =

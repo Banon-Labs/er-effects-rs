@@ -1,0 +1,200 @@
+# 05_010_ProfileSelect visual editor schema.
+# Edited by scripts/profile-05-010-editor.py or by hand.
+# The canvas is approximate; in-game Scaleform rendering is the final oracle.
+# Icon_0 stays placed and hidden, never unplaced.
+
+[field.PlayerName]
+x = -538
+y = -17
+width = 371
+clip_height = 40
+font_height = 22
+align = "left"
+sample_load_character = "Maddened Bean, RL 125 WL 25"
+sample_save_picker = "[..] save-files"
+sample_drive_row = "Save Root"
+
+[field.StaticText_110502]
+x = -346
+y = -18.25
+width = 149
+clip_height = 40
+font_height = 22
+align = "left"
+sample_load_character = "RL"
+sample_save_picker = ""
+sample_drive_row = ""
+
+[field.Level]
+x = -300
+y = -19
+width = 52
+clip_height = 40
+font_height = 22
+align = "right"
+sample_load_character = "125"
+sample_save_picker = ""
+sample_drive_row = ""
+
+[field.Location]
+x = 260
+y = -16
+width = 281
+clip_height = 40
+font_height = 22
+align = "right"
+sample_load_character = "Midra's Manse"
+sample_save_picker = ""
+sample_drive_row = ""
+
+[field.PlayTime]
+x = 326
+y = -16
+width = 200
+clip_height = 40
+font_height = 22
+align = "right"
+sample_load_character = "107:49:34"
+sample_save_picker = "2026-07-07"
+sample_drive_row = "2026-07-07"
+
+[field.ErStats]
+x = -100
+y = -16
+width = 670
+clip_height = 40
+font_height = 22
+align = "left"
+sample_load_character = ""
+sample_save_picker = "PARENT FOLDER / Go to save-files"
+sample_drive_row = "45-Slots / ER0000.sl2"
+
+[field.ErCharStats]
+x = -200
+y = -13.5
+width = 484
+clip_height = 42
+font_height = 20
+align = "center"
+sample_load_character = "VIG 50 MND 10 END 50 STR 21 DEX 21 INT 10 FAI 35 ARC 7"
+sample_save_picker = ""
+sample_drive_row = ""
+
+[field.DriveCell_0]
+x = -420
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "C:"
+sample_drive_row = "C:"
+
+[field.DriveCell_1]
+x = -388
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "S:"
+sample_drive_row = "S:"
+
+[field.DriveCell_2]
+x = -356
+y = -18
+width = 34
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "Z:"
+sample_drive_row = "Z:"
+
+[field.CurrentPath]
+x = -180
+y = -18
+width = 600
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = "Z:\\home\\banon\\Elden Ring Saves"
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
+
+[path_editor]
+x = -77
+y = 80
+width = 700
+clip_height = 39
+font_height = 20
+align = "left"
+sample_load_character = ""
+sample_save_picker = ""
+sample_drive_row = "Z:\\home\\banon\\Elden Ring Saves"
+
+[row_chrome.backing]
+x = -17.3
+y = 0
+scale_x = 20
+scale_y = 1
+opacity = 1
+editable = true
+source = "normal non-highlighted row backing: Backing/char54 contains MENU_FL_SelectWaku, the same 56x54 Save Game-style button frame art"
+
+[row_chrome.hit_area]
+x = -17.3
+y = 0
+scale_x = 20
+scale_y = 1
+opacity = 0
+editable = false
+source = "invisible full-row mouse target: HitArea/char54. GridControl's hit resolver (FUN_14074b0d0) prefers a child named HitArea over Cursor, so the row stays hoverable end to end while the drive-row runtime shrinks Cursor onto the focused sub-control"
+
+[row_chrome.cursor]
+x = -17.3
+y = 0
+scale_x = 1
+scale_y = 1
+opacity = 1
+editable = true
+source = "outer highlighted-row cursor wrapper: row sprite 76 named Cursor / char 75; keep identity so CursorBody locks to Backing dimensions"
+
+[row_chrome.cursor_body]
+x = 0
+y = 0
+scale_x = 20
+scale_y = 1
+opacity = 1
+editable = true
+source = "inner highlighted-row cursor body: Cursor/char75 -> CursorBody/char73 -> MENU_FL_Select_Cursor, the same 56x54 art used by Save Game / Return to Desktop style buttons"
+
+[row_chrome.drive_button]
+x = -2
+y = 0
+scale_x = 0.991
+scale_y = 1
+opacity = 0.55
+editable = true
+source = "relative offset/scale/opacity shared by every DriveButton_* native frame; x/y nudge button chrome without moving drive-letter text"
+
+[row_chrome.path_button]
+x = -2
+y = 0
+scale_x = 1
+scale_y = 1
+opacity = 0.42
+editable = true
+source = "independent offset/scale/opacity for CurrentPathButton; lower opacity softens the oversized native outline"
+
+[list]
+row_pitch = 48
+visible_rows = 10
+top_recycle_rows = 1
+bottom_recycle_rows = 1
+mask_height = 480
+scrollbar_x = 567
+scrollbar_top_y = -240
+scrollbar_track_height = 480

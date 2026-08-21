@@ -1,0 +1,18 @@
+[package]
+name = "er-loading-bar-dll"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_loading_bar_dll"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell
+# testable on the host without pulling the main product DLL into the graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
+er-loading-bar = { path = "../er-loading-bar" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's run log and crash log each describe exactly one run.
+er-game-base = { path = "../er-game-base" }

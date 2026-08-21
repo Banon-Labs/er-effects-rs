@@ -1,3 +1,5 @@
+use super::*;
+
 /// MODEL B: LIVE-dialog Load-Game fire (er-effects-live-dialog.txt / ER_EFFECTS_LIVE_DIALOG).
 /// OFF by default. SIBLING to direct_build (the forge). Instead of FORGING a ProfileLoadDialog
 /// (factory 0x14081ead0 with a synthetic capture + no live MenuWindow -> a NON-LIVE dialog the
@@ -96,22 +98,6 @@ pub(crate) fn title_menu_resource_observer_enabled() -> bool {
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.
 pub(crate) fn auto_confirm_enabled() -> bool {
-    false
-}
-/// Whether STAGE 1d should SELF-FIRE the TitleTopDialog open-menu registrar (0x1409b24e0).
-/// DEFAULT OFF (file-gated): with the connection-error modal now handled (clean headless boot),
-/// the NATURAL Continue/Load main menu builds from SetState(2)=BeginLogo, and force-firing the
-/// TitleTopDialog registrar opens a COMPETING dialog that prevents the natural menu's Load-Game
-/// item d180 from ticking through the capture hooks. Off => let the natural menu surface d180.
-pub(crate) fn own_stepper_selffire_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_SUBMIT_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn submit_play_game_enabled() -> bool {
-    false
-}
-// ENV-GATE RATIONALE: ER_EFFECTS_INGAMEINIT_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn ingameinit_drive_enabled() -> bool {
     false
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_CONTINUE_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.

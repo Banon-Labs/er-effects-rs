@@ -120,15 +120,21 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         );
         // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
         // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
-        if profiler_enabled() {
+        if er_boot_profiler::profiler_enabled() {
             append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
         }
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
                 let _gt = GameTaskTimer(std::time::Instant::now());
+                // Free-running, lock-free liveness beat. `EffectsState::game_task_ticks` counts the
+                // same thing but only a telemetry write this task performs can publish it, so it
+                // cannot answer "is this task still running" for anyone else. Any thread can read
+                // this one, which is what lets the boot picker record whether the game was alive
+                // across a dialog that blocked for half a minute.
+                er_telemetry::counters::GAME_TASK_TICKS_TOTAL.fetch_add(1, Ordering::SeqCst);
                 // Boot-phase marker: first frame our recurring task actually ticks.
-                if profiler_enabled()
+                if er_boot_profiler::profiler_enabled()
                     && BOOT_FIRST_FRAME_LOGGED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == 0
@@ -171,6 +177,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
+                    if let Ok(base) = game_module_base() {
+                        unsafe { profile_editor_necromancy_tick(base) };
+                    }
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -192,13 +201,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            // The missing-save picker cannot set a config slot; instead its
-                            // character sub-picker records the chosen slot here. Configured slots
-                            // still win via `state.autoload.slot()`.
-                            state
-                                .autoload
-                                .slot()
-                                .or_else(missing_save_picker_selected_slot)
+                            // DELIBERATE BEHAVIOR CHANGE (bd er-effects-rs-91zb; IMPLEMENTED BUT
+                            // UNPROVEN -- no live run has exercised it). The missing-save picker
+                            // cannot set a config slot; its character sub-picker records the chosen
+                            // slot here. This used to be `autoload.slot().or_else(picker)` --
+                            // "configured slots still win" -- while the OTHER resolver for the same
+                            // question, `continue_load::slot_resolution::native_fullread_slot`,
+                            // puts the picker FIRST. Two resolvers disagreeing about which slot the
+                            // user meant is how a portrait ends up targeting one character while
+                            // another loads. Resolved in the picker's favour on both sides: a
+                            // user's explicit on-screen pick outranks a config default, which is a
+                            // stale preference by comparison.
+                            missing_save_picker_selected_slot()
+                                .or_else(|| state.autoload.slot())
                         };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
@@ -288,19 +303,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // Corrected play-game submit: on the live FE-host at state 10,
-                    // SetState(5) with a packed map (not raw state/slot like the old
-                    // force_play_game) so the existing pump builds CSFeMan + loads.
-                    if submit_play_game_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe {
-                                submit_play_game_once(base, slot, state.game_task_ticks, task_data)
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
                     // Per-frame native arm: re-set the slot each frame + latch so
                     // the save-mgr update can arm before the title resets the slot.
                     if native_arm_loop_enabled() {
@@ -321,29 +323,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // Recipe B (flagless): drive the outer IngameInit once + pump
-                    // the InGameStep. Self-contained -- skips the other autoload
-                    // branches to avoid double-submit. Needs the live FD4TaskData.
-                    if ingameinit_drive_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe {
-                                ingameinit_drive_tick(base, slot, state.game_task_ticks, task_data)
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
-                    // Direct-drive the orphaned InGameStep load once force_play_game
-                    // has reached GameStepWait (run 305: hooking the step pump froze
-                    // the title, so we call its Execute directly with the live ctx).
-                    if ingamestep_pump_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe { ingamestep_pump_tick(base, task_data) };
-                        }
-                    }
                     write_telemetry_throttled(&mut state, false);
                     return;
                 };
@@ -359,16 +340,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // that distinguished a playable load from a frozen one (the render/draw_group oracles read
                 // FALSE even for a visibly-rendered, controllable load). Frozen loads never accumulate.
                 // Game-thread only, so driving input here is safe.
-                // Run the move-probe whenever in-world EXCEPT during active MENU-NAV (OPEN_MENU..CONFIRM),
-                // where an injected forward stick would move the menu cursor. WAIT_WORLD(0) / WAIT_RELOAD(7)
-                // / DONE(6) are in-world settle states -- the probe MUST run there (that is where load1 and
-                // each reload prove movement). NB: sq_repro_actively_driving() returns TRUE for WAIT_WORLD
-                // (it blocks during boot), which wrongly skipped load1's proof -- so gate on the STATE range
-                // directly, not that.
-                let sq_menu_nav = system_quit_repro_enabled() && {
-                    let st = SQ_REPRO_STATE.load(Ordering::SeqCst);
-                    (SQ_REPRO_STATE_OPEN_MENU..=SQ_REPRO_STATE_CONFIRM).contains(&st)
-                };
+                // The old OPEN_MENU..CONFIRM menu-nav exclusion is GONE: those autopilot states no longer
+                // exist. `system_quit_repro_tick` now runs WAIT_WORLD -> WAIT_RELOAD -> DONE only, and all
+                // three are in-world settle states where the probe MUST run (that is where load1 and each
+                // reload prove movement). Nothing injects a menu cursor any more, so there is nothing to
+                // exclude.
                 // Only inject once the char is actually RENDERED in-world (render_group 1c4 + enable_render
                 // 1c5), NOT merely present. `player present` goes true mid-load (mms=13, ~14s before
                 // render_group), and injecting there latched an invalid DISPROVEN before the char could be
@@ -378,7 +354,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // means the char genuinely did not move, not that we injected before the world was up.
                 let char_rendered = player.chr_ins.chr_flags1c4.is_render_group_enabled()
                     && player.chr_ins.chr_flags1c5.enable_render();
-                if !sq_menu_nav && char_rendered {
+                if char_rendered {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }
@@ -389,7 +365,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // world resident @ step 18 + mtime change), so an every-frame call is cheap and safe.
                 poll_cached_mms18_ending_request_advancer();
                 if let Ok(base) = game_module_base() {
-                    unsafe { poll_switch_slot_control_file(base) };
+                    unsafe {
+                        profile_editor_necromancy_tick(base);
+                        poll_switch_slot_control_file(base);
+                    }
                 }
                 // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,
                 // refined by repeatable-multi-save-consolidated-plan-2026-07-18).

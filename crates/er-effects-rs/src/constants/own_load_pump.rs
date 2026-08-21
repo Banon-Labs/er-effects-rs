@@ -24,14 +24,11 @@ pub(crate) const MENUJOB_RESULT_SUBCODE_4_OFFSET: usize = 0x4;
 pub(crate) const MENUJOB_STATE_CONTINUE: i32 = 1;
 pub(crate) const MENUJOB_STATE_SUCCESS: i32 = 2;
 pub(crate) const MENUJOB_STATE_FAILED: i32 = 3;
-/// `FD4::FD4Time` size (dump `/FD4/FD4Time` len 16): `+0x0 vtable ptr`, `+0x8 f32 time` (the frame
-/// delta the map-stream sub-job advances on). Run only READS `time+8`. Pass a 16-byte buffer with the
-/// f32 frame delta at +8 (a zeroed buffer => delta 0.0 is valid; the deser self-builds regardless).
-pub(crate) const FD4_TIME_SIZE: usize = 0x10;
-pub(crate) const FD4_TIME_DELTA_8_OFFSET: usize = 0x8;
+pub(crate) use er_title_flow::FD4_TIME_SIZE;
+pub(crate) use er_title_flow::FD4_TIME_DELTA_8_OFFSET;
 /// GameDataMan singleton global (.data abs `0x143d5df38`, == `CONTINUE_MANAGER_GLOBAL_RVA` deref base).
 /// `GetMenuSystemSaveLoad() = GLOBAL_GameDataMan->menuSystemSaveLoad`, i.e. `mss = *(*(base+RVA)+0x60)`.
-pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 /// `GameDataMan->menuSystemSaveLoad` field offset (`mss = *(GameDataMan + 0x60)`).
 pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
 /// LoadGame build factory REAL ctx args (golden Continue trace): `ctx_parent = mss + 0x50`,
@@ -48,109 +45,33 @@ pub(crate) const MSS_OWNER_CTX_A38_OFFSET: usize = 0xa38;
 /// ctor -> valid at the settled press-any-button title, unlike `mss+0xa38` which read back garbage).
 /// bd `loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22`.
 pub(crate) const DIALOG_CTX_PARENT_50_OFFSET: usize = 0x50;
-pub(crate) const DIALOG_OWNER_CTX_A38_OFFSET: usize = 0xa38;
-/// CS::TitleFlowContext dispatch-state field (`tfc = *(TitleTopDialog+0xa38)`; `tfc+0x14c`). The
-/// live user-driven Continue capture (bd LIVE-continue-chain-via-selector-NOT-confirm-handler) showed
-/// the load runs through the selector `0x1409a8eb0` which reads this field and dispatches to the load
-/// dispatcher `0x1409b3070` (0=idle, 1=load, 3/5=busy). Setting it to 1 at the settled main menu is
-/// the candidate DIRECT "Continue pressed" trigger (no input) -- the exact bit we change.
-pub(crate) const TFC_DISPATCH_STATE_14C_OFFSET: usize = 0x14c;
-pub(crate) const TFC_DISPATCH_STATE_LOAD: i32 = 1;
-/// CS::TitleFlowContext `notReleaseFlag55` byte at `tfc+0x18c`. The load dispatcher `0x1409b3070`
-/// gates its BUILD-the-LoadGame-job branch on `IsNotReleaseFlag55` (`0x14082cd60`: `cmpb $0,0x18c(rcx)`
-/// -> returns 1 iff the byte is 0); the dispatcher takes the LOAD branch ONLY when that returns
-/// nonzero, i.e. when `*(u8*)(tfc+0x18c)==0`. The open-menu path sets this nonzero AFTER press-any-
-/// button, so a Continue trigger fired post-menu-open lands on the ABORT branch (empty job, no load).
-/// Force this to 0 before invoking the selector to guarantee the real LoadGame build. bd
-/// dispatcher-abort-branch-force-tfc-18c-zero-2026-06-23.
-pub(crate) const TFC_NOT_RELEASE_FLAG_18C_OFFSET: usize = 0x18c;
-pub(crate) const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
-/// CS::TitleTopDialog Continue-item SELECTOR `0x1409a8eb0` -- the menu-item-action funclet that the
-/// engine invokes on Continue confirm (it is NOT pumped from the idle menu; setting tfc+0x14c alone
-/// is dormant -- bd tfc-bit-dormant-even-at-open-menu). ABI `__fastcall(rcx = &dialog_slot, rdx = out
-/// MenuJobResult*)`: it does `rcx=*(rcx)` (dialog), `*(dialog+0xa38)`=tfc, reads `*(tfc+0x14c)`; when
-/// that == 1 (TFC_DISPATCH_STATE_LOAD) it takes the LOAD branch -- `r8=dialog+0x50`, calls the load
-/// dispatcher `0x1409b3070` (the PROPER CS::MenuJob::ChainMenuJobs enqueue, no FixOrderJobSequence
-/// overflow), and wraps the built job into rdx. Pass rcx = owner+0xe0 (its [0] is the live dialog).
-/// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
-/// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
-pub(crate) const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
-/// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
-/// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
-/// iterates the active-screen array `0x143d6d8d0` that holds the live `owner+0xe0` dialog). The
-/// selector/dispatcher only BUILD + return the job; we PushBackJob it here so it is pumped to
-/// completion. bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
-pub(crate) const DIALOG_MENU_QUEUE_10_OFFSET: usize = 0x10;
-/// Menu-pump KICK pointer: `*(base+0x3b37c98)` holds `0x1409b3ff0` (a `jmp` thunk into the obfuscated
-/// per-frame pump trigger). The native posts a MenuJob then calls this zero-arg to drain it promptly;
-/// we replicate that after PushBackJob. RVA = abs - base; the stored value is an ABSOLUTE code ptr.
-pub(crate) const MENU_PUMP_KICK_PTR_RVA: usize = 0x3b37c98;
-/// MenuJobQueue per-frame DRAIN wrapper (deobf `0x1407a90f0`; dump `FUN_1407a91e0`). The zero-input,
-/// input-free way to pump a job we PushBackJob'd -- this is what the native front-end `Update` /
-/// `STEP_MenuJobWait` call each frame (NOT the Arxan kick, which is a Scaleform render refresh needing
-/// render-thread r8). `__fastcall(rcx = queue_owner /*the dialog: +0x8 active MenuJob* slot, +0x10 the
-/// MenuJobQueue we push into, +0x38 pending*/, rdx = *FD4Time {vtbl; f32 delta@+0x8})`: if the active
-/// slot is empty and a job is pending it pops (`0x1407a8780`) + Assigns (`0x1407a9460`) the queued job
-/// into the active slot, then runs `ExecuteMenuJob` (deobf `0x1407a9600`: `cur->vtable[2](cur,&result,
-/// &FD4Time)`). Call it each frame with rcx=dialog to drive our posted LoadGame job to completion.
-/// Grounded by prologue on eldenring-deobf.bin (dump->deobf shift ~-0xf0 here, anchored on PushBackJob
-/// dump 0x1407a9340 == deobf 0x1407a9250). bd continue-load-drain-via-executemenujob-not-kick-2026-06-23.
-pub(crate) const MENU_DRAIN_WRAPPER_RVA: usize = 0x7a90f0;
-/// `ExecuteMenuJob` (deobf `0x1407a9600`; dump `0x1407a96f0`). `__fastcall(rcx = *MenuJob* (slot),
-/// rdx = *FD4Time {vtbl; f32 delta@+0x8})`: `cur=*rcx; if(!cur) return; AtomicIncrement(cur+8);
-/// cur->vtable[+0x10](cur, &result, &{FD4Time vtbl, delta}); if(!MenuJobResult::ShouldContinue)
-/// *rcx=0; AtomicDecrement`. We call this directly on OUR built job each frame (rcx=&job_slot) to
-/// pump it via its OWN vtable[2] -- correct for the dispatcher's chained LoadGame job, and it avoids
-/// the dialog's `+0x8` slot (which is NOT a MenuJob and AV'd the queue-drain wrapper). Grounded by
-/// prologue on eldenring-deobf.bin (the `vtable[2]` call site `0x1407a968b call *0x10(rax)`).
-pub(crate) const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
-/// CS::MenuManImp singleton global (`*(base+0x3d6b7b0)` = CSMenuManImp*). Verified: HasTopMenuJob
-/// 0x14080d960 does `mov rax,[0x143d6b7b0]; mov rcx,0x80(rax)` (popupMenu) then reads +0xB0. (Same
-/// singleton whose +0x90 is the menu input bitmap.) bd menu-job-install-mechanism-2026-06-23.
-pub(crate) const GLOBAL_CSMENUMAN_RVA: usize = 0x3d6b7b0;
+pub(crate) use er_title_flow::DIALOG_OWNER_CTX_A38_OFFSET;
+pub(crate) use er_title_flow::TFC_DISPATCH_STATE_14C_OFFSET;
+pub(crate) use er_title_flow::TFC_DISPATCH_STATE_LOAD;
+pub(crate) use er_title_flow::TFC_NOT_RELEASE_FLAG_18C_OFFSET;
+pub(crate) use er_title_flow::TFC_NOT_RELEASE_FLAG_CLEAR;
+pub(crate) use er_title_flow::TITLE_CONTINUE_SELECTOR_RVA;
+pub(crate) use er_title_flow::DIALOG_MENU_QUEUE_10_OFFSET;
+pub(crate) use er_title_flow::MENU_PUMP_KICK_PTR_RVA;
+pub(crate) use er_title_flow::MENU_DRAIN_WRAPPER_RVA;
+pub(crate) use er_title_flow::EXECUTE_MENU_JOB_RVA;
+pub(crate) use er_title_flow::GLOBAL_CSMENUMAN_RVA;
 /// CSMenuManImp -> menuData* at +0x8. Return-title final functor writes `menuData+0x5d = 1`.
 pub(crate) const CSMENUMAN_MENU_DATA_08_OFFSET: usize = 0x8;
 /// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
 pub(crate) const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
 /// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
 pub(crate) const RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA: usize = 0x3d6c5e8;
-/// CSMenuManImp -> CSPopupMenu* at +0x80.
-pub(crate) const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
-/// CSPopupMenu -> `currentTopMenuJob` (MenuJob*) at +0xB0 -- the single top-job slot the per-frame
-/// menu pump drains (no cap). Install our built LoadGame job here so the native pump runs its Run
-/// IN CONTEXT (vs our menu-jumping self-pump).
-pub(crate) const CSPOPUP_TOP_JOB_B0_OFFSET: usize = 0xB0;
-/// `CS::MenuJob::Assign(rcx = dest MenuJob**, rdx = out MenuJob**, r8 = src MenuJob**)` (deobf
-/// 0x1407a9460 -- verified prologue: homes r8/rdx, `rbx=*dest`; if `*dest != *src` AtomicDecrements
-/// the old occupant (0x141eba200) + dtors if last, then installs `*dest=*src` + AtomicIncrement).
-/// Refcount-correct slot replace -- use to install our job into currentTopMenuJob without leaking the
-/// displaced title-FSM job. NOTE: distinct from MENUJOB_ASSIGN_RVA (0x7a9560, a 2-arg move-assign).
-pub(crate) const MENU_JOB_ASSIGN3_RVA: usize = 0x7a9460;
-/// CS::MenuJob (DLReferenceCountObject) refcount field at +0x8 (vfptr at +0x0).
-pub(crate) const MENU_JOB_REFCOUNT_8_OFFSET: usize = 0x8;
-/// CS::TitleTopDialog embedded MenuWindowJob `DLFixedVector<MenuJob*,8>` at `dialog+0x50` -- the push
-/// target our built load job's `CS::MenuWindowJob::Run` (`0x1407ad53b call 0x140733ef0`) inserts its
-/// window into. Pinned via the push-site sw-bp diagnostic (rcx=`dialog+0x50`). Cap-8 and already FULL
-/// with the dialog's windows, so the load window's push #9 overflows ("out of memory"
-/// DLFixedVector.inl:662). Reset its count to make room. bd OVERFLOW-VECTOR-PINNED-dialog-plus-0x50.
-pub(crate) const DIALOG_MENUWINDOW_VEC_50_OFFSET: usize = 0x50;
-/// DLFixedVector element-count field at +0x48 (the push reads/increments `[vector+0x48]`, panics >8).
-/// The dialog+0x50 vector's count is thus at `dialog+0x50+0x48 = dialog+0x98`.
-pub(crate) const DLFIXEDVECTOR_COUNT_48_OFFSET: usize = 0x48;
-/// CSMenuSystemSaveLoad save-slot field (`mss+0x1200`). The native confirm handler `0x1409a9250`
-/// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
-/// Replicate that write so the direct trigger loads the intended slot.
-pub(crate) const MSS_SAVE_SLOT_1200_OFFSET: usize = 0x1200;
-/// GameMan/GameDataMan singleton global read by `GetSaveSlot` (`*(0x143d69918)`, slot at `+0xac0`):
-/// the "rest of GameMan is set up" readiness signal the user observed after press-any-button. The
-/// direct continue trigger only fires once this is non-null. RVA = abs - base.
-pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
-/// Plausible-pointer bounds for validating `owner_ctx = *(mss+0xa38)`: at `title_boot_ready` the
-/// TitleFlowContext is often uninitialized (reads as 0x8080808080808080 -- non-null garbage), so a
-/// `!= 0` check is insufficient. A real wine-heap pointer sits roughly in `0x1_0000 .. 0x8000_0000_0000`
-/// (the golden value was 0x7fff..); anything outside is treated as "not built yet" -> pass NULL.
-pub(crate) const OWNER_CTX_MIN_PLAUSIBLE_PTR: usize = 0x1_0000;
-pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
+pub(crate) use er_title_flow::CSMENUMAN_POPUP_80_OFFSET;
+pub(crate) use er_title_flow::CSPOPUP_TOP_JOB_B0_OFFSET;
+pub(crate) use er_title_flow::MENU_JOB_ASSIGN3_RVA;
+pub(crate) use er_title_flow::MENU_JOB_REFCOUNT_8_OFFSET;
+pub(crate) use er_title_flow::DIALOG_MENUWINDOW_VEC_50_OFFSET;
+pub(crate) use er_title_flow::DLFIXEDVECTOR_COUNT_48_OFFSET;
+pub(crate) use er_title_flow::MSS_SAVE_SLOT_1200_OFFSET;
+pub(crate) use er_title_flow::GAME_SAVE_SLOT_SINGLETON_RVA;
+pub(crate) use er_title_flow::OWNER_CTX_MIN_PLAUSIBLE_PTR;
+pub(crate) use er_title_flow::OWNER_CTX_MAX_PLAUSIBLE_PTR;
 /// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
 /// checks this for null before comparing `TitleFlowContext+0x148` against manager `+0x44`.
 pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
@@ -163,22 +84,10 @@ pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
 pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED;
 pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS;
 
-pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
-pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
+pub(crate) use er_title_flow::OWN_STEPPER_LOG_INTERVAL;
+pub(crate) use er_title_flow::OWN_STEPPER_CALL_INC;
 
-#[repr(usize)]
-pub(crate) enum OwnStepperPhase {
-    Menu,
-    Continue,
-    Done,
-    Mount,
-    Drive,
-    MenuBuild,
-    S2Invoke,
-    S2Activate,
-    S2MountPoll,
-    S2Confirm,
-}
+pub(crate) use er_title_flow::OwnStepperPhase;
 
 /// Own-stepper phase progress is semantic. These values are wall-clock fail-safe caps only:
 /// they abort to a no-write state if a native predicate never arrives, and must never be used as
@@ -190,10 +99,9 @@ pub(crate) const OWN_STEPPER_S2_PHASE_TIMEOUT_MS: u64 = 20_000;
 pub(crate) const OWN_STEPPER_IDX6_SETTLE_TICKS: u64 = 120;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL_TICKS: usize = 120;
 
-/// Driver phases for the in-context idx10 handler.
-pub(crate) const OWN_STEPPER_PHASE_MENU: usize = OwnStepperPhase::Menu as usize;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_MENU;
 pub(crate) const OWN_STEPPER_PHASE_CONTINUE: usize = OwnStepperPhase::Continue as usize;
-pub(crate) const OWN_STEPPER_PHASE_DONE: usize = OwnStepperPhase::Done as usize;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE_DONE;
 /// PHASE 3 (MOUNT): mount the slot at state 10 BEFORE SetState(5) -- the only place the
 /// MoveMapStep dispatcher (which resets b80 via its b80==1 lane) is NOT running, so our
 /// own b80 poll can drive the save-IO machine 1->2->3 cleanly (minimal-save-mount-
@@ -385,14 +293,10 @@ pub(crate) const OWN_STEPPER_B80_PREVIEW_LANE: i32 = OwnStepperB80State::Preview
 pub(crate) const OWN_STEPPER_B80_IDLE: i32 = OwnStepperB80State::Idle as i32;
 /// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
 pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = OWN_STEPPER_IDX6_SETTLE_TICKS;
-pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = !OWN_STEPPER_SLOT_ZERO;
-/// Lowest valid save-slot index (used to bounds-check the dialog cursor in STAGE 2).
-pub(crate) const OWN_STEPPER_SLOT_ZERO: i32 = false as i32;
-/// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
-/// own most-recent selection).
-pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
-    std::sync::atomic::AtomicI32::new(OWN_STEPPER_SLOT_NONE);
-pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
+pub(crate) use er_title_flow::OWN_STEPPER_SLOT_NONE;
+pub(crate) use er_title_flow::OWN_STEPPER_SLOT_ZERO;
+pub(crate) use er_title_flow::OWN_STEPPER_SLOT;
+pub(crate) use er_title_flow::OWN_STEPPER_PHASE;
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
 /// 2026-06-18 DIRECT BUILD: persistent buffers for building a ProfileLoadDialog directly via

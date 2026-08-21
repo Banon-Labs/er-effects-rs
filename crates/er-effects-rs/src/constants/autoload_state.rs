@@ -15,28 +15,8 @@
 /// pump drives (the live-dialog MenuWindow wall was a forcing artifact -- this de-risks step 4).
 pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize =
     ProfileLoadMenuRva::MenuMemberFuncJobRun as usize;
-/// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
-/// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
-/// (Mirrors the local MEMBERFUNCJOB_VTABLE_RVA in scan_dialog_for_loadgame.)
-pub(crate) const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
-/// TitleTopDialog row registry [dialog+0xa48] (the FD4 delegate registry the registrar populates).
-/// Used as the live-menu readiness signal: populated == the menu rows are registered + rendered.
-pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
-    core::mem::offset_of!(TitleTopDialogLayout, row_registry);
-/// NATIVE-LOAD fire latch states (one-shot: fire the Load-Game run exactly once).
-pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
-pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
-pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
-pub(crate) static NATIVE_LOAD_LAST_NODE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_NODE_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_FN: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static NATIVE_LOAD_LAST_MEMBER_ADJUST: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) use er_title_flow::MEMBERFUNCJOB_VTABLE_RVA;
+pub(crate) use er_title_flow::DIALOG_ROW_REGISTRY_A48_OFFSET;
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).
@@ -49,17 +29,10 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// recipe for the full-read chain.)
 pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
-/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
-/// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
-/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
-/// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
-/// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
-pub(crate) const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
+pub(crate) use er_title_flow::GAME_MAN_SAVE_STATE_IDLE;
 pub(crate) const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
 pub(crate) const GAME_MAN_SAVE_STATE_READING: i32 = 2;
-/// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
-/// phase ticks the lane + poll each frame until b80 reaches this.
-pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;
+pub(crate) use er_title_flow::FULLREAD_B80_RESIDENT;
 /// GameMan+0xc30 m10 new-game default (golden-oracle-baseline). c30 == this == FAILURE (the char did
 /// NOT deserialize). The step-6 guard requires c30 != this before the (gated) continue_confirm.
 pub(crate) const FULLREAD_C30_M10_DEFAULT: i32 = 0xa010000;
@@ -82,14 +55,12 @@ pub(crate) const FULLREAD_OWNER_NEW_GAME_OK: u8 = 0;
 /// owner = *(game_data_man_ptr_or_null() + this offset) -- the GameDataMan+0x8 chain the
 /// continue_confirm shim owner is read from (recipe step 7: owner = *(base+0x3d5df38+8)).
 pub(crate) const FULLREAD_OWNER_GDM_08_OFFSET: usize = 0x08;
-/// Full-read chain phase machine states (one step per frame).
-pub(crate) const FULLREAD_PHASE_SUBMIT: usize = 0;
+pub(crate) use er_title_flow::FULLREAD_PHASE_SUBMIT;
 pub(crate) const FULLREAD_PHASE_DRAIN: usize = 1;
 pub(crate) const FULLREAD_PHASE_DESER: usize = 2;
-pub(crate) const FULLREAD_PHASE_GUARD: usize = 3;
+pub(crate) use er_title_flow::FULLREAD_PHASE_GUARD;
 pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
-/// Live phase + drain-wait counters for the full-read chain (one-shot per run).
-pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
+pub(crate) use er_title_flow::FULLREAD_PHASE;
 pub(crate) use er_telemetry::counters::FULLREAD_DRAIN_WAITS;
 /// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms
 /// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
@@ -112,47 +83,18 @@ pub(crate) use er_telemetry::counters::LOADED_PEAK_LEVEL;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_C30;
 pub(crate) use er_telemetry::counters::LOADED_PEAK_NAME_LEN;
 pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
-/// The native full-read chain shares the semantic `title_menu_action_ready` menu readiness gate;
-/// it no longer latches a first-seen frame before starting the save-read phase machine.
-/// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior
-/// hand-decoded offset).
-pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize =
-    core::mem::offset_of!(GameMan, save_requested);
+pub(crate) use er_title_flow::GAME_MAN_ARM_FLAG_B72_OFFSET;
 
-#[repr(C)]
-pub(crate) struct GameManAutoloadFlagCluster {
-    pub(crate) save_requested: u8,
-    pub(crate) probe_b73: u8,
-    pub(crate) probe_b74: u8,
-    pub(crate) probe_b75: u8,
-}
+pub(crate) use er_title_flow::GameManAutoloadFlagCluster;
 
-pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize =
-    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b73);
-pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize =
-    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
-/// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
-pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
-    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
-pub(crate) const GAME_MAN_FLAG_BC4_OFFSET: usize =
-    core::mem::offset_of!(GameMan, is_in_online_mode) - core::mem::size_of::<u32>();
-/// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
-/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 ONLY if the async submit
-/// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails FALSE if the IO device
-/// has a STALE request in-flight ([iodev+0x10]!=0) or a stale request handle
-/// ([iodev+0x20]!=0). The IO device global is abs 0x144589390 (RVA 0x4589390); we read
-/// it both as a possible pointer-to-device and as a struct base so the log
-/// disambiguates. Also: the b72 effective-getter 0x1406793d0 zeroes b72 if
-/// [GameMan+0xbc4]==3 or [inputmgr+0x13c]!=0, so log those too.
-pub(crate) const IODEV_GLOBAL_RVA: usize = 0x4589390;
-pub(crate) const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
-/// The async-IO request handle the poll 0x140e6e080 actually reads is the PAIR
-/// [iodev+0x18] && [iodev+0x20] (a *started* request). 0x14067b4e0's preview read
-/// (0x140e6ec80) is what populates these; 0x14067b200's queue (0x140e6eb80) goes to
-/// the file-device-mgr instead, so it never appears here. Logging both pins which
-/// initiator actually started the iodev read (menu-b80-mount-orchestration-sequence).
-pub(crate) const IODEV_REQHANDLE_18_OFFSET: usize = 0x18;
-pub(crate) const IODEV_REQHANDLE_20_OFFSET: usize = 0x20;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_B73_PROBE_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_B75_PROBE_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_REQUESTED_SLOT_B78_OFFSET;
+pub(crate) use er_title_flow::GAME_MAN_FLAG_BC4_OFFSET;
+pub(crate) use er_title_flow::IODEV_GLOBAL_RVA;
+pub(crate) use er_title_flow::IODEV_INFLIGHT_10_OFFSET;
+pub(crate) use er_title_flow::IODEV_REQHANDLE_18_OFFSET;
+pub(crate) use er_title_flow::IODEV_REQHANDLE_20_OFFSET;
 /// The save-DEVICE MOUNT/OPEN routine 0x140e6e8d0(rcx=iodev): the title->Continue boot
 /// (single native call site 0x140defec2) runs it to BIND the .sl2 file to the IO device.
 /// It opens the OS handle (via 0x140e45660), registers the save paths, then writes the
@@ -225,7 +167,15 @@ pub(crate) const IO_WORKER_REGISTRY_COUNT_18_OFFSET: usize = 0x18;
 /// status 0xe, b80 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
 /// byte) @0x14240e472. Prime suspect for the read-completes-empty wall (b80-DEVICE-MOUNT-
 /// REFUTED-...).
-pub(crate) const FD4_IO_WORKER_MGR_RVA: usize = 0x4852f88;
+/// CORRECTION (2026-08-01): this is `SaveLoad2::SLSystemImpl*`, NOT an FD4 IO worker
+/// manager -- its lazy initializer `FUN_14240dee0` opens with
+/// `*param_1 = SaveLoad2::SLSystemImpl::vftable`. The name is kept for its call sites.
+///
+/// UNRESOLVED, and it matters: the doc above reads `+0x19` as "the worker no-accept/
+/// shutdown byte", while `experiments/own_stepper/bootstrap_drive.rs` reads the SAME field
+/// on the SAME object as "sysimpl built+ready (`sysimpl+0x19 != 0`)". Those are opposite
+/// polarities. Tracked in bd; do not build new logic on either reading until it is settled.
+pub(crate) const FD4_IO_WORKER_MGR_RVA: usize = RuntimeGlobalRva::SaveLoad2SlSystemImpl as usize;
 pub(crate) const FD4_IO_WORKER_NOACCEPT_19_OFFSET: usize = 0x19;
 /// The worker's job QUEUE fields the normal (non-discard) enqueue pushes to: 0x14240e420
 /// pushes onto [worker+0x8] (via 0x14240c060) and [worker+0x10] (via 0x14240f2c0). Reading
@@ -241,42 +191,19 @@ pub(crate) const FD4_IO_POOL_RVA: usize = 0x4853048;
 /// IO context). Empty when [[registry+0x28]] == [registry+0x28].
 pub(crate) const IO_WORKER_REGISTRY_LIST_28_OFFSET: usize = 0x28;
 pub(crate) const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
-pub(crate) const ARM_PROBE_MIN_TICK: u64 = 60;
-pub(crate) const ARM_PROBE_TICK_INTERVAL: u64 = 30;
-/// Lever 2 (zero-input title-accept via input-event injection). Inner TitleStep
-/// state is at owner+0x4c (==10 MenuJobWait); the press-any-button job is at
-/// owner+0x130; its vtable[+0x18] fills a descriptor whose first i32 indexes the
-/// event table 0x143d6a860 (stride 0x60); eventId=[entry+4], value=[entry+8];
-/// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
-/// Injecting that event makes the game's own node update accept and run the real
-/// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
-/// The press-any-button job (owner+0x130) is an AND-combiner (vtable RVA
-/// 0x2aa2958) over child condition nodes at [job+0x18 + i*8], count [job+0x60].
-/// The real input node is the child with vtable RVA 0x2aa97e8; its keycode is at
-/// child+0x180. Accept = set the inputmgr keystate bitmap (inputmgr+0x90+keycode
-/// |= 3 pressed+triggered) so the leaf returns accepted and the combiner ANDs to
-/// done -> MenuJobWait advances 10->11 and the front-end bootstraps.
-/// Logical input-event array on the inputmgr (inputmgr+0xdc, i32 per event id,
-/// ids 0..=0x15e). The leaf input node detects a press via this layer (then
-/// mirrors into the keystate bitmap), so injecting here is what actually accepts.
-pub(crate) const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
-/// Boot intro/movie singleton (ptr) and its decoder skip-flag byte. The latch
-/// 0x143d856a0 is set by the intro thread 0x140c8fe90 only after its movie-wait
-/// loop ends; the movie-dismiss gate 0x140e90820 finishes on decode-complete or
-/// when the skip-flag byte 0x14458b8a5 is non-zero (sole non-WNDPROC effect is the
-/// movie's own stop). Setting the skip-flag drives a genuine zero-input dismiss.
-pub(crate) const MOVIE_SINGLETON_RVA: usize = 0x458b890;
-pub(crate) const MOVIE_SKIP_FLAG_RVA: usize = 0x458b8a5;
-pub(crate) const MOVIE_SKIP_FLAG_CLEAR: u8 = 0;
-pub(crate) const MOVIE_SKIP_FLAG_SET: u8 = 1;
-/// Movie controller vtable RVA (0x142bfe088), HWND field offset (M+8), and the
-/// USER32 constants for mirroring the WNDPROC WM_CLOSE teardown.
-pub(crate) const MOVIE_VTABLE_RVA: usize = 0x2bfe088;
-pub(crate) const MOVIE_HWND_OFFSET: usize = 0x8;
-pub(crate) const WND_SC_CLOSE: u32 = 0xf060;
-pub(crate) const WND_MF_BYCOMMAND: u32 = 0;
-pub(crate) const WND_SW_HIDE: i32 = 0;
-pub(crate) const WND_GET_SYSTEM_MENU_KEEP: i32 = false as i32;
+pub(crate) use er_title_flow::ARM_PROBE_MIN_TICK;
+pub(crate) use er_title_flow::ARM_PROBE_TICK_INTERVAL;
+pub(crate) use er_title_flow::TITLE_ACCEPT_LATCH_RVA;
+pub(crate) use er_title_flow::MOVIE_SINGLETON_RVA;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_RVA;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_CLEAR;
+pub(crate) use er_title_flow::MOVIE_SKIP_FLAG_SET;
+pub(crate) use er_title_flow::MOVIE_VTABLE_RVA;
+pub(crate) use er_title_flow::MOVIE_HWND_OFFSET;
+pub(crate) use er_title_flow::WND_SC_CLOSE;
+pub(crate) use er_title_flow::WND_MF_BYCOMMAND;
+pub(crate) use er_title_flow::WND_SW_HIDE;
+pub(crate) use er_title_flow::WND_GET_SYSTEM_MENU_KEEP;
 /// Render-thread liveness probe logging cadence (in render frames).
 pub(crate) const RENDER_PROBE_INTERVAL: usize = 120;
 /// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
@@ -288,109 +215,110 @@ pub(crate) const SPLASH_SKIP_RVA: usize = 0xb0c35d;
 pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
-/// ONLINE-DISABLE (headless offline boot, no "Unable to start in online mode" modal).
-/// `GameMan::IsOnlineMode` getter 0x14067a030 = `mov rax,[rip+..]; movzx eax,[rax+0xbc8]; ret`
-/// (the canonical online/offline flag, default 1=online, read by ~22 consumers incl. the boot
-/// login flow). Patching the getter body to `xor eax,eax; ret` forces every consumer onto the
-/// game's own OFFLINE branch, so the boot never attempts online login and the connection-error
-/// modal is never raised. Single leaf accessor, no side effects -> equivalent to "Play Offline";
-/// no save/crash risk. Verified (self-disasm, online-disable RE 2026-06-17): first byte 0x48.
-pub(crate) const ONLINE_DISABLE_RVA: usize = 0x67a030;
-pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
-/// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
-/// bytes followed by the next function, so a 3-byte stub is self-contained).
-pub(crate) const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
-pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
-pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
+pub(crate) use er_title_flow::ONLINE_DISABLE_RVA;
+pub(crate) use er_title_flow::ONLINE_DISABLE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::ONLINE_DISABLE_STUB;
 // Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
 // CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
 // bootstrap.rs / profile_select_flow.rs.
-/// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
-/// creates its runnable ONLY if the sign-in check returns true AND the user index is <= 3; cold
-/// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
-/// both gate fns to pass so the cold menu-free path loads as if signed in as user 0. Addresses
-/// ground-truthed against the deobf/live binary (the Ghidra dump's FUN_1424129a0 / FUN_14240f480
-/// are shifted; live entries below). Scoped to the cold-mount attempt, not attach.
-/// `CS::..::IsSignedIn`-class check (dump FUN_1424129a0) -> always true.
-pub(crate) const SIGNIN_FORCE_RVA: usize = 0x24129b0;
-pub(crate) const SIGNIN_FORCE_EXPECTED_FIRST: u8 = 0x40;
-pub(crate) const SIGNIN_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3]; // mov al,1; ret
-/// User-index resolver (dump FUN_14240f480) -> return 0 (valid index, <= 3) instead of 0xffffffff.
-pub(crate) const USERINDEX_FORCE_RVA: usize = 0x240f490;
-pub(crate) const USERINDEX_FORCE_EXPECTED_FIRST: u8 = 0x4c;
-pub(crate) const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3]; // xor eax,eax; ret
-/// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
-/// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
-/// non-zero return makes it attempt online login, which FAILS offline -> the connection-error
-/// modal re-pops on every menu transition (the popup LOOP). Patching it to `xor eax,eax; ret`
-/// (return "not ready") makes the flow take the clean OFFLINE fork and NEVER attempt online.
-/// Same 3-byte stub; first byte 0x48 (verified disasm). Applied with the getter patch.
-pub(crate) const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcab230;
-/// MENU OFFLINE-NOTICE GATE -- the THIRD menu-open popup, root-caused 2026-06-23
-/// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE `er-effects-rs-yvf`).
-/// `Menu_IsEnableOnlineMode` (deobf 0x140e56310) is a lazy-init cached getter that DEFAULTS TRUE. The
-/// TitleTopDialog ctx-init step (0x14082d0d0) computes
-/// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter TRUE and the
-/// boot offline, `notReleaseFlag55 == 0` routes the title-flow offline step (0x14082fda0) into building the
-/// "Starting in offline mode" `GR_System_Message` (id 401170) `CS::MessageBoxDialog` -- which BLOCKS the
-/// Continue/Load/NewGame row build (the stage-3 / 0-node continue-readiness wall). Patching this getter to
-/// `xor eax,eax; ret` (return false) makes the game's OWN ctx-init set `notReleaseFlag55 = 1` every time it
-/// runs, so the offline step takes the clean no-popup branch and the menu rows build with ZERO MessageBoxDialog
-/// builds. Race-free (re-evaluated on each ctx-init, unlike a one-shot field poke). Applied with the
-/// IsOnlineMode getter patch (offline-gated -> Seamless online is unaffected). Verified prologue first byte 0x40
-/// (`push rbx`; deobf disasm). Reuses `ONLINE_DISABLE_STUB` (`xor eax,eax; ret`).
-pub(crate) const MENU_ONLINE_MODE_DISABLE_RVA: usize = 0xe56310;
-pub(crate) const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
-/// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
-/// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
-/// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0
-/// (`cmp [rcx+0x25e8],2; setge al; ret`, rcx=dialog) and, for the MessageBoxDialog vtable only,
-/// write the result fields (button=OK, state=decided) and return "finished" -- exactly as if OK
-/// were pressed. Scoped by vtable + pre-in-world so in-game dialogs + the load flow are untouched.
-/// Verified self-disasm (online-disable RE 2026-06-17 + local disasm).
-#[repr(usize)]
-pub(crate) enum MsgBoxRva {
-    ForceStop = 0x78dfd0,
-    FinishedGetter = 0x7b0cf0,
-    Builder = 0x9275b0,
-    OnDecide = 0x927ba0,
-    DialogVtable = 0x2b03550,
-}
+pub(crate) use er_title_flow::SIGNIN_FORCE_RVA;
+pub(crate) use er_title_flow::SIGNIN_FORCE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::SIGNIN_FORCE_STUB;
+pub(crate) use er_title_flow::USERINDEX_FORCE_RVA;
+pub(crate) use er_title_flow::USERINDEX_FORCE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::USERINDEX_FORCE_STUB;
+pub(crate) use er_title_flow::ONLINE_PREDICATE_DISABLE_RVA;
+pub(crate) use er_title_flow::MENU_ONLINE_MODE_DISABLE_RVA;
+pub(crate) use er_title_flow::MENU_ONLINE_MODE_EXPECTED_FIRST;
+pub(crate) use er_title_flow::MsgBoxRva;
 
-pub(crate) const MSGBOX_FINISHED_GETTER_RVA: u32 = MsgBoxRva::FinishedGetter as u32;
-pub(crate) const MSGBOX_DIALOG_VTABLE_RVA: usize = MsgBoxRva::DialogVtable as usize;
+/// `FUN_1407b0cf0` -- vtable slot 14 of every MessageBoxDialog-family vtable. Whole body is
+/// `return 1 < *(i32*)(this+0x25e8)`, i.e. "this box has MORE THAN ONE button" (a Yes/No
+/// confirm rather than a single-OK notice). It is NOT a finished/decided poll: `+0x25e8` is
+/// the BUTTON COUNT the ctor writes at construction (see `MSGBOX_BUTTON_COUNT_25E8_OFFSET`).
+/// The old name (`MSGBOX_FINISHED_GETTER_RVA`) was wrong and is what made the save-flow poll
+/// resolve a freshly built two-button confirm on its first frame (2026-07-28).
+pub(crate) const MSGBOX_MULTI_CHOICE_GETTER_RVA: u32 = MsgBoxRva::MultiChoiceGetter as u32;
+pub(crate) use er_title_flow::MSGBOX_DIALOG_VTABLE_RVA;
+/// `CS::MessageBoxDialog::Update` (`FUN_140927d30`), vtable slot 2. STRUCTURAL IDENTITY: all
+/// five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry this exact function in
+/// slot 2 -- base `CS::MessageBoxDialog` (rva 0x2b03550), `CS::SaveRetryDialog` (0x2aaabf8),
+/// and the subclasses at 0x2ae5ae0 / 0x2b06780 / 0x2b220d0 (byte-read from the deobf image
+/// 2026-07-28). Comparing `vtable[2]` therefore recognises EVERY legitimate subclass -- and a
+/// wrapper that swaps the vtable after the builder runs -- while still rejecting a freed or
+/// reused object, which a single hard-coded vtable equality cannot do.
+pub(crate) const MSGBOX_DIALOG_UPDATE_RVA: usize = MsgBoxRva::Update as usize;
+/// Index of the `Update` entry in a MessageBoxDialog vtable (slot 2 == byte offset 0x10).
+pub(crate) const MSGBOX_DIALOG_VTABLE_UPDATE_SLOT: usize = 2;
 
-#[repr(C)]
-pub(crate) struct MsgBoxDialogLayout {
-    pub(crate) unknown_000: [u8; 0x3b0],
-    pub(crate) closing_latch: u8,
-    pub(crate) unknown_3b1: [u8; 0x180f],
-    pub(crate) confirm_latch: u8,
-    pub(crate) unknown_1bc1: [u8; 0xa1f],
-    pub(crate) result_button: i32,
-    pub(crate) unknown_25e4: [u8; 0x04],
-    pub(crate) state: i32,
-}
+pub(crate) use er_title_flow::MsgBoxDialogLayout;
 
-pub(crate) const MSGBOX_RESULT_BUTTON_25E0_OFFSET: usize =
-    core::mem::offset_of!(MsgBoxDialogLayout, result_button);
-pub(crate) const MSGBOX_STATE_25E8_OFFSET: usize = core::mem::offset_of!(MsgBoxDialogLayout, state);
-/// Affirmative/OK button index (the consumer treats -1 as "none yet").
-pub(crate) const MSGBOX_OK_BUTTON: i32 = false as i32;
-/// Dialog state >= 2 satisfies the finished-poll.
-#[repr(i32)]
-pub(crate) enum MsgBoxState {
-    Decided = 2,
-}
-
-pub(crate) const MSGBOX_STATE_DECIDED: i32 = MsgBoxState::Decided as i32;
-/// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
-/// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
-/// prompt the offline title flow builds (save-data/profile read error in a degraded/offline env). The
-/// auto-accept must recognize it by THIS vtable -- not the base MessageBoxDialog vtable (0x2b03550) --
-/// or it bails before dismissing (the vtable mismatch is why auto-accept never fired). bd
-/// offline-title-modal-is-saveretrydialog + press-any-button-golden-lever-job1e8-readiness-2026-06-23.
-pub(crate) const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
+/// `dialog+0x25e0` -- the DEFAULT/INITIAL CURSOR INDEX, written once by the ctor
+/// (`FUN_1409275b0`: `*(u32*)(param_1+0x4bc) = param_5`, and `0x4bc*8 == 0x25e0`) from the
+/// MenuJob config the builder's `finalize` filled in. `OnDecide` (`FUN_140927ba0`) reads it
+/// and either moves the list cursor there (`FUN_140738d40(dialog+0xa38, idx, 0)`) or, when it
+/// is -1, takes the cancel arm. It is NOT the button the user chose: it never changes after
+/// construction, so for a `[Yes, No]` + `default_last` confirm it reads 1 ("No") from the very
+/// first frame the box exists.
+pub(crate) const MSGBOX_DEFAULT_CURSOR_25E0_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, default_cursor_index);
+/// `dialog+0x25e8` -- the BUTTON COUNT, written by the ctor as
+/// `(*(i64*)(cfg+0x38) - *(i64*)(cfg+0x30)) / 0x210` (the size of the button-descriptor
+/// vector). A Yes/No confirm therefore reads 2 here at construction; a single-OK notice reads
+/// 1. Never a state machine.
+pub(crate) const MSGBOX_BUTTON_COUNT_25E8_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, button_count);
+/// First button index -- what the deprecated startup auto-accept pokes into the default-cursor
+/// field so `OnDecide` dispatches button 0 instead of taking the cancel arm.
+pub(crate) const MSGBOX_FIRST_BUTTON_INDEX: i32 = false as i32;
+/// The button count that makes `MSGBOX_MULTI_CHOICE_GETTER_RVA` (`1 < count`) return true.
+/// The deprecated auto-accept writes this over the real count so the title flow's modal poll
+/// treats the box as resolved -- a deliberate corruption of a real field, kept only because
+/// that historical path depends on it.
+pub(crate) const MSGBOX_BUTTON_COUNT_MULTI_CHOICE: i32 = 2;
+/// `dialog+0x1e8` -- the dialog's own `MenuJobResult` (state i32, subcode i32 at +0x1ec).
+/// THIS is where a pressed button's answer lands. RE (1.16.2, 2026-07-28):
+///   * `add_yes` (`FUN_1407b1c70`) attaches `MenuJobResult::SetResult(Success=2, 0)` to its
+///     button; `add_no` (`FUN_1407b1900`) attaches `SetResult(Failed=3, 0)`.
+///   * pressing a button runs the OK handler `FUN_14078e030` -> `FUN_14078ef20`, which reads
+///     that button's `MenuJobResult` out of the 0x210-byte command struct at `+0x180` and
+///     hands it to the lambda `FUN_14078ee20`, whose whole body is:
+///       `if (*(u8*)(dialog+0x127c)) dialog->vtable[0x60](dialog, result);`
+///       `else                       *(MenuJobResult*)(dialog+0x1e8) = result;`
+///     -- i.e. either EMIT the result (which sets the `+0x3b0` latch) or store it here.
+///   * the dialog's own `Update` (`FUN_140927d30`) reads `+0x1e8` and only auto-cancels
+///     (`FUN_1407ac890` -> emit `Failed`) when it is still non-terminal.
+pub(crate) const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, job_result_state);
+pub(crate) const MSGBOX_JOB_RESULT_SUBCODE_1EC_OFFSET: usize =
+    core::mem::offset_of!(MsgBoxDialogLayout, job_result_subcode);
+/// `MenuJobResult` state values, read straight out of the callers' immediates:
+/// `MenuJobResult::SetResult` (0x1407a91e0) is `[rcx]=edx; [rcx+4]=r8d`, `add_yes` passes
+/// `edx=2`, `add_no` passes `edx=3`, and `ShouldContinue` (0x1407a9200) is `cmp [rcx],1;
+/// seta al` -- so state <= 1 means "no answer yet" and anything above is terminal.
+pub(crate) const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
+pub(crate) const MENU_JOB_RESULT_STATE_SUCCESS: i32 = 2;
+pub(crate) const MENU_JOB_RESULT_STATE_FAILED: i32 = 3;
+/// "No source has produced a state" sentinel for the save-flow poll. Deliberately inside the
+/// `Continue` band so it can never be mistaken for a terminal answer.
+pub(crate) const MENU_JOB_RESULT_STATE_NONE: i32 = 0;
+/// `CS::MenuJob::EmitResult` -- vtable slot 12 (`+0x60`) of every MessageBoxDialog-family
+/// vtable, `void f(rcx=this, rdx=MenuJobResult by value, r8, r9)`. Guards on the `+0x3b0`
+/// latch (`cmpb $0x0,0x3b0(%rcx)`), picks the confirm/cancel sound by
+/// `MenuJobResult::IsSuccess`, hands the result to the parent, then SETS `+0x3b0`. It is the
+/// single choke point every answer passes through -- a pressed Yes, a pressed No, and the
+/// cancel/auto-close path (`FUN_1407ac890`, which emits `Failed`) -- which is why the
+/// save-flow observes it instead of guessing from dialog fields.
+pub(crate) const MENU_JOB_EMIT_RESULT_RVA: u32 = 0x746e80;
+/// Prologue of `MENU_JOB_EMIT_RESULT_RVA` (`mov %rdx,0x10(%rsp); push %rbx; sub $0x80,%rsp`),
+/// byte-verified against `eldenring-deobf.bin` 2026-07-28.
+pub(crate) const MENU_JOB_EMIT_RESULT_SIG: &[u8] =
+    &[0x48, 0x89, 0x54, 0x24, 0x10, 0x53, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
+pub(crate) static MENU_JOB_EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) const MENU_JOB_EMIT_RESULT_NOT_INSTALLED: usize = 0;
+pub(crate) const MENU_JOB_EMIT_RESULT_INSTALLED_YES: usize = 1;
+pub(crate) use er_telemetry::counters::MENU_JOB_EMIT_RESULT_INSTALLED;
+pub(crate) use er_title_flow::SAVE_RETRY_DIALOG_VTABLE_RVA;
 /// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
 /// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
 /// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
@@ -399,11 +327,6 @@ pub(crate) const MSGBOX_FADE_TARGET_2300_OFFSET: usize = 0x2300;
 pub(crate) const MSGBOX_FINISHED_TRUE: u8 = true as u8;
 pub(crate) const MSGBOX_FINISHED_FALSE: u8 = false as u8;
 pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
-/// The `MenuWindowJob` currently executing inside `system_quit_menu_window_job_run_hook` (stored at
-/// its entry each call). The MessageBox builder hook -- which fires nested inside that Run when a job
-/// shows a `CS::MessageBoxDialog` -- reads this to learn WHICH job is building a (Seamless-suppressed)
-/// popup, so that job's next Run can be advanced past the never-shown modal.
-pub(crate) use er_telemetry::counters::CURRENT_MENU_WINDOW_JOB_RUN_JOB;
 /// A `MenuWindowJob` whose Run built a Seamless-suppressed (ERSC post-PAB) MessageBox. Its next Run
 /// is forced to `MenuJobResult(Success)` so the title `FixOrderJobSequence` steps past the popup that
 /// was never shown -- the same advance the ToS-skip performs. 0 = none pending.
@@ -417,8 +340,10 @@ pub(crate) use er_telemetry::counters::AUTO_ACCEPT_COUNT;
 /// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
 /// MessageBoxDialogs (which need real choices) are never force-accepted.
 pub(crate) use er_telemetry::counters::IN_WORLD_REACHED;
+pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_LAST_NATIVE_SLOT;
+pub(crate) use er_telemetry::counters::LOADGAME_BUILDER_SLOT_OVERRIDES;
 pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
-pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
+pub(crate) use er_title_flow::IN_WORLD_REACHED_YES;
 /// The fresh_deser load epoch whose world is genuinely LIVE (play_time advanced past that epoch's
 /// baseline), published by the play-time-live oracle. The boot-view compositor uses this as a
 /// PER-EPOCH world-reached signal to stop its per-frame GPU readback promptly after an own-menu switch
@@ -433,9 +358,10 @@ pub(crate) use er_telemetry::counters::BOOT_VIEW_EPOCH_WORLD_LIVE;
 /// bail reliably stops the readback regardless of the handoff signals. Per-epoch composite clock.
 pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_EPOCH;
 pub(crate) use er_telemetry::counters::BOOT_VIEW_COMPOSITE_FIRST_MS;
-/// Loading bar permille (0..1000) at/above which the FPS bail stops the composite for an own-menu
-/// reload (bar essentially full = loading visually done).
-pub(crate) const BOOT_VIEW_EPOCH_BAIL_PERMILLE: u32 = 950;
+// BOOT_VIEW_EPOCH_BAIL_PERMILLE removed 2026-07-31 (er-effects-rs-drb7) along with the FPS bail's
+// permille arm: "the bar reads ~full" is a progress reading, not the freeze predicate the bail
+// needs, and it fired ~1.3s into every healthy switch. BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS is now the
+// bail's only trigger.
 /// Hard cap (ms) on how long the composite may run for one own-menu reload epoch before the FPS bail
 /// force-stops it, so the GPU readback can never tank FPS indefinitely even if permille stalls.
 pub(crate) const BOOT_VIEW_EPOCH_COMPOSITE_CAP_MS: u64 = 20_000;
@@ -689,10 +615,273 @@ pub(crate) const SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID: i32 = 110500;
 pub(crate) const SYSTEM_QUIT_SECOND_ROW_MENU_TEXT_ID: i32 = 110511;
 pub(crate) const SYSTEM_QUIT_SECOND_ROW_LINEHELP_ID: i32 = 110501;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
-/// Native save-only routines: `SaveRequest_Profile(true)` and `RequestSave(true)`. Distinct from
+/// Native save-only routines: `SaveRequest_Profile(bool)` and `RequestSave(bool)`. Distinct from
 /// `FUN_14067a490`, which requests save AND sets return-title teardown state.
+///
+/// Bool PINNED via the 1.16.2 Ghidra decompile (2026-07-28): the parameter is `throttled`.
+/// `RequestSave(true)` runs a 60-second throttle against `GameMan+0xb98` (last game-save
+/// DLDateTime, +60 window) with an early `return` that sets NOTHING; `false` skips the throttle
+/// and always sets `+0xb73` (plus `+0xb72` iff `saveSlot != -1`), gated only on the suppression
+/// global. `SaveRequest_Profile` has the same shape (gate `FUN_14080d570` first, throttle vs
+/// `+0xb88` `SetSeconds(0x3c)`).
 pub(crate) const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67a420;
 pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
+/// The game's OWN retractions of the two save-request flags: `FUN_140678740` clears
+/// `GameMan+0xb72` and `FUN_140678710` clears `GameMan+0xb73`. Each is a whole function of
+/// three instructions -- load the GameMan singleton from `0x143d69918`, store 0 into the
+/// flag byte, return -- so calling them is exactly the game's own retract semantics with
+/// no offset of ours in the loop.
+///
+/// They exist because a refused save lane touches NOTHING: the flags stay latched, the
+/// per-frame dispatcher `FUN_140afb880` re-enters the refusing lane every frame, and each
+/// entry serializes the whole character into a 0x280000 buffer and throws it away. Measured
+/// on a run whose submit builder was refusing: 27,824 declines with 0 serializer failures
+/// over 854 s -- ~33 full character serializations per second, indefinitely, on the game
+/// thread. Retracting a request that provably cannot be serviced is not a dropped save; it
+/// is the end of a spin.
+pub(crate) const SAVE_REQUEST_RETRACT_B72_RVA: u32 = 0x678740;
+pub(crate) const SAVE_REQUEST_RETRACT_B73_RVA: u32 = 0x678710;
+/// Whole-body bytes of the two retractions, byte-verified in `eldenring-deobf.bin` at the
+/// same VA (1.16.2, shift 0). `48 8B 05 <disp32>` is the RIP-relative GameMan load whose
+/// target resolves to `0x143d69918`; `C6 80 <off32> 00` is the flag store, and the offset
+/// immediates (`0xb72` / `0xb73`) are visible in the signature itself. Verified before the
+/// call: if the bytes ever differ, the address means something else in that build and the
+/// retraction is skipped rather than fired blind at unknown code.
+pub(crate) const SAVE_REQUEST_RETRACT_B72_SIG: &[u8] = &[
+    0x48, 0x8B, 0x05, 0xD1, 0x11, 0x6F, 0x03, 0xC6, 0x80, 0x72, 0x0B, 0x00, 0x00, 0x00, 0xC3,
+];
+pub(crate) const SAVE_REQUEST_RETRACT_B73_SIG: &[u8] = &[
+    0x48, 0x8B, 0x05, 0x01, 0x12, 0x6F, 0x03, 0xC6, 0x80, 0x73, 0x0B, 0x00, 0x00, 0x00, 0xC3,
+];
+// ---- SAVE-FLOW state machine (save-game-flow WP1, 2026-07-28; reshaped 2026-07-31) ----
+// The Save Game row is CLOSE-THEN-FIRE: a commit is staged (stage 6), the proven close sequence
+// runs, and only with menus closed + RAM gates green does the tick arm the one-shot
+// er-save-suppress bypass and fire the FORCED (throttle-skipping) request pair.
+//
+// The row press goes STRAIGHT TO THE DESTINATION LIST (stage 3). It asks nothing first: the only
+// question in the flow is the overwrite confirm (stage 4), and it is asked about a file the user
+// has already pointed at. Full stage map lives on `er_telemetry::counters::SAVE_FLOW_STAGE`.
+//
+// STAGE IDS 1 AND 2 ARE RETIRED, NOT REUSED. They were the two up-front confirms. Leaving the gap
+// keeps every existing log line and `oracle_save_flow_stage` value in the archive meaning what it
+// meant when it was written; renumbering 3..8 down would silently redefine them. A live 1 or 2 is
+// now state corruption, and `save_flow_tick`'s catch-all arm resets loudly on it.
+pub(crate) const SAVE_FLOW_STAGE_IDLE: usize = 0;
+/// The destination browser owns the screen -- opening, being browsed, or tearing down after a
+/// destination was chosen (`SAVE_DEST_COMMIT_PENDING`). The Save Game row press enters HERE.
+pub(crate) const SAVE_FLOW_STAGE_DEST_BROWSE: usize = 3;
+/// The "Are you sure you want to overwrite this file?" confirm is up over the destination
+/// browser (default No). The only confirm in the flow.
+pub(crate) const SAVE_FLOW_STAGE_OVERWRITE_CONFIRM: usize = 4;
+/// WP2: the user declined (or a recipe failure aborted); the close sequence is running and
+/// NOTHING will be written.
+pub(crate) const SAVE_FLOW_STAGE_CLOSING_ABORT: usize = 5;
+pub(crate) const SAVE_FLOW_STAGE_CLOSING_COMMIT: usize = 6;
+pub(crate) const SAVE_FLOW_STAGE_FIRE_GATE_WAIT: usize = 7;
+pub(crate) const SAVE_FLOW_STAGE_COMMIT_WAIT: usize = 8;
+/// Stage-7 fire-gate timeout (~10 s at 60 game-task ticks/s): if the RAM gates never go
+/// green the flow aborts WITHOUT firing (the bypass token is only armed at the green edge,
+/// so nothing is left armed).
+pub(crate) const SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS: usize = 600;
+/// Stage-8 commit watchdog (~15 s): a fired request whose enqueue/terminal status never
+/// arrives expires the still-pending bypass token so it can never leak onto a later
+/// native save.
+pub(crate) const SAVE_BYPASS_WATCHDOG_TICKS: usize = 900;
+/// `CSMenuMan+0x80` -> the save-gate sub-object read by `FUN_14080d660` /
+/// `SaveRequest_Profile`'s gate `FUN_14080d570`: the gate fails PERMANENTLY for the session
+/// while the `+0x290` byte or `+0x298` qword is latched nonzero (same fields the switch-2
+/// save-freeze diagnostic `system_quit_log_save_gates` reads inline).
+pub(crate) const CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET: usize = 0x80;
+pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET: usize = 0x290;
+pub(crate) const CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET: usize = 0x298;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_ROW_PRESS_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_JOB_START_TICK;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_COMMIT_WATCHDOG_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_B72_BEFORE_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_B73_BEFORE_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_FLAG_UNREAD;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_REQUEST_RETRACTIONS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_RETRACT_DECLINED;
+/// Game-task ticks stage 8 waits for the fired save request to actually REACH the writer (an SL
+/// save enqueue arriving at the suppressor) before declaring the fire failed. ~3 s at 60 ticks/s,
+/// the same budget the confirm-box build and destination-browser open timeouts use.
+///
+/// This exists because the full `SAVE_BYPASS_WATCHDOG_TICKS` (900) is the wrong bound for a fire
+/// that never dispatched: the Save Game row is gated on the flow being IDLE, so a dead stage 8
+/// froze every subsequent press for ~15-30 s (user-reported 2026-07-28). A write that IS in
+/// flight still gets the full watchdog -- only the never-enqueued case bails early.
+pub(crate) const SAVE_FLOW_ENQUEUE_GRACE_TICKS: usize = 180;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_STAGE_TICKS;
+// ---- SAVE-FLOW confirm box (save-game-flow WP2, 2026-07-28; one box since 2026-07-31) ----
+// The Save Game row does not commit on press and does not ask on press: it opens the destination
+// list. The flow's ONE confirm ("Are you sure you want to overwrite this file?", default No) is
+// built through the GAME's own `CS::MessageBoxBuilder` recipe (RVAs below) and submitted to a
+// MenuJob queue, so it is localized, skinned and input-routed exactly like the native quit
+// confirm. See `save_flow_boxes.rs` for the recipe.
+pub(crate) use er_telemetry::counters::SAVE_FLOW_ABORT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EXPECTED;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_DIALOG;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_EMIT_STATE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_IDENTITY_LOST_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_NO_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_OPEN_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_RESULT_BASELINE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_UNDECIDABLE_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_YES_COUNTS;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_RECIPE_UNAVAILABLE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
+/// Game-task ticks a submitted confirm box may go without its `CS::MessageBoxDialog` build
+/// reaching the builder hook (~3 s at 60 ticks/s). Exceeding it means the recipe produced no
+/// visible box, so the flow aborts back to the world instead of waiting on a box that will
+/// never appear. There is deliberately NO timeout on the user's DECISION.
+pub(crate) const SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS: usize = 180;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_BOX_HOST_DIALOG;
+// ---- SAVE-DESTINATION browser (save-game-flow WP3, 2026-07-28) ----
+// The Save Game row press opens the shipping `05_010` picker REPURPOSED as a save-destination
+// chooser (`[ new ]` is the initial selection, below the always-first drive row when present), and
+// the commit writes there instead of the loaded save by
+// diverting the native writer's single container write-open. See `save_dest_commit.rs`. A pick
+// that resolves back to the LOADED save is recognised as such and routed to the sanctioned
+// in-place overwrite -- with the up-front "Overwrite your loaded save?" box gone, that is the ONLY
+// way a user overwrites their own save, so the filesystem-identity check is load-bearing.
+pub(crate) use er_telemetry::counters::SAVE_DEST_CANCEL_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_FAIL;
+pub(crate) use er_telemetry::counters::SAVE_DEST_COMMIT_PENDING;
+/// 1 = an OS Save-As chose an existing file and the Box3 overwrite confirm is owed. Consumed by
+/// the save-flow tick, which owns every `SAVE_FLOW_STAGE` transition on the OS path.
+pub(crate) use er_telemetry::counters::SAVE_DEST_CONFIRM_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_FILE_MUTATED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_OPEN_PICKER_PENDING;
+pub(crate) use er_telemetry::counters::SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_PICKER_OPEN_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_ARMED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_REDIRECT_HITS;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_EXISTING_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_NEW_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_TARGET_WRITTEN_OK;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_DEST_MODE;
+pub(crate) use er_telemetry::counters::SAVE_PICKER_SYSTEM_DIALOG;
+/// Game-task ticks the save flow waits for the destination browser to actually appear after the
+/// open was staged for the menu pump (~3 s at 60 ticks/s, same budget as a confirm-box build).
+/// Exceeding it aborts back to the world with nothing written.
+pub(crate) const SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS: usize = 180;
+// ---- DESTINATION-COMMIT SAFETY ORACLES (2026-07-29) ----
+// Each one names a decision the commit refused to guess at, a wait it had to take, or a fact it
+// could not establish. They exist because the previous shape of this flow could destroy the loaded
+// save while its log read "restored pre-fire snapshot ok=true": a decision it got wrong had no
+// name, so no run could report it.
+pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_DEFERRED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_DISARM_UNPROVEN;
+pub(crate) use er_telemetry::counters::SAVE_DEST_FOREIGN_OPEN_PASSED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_IDENTITY_UNKNOWN_ABORT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_LIVE_STAT_UNREADABLE;
+pub(crate) use er_telemetry::counters::SAVE_DEST_NO_WRITER_OBSERVER_ABORT;
+pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_FAILED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_RESTORE_SUPPRESSED;
+pub(crate) use er_telemetry::counters::SAVE_DEST_SELF_REDIRECT_BLOCKED;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_COMPLETE_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_FIRE;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT;
+pub(crate) use er_telemetry::counters::SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE;
+/// Extra game-task ticks past `SAVE_BYPASS_WATCHDOG_TICKS` that a destination commit will hold its
+/// redirect window open when the bypass token was CONSUMED but no save-job body ever started
+/// (~60 s at 60 ticks/s).
+///
+/// The window cannot be closed on the watchdog alone: an enqueue that the worker has not picked up
+/// yet is a write that has not happened, and disarming in front of it sends the native writer's
+/// per-block opens to the loaded save. Waiting is the safe side, so the extension exists purely so
+/// a permanently stalled SL queue cannot disable the Save Game row for the rest of the session --
+/// and reaching it is a named failure (`oracle_save_dest_disarm_unproven`), never a quiet timeout.
+/// A writer that is genuinely INSIDE a body is never cut off by this; that case waits it out.
+pub(crate) const SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS: usize = 3600;
+/// `PropertyEditDialog` pointer stored at `action_object + 0x8` -- how every System>Quit row
+/// action reaches its owning dialog.
+pub(crate) const SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET: usize = 0x8;
+/// `CS::MessageBoxBuilder` recipe, byte-verified against `eldenring-deobf.bin` on 2026-07-28
+/// and lifted verbatim from the native Yes/No confirm wrapper `FUN_1407b73d0` (whose own
+/// disassembly is the source for the call order and argument registers). Every address is
+/// re-checked against its prologue at first use; a mismatch disarms the whole chain rather
+/// than calling into a drifted build.
+///
+/// `ctor(rcx=builder, rdx=ctx, r8=prompt MenuString*, r9=&mode_i32, [rsp+0x28]=0u8)`
+pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_RVA: u32 = 0x7af730;
+pub(crate) const SYSTEM_QUIT_MSGBOX_BUILDER_CTOR_SIG: &[u8] =
+    &[0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00];
+/// `add_yes(rcx=builder, rdx=&SaveFlowYesButtonDesc) -> builder` (localized Yes label).
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_RVA: u32 = 0x7b1c70;
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_YES_SIG: &[u8] =
+    &[0x4c, 0x8b, 0xdc, 0x57, 0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00];
+/// `add_no(rcx=builder) -> builder` (localized No/Cancel label; builds its own descriptor).
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_RVA: u32 = 0x7b1900;
+pub(crate) const SYSTEM_QUIT_MSGBOX_ADD_NO_SIG: &[u8] =
+    &[0x40, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00];
+/// `default_last(rcx=builder) -> builder`; whole body is
+/// `*(i32*)(builder+0x28) = *(i32*)(builder+0x10f0) - 1`, i.e. the default choice is the
+/// LAST button added. That is why add order encodes the default.
+pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_RVA: u32 = 0x7b1b60;
+pub(crate) const SYSTEM_QUIT_MSGBOX_DEFAULT_LAST_SIG: &[u8] = &[
+    0x8b, 0x81, 0xf0, 0x10, 0x00, 0x00, 0xff, 0xc8, 0x89, 0x41, 0x28, 0x48, 0x8b, 0xc1, 0xc3,
+];
+/// `finalize(rcx=builder, rdx=&job_slot, r8b=0) -> &job_slot`: writes the built MenuJob
+/// reference into the caller's slot.
+pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_RVA: u32 = 0x7b10f0;
+pub(crate) const SYSTEM_QUIT_MSGBOX_FINALIZE_SIG: &[u8] = &[
+    0x4c, 0x8b, 0xdc, 0x56, 0x57, 0x41, 0x56, 0x48, 0x81, 0xec, 0x30, 0x01, 0x00, 0x00,
+];
+/// `dtor(rcx=builder)`: tears down the stack builder once the job is built.
+pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_RVA: u32 = 0x7b0140;
+pub(crate) const SYSTEM_QUIT_MSGBOX_DTOR_SIG: &[u8] =
+    &[0x48, 0x89, 0x4c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30];
+/// Stack footprint of `CS::MessageBoxBuilder` (`sub $0x11b8,%rsp` frame in `FUN_1407b73d0`
+/// hands `lea 0x60(%rsp)` to the ctor and `finalize` reads up to `builder+0x1138`).
+pub(crate) const MSGBOX_BUILDER_SIZE: usize = 0x1140;
+/// Builder mode dword every native Yes/No confirm passes (`movl $0x17`). Only ONE dword is
+/// read from the pointer (`mov (%rdx),%eax` in the sub-ctor `FUN_14078c950`).
+pub(crate) const MSGBOX_BUILDER_MODE_CONFIRM: i32 = 0x17;
+/// Builder trailing byte argument (5th stack arg) every native confirm passes.
+pub(crate) const MSGBOX_BUILDER_CTOR_TRAILING_ARG: u8 = 0;
+/// Buttons added so far (`builder+0x10f0`), incremented by each adder.
+pub(crate) const MSGBOX_BUILDER_BUTTON_COUNT_OFF: usize = 0x10f0;
+/// Default/initial cursor index (`builder+0x28`), written by `default_last`.
+pub(crate) const MSGBOX_BUILDER_DEFAULT_IDX_OFF: usize = 0x28;
+/// `PropertyEditDialog+0x10` is the MenuJob queue our confirm boxes submit to, and
+/// `+0x50` the owning MenuWindow list passed as the builder's context -- the same two
+/// derivations `system_quit_open_profile_load_dialog` /
+/// `system_quit_submit_direct_return_title_chain` already make from the System dialog.
+pub(crate) const SYSTEM_QUIT_DIALOG_MENU_JOB_QUEUE_10_OFFSET: usize = 0x10;
+pub(crate) const SYSTEM_QUIT_DIALOG_MENU_WINDOW_LIST_50_OFFSET: usize = 0x50;
+/// `CS::MenuString` is 0x38 bytes: `MenuHelpLabelComponent` stores its second MenuString at
+/// `MENU_HELP_LABEL_HELP_OFFSET`.
+pub(crate) const MENU_STRING_SIZE: usize = MENU_HELP_LABEL_HELP_OFFSET;
+/// One-shot spawn guard for the boot-time er-save-suppress install thread (bootstrap.rs).
+pub(crate) static START_SAVE_SUPPRESS: Once = Once::new();
+/// One-shot spawn guard for the boot-time CORE file-ops install thread (CreateFileW in every save
+/// mode; the save-destination commit rides that detour).
+pub(crate) static START_SAVE_FILE_OPS_CORE: Once = Once::new();
+/// One-shot spawn guard for the OBSERVERS-ONLY save-lane attribution thread, used when save
+/// suppression is left at its product default of off. The observers call their originals and only
+/// count, so binding them changes no save behaviour -- but without them
+/// `oracle_save_dispatch_last_decline_reason` reads `unsampled`, which is the field that names why a
+/// save was refused and therefore why `GameMan+0xb72`/`+0xb73` stay latched after a reload.
+pub(crate) static START_SAVE_OBSERVERS: Once = Once::new();
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
@@ -725,8 +914,50 @@ pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
 pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
 pub(crate) const EDIT_PROPERTY_SIZE: usize = 0x88;
 pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
-/// In `PropertyNewButtonController`, first cloned action std::function stores its impl ptr at +0xa8.
+/// `CS::EditProperty.label` (a `CS::MenuHelpLabelComponent`, 0x70 bytes) whose FIRST field is the
+/// `MenuString`'s raw UTF-16 pointer -- `CS::MenuString::MenuString` stores the pointer it is handed,
+/// so a row built from this DLL's static label arrays is identifiable by pointer equality, and every
+/// row is identifiable by its text. This is the only per-row identity in the Quit dialog that the
+/// engine does not alias or share (1.16.2 `EditProperty`: super_MenuViewItem +0, label +8,
+/// propertyController +0x78, size 0x88).
+pub(crate) const EDIT_PROPERTY_LABEL_OFFSET: usize = 0x8;
+/// In `PropertyNewButtonController`, the action `std::function`'s `_Getter()` slot.
+///
+/// NOT an object identity. `CS::PropertyNewButtonController` is a 0x300-byte allocation
+/// (`HeapAlloc(0x300, 8, ...)` in 1.16.2 `FUN_14086a950`) whose ctor `FUN_14086a2a0`
+/// copy-constructs the caller's action `std::function` into `this + 0x70` (`param_1 + 0xe`) and
+/// stores the resulting getter pointer here (`param_1[0x15]`). MSVC keeps that getter at
+/// `storage + 0x38`, and for a small (inline) callable it points at the storage itself -- so this
+/// field always reads back `controller + 0x70`. Comparing it is comparing the controller, and a
+/// controller is NOT a row: the patched 4-row Quit tab dispatches all four visible buttons through
+/// only the two NATIVE row controllers. Use `system_quit_resolve_row_now` for row identity.
 pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0xa8;
+/// `CS::CSEzMenuViewerPad` predicates that `PropertyNewButtonController`'s should-invoke predicate
+/// (`FUN_140974b00`, deobf 0x974b00) itself calls to classify the dispatched event. The first
+/// short-circuits the predicate with NO positional test (pad/keyboard confirm); the second is the one
+/// whose result the native code then hit-tests against the row's display object (mouse click).
+pub(crate) const MENU_VIEWER_PAD_CONFIRM_PRESSED_RVA: u32 = 0x758a10;
+pub(crate) const MENU_VIEWER_PAD_MOUSE_CLICKED_RVA: u32 = 0x758a70;
+/// `CS::GridControl::SetItemCount(this, count)` (1.16.2 `FUN_140738dc0`; byte-verified against
+/// `eldenring-deobf.bin`: `48 89 5c 24 08 57 48 83 ec 20 8b fa 48 8b d9 85 d2 75 0d`).
+///
+/// The list widget's item count is NOT a plain field to poke. This setter writes `this + 0xd0` AND
+/// recomputes the scroll/page row count on the embedded scroll control at `this + 0x1a8`
+/// (`FUN_14074dad0(this + 0x1a8, (count - 1 + cols) / cols)`), which is what the native rebuild
+/// (`FUN_140975040`) calls. Writing the raw field leaves the scroll control describing the old,
+/// shorter list.
+pub(crate) const GRID_CONTROL_SET_ITEM_COUNT_RVA: u32 = 0x738dc0;
+/// The `CS::GridControl` (0x7c8 bytes, vtable dump `0x142a913b8`) embedded in every
+/// `GenericListSelectDialog` at `+0xa38`. Its geometry fields, measured once at dialog construction
+/// by `GridControl::MeasureGridFromMovie` (vtable `+0x18`, `FUN_140737c60`) from which
+/// `Item_<row>_<col>` components the movie actually contains:
+///   `+0xd0` item count, `+0xd4` cursor, `+0xd8` COLUMNS, `+0xdc` ROWS.
+/// `GridControl::Update` (`FUN_1407392f0`) enables up/down only at `rows >= 2` and left/right only at
+/// `cols != 1 || rows < 2`, and the mouse hit test (`FUN_140736c90`) walks exactly `cols * rows`
+/// cells -- so these two numbers are the whole navigation and hover model of the dialog.
+pub(crate) const DIALOG_GRID_CONTROL_A38_OFFSET: usize = 0xa38;
+pub(crate) const GRID_CONTROL_COLS_D8_OFFSET: usize = 0xd8;
+pub(crate) const GRID_CONTROL_ROWS_DC_OFFSET: usize = 0xdc;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG: AtomicUsize =
@@ -761,7 +992,7 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_DUPLICATE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT;
 /// Native second Quit-tab row action object (Return to Desktop). The patched 4-slot GameEnd GFx can
 /// still dispatch this native object for the lower visual buttons; the action hook disambiguates those
-/// by the live dialog cursor so row 2/3 become Load Profile / Load Save Profiles instead of showing
+/// by the live dialog cursor so row 2/3 become Load Character / Load Character from File instead of showing
 /// the native desktop confirmation.
 pub(crate) static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT: AtomicUsize =
     AtomicUsize::new(0);
@@ -786,6 +1017,24 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT;
+// ---- System->Quit ROW IDENTITY table + resolution oracles (see system_quit_row_identity.rs) ----
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_NATIVE_SAVE_GAME_CONTROLLER_LAST_OBJECT;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1;
+pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ROW_TABLE_DIALOG;
+pub(crate) use er_telemetry::counters::{
+    SYSTEM_QUIT_ACTION_ALIAS_FALSE_QUIT_CLAIMS, SYSTEM_QUIT_QUIT_AUTHORIZED_COUNT,
+    SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT, SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT,
+    SYSTEM_QUIT_ROW_LAST_AMBIGUITY, SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND,
+    SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1, SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR,
+    SYSTEM_QUIT_GRID_COLS, SYSTEM_QUIT_GRID_ITEM_COUNT, SYSTEM_QUIT_GRID_NAVIGABLE_CELLS,
+    SYSTEM_QUIT_GRID_ROWS, SYSTEM_QUIT_ROW_LAST_INPUT_KIND, SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW,
+    SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT, SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT,
+    SYSTEM_QUIT_ROW_RESOLVE_COUNT,
+};
 /// Legacy fallback latch for older confirmation-based Save Game routing. The product Save Game row
 /// now requests save + closes menus directly and clears this latch so it never reaches the native
 /// Quit Game / return-title action.
@@ -795,10 +1044,8 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT;
 /// Live/deobf native `05_010_ProfileSelect` wrapper (`FUN_14081f7e0` dump -> live `0x14081f6f0`).
 pub(crate) const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
-/// Live/deobf native menu-job submit helper (`FUN_1407a9340` dump -> live `0x1407a9250`).
-pub(crate) const MENU_JOB_SUBMIT_RVA: u32 = 0x7a9250;
-/// Live/deobf native menu-job queue idle predicate (`FUN_1407a9320` dump -> live `0x1407a9230`).
-pub(crate) const MENU_JOB_QUEUE_READY_RVA: u32 = 0x7a9230;
+pub(crate) use er_title_flow::MENU_JOB_SUBMIT_RVA;
+pub(crate) use er_title_flow::MENU_JOB_QUEUE_READY_RVA;
 /// Live/deobf native `CS::MenuJob::ChainMenuJobs` (`0x1407a7ca0` dump -> live `0x1407a7bb0`).
 /// ABI: `rcx=&first_job_slot, rdx=&out_job_slot, r8=&second_job_slot`; it builds a native
 /// FixOrderJobSequence so the existing menu/job pump owns both jobs rather than a private manual pump.
@@ -857,7 +1104,87 @@ pub(crate) use er_telemetry::counters::SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ;
 /// skips the block entirely (and correctly does NOT unref a dead window). Gated to `menu_id == 0xffff`
 /// so healthy mapped windows are untouched (byte-identical, no extra virtual call). The dtor forwards
 /// rdx/r8/r9 to the finalize untouched, so all four argument registers are forwarded verbatim.
+///
+/// IDENTITY LAYER (2026-07-29, closes the 2026-07-23 false-negative at rva 0x7ada7c): the state
+/// heuristic above forwards whenever `menu_id != 0xffff` -- but a freed-and-REUSED window can carry an
+/// in-module vtable and arbitrary non-0xffff bytes at +0x180, so the native finalize then virtual-
+/// calls the reused object and crashes at its FIRST `vfptr[3]` call (rva 0x7ada7c; observed
+/// 2026-07-23 with the guard armed). No memory-state probe can identify that case. What CAN identify
+/// it is OWNERSHIP: the only producer of stale jobs is our own title-cover masquerade, which latches
+/// every job it preserves (`title_native_menu_visual_begin_title_hook` /
+/// `title_pab_information_visual_hook`). Those latches now also record the job pointer in
+/// `MASQUERADE_PRESERVED_JOBS`; at `~MenuWindowJob` a preserved job gets the STRICT lifetime
+/// predicate: forward natively only when the window is verifiably still in the state the finalize's
+/// contract requires (in-module vtable AND `menu_id < 0x47` mapped, i.e. the native deregistration is
+/// valid), probe `vfptr[3]` for the `0xffff` never/de-registered state, and DETACH (native
+/// vector-remove `FUN_140733d70` + null `job+0x130`) on every unverifiable state (unreadable window,
+/// out-of-module vtable, unreadable or garbage `menu_id`, garbage descriptor index). The 1.16.2
+/// finalize (0x1407ada40) and dtor both gate every window access on `owningMenuWindow != 0`, so the
+/// detached state is native-tolerated by construction. Non-preserved (native-owned) jobs keep the
+/// legacy heuristic byte-identically.
 pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
+
+/// `CS::MenuWindowJob` FINALIZE (deobf 0x1407ada40) -- the function whose `if (owningMenuWindow != 0)`
+/// block virtual-calls `owningMenuWindow->vfptr[3]`, faulting at rva 0x7ada7c when that window is
+/// freed/reused.
+///
+/// It has FIVE callers and `MENU_WINDOW_JOB_DTOR_RVA` (0x7ac720) is only ONE of them; the others are
+/// three sites inside `MenuWindowJob::Run` (0x7ad3fb / 0x7ad54d / 0x7ad66a) and 0x7bdee0. The
+/// destructor guard therefore cannot see the crash observed on the profile switch, which arrives via
+/// `Run` (proven twice 2026-07-30: agent + user runs, identical AV signature). Hooking the finalize
+/// itself covers every caller with one detour, and 0x7ada40 has no other detour -- unlike
+/// `MenuWindowJob::Run` (0x7ad1c0), where two detours already collided (MinHook allows one per
+/// address; see bd system-quit-menuwindowjob-run-dead-hook-rootcause-2026-07-15).
+pub(crate) const MENU_WINDOW_JOB_FINALIZE_RVA: usize = 0x7ada40;
+/// `MsbFileCap` load-complete callback -- THE SOLE WRITER of `msbResCap` (`cap+0x90`), 1.16.2 dump
+/// `FUN_14021bbf0`. Byte-verified against `eldenring-deobf.bin` at the same VA (shift 0 on 1.16.2):
+/// `48 8b c4 56 57 41 56 48 81 ec 80 00 00 00`, with the first rip-relative operand only at +0x1e,
+/// so the prologue is safely detourable.
+///
+/// It writes `msbResCap` ONLY when the cap's content is non-null, and returns normally otherwise --
+/// leaving `(loadState=4, msbResCap=0)`, which wedges `WorldBlockRes` case 2 forever. Tracing it
+/// separates "fired with null content" (empty read) from "never fired" (cache hit, no enqueue); no
+/// passive read can, because both end in identical cap state.
+pub(crate) const MSB_FILECAP_PARSE_CALLBACK_RVA: usize = 0x21bbf0;
+/// How many SUCCESSFUL parses to log before rate-limiting. Null-result parses are always logged.
+pub(crate) const MSB_PARSE_TRACE_VERBOSE_CALLS: usize = 24;
+/// `CS::MoveMapListStep::STEP_LoadListWait` -- the ONLY live path that refills the DLC virtual roots
+/// (it calls `FUN_140e05fb0(GLOBAL_CSDlc, true)` -> `CSDlcImp::AddVirtualFileRoots`). Proven to be
+/// the fix site by bd `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty`.
+///
+/// Prologue is `40 53 48 83 ec 20 48 8b 81 c0 02 00 00` (`push rbx; sub rsp,0x20; mov rax,[rcx+0x2c0]`)
+/// -- no rip-relative operand anywhere near the patch site, and the deobf bytes match the 1.16.2 dump
+/// exactly, so a 5-byte detour relocates cleanly. `rcx` is the `MoveMapListStep` this-pointer.
+pub(crate) const STEP_LOADLIST_WAIT_RVA: usize = 0x00af_1800;
+/// Gate A operand: `MoveMapListStep::loadList`. The step proceeds when this is NULL **or** the int at
+/// `*loadList` is 2 or 3 (`sub eax,2; cmp eax,1; ja bail`).
+pub(crate) const MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET: usize = 0x2c0;
+/// Gate B operand: must be 0 for the step to proceed (`cmp qword [rcx+0xb8],0; jnz bail`).
+pub(crate) const MOVEMAPLISTSTEP_GATE_B8_OFFSET: usize = 0xb8;
+/// `STEP_LoadListWait` runs every frame, so the trace logs only on VERDICT CHANGE plus this many
+/// opening entries -- enough to capture the load-1 baseline without burying the reload.
+pub(crate) const LOADLIST_WAIT_TRACE_VERBOSE_CALLS: usize = 6;
+/// `FUN_140e06490(CSDlcImp*, bool)` -- BLANKS the 13 `*_dlc2` virtual roots to `L""` and clears the
+/// DLC ownership flags. Sole code caller is the title start-game flow `FUN_1409b24e0`.
+pub(crate) const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
+/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the REFILL: re-queries Steam DLC ownership and calls
+/// `CSDlcImp::AddVirtualFileRoots`. Hooked at this shared entry rather than at either caller,
+/// because a measured run showed `STEP_LoadListWait` never executes at all.
+pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
+/// `FUN_140836f30` -- the `Do` of the MenuFunctorJob that eventually reaches the refill (vtable
+/// 0x142acb638). One level above `FUN_140e05fb0`, so it separates "job never enqueued" from "job ran
+/// and diverged inside". Prologue `48 89 54 24 10 53 48 83 ec 30`, no rip-relative in the window.
+pub(crate) const DLC_ROOTS_JOB_RVA: usize = 0x0083_6f30;
+/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton. Grounded from `FUN_1408371e0`'s own load:
+/// `mov 0x354f9ed(%rip),%rcx  # 0x143d86bd8`.
+pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
+/// The DLIO alias every failing `m28` read resolves through.
+pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
+
+/// How many NULL-RESULT parses also carry a DLIO virtual-root dump. The null path fires ~13x/second
+/// during the stall and the root walk is a vector scan, so only the first few need it -- the roots
+/// do not change once the block is wedged, and the load-1 baseline comes from the verbose successes.
+pub(crate) const MSB_PARSE_TRACE_ROOTS_ON_NULL_RESULTS: usize = 4;
 pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
 /// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
 /// every observed crash was in; the finalize's second getter is itself gated on it.
@@ -893,9 +1220,49 @@ pub(crate) const MENU_WINDOW_LIST_SANE_MAX_COUNT: i32 = 64;
 pub(crate) static MENU_WINDOW_JOB_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS;
+pub(crate) use er_telemetry::counters::{
+    MENU_WINDOW_JOB_FINALIZE_GUARDS, MENU_WINDOW_JOB_FINALIZE_INSTALLED,
+    MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW, MENU_WINDOW_JOB_FINALIZE_ORIG,
+};
+pub(crate) use er_telemetry::counters::{
+    MSB_PARSE_TRACE_CALLS, MSB_PARSE_TRACE_INSTALLED, MSB_PARSE_TRACE_NULL_RESULTS,
+    MSB_PARSE_TRACE_ORIG,
+};
+pub(crate) use er_telemetry::counters::{
+    LOADLIST_WAIT_TRACE_CALLS, LOADLIST_WAIT_TRACE_INSTALLED, LOADLIST_WAIT_TRACE_LAST_VERDICT,
+    LOADLIST_WAIT_TRACE_ORIG, LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE,
+};
+pub(crate) use er_telemetry::counters::{
+    DLC_ROOTS_BLANK_CALLS, DLC_ROOTS_BLANK_ORIG, DLC_ROOTS_REFILL_CALLS, DLC_ROOTS_REFILL_ORIG,
+    DLC_ROOTS_TRACE_INSTALLED,
+};
+pub(crate) use er_telemetry::counters::{DLC_ROOTS_JOB_CALLS, DLC_ROOTS_JOB_ORIG};
+pub(crate) use er_telemetry::counters::{
+    DLC_ROOT_ENTRY_ADDR, DLC_ROOT_GOOD_PATH_HASH, DLC_ROOT_HEAL_ATTEMPTS, DLC_ROOT_HEAL_OK,
+    DLC_ROOT_HEAL_WRONG, DLC_ROOT_SEEN_POPULATED,
+};
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LIST_REMOVALS;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW;
 pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX;
+pub(crate) use er_telemetry::counters::MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES;
+/// Upper bound (exclusive) of a MAPPED menu id: the 1.16.2 finalize's own flag-clear guard is
+/// `if (*menu_id < 0x47) GLOBAL_CSMenuMan->field99_0x90[*menu_id] = 0;` and the sibling
+/// `MenuWindowJob::Run` bounds the same index identically, so `< 0x47` is the game's own definition
+/// of "registered in the CSMenuMan window-flag table".
+pub(crate) const MENU_WINDOW_MAPPED_MENU_ID_MAX: u16 = 0x47;
+/// Identity set of `MenuWindowJob*` values preserved by OUR title-cover masquerade (er-effects-rs-
+/// j74t identity layer; see `MENU_WINDOW_JOB_DTOR_RVA`). The part-a latches insert
+/// (`masquerade_preserved_job_note`); `menu_window_job_dtor_hook` removes at destruction
+/// (`masquerade_preserved_job_take`), so the set self-cleans and 4 slots comfortably cover the at
+/// most two preserved jobs (05_000_Title + 05_020_TitleInformation) live per title build. On
+/// overflow the job simply falls back to the legacy state heuristic (logged).
+pub(crate) const MASQUERADE_PRESERVED_JOB_SLOTS: usize = 4;
+pub(crate) static MASQUERADE_PRESERVED_JOBS: [AtomicUsize; MASQUERADE_PRESERVED_JOB_SLOTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
 
 /// QUIT-TO-DESKTOP CLEAN KILL (user directive 2026-07-08): the native quit saves the character then
 /// tears the world down and rebuilds the title -- slow, and with our flow the rebuilt title's
@@ -1001,7 +1368,7 @@ pub(crate) use er_telemetry::counters::OPTIONSETTING_REAL_BLANK_DETECTED_COUNT;
 /// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
 /// where our injected Load-Profile rows live vs the Game tab).
 pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB;
-/// The System/OptionSetting Quit tab index. The custom Load Profile / Load Save Profiles rows are
+/// The System/OptionSetting Quit tab index. The custom Load Character / Load Character from File rows are
 /// children of this tab, so Back from their ProfileSelect child must restore this tab as the parent.
 pub(crate) const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
 pub(crate) use er_telemetry::counters::OPTIONSETTING_CURRENT_TAB_AT_BLANK;
@@ -1144,7 +1511,7 @@ pub(crate) use er_telemetry::counters::GX_CMD_ARENA_SWITCH_MIN_REMAINING;
 /// (validate the pointer + a sane count); RVA ground-truthed in the DEOBF binary (teardown 0x9b2db0
 /// disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x1445896a8 - 0x140000000 = 0x45896a8),
 /// same VA as the dump. The runtime read is self-validating so a bad RVA logs -1, not a crash.
-pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = 0x45896a8;
+pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = er_title_flow::CS_DELAY_DELETE_MAN_GLOBAL_RVA;
 pub(crate) const DELAY_DELETE_MAN_PENDING_COUNT_OFFSET: usize = 0x40;
 pub(crate) const DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET: usize = 0x44;
 /// Sane upper bound for the pending count; a larger read means the singleton RVA/layout is wrong.

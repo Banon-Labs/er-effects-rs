@@ -178,7 +178,7 @@ needs no live user input and ends in finite time with a short human-readable pas
 
 **Product mechanisms:** `crates/er-effects-rs/src/config.rs`, `.../experiments/save_redirect/`,
 `.../experiments/continue_load/`, `.../experiments/own_load/`,
-`.../experiments/startup_hooks/system_quit_repro_guards.rs`, `.../experiments/title/title_tick_cover.rs`,
+`.../experiments/startup_hooks/quit_menu/system_quit_repro_guards.rs`, `.../experiments/title/title_tick_cover.rs`,
 `.../experiments/save_picker*`, `.../experiments/present_overlay.rs`.
 
 **Harness / analysis:** `scripts/run-samechar-3x-threedll.sh`, `scripts/capture-samechar-3x.py`,

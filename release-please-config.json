@@ -1,0 +1,10 @@
+{
+  "release-type": "simple",
+  "bootstrap-sha": "4da40846aefdc9873e9a5f0757cb22cea794ab9e",
+  "draft": true,
+  "force-tag-creation": true,
+  "include-v-in-tag": false,
+  "packages": {
+    ".": {}
+  }
+}

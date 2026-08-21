@@ -2,11 +2,15 @@
 /// XInput poll counter, incremented each XInputGetState call while inject-nav is active and the
 /// menu is open. The schedule below is in these poll-frames.
 pub(crate) use er_telemetry::counters::INJECT_NAV_FRAME;
-/// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
-pub(crate) const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
+pub(crate) use er_title_flow::XINPUT_GAMEPAD_DPAD_DOWN;
 /// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
 /// (D-pad Up, Start, Left-Shoulder/LB, A). D-pad Down is XINPUT_GAMEPAD_DPAD_DOWN above.
 pub(crate) const XINPUT_GAMEPAD_DPAD_UP: u16 = 0x0001;
+/// D-pad Left/Right bits. Used only by the Save Game confirm-chain drive, which does not know
+/// (and must not guess) which axis a two-button `CS::MessageBoxDialog` lays its buttons out on:
+/// it pulses candidates and latches whichever one actually moves the dialog cursor.
+pub(crate) const XINPUT_GAMEPAD_DPAD_LEFT: u16 = 0x0004;
+pub(crate) const XINPUT_GAMEPAD_DPAD_RIGHT: u16 = 0x0008;
 pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
 pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
 pub(crate) const XINPUT_GAMEPAD_RIGHT_SHOULDER: u16 = 0x0200;
@@ -21,18 +25,11 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_XINPUT_BUTTONS;
 /// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
 /// usize::MAX = not yet captured (reset on entry to TO_SLOT).
 pub(crate) use er_telemetry::counters::SQ_REPRO_INITIAL_CURSOR;
-/// Settle the freshly-opened menu before injecting (poll-frames).
-pub(crate) const INJECT_NAV_SETTLE_FRAMES: usize = 90;
-/// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
-pub(crate) const INJECT_NAV_TAP_LEN: usize = 4;
-/// Released gap between taps (edge re-arm; menu nav is edge-triggered, not auto-repeat).
-pub(crate) const INJECT_NAV_GAP_LEN: usize = 16;
-/// One tap+gap cycle length.
-pub(crate) const INJECT_NAV_CYCLE: usize = INJECT_NAV_TAP_LEN + INJECT_NAV_GAP_LEN;
-/// Number of Down taps to drive. The problem is fully deterministic: the cursor starts on
-/// Continue (index 0) and Load Game is index 1, so EXACTLY ONE Down reaches it. There is no state
-/// of knowledge that justifies more than one tap, so this is a literal 1 (not a tunable).
-pub(crate) const INJECT_NAV_MAX_CYCLES: usize = 1;
+pub(crate) use er_title_flow::INJECT_NAV_SETTLE_FRAMES;
+pub(crate) use er_title_flow::INJECT_NAV_TAP_LEN;
+pub(crate) use er_title_flow::INJECT_NAV_GAP_LEN;
+pub(crate) use er_title_flow::INJECT_NAV_CYCLE;
+pub(crate) use er_title_flow::INJECT_NAV_MAX_CYCLES;
 /// Throttle the per-tap log.
 pub(crate) use er_telemetry::counters::INJECT_NAV_LOG_COUNT;
 pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
@@ -53,10 +50,7 @@ pub(crate) static MOVE_PROBE_ACTIVE: std::sync::atomic::AtomicBool =
 /// Left-thumbstick Y to inject while MOVE_PROBE_ACTIVE (i16 range; +full = forward). Stored as i32.
 pub(crate) static MOVE_PROBE_STICK_LY: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(0);
-/// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
-/// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
-pub(crate) static CAN_MOVE_CONFIRMED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(crate) use er_title_flow::CAN_MOVE_CONFIRMED;
 /// HARNESS-ATTRIBUTED movement verdict for the CURRENT load epoch -- the contamination-proof result
 /// (user 2026-07-20, bd canmove-contaminated-user-moved-harness-never-supplied). The move-probe
 /// alternates INJECT-ON / INJECT-OFF windows and requires the char to move WHILE WE inject AND stop
@@ -106,18 +100,12 @@ pub(crate) const DIK_NONE: u8 = 0;
 /// (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances ONLY on an
 /// observed transition (menu-window semaphore / save-request telemetry / close telemetry) -- never a
 /// timer, tap budget, or retry count:
-///   WAIT_WORLD -> OPEN_MENU (START -> 02_000_IngameTop)
-///   -> TO_SYSTEM (UP, A -> 02_040_OptionSetting, the quit submenu)
-///   -> TO_PROFILE/TO_SAVE_GAME (LB, A -> Save Game row)
-///   -> DONE.
-/// After a phase's edges are issued it HOLDS (injects nothing) until its transition is observed, so
-/// a genuinely missed edge self-reports (stuck waiting) instead of being papered over by a re-tap.
+///   WAIT_WORLD -> WAIT_RELOAD (menu-free programmatic switch arm) -> DONE.
+/// The intermediate menu-nav states 1..5 (OPEN_MENU / TO_SYSTEM / TO_PROFILE / TO_SLOT / CONFIRM)
+/// are GONE: nothing ever transitioned into them, so the arms that implemented them were shipped but
+/// unreachable machine code. The values are left unused rather than renumbered because DONE=6 and
+/// WAIT_RELOAD=7 are compared against in telemetry consumers.
 pub(crate) const SQ_REPRO_STATE_WAIT_WORLD: usize = 0;
-pub(crate) const SQ_REPRO_STATE_OPEN_MENU: usize = 1;
-pub(crate) const SQ_REPRO_STATE_TO_SYSTEM: usize = 2;
-pub(crate) const SQ_REPRO_STATE_TO_PROFILE: usize = 3;
-pub(crate) const SQ_REPRO_STATE_TO_SLOT: usize = 4;
-pub(crate) const SQ_REPRO_STATE_CONFIRM: usize = 5;
 pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
 /// Between two back-to-back switches: after a switch's OK is confirmed, wait here for THAT switch's
 /// reload to commit (fresh-deser count reached) and the NEW world to be up + settled, then re-arm
@@ -136,6 +124,25 @@ pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
 pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
+/// SAVE-GAME SELF-DRIVE (save-game-flow WP2): once the Save Game row has opened the destination list,
+/// walk the confirm boxes the way a user does -- move the dialog cursor onto the affirmative
+/// button, then press confirm -- checkpointed on `oracle_save_flow_stage`, never on timers.
+pub(crate) const SQ_REPRO_STATE_SAVE_CONFIRM: usize = 13;
+/// Nav directions the confirm-chain drive tries, in order, until one moves the dialog cursor.
+/// The winning direction is latched in `SQ_REPRO_BOX_NAV_BUTTON` for the rest of the run; a
+/// two-button box wraps, so any working axis converges on the target index.
+pub(crate) const SQ_REPRO_BOX_NAV_CANDIDATES: [u16; 4] = [
+    XINPUT_GAMEPAD_DPAD_LEFT,
+    XINPUT_GAMEPAD_DPAD_RIGHT,
+    XINPUT_GAMEPAD_DPAD_UP,
+    XINPUT_GAMEPAD_DPAD_DOWN,
+];
+/// Latched working nav button for the confirm boxes (0 = not discovered yet).
+pub(crate) static SQ_REPRO_BOX_NAV_BUTTON: AtomicUsize = AtomicUsize::new(0);
+/// Dialog cursor observed when the current nav candidate began its pulse (usize::MAX = none).
+pub(crate) static SQ_REPRO_BOX_NAV_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Candidate index currently being pulsed while the nav direction is still unknown.
+pub(crate) static SQ_REPRO_BOX_NAV_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 /// TAB_RETURN sub-phase: 0 = drive RIGHT to the last tab, 1 = drive LEFT back to tab 0, 2 = dwell.
 pub(crate) use er_telemetry::counters::SQ_REPRO_TAB_RETURN_PHASE;
 /// Highest tab index seen while driving right (end-of-strip detection) and the tick the dwell began.
@@ -162,11 +169,6 @@ pub(crate) use er_telemetry::counters::SQ_REPRO_SWITCH_INDEX;
 // after the first automatic load). The harness ships inert (harness_dll_present), so this only affects
 // agent-owned runs. Overridable per-run via er-effects-sq-target-switches.txt.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
-/// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
-/// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
-/// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
-/// the no-load semaphores (activate count, quickload phase, fresh-deser count) all still read idle.
-pub(crate) use er_telemetry::counters::SQ_REPRO_PAUSED_AT_PROFILE_SELECT;
 /// Exact ProfileSelect Back repro latches. `DONE` means the self-drive opened System->Quit's cloned
 /// Load Profile row, observed ProfileSelect, sent B/Back, observed restore, returned to Game Options,
 /// and did not arm a profile load.
@@ -227,22 +229,13 @@ pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
 /// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
 /// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
-/// the next switch, not just the last. Fallback: if the load cannot latch within this window (drift /
-/// contention / a genuinely non-movable load) arm anyway on the game-global signature so the sequence
-/// never hangs -- the run then records that load as not-proven rather than stalling.
+/// the next switch, not just the last. Reaching this timeout emits a failed-epoch verdict and leaves the
+/// harness parked; it never advances past an unproven load.
 pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
-/// FREEZE-RECOVERY DEADLINE (2026-07-18, user-directed readiness gate). Frames the WAIT_RELOAD gate
-/// will wait for a just-triggered reload to become render-ready before classifying it the LOAD-2 FREEZE
-/// (present + reload committed, but the loading cover never lifts / render never hands off -- exactly
-/// the user's "character does not show up + can't move, but the menu still opens" state) and force-
-/// advancing to the NEXT switch (the recovery load), just as the user re-loads by hand instead of
-/// waiting forever. ~20s at 60fps -- longer than a real reload (~10-15s) so a slow-but-real load is NOT
-/// misread as frozen, yet short enough to drive the recovery load well inside the runtime cap.
-/// Sized for the can_move (input-registered) gate: a MOVABLE reload must settle in-world (~20s of
-/// SetState5 streaming after WAIT_RELOAD entry) AND then have the move-probe prove 60 frames of injected
-/// motion (~2s) before this deadline, else it is misread as frozen. A FROZEN reload never proves and is
-/// force-advanced here (per parity, the next load recovers it). ~900f (~28s at 32fps) clears a real
-/// reload+prove while staying tight enough that a 3-load chain finishes inside the runtime cap.
+/// FREEZE VERDICT DEADLINE. Frames the WAIT_RELOAD gate allows a reload to prove genuine movement
+/// before emitting a one-shot frozen-epoch verdict. The harness does NOT advance to another switch on
+/// this deadline: doing so overwrote the still-open portrait target and made the failed epoch disappear
+/// under a recovery load. The bounded run's global cap owns teardown if movement never proves.
 pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 /// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
 /// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
@@ -252,25 +245,9 @@ pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
 pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
-/// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
-/// snapshot the live TitleTopDialog dwords just BEFORE the Down (cursor should read 0) and again
-/// AFTER it settles (cursor should read 1); the dword that goes 0->1 IS the cursor field. This
-/// observes the real offset instead of trusting the unverified +0xb0c guess (which the self-fire
-/// run read as 0). Frames are relative to the first poll after menu-open.
-pub(crate) const CURSOR_PROBE_BASELINE_FRAME: usize = INJECT_NAV_SETTLE_FRAMES - 2;
-pub(crate) const CURSOR_PROBE_POSTDOWN_FRAME: usize = INJECT_NAV_SETTLE_FRAMES + 12;
-/// Dwords to scan from the dialog base (covers 0..0x2400, the known field range).
-pub(crate) const CURSOR_PROBE_SCAN_DWORDS: usize = 0x900;
-/// Only dwords in [0, this) are logged as cursor candidates (a row index is small).
-pub(crate) const CURSOR_PROBE_SMALL_MAX: u32 = 8;
-/// Cap the candidate-dword log per snapshot.
-pub(crate) const CURSOR_PROBE_LOG_CAP: usize = 96;
-/// "result emitted / closing" latch, set =1 by EmitResult once the dialog begins teardown. We
-/// stop calling OnDecide once this is set (avoids re-dispatch / UAF after teardown).
-pub(crate) const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize =
-    core::mem::offset_of!(MsgBoxDialogLayout, closing_latch);
-pub(crate) const MSGBOX_CLOSING_YES: usize = true as usize;
-pub(crate) const MSGBOX_LATCH_BYTE_MASK: usize = u8::MAX as usize;
+pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;
+pub(crate) use er_title_flow::MSGBOX_CLOSING_YES;
+pub(crate) use er_title_flow::MSGBOX_LATCH_BYTE_MASK;
 /// THE OK-BUTTON HANDLER 0x14078e030(rcx=dialog) -- the std::function the menu router invokes when
 /// OK is pressed. Captured from a real OK-press (commit 0x14078ef20 fired with caller 0x78e09c, in
 /// the function entered at 0x78e030). It takes ONLY rcx=dialog: reads the dialog cursor (0x140739e20
@@ -280,7 +257,7 @@ pub(crate) const MSGBOX_LATCH_BYTE_MASK: usize = u8::MAX as usize;
 /// captured MessageBoxDialog skips ALL of them generically (connection-error, starting-offline, ...)
 /// with no input -- it is exactly what a real OK-press runs. Verified entry: `rex push rbx; ... mov
 /// rbx,rcx` at 0x78e030; only rcx used.
-pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = 0x78e030;
+pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = MsgBoxRva::OkHandler as usize;
 /// CONFIRM latch [dialog+0x1bc0] u8 -- the field a real OK-press sets. The dialog's own per-frame
 /// UPDATE 0x140927d30 reads it -> commit 0x14078ef20 builds the result functor into [dialog+0x10]
 /// -> next UPDATE emits stop via EmitResult (sets the +0x3b0 closing latch) -> the dialog TEARS
@@ -291,14 +268,8 @@ pub(crate) const MSGBOX_CONFIRM_LATCH_1BC0_OFFSET: usize =
 pub(crate) const MSGBOX_CONFIRM_LATCH_SET: u8 = true as u8;
 pub(crate) const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
-/// Earliest game-task tick to fire the movie dismiss -- a settle floor; the real
-/// gate is the movie singleton being present with the expected vtable. Kept modest
-/// so the dismiss reliably fires within the runtime window.
-pub(crate) const DISMISS_MIN_TICK: u64 = 120;
-/// Generous upper bound on the game image span, to sanity-check that a candidate
-/// object's vtable points into the module before dereferencing deeper.
-/// Sentinel logged when GameMan is null so the field could not be read.
-pub(crate) const ARM_PROBE_FIELD_ABSENT: i64 = -1;
+pub(crate) use er_title_flow::DISMISS_MIN_TICK;
+pub(crate) use er_title_flow::ARM_PROBE_FIELD_ABSENT;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
 /// bears IngameInit is compiled-in but NEVER instantiated in this build, so we
 /// call IngameInit (its state-2 handler) with a SYNTHETIC `this`: it only reads
@@ -347,60 +318,21 @@ pub(crate) const CONTINUE_OWNER_QWORDS: usize =
     core::mem::size_of::<ContinueOwnerLayout>() / core::mem::size_of::<usize>();
 pub(crate) const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
 pub(crate) const CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS: u64 = u64::MIN;
-/// PlayGame load-pair target block, bound to upstream `GameMan::move_map_target`
-/// (audit-confirmed equal to the hand-decoded 0x14).
-pub(crate) const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize =
-    core::mem::offset_of!(GameMan, move_map_target);
+pub(crate) use er_title_flow::FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET;
 pub(crate) const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;
-/// SelectBot selection-injection lane (runs 300/301 static decode). The
-/// SimpleTitleStep MenuLoop pump 0xb0a5e0 parses a serialized SelectBot stream
-/// keyed by "CSEzSelectBot.MoveMapListStep" into owner+0x130 (parsed selection)
-/// and submits a task onto owner+0x128 (title queue). The stream data lives in
-/// the registry object pointed to by global [0x143d87360]. The pump's direct
-/// PlayGame trigger 0xb0a78b is gated by byte [0x143d856a0] (load-active, which
-/// the sole writer 0x140c8fe90 sets downstream of the load). This read-only
-/// probe samples those fields to confirm the registry is live and the pump idles
-/// with an empty stream before any write is attempted.
-pub(crate) const SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET: usize = 0x128;
-pub(crate) const SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET: usize = 0x130;
-pub(crate) const SELECTBOT_REGISTRY_GLOBAL_RVA: usize = 0x3d87360;
-pub(crate) const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
-/// The MenuLoop pump 0xb0a5e0 sets `[input_manager+0x6b0]=1` near its entry
-/// (`mov rax,[0x143d6b7b0]; mov byte [rax+0x6b0],1` at 0xb0a64d) every frame it
-/// executes. Sampling this byte tells us whether the outer SimpleTitleStep is
-/// actually running MenuLoop at the title idle (so SelectBot injection would be
-/// parsed) or is still parked before it (so injection alone would be a no-op
-/// until the title-accept advances the outer state).
-pub(crate) const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
-pub(crate) const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
-/// Lever-1 title-accept experiment (runs 304+). Static RE (bd
-/// `title-accept-lever-143d856a0`) shows inner MenuJobWait (state 10, 0xb0d400)
-/// advances to state 11 (Finish) iff the global byte `[0x143d856a0]` (==
-/// `SELECTBOT_LOAD_GATE_RVA`) is non-zero — it is the title-accept/"proceed"
-/// latch, not a load-downstream flag. We set it ONCE, only while the inner owner
-/// is confirmed at MenuJobWait, to drive the native title-accept with zero input,
-/// then keep sampling to observe the cascade.
-pub(crate) const TITLE_STEP_MENU_JOB_WAIT_STATE: i32 = TITLE_STEP_MENU_JOB_WAIT;
-pub(crate) const TITLE_PROCEED_GATE_SET_VALUE: u8 = true as u8;
-/// Global menu-accept byte 0x144589bdc (RVA 0x4589bdc): the decoded "a button was accepted"
-/// flag the input pipeline sets on press, read via getter 0x140e85f50 from TitleTopDialog::update
-/// (and 22 other menu accept-gates). When non-zero at the parked title, update runs the open-menu
-/// registrar 0x1409b24e0 NATURALLY (build Continue/Load + transfer focus -> select-layer build) --
-/// unlike a direct registrar self-fire which opened a competing dialog and reverted. Setting this
-/// flag zero-input is the ToS-style "satisfy the accept side-effect" advance (NOT a synthesized
-/// DInput/keystate/XInput event). bd title-global-accept-byte-144589bdc-zeroinput-advance-2026.
-pub(crate) const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
-/// Menu-system manager singleton pointer global 0x143d5dea8 (89 refs). The title press-accept
-/// handler 0x1409b1260 does `mov rax,[0x143d5dea8]; if rax: movb [rax],1; jmp registrar 0x1409b24e0`
-/// -- it sets the singleton's +0 byte (a "menu-open in progress" flag) then opens the main menu
-/// IN PLACE. Replicating this (set the flag, then registrar on the validated TitleTopDialog) is the
-/// NARROW title-specific advance that should reach the main menu WITHOUT the language/ToS build that
-/// the broad global accept byte over-triggers, and without the competing-dialog revert a bare
-/// registrar self-fire caused. bd title-accept-to-registrar-narrow-path-143d5dea8-2026.
-pub(crate) const TITLE_MENU_TRANSITION_SINGLETON_RVA: usize = 0x3d5dea8;
-pub(crate) const TITLE_MENU_TRANSITION_FLAG_SET_VALUE: u8 = true as u8;
+pub(crate) use er_title_flow::SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET;
+pub(crate) use er_title_flow::SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET;
+pub(crate) use er_title_flow::SELECTBOT_REGISTRY_GLOBAL_RVA;
+pub(crate) use er_title_flow::SELECTBOT_LOAD_GATE_RVA;
+pub(crate) use er_title_flow::SELECTBOT_INPUT_MANAGER_GLOBAL_RVA;
+pub(crate) use er_title_flow::SELECTBOT_PUMP_RAN_FLAG_OFFSET;
+pub(crate) use er_title_flow::TITLE_STEP_MENU_JOB_WAIT_STATE;
+pub(crate) use er_title_flow::TITLE_PROCEED_GATE_SET_VALUE;
+pub(crate) use er_title_flow::TITLE_GLOBAL_ACCEPT_BYTE_RVA;
+pub(crate) use er_title_flow::TITLE_MENU_TRANSITION_SINGLETON_RVA;
+pub(crate) use er_title_flow::TITLE_MENU_TRANSITION_FLAG_SET_VALUE;
 /// InGameStep manual-tick experiment (lever / "direct drive the load"). The
 /// load job at `owner+0x2e8` is a `CS::InGameStep` whose step machine only
 /// advances while its FD4StepTemplate::Execute pump (`0x140b0bd60`) is ticked
@@ -412,8 +344,8 @@ pub(crate) const TITLE_MENU_TRANSITION_FLAG_SET_VALUE: u8 = true as u8;
 /// ctx+0x8) instead of fabricating one. The InGameStep's own state lives at
 /// `+0x48` (`-1` == finished); we tick only while `+0xd8 != 0` and `+0x48 != -1`.
 pub(crate) const STEP_PUMP_DRIVER_RVA: u32 = 0x00b0bd60;
-pub(crate) const INGAMESTEP_STEP_STATE_OFFSET: usize = 0x48;
-pub(crate) const INGAMESTEP_NEXT_STATE_OFFSET: usize = 0x4c;
+pub(crate) use er_title_flow::INGAMESTEP_STEP_STATE_OFFSET;
+pub(crate) use er_title_flow::INGAMESTEP_NEXT_STATE_OFFSET;
 pub(crate) const INGAMESTEP_FINISHED_SENTINEL: i32 = -1;
 pub(crate) const INGAMESTEP_LOAD_DONE: i32 = 0;
 pub(crate) const INGAMESTEP_PUMP_D8_UNOBSERVED: i32 = -2;
@@ -450,7 +382,6 @@ pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new()
 /// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).
 pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
-pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
 /// BEFORE the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
 pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();
@@ -473,8 +404,6 @@ pub(crate) static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOO
 pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static NATIVE_SUBMIT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_EVENT_HANDLER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_ACTION_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -667,10 +596,9 @@ pub(crate) use er_telemetry::counters::DIRECT_INPUT8_CREATE_ORIG;
 pub(crate) use er_telemetry::counters::DIRECT_INPUT_CREATE_DEVICE_ORIG;
 pub(crate) use er_telemetry::counters::DIRECT_INPUT_GET_DEVICE_STATE_ORIG;
 pub(crate) use er_telemetry::counters::TITLE_HANDOFF_COMPLETE;
-pub(crate) static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
-pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
-    AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
+pub(crate) use er_title_flow::TITLE_OWNER_PTR;
+pub(crate) use er_title_flow::TITLE_OWNER_TRACE_COUNT;
+pub(crate) use er_title_flow::TITLE_NATIVE_JOB_CALLED;
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 /// Trampoline to the original STEP_MenuJobWait (0x140b0d400) for the title-anim speedup hook. 0 = not hooked.
@@ -690,19 +618,15 @@ pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
-pub(crate) static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-/// One-shot latch for the global-accept-byte (0x144589bdc) zero-input title-advance lever.
-pub(crate) static TITLE_ACCEPT_BYTE_GATE_FIRED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(crate) use er_title_flow::TITLE_PROCEED_GATE_FIRED;
+pub(crate) use er_title_flow::TITLE_ACCEPT_BYTE_GATE_FIRED;
 pub(crate) static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
 pub(crate) static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
 pub(crate) static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub(crate) static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(crate) use er_title_flow::NATIVE_AUTOLOAD_ARMED;
 pub(crate) use er_telemetry::counters::SYNTHETIC_OUTER_PTR;
 pub(crate) static CONTINUE_OWNER_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -725,6 +649,8 @@ pub(crate) use er_telemetry::counters::RENDER_FRAME_COUNT;
 pub(crate) static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) use er_telemetry::counters::AV_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry::counters::FATAL_EXCEPTION_LOG_LINES_WRITTEN;
+pub(crate) use er_telemetry::counters::OTHER_EXCEPTION_LOG_LINES_WRITTEN;
 /// Base address (HINSTANCE) of THIS injected DLL, captured from `DllMain`'s hmodule at
 /// `DLL_PROCESS_ATTACH`. Under Wine/Proton the DLL is relocated far from the game module
 /// (observed ~0x6ffe_xxxx_xxxx), so a crash whose faulting RIP / return addresses land in
@@ -738,8 +664,7 @@ pub(crate) use er_telemetry::counters::SELF_DLL_SIZE;
 pub(crate) static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
 pub(crate) static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-pub(crate) static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_COUNTDOWN_READY);
+pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN;
 pub(crate) static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize =
     AtomicUsize::new(SAFE_INPUT_FIRST_PULSE_INDEX as usize);
 pub(crate) static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);

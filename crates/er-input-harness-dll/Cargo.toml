@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 # (bd ROOTCAUSE-plus90-is-OUTPUT-not-input). er-hook provides the shared MinHook FFI.
 [dependencies]
 er-hook = { path = "../er-hook" }
+# Tier A only (default features = zero external deps): shared singleton RVA table.
+er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

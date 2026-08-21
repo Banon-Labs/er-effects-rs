@@ -2,5 +2,10 @@
 
 #![allow(unused_imports)]
 
-include!("own_stepper/bootstrap_drive.rs");
-include!("own_stepper/load_steps.rs");
+use super::*;
+
+mod bootstrap_drive;
+pub(crate) use bootstrap_drive::*;
+
+mod load_steps;
+pub(crate) use load_steps::*;

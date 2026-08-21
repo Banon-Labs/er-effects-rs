@@ -3,7 +3,7 @@
 use std::{
     ffi::c_void,
     fmt,
-    fs::{File, OpenOptions},
+    fs::File,
     io::Write,
     ptr::null_mut,
     sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering},
@@ -19,8 +19,8 @@ const MH_OK: i32 = 0;
 const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
 const MH_ERROR_ENABLED: i32 = 5;
 
-const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
-const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
+const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
 const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = 0x448464a8;
 
 // MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
@@ -33,10 +33,10 @@ const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
 /// logging the child_base-0x108 MoveMapStep state(+0x48)/field25(+0x12a) shows whether load2's
 /// MoveMapStep child (state==18) is torn down at field25<9 (teardown mechanism) or never appears here
 /// (never re-scheduled). rva 0xafa6d0 = the advancer; the mms= pointer in each log distinguishes loads.
-const CHILD_TEARDOWN_RVA: usize = 0xeb54c0;
+const CHILD_TEARDOWN_RVA: usize = er_game_base::rva::EZ_CHILDSTEP_RESET_RVA;
 const MOVEMAPSTEP_CHILD_EZSTEP_OFFSET: usize = 0x108;
 const MOVEMAPSTEP_STATE_48_OFFSET: usize = 0x48;
-const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 const MENU_DATA_RT5D_OFFSET: usize = 0x5d;
 const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
@@ -61,7 +61,7 @@ const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
 const GAME_MAN_SUBMIT_GATE_BCA_OFFSET: usize = 0xbca;
 const GAME_MAN_SUBMIT_GATE_B5E_OFFSET: usize = 0xb5e;
-const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = 0x3d68078;
+const SUBMIT_GLOBAL_PTR_3D68078_RVA: usize = er_game_base::rva::SAVE_DATA_SUBSYSTEM_GATE_RVA;
 const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 
 const HOOK_ORIGINAL_UNSET: usize = 0;
@@ -189,17 +189,16 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+/// Cached appending handle onto a log this process freshened on its first write. The one-shot
+/// truncation lives in `er_game_base::log`, so the handle can be held for the whole run.
 fn open_log_file() -> Option<Mutex<File>> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(LOG_PATH)
-        .ok()
-        .map(Mutex::new)
+    er_game_base::log::open_fresh_run_append(std::path::Path::new(LOG_PATH)).map(Mutex::new)
 }
 
+/// Start this run's trace clean at attach. Rotates the previous run's file to `.log.prev`
+/// rather than destroying it (this used to be a bare `File::create`).
 fn reset_log_file() {
-    let _ = File::create(LOG_PATH);
+    er_game_base::log::begin_fresh_run(std::path::Path::new(LOG_PATH));
 }
 
 fn log_line(args: fmt::Arguments<'_>) {
