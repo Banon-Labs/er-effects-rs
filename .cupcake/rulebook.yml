@@ -24,6 +24,10 @@ signals:
     command: 'printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
     timeout_seconds: 2
   
+  origin_main_oids:
+    command: 'if [ -n "${CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE:-}" ]; then printf "%s" "$CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"; else local_oid="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"; remote_oid="$(git ls-remote --exit-code origin refs/heads/main 2>/dev/null | cut -f1)"; printf "%s %s" "$local_oid" "$remote_oid"; fi'
+    timeout_seconds: 8
+
   # Example: Structured JSON signal
   # system_info:
   #   command: 'echo "{\"os\": \"$(uname)\", \"user\": \"$(whoami)\"}"'
