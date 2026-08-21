@@ -1905,6 +1905,15 @@ pub static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_EQUIP_ORACLE_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// Profile slot the sampler read this window, biased by 1 (0 = nothing sampled yet).
 pub static PORTRAIT_EQUIP_ORACLE_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+/// The `CS::ModelIns` the current portrait-equip window opened against, latched on its first
+/// sample. DIAGNOSTIC ONLY -- nothing classifies on it. It exists to answer bd er-effects-rs-7m5y:
+/// a run measured 40 bad HEAD/CHEST frames out of 235 while every capture frame was clean, and the
+/// suspicion is that they are all sampled BEFORE the model is rebuilt for the incoming character.
+/// Comparing each failing frame's `model_ins` against this settles that from one run instead of
+/// from an assumption -- and if a bad frame reports a DIFFERENT model, the mismatch survives the
+/// rebuild and is a real defect rather than a sampling artifact.
+pub static PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS: AtomicUsize = AtomicUsize::new(0);
 /// Frames THIS window on which a portrait model existed and its live `ChrAsm` was configured. ZERO is
 /// a FAILURE verdict, not a pass: it means the oracle never got to look, which is the `naked_kicks=0`
 /// false negative in a different costume.

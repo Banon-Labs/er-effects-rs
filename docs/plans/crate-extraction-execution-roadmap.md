@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 50630 |
+| all `experiments/**` | 76 | 50639 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -141,7 +141,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,550 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 186 | loading-cover module facade | R15-R16 |
-| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 276 | portrait oracle family | R16 |
+| `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 285 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 898 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,075 | title-flow and product modal families | R22 |

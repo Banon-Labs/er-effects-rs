@@ -48,6 +48,7 @@ pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_ORACLE_SLOT;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_ORACLE_WINDOW;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_RECORD_PARAM_ID;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_SAMPLED_FRAMES;
+pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOWS_BAD;
 pub(crate) use er_telemetry::counters::PORTRAIT_EQUIP_WINDOWS_SAMPLED;
 
@@ -162,6 +163,7 @@ pub(crate) unsafe fn portrait_equip_read_sample(
         unkd8,
         effective,
         record: record_ids,
+        model_ins,
     })
 }
 
@@ -186,6 +188,11 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
     if sampled == 1 {
         PORTRAIT_EQUIP_WINDOWS_SAMPLED.fetch_add(1, Ordering::SeqCst);
         PORTRAIT_EQUIP_ORACLE_SLOT.store((target_slot + 1) as usize, Ordering::SeqCst);
+        // The model the window OPENED against. If every bad frame carries this value and the clean
+        // ones carry a different one, the mismatch is a pre-propagation sampling artifact and the
+        // counting edge is `model_ins != this`. If a bad frame carries a DIFFERENT model, it is a
+        // real post-rebuild defect. One run decides it; nothing here assumes which.
+        PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS.store(sample.model_ins, Ordering::SeqCst);
     }
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNK0, sample.unk0);
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNKD4, sample.unkd4);
@@ -204,7 +211,9 @@ pub(crate) unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, t
         if bad == 1 {
             PORTRAIT_EQUIP_WINDOWS_BAD.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "PORTRAIT-EQUIP FAIL slot={target_slot} mask=0b{mask:05b} effective=[head {} chest {} hands {} legs {}] record=[head {} chest {}] unk0={} unkd4={} unkd8={} -- the portrait will not render this character's armor",
+                "PORTRAIT-EQUIP FAIL slot={target_slot} mask=0b{mask:05b} model_ins=0x{:x} window_open_model_ins=0x{:x} effective=[head {} chest {} hands {} legs {}] record=[head {} chest {}] unk0={} unkd4={} unkd8={} -- the portrait will not render this character's armor",
+                sample.model_ins,
+                PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS.load(Ordering::SeqCst),
                 sample.effective[PORTRAIT_EQUIP_SLOT_HEAD],
                 sample.effective[PORTRAIT_EQUIP_SLOT_CHEST],
                 sample.effective[PORTRAIT_EQUIP_SLOT_HANDS],
