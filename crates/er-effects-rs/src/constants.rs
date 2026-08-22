@@ -3,21 +3,13 @@
 //! This is intentionally broad for the first lib.rs slimming pass. Split into
 //! narrower constants submodules once stable clusters emerge.
 
-#![allow(unused_imports)]
+use std::sync::{Once, atomic::AtomicUsize};
 
-use std::sync::{
-    Once,
-    atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicUsize},
-};
-
-use crate::input_blocker::InputBlocker;
 use eldenring::{
     cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
-    fd4::FD4TaskData,
 };
-use fromsoftware_shared::{F32Vector4, FromStatic};
-use windows::Win32::Foundation::HWND;
+use fromsoftware_shared::FromStatic;
 
 pub(crate) const DLL_MAIN_SUCCESS: i32 = 1;
 pub(crate) const DIRECTINPUT_FORWARD_UNRESOLVED: usize = 0;
@@ -33,7 +25,9 @@ pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
 pub(crate) use er_telemetry::counters::PLAYER_CURRENT_ANIMATION_ID;
 pub(crate) const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 pub(crate) const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const CUSTOM_CALL_DEFAULT_ID: i32 = 0;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const NEXT_INDEX_OFFSET: usize = 1;
 pub(crate) const TITLE_HANDOFF_INCOMPLETE: usize = 0;
 pub(crate) const TITLE_HANDOFF_COMPLETE_VALUE: usize = 1;

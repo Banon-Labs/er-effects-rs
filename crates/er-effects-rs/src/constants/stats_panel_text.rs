@@ -234,6 +234,7 @@ pub(crate) const PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET: usize = 0x90;
 /// populate makes the game's own `FUN_14074a000` write our text, with no second SetText and nothing
 /// left behind: `~MenuString` (0x1401bcc60) frees only the DLString, never `rawString`, and we
 /// restore the displaced pointer as soon as the populate returns.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const PROFILE_ROW_MODEL_PLAY_TIME_MENUSTRING_C8_OFFSET: usize = 0xc8;
 /// Count of rows whose `PlayTime` was replaced with the file's last-saved timestamp (oracle).
 pub(crate) use er_telemetry::counters::PROFILE_ROW_LAST_SAVED_ROWS;
@@ -349,10 +350,6 @@ pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_BIND_HIDE_CALLS;
 pub(crate) use er_telemetry::counters::TITLE_PRESS_START_GFX_HIDE_CALLS;
-pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG;
-pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_PROXY;
-pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT;
-pub(crate) use er_title_flow::TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE;
 pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
 pub(crate) use er_title_flow::TITLE_LOGO_BACK_VIEW_PARTS_NAME;
 pub(crate) use er_title_flow::TITLE_LOGO_RESOURCE_NAME;
@@ -445,12 +442,18 @@ pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// MemoryFile-backed replacement state for `ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX`. The replacement
 /// is deliberately opt-in: default file-open observer mode still calls the original loader.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SCALEFORM_MEMORY_GLOBAL_RVA: usize = 0x4593250;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SCALEFORM_DLSTRING_CHAR_COPY_RVA: usize = 0x1140ec0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SCALEFORM_MEMORY_FILE_SIZE: usize = 0x30;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET: usize = 0x8;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
 pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
 pub(crate) use er_telemetry::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
 /// 05_000_title-only slice of `TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS` (which aggregates both the
@@ -559,18 +562,14 @@ pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA: AtomicUsize =
 /// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
 /// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
 /// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA: usize = 0x9a62a0;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SCENE_PROXY_DIAG_SCAN_SPAN: usize = 0x40;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_LATCH_BYTE_MASK;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_IS_IN_STATE_RVA;
-pub(crate) use er_title_flow::TITLE_STATE_DESC_FADEIN_RVA;
-pub(crate) use er_title_flow::TITLE_STATE_DESC_LOOP_RVA;
-pub(crate) use er_title_flow::TITLE_STATE_DESC_TEXTFADEOUT_RVA;
 pub(crate) use er_title_flow::OWN_STEPPER_FALSE;
 pub(crate) use er_title_flow::OWN_STEPPER_MENU_OPENED_NO;
 /// STAGE1d probes the dialog's FD4 state immediately and opens only on the semantic Loop+latch
@@ -599,14 +598,17 @@ pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = TraceSampleLimit::Value8
 pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const OWN_STEPPER_LOADGAME_SCAN_CAP: usize = TraceSampleLimit::Value12 as usize;
 pub(crate) use er_title_flow::TITLE_STATE_OWNER_GONE;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const FORCE_PLAY_GAME_STATE_UNOBSERVED: i32 = -999;
 /// One-shot "PlayGame requested" flag on the TitleStep owner. STEP_PlayGame only
 /// runs its real load-trigger (`consume_owner300` 0x140ca89e0 on owner+0x300,
 /// gated at 0x140b0d70c) when this byte is nonzero, then clears it. The menu
 /// "Continue" selection normally sets it; we set it so the forced PlayGame step
 /// actually starts the load instead of resetting via GameStepWait.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, play_game_request_flag);
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = true as u8;
 /// The save slot STEP_PlayGame actually loads. Its handler (0x140b0d5b0) reads
 /// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
@@ -615,12 +617,10 @@ pub(crate) const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = true as u8;
 pub(crate) const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, play_game_slot);
 pub(crate) use er_title_flow::TITLE_STEP_GAME_STEP_WAIT;
-pub(crate) use er_title_flow::TITLE_OWNER_JOB_OFFSET;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLoadJobLayout, pending);
-pub(crate) use er_title_flow::TITLE_JOB_OBSERVE_TICK_INTERVAL;
 pub(crate) use er_title_flow::FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA;
-pub(crate) use er_title_flow::TITLE_SET_STATE_RVA;
 pub(crate) const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, new_game_flag);
 /// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
@@ -650,23 +650,29 @@ pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
 /// `blankSlot == 1` takes the `memset(buf, 0, 0x280000)` branch, i.e. it writes an ERASED
 /// slot -- destructive. The prior doc claimed this "submits the 0x280000 save read"; the
 /// 0x280000 buffer is the save WRITE buffer.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SAVE_WRITE_TO_SLOT_RVA: usize = 0x67b750;
 pub(crate) use er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
 pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
-pub(crate) use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SUBMIT_PHASE_BUILT: i32 = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SUBMIT_PHASE_DESER: i32 = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 /// Phase C world-priming (ingameinit-decoded-world-built-by-movemapstep-msbload-2026):
 /// the world singletons are built by the MoveMapStep's OWN step machine (STEP_MsbLoad),
 /// driven by per-frame update 0x140aff640(rcx=MoveMapStep, rdx=FD4TaskData). The
 /// MoveMapStep is held at InGameStep(owner+0x2e8)+0xe8. Pump it until child+0xd8 drains.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MOVEMAPSTEP_UPDATE_RVA: usize = 0xaff640;
 pub(crate) use er_title_flow::INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// play_game_submit-handoff discriminators on the InGameStep object (own-load-worldreswait-is-block-
 /// registration-not-coord-2026-06-22). play_game_submit 0x140aebdc0 sets InGameStep+0xd8=1 and
@@ -708,10 +714,14 @@ pub(crate) const C30_WRITER_RVA: usize = 0x67bd70;
 /// GameMan save-load entry that reaches PlayerGameData::Deserialize -> CSGaitemImp::Deserialize.
 /// Guarded during System quickload return-title transition so ProfileSelect OK cannot deserialize
 /// into the live in-world player state before native title ownership is rebuilt.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA: u32 = 0x67bd70;
 /// CSGaitemImp::Deserialize leaf that crashes during in-world ProfileSelect OK handoff.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA: u32 = 0x671130;
 /// CSGaitemImp indexed-handle lookup used by ChrAsm::Deserialize after equipment stream reads.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_RVA: u32 = 0x671810;
 /// CSGaitemImp post-deserialize finalize/reindex path that panics while singleton state is reset.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_RVA: u32 = 0x671670;

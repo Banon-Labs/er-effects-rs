@@ -13,6 +13,7 @@
 // 0x141a004c0) + FUN_140b81110(GLOBAL_TexRepository, name=NULL, builder, ...) -- name=NULL DERIVES the
 // GLOBAL_TexRepository GPU key from the TPF ENTRY name (FUN_141a00950(builder)). So the TPF entry name
 // (not texName) is the GPU repo key. Returns the TpfResCap* (non-null on success).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const CREATE_TPF_RES_CAP_RVA: usize = CREATE_TPF_RESCAP_RVA;
 /// `GLOBAL_TpfRepository` singleton pointer (dump 0x143d73fb8; data RVA = dump_va - 0x140000000, the
 /// 0-shift data convention used by the other singleton RVAs here). MUST be read + null-checked before
@@ -33,18 +34,14 @@ pub(crate) const GLOBAL_TEX_REPOSITORY_RVA: usize = 0x3d73e58;
 pub(crate) const ER_TPF_COVER_SYSTEX_KEY: &str = "SYSTEX_ErTpf_Cover00";
 /// er-tpf cover texture dimensions + checker cell (bright magenta/white checker = unmistakable on the
 /// loading-screen-portrait screenshot). 256x256 RGBA8 (uncompressed, legacy DDS header -> DXGI 28).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const ER_TPF_COVER_TEX_DIM: u32 = 256;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const ER_TPF_COVER_TEX_CELL: u32 = 32;
 // ER_TPF_COVER_ERR_* removed 2026-07-31 (er-effects-rs-56fx) with ER_TPF_COVER_LAST_ERROR: every
 // code had exactly one reference -- its own definition -- because nothing ever recorded one.
-/// 1 once the native CreateTpfResCap call has been ATTEMPTED (success or failure). Latched the moment a
-/// real call is made so the register fires exactly ONCE; precondition-not-ready bails (repos still null
-/// during boot) do NOT set this and keep retrying until graphics is up.
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_REGISTER_ATTEMPTED;
 // ER_TPF_COVER_REGISTERED / _LAST_RESCAP / _BOUND / _FAILURES / _LAST_ERROR removed 2026-07-31
 // (er-effects-rs-56fx): all five were read once each to emit an oracle and written nowhere, so the
 // TPF cover texture path reported registered=false, bound=0, failures=0, err=NONE on every run
 // whether or not it ever ran. Re-add WITH writers at the register/bind sites if that path is built.
-/// One-shot latch for the bind-observer target rewrite (fires once after registration).
-pub(crate) use er_telemetry::counters::ER_TPF_COVER_TARGET_REWRITE_FIRED;
 

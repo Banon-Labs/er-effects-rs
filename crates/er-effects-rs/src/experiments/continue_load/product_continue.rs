@@ -1,41 +1,6 @@
-use std::{
-    ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use std::{fs, sync::atomic::Ordering};
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use eldenring::cs::PlayerIns;
 
 #[allow(unused_imports)]
 use crate::*;
@@ -184,8 +149,11 @@ pub(crate) unsafe fn submit_native_continue_item_action(
         ));
         return None;
     }
+    #[allow(dead_code)] // Retained: Decoded FD4 event-payload shape for the Continue wrapper; the current submit path logs the ABI instead of building the event.
     const CONTINUE_WRAPPER_EVENT_WORDS: usize = 2;
+    #[allow(dead_code)] // Retained: Word index within the decoded Continue event payload; see CONTINUE_WRAPPER_EVENT_WORDS.
     const CONTINUE_WRAPPER_EVENT_CODE_INDEX: usize = 0;
+    #[allow(dead_code)] // Retained: Word index within the decoded Continue event payload; see CONTINUE_WRAPPER_EVENT_WORDS.
     const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
     let native_submit = base + MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
@@ -489,10 +457,11 @@ pub(crate) unsafe fn menu_input_probe(owner: usize, base: usize) {
     let leaf_ticks = MENU_D180_LEAF_TICKED.load(Ordering::SeqCst);
 
     let in_down =
-        f >= INPUT_PROBE_DOWN_START && f < INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES;
-    let in_highlight = f >= INPUT_PROBE_DOWN_START && f < INPUT_PROBE_CONFIRM_START;
-    let in_confirm = f >= INPUT_PROBE_CONFIRM_START
-        && f < INPUT_PROBE_CONFIRM_START + INPUT_PROBE_CONFIRM_TAP_FRAMES;
+        (INPUT_PROBE_DOWN_START..INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES).contains(&f);
+    let in_highlight = (INPUT_PROBE_DOWN_START..INPUT_PROBE_CONFIRM_START).contains(&f);
+    let in_confirm = (INPUT_PROBE_CONFIRM_START
+        ..INPUT_PROBE_CONFIRM_START + INPUT_PROBE_CONFIRM_TAP_FRAMES)
+        .contains(&f);
 
     if inputmgr != NULL {
         if in_down {
@@ -576,6 +545,7 @@ pub(crate) unsafe fn menu_input_probe(owner: usize, base: usize) {
 /// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
+#[allow(dead_code)] // Retained: Staged-save slot seeder for the deprecated staged-save probe path; the RE it encodes (ProfileSummary slot layout, FaceData::CopyFromBuffer, ChrAsm copy) is the reason it stays.
 unsafe fn seed_profile_summary_slot_from_staged_save(
     base: usize,
     profile_summary: usize,
@@ -591,7 +561,7 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     // memcpy'ing the saved wrapper over the live slot. The native row builder passes slot+0x1a8
     // to the equipment renderer (CHR_ASM_COPY_RVA, shared constant) instead of leaving a
     // zero/default `ChrAsm` that only proves renderer plumbing.
-    if profile_summary <= NULL
+    if profile_summary == NULL
         || slot < OWN_STEPPER_SLOT_ZERO
         || slot as usize >= TITLE_PROFILE_SLOT_COUNT
     {

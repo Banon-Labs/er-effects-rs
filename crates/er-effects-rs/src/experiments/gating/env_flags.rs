@@ -1,41 +1,6 @@
-use std::{
-    ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::s};
 
 #[allow(unused_imports)]
 use crate::*;
@@ -286,14 +251,16 @@ pub(crate) fn native_load_enabled() -> bool {
 /// (load-most-recent) MenuMemberFuncJob node's run 0x1409aaba0 exactly once -- which drives the FULL
 /// native load (parse + world-asset streaming + spawn). NO SetState(2/3), NO beginlogo-gate clear,
 /// NO registrar self-fire, NO direct_build / cold_char_mount. Observe + one-shot fire only.
-/// Single explicit OFF kill-switch for the always-on product autoload (most-recent native Continue
-/// + the readiness press-any-button advance that gets us to the title menu). Autoload is the DEFAULT
+///
+/// Single explicit OFF kill-switch for the always-on product autoload (most-recent native Continue +
+/// the readiness press-any-button advance that gets us to the title menu). Autoload is the DEFAULT
 /// DLL behavior (user directive 2026-06-24 "Autoload should always be the default dll behavior";
 /// product contract `autoload-dll-product-requirements`: "always-on -- no opt-in gate; users install
 /// the DLL knowingly and read docs"). Set `ER_EFFECTS_NO_AUTOLOAD=1` or drop
 /// `er-effects-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
 /// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
 /// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+///
 /// CLEAN-A/B DIAGNOSTIC (bd STEP4-RUNTIME-TRACE + STEP4-4fps-AB-STRUCTURALLY-CONFOUNDED): disable the
 /// menu-free switch-reload (`own_load_switch_reload_fire`) so the ONLY reload path is the harness's
 /// menu-driven native quit->Continue. Run with vs without this marker under IDENTICAL config (armed,
@@ -548,7 +515,7 @@ pub(crate) fn harness_dll_present() -> bool {
     if CACHED.load(Ordering::Relaxed) == 1 {
         return true;
     }
-    let present = unsafe { GetModuleHandleA(PCSTR(b"er_input_harness_dll.dll\0".as_ptr())) }
+    let present = unsafe { GetModuleHandleA(s!("er_input_harness_dll.dll")) }
         .map(|h| !h.is_invalid())
         .unwrap_or(false);
     if present {
@@ -566,7 +533,7 @@ pub(crate) fn renderdoc_active() -> bool {
     if CACHED.load(Ordering::Relaxed) == 1 {
         return true;
     }
-    let present = unsafe { GetModuleHandleA(PCSTR(b"renderdoc.dll\0".as_ptr())) }
+    let present = unsafe { GetModuleHandleA(s!("renderdoc.dll")) }
         .map(|h| !h.is_invalid())
         .unwrap_or(false);
     if present {

@@ -1,6 +1,16 @@
 use crate::prelude::*;
 
 /// Read a `BoneData` quaternion (4 f32 at `addr`) with fault-guarded reads; `None` on unmapped memory.
+///
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
 pub unsafe fn read_quat(addr: usize) -> Option<[f32; 4]> {
     Some([
         f32::from_bits(unsafe { safe_read_i32(addr) }? as u32),
@@ -91,6 +101,19 @@ unsafe fn lookat_write_local(holder: usize) {
 
 /// Hook on `updateBoneModelSpace`: for a registered profile holder, write the look-at into the local
 /// pose BEFORE the original recomputes model-space, so the rotation cascades into the rendered pose.
+///
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// `updateBoneModelSpace`, so it may only be entered by that patched call site, on the game thread
+/// that made the call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `PROFILE_LOOKAT_HOOK_ORIG`; that static must hold the trampoline this detour was installed with,
+/// or the call transfers to an arbitrary address.
+///
+/// `holder` is only written to when it matches a holder this crate itself registered in
+/// `PROFILE_LOOKAT_HOLDERS`; any other value is passed straight through untouched.
 pub unsafe extern "system" fn update_bone_model_space_hook(holder: usize) {
     if holder != 0 {
         let ours = PROFILE_LOOKAT_HOLDERS
@@ -137,7 +160,9 @@ pub fn install_lookat_hook() {
                 ));
                 return;
             }
-            std::mem::forget(hook);
+            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address -- so letting the handle go does NOT uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!("lookat-hook: MhHook::new failed: {status:?}"));
@@ -160,10 +185,14 @@ pub fn install_lookat_hook() {
 unsafe fn lookat_recompute_fn() -> Option<unsafe extern "system" fn(usize)> {
     let orig = PROFILE_LOOKAT_HOOK_ORIG.load(Ordering::SeqCst);
     if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
-        return Some(unsafe { core::mem::transmute(orig) });
+        return Some(unsafe {
+            core::mem::transmute::<usize, unsafe extern "system" fn(usize)>(orig)
+        });
     }
     match game_rva(UPDATE_BONE_MODEL_SPACE_RVA as u32) {
-        Ok(addr) => Some(unsafe { core::mem::transmute(addr) }),
+        Ok(addr) => {
+            Some(unsafe { core::mem::transmute::<usize, unsafe extern "system" fn(usize)>(addr) })
+        }
         Err(_) => None,
     }
 }
@@ -172,6 +201,18 @@ unsafe fn lookat_recompute_fn() -> Option<unsafe extern "system" fn(usize)> {
 /// idle local quats once (drift-free base), write `base ⊗ delta(yaw,pitch)` into Head/Neck/Spine2 local
 /// quats, mark all bones model-space-dirty + `isUpdated=false`, then recompute model-space so the draw
 /// that follows skins from the rotated pose. Returns true if any bone was driven. Every read is bounded.
+///
+/// # Safety
+///
+/// `holder` is read through fault-guarded helpers, but on success this WRITES bone
+/// quaternions and dirty flags into the game's live `PoseHolder` and then CALLS the game's
+/// `updateBoneModelSpace`. The caller must guarantee:
+///
+/// * `holder` is a live Havok `PoseHolder` whose model is currently built -- writing pose
+///   bytes into an arbitrary address is corruption, and the recompute call dereferences it;
+/// * the call happens on the render thread inside the draw phase, between the engine's own
+///   pose update and the draw that skins from it, so the write is not raced;
+/// * `slot_idx` is a valid index into `PROFILE_LOOKAT_SLOTS` (out of range panics).
 pub unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch: f32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -225,10 +266,10 @@ pub unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pi
     // freshly-rebuilt idle pose -- captured before this frame's look-at write contaminates it).
     if !latched {
         for (bidx, _, _, bslot) in drives {
-            if let Some(addr) = q_addr(bidx) {
-                if let Some(q) = unsafe { read_quat(addr) } {
-                    base[bslot] = q;
-                }
+            if let Some(addr) = q_addr(bidx)
+                && let Some(q) = unsafe { read_quat(addr) }
+            {
+                base[bslot] = q;
             }
         }
         let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
@@ -345,6 +386,17 @@ unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
 /// Each frame: keep the loaded-character portrait renderer alive, run the safe draw/publish pump, and
 /// deliberately publish a neutral pose. Cursor/head tracking is retired; this path never reads or warps
 /// the OS cursor for portrait motion.
+///
+/// # Safety
+///
+/// `base` must be the running `eldenring.exe` image base -- every RVA constant this drives
+/// is added to it and the results are called or written, so a wrong base turns a draw into
+/// a jump to an arbitrary address.
+///
+/// `task_data` must be the live `FD4TaskData` the engine handed to a `GameSceneDraw`-phase
+/// task, and this must run on that render thread inside an actively-recording GX frame.
+/// Driven from the game task phase, its GX subcontext pool is empty and the draw is a
+/// black no-op; driven from any other thread it races the engine's own recording.
 pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
     if !portrait_overlay_enabled() {
         return;

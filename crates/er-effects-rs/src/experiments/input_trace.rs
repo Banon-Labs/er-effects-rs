@@ -255,10 +255,10 @@ fn game_input_accept_now() -> bool {
     if let Ok(base) = game_module_base() {
         let dluid = unsafe { safe_read_usize(base + RuntimeGlobalRva::DluidInputManager as usize) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-        if dluid != TITLE_OWNER_SCAN_START_ADDRESS {
-            if let Some(v) = unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) } {
-                return (v & 0xff) != 0;
-            }
+        if dluid != TITLE_OWNER_SCAN_START_ADDRESS
+            && let Some(v) = unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }
+        {
+            return (v & 0xff) != 0;
         }
     }
     let mut pid = 0u32;
@@ -351,7 +351,7 @@ fn input_trace_semaphores() -> TraceSem {
     let opt_tab_raw = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
     // GameMan typed view + raw RE fields, exactly as snapshot_game_man_on_change samples them.
     let t = unsafe { GameMan::instance() }
-        .map(|game_man| GameManTelemetry::from_game_man(game_man))
+        .map(GameManTelemetry::from_game_man)
         .unwrap_or_default();
     let gm = game_man_ptr_or_null();
     let (c30, bc4) = if gm != null {

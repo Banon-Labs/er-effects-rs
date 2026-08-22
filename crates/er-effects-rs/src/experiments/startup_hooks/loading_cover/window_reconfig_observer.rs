@@ -331,7 +331,9 @@ pub(crate) fn winreconfig_screen_mode() -> Option<String> {
     let path = format!("{root_string}\\EldenRing\\GraphicsConfig.xml");
     let bytes = std::fs::read(&path).ok()?;
     let mut units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     if units.first() == Some(&0xFEFF) {
@@ -423,7 +425,7 @@ pub(crate) fn apply_startup_window_final_geometry() {
     let width = target.right - target.left;
     let height = target.bottom - target.top;
     WINRECONFIG_EARLY_APPLY_RECT.store(
-        (((width as u32 as usize) << 16) | (height as u32 as usize & 0xffff)).min(usize::MAX),
+        ((width as u32 as usize) << 16) | (height as u32 as usize & 0xffff),
         Ordering::SeqCst,
     );
 

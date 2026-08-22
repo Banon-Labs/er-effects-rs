@@ -19,6 +19,7 @@ pub(crate) struct EffectsState {
     /// Latched when the expected appear animation is observed either as current or as a queue write
     /// between task ticks; runtime proof needs the semantic event, not a one-frame sampling race.
     expected_animation_seen: bool,
+    #[allow(dead_code)] // Retained: Written by the appear-animation latch; nothing reads it back yet.
     applied_for_current_appear: bool,
     /// TimeAct queue write index at the previous tick; used to detect appear
     /// animations that were enqueued (and possibly finished) between ticks.
@@ -438,7 +439,7 @@ fn spawn_save_suppress_install() {
                 match er_game_base::mem::game_module_base() {
                     Ok(_) => break,
                     Err(err) => {
-                        if attempts == 0 || attempts % SAVE_SUPPRESS_WAIT_LOG_INTERVAL == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(SAVE_SUPPRESS_WAIT_LOG_INTERVAL) {
                             crate::telemetry::append_autoload_debug(format_args!(
                                 "save-suppress: waiting for game module base: {err}"
                             ));
@@ -476,7 +477,7 @@ fn spawn_save_observers_only() {
                 match er_game_base::mem::game_module_base() {
                     Ok(_) => break,
                     Err(err) => {
-                        if attempts == 0 || attempts % SAVE_SUPPRESS_WAIT_LOG_INTERVAL == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(SAVE_SUPPRESS_WAIT_LOG_INTERVAL) {
                             crate::telemetry::append_autoload_debug(format_args!(
                                 "save-observers: waiting for game module base: {err}"
                             ));
@@ -506,7 +507,7 @@ pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
             Ok(instance) => return instance,
             Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
                 wait_attempts = wait_attempts.saturating_add(1);
-                if wait_attempts == 1 || wait_attempts % TASK_INSTANCE_WAIT_LOG_INTERVAL == 0 {
+                if wait_attempts == 1 || wait_attempts.is_multiple_of(TASK_INSTANCE_WAIT_LOG_INTERVAL) {
                     let detail = format!("attempts={wait_attempts}");
                     write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
                 }

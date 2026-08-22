@@ -2,8 +2,6 @@
 //! er-effects-rs constants/player_correctness.rs in the portrait crate split.
 //! Bound to the upstream `eldenring` typed layout via `offset_of!` exactly as before.
 
-use crate::prelude::*;
-
 use eldenring::cs::{GameDataMan, PlayerGameData};
 
 /// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data

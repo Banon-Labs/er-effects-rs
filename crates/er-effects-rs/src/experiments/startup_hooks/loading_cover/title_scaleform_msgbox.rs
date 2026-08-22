@@ -1,47 +1,11 @@
 use super::*;
 
 use std::{
-    ffi::{CStr, c_void},
-    fmt::Write as _,
-    fs,
-    path::Path,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant, UNIX_EPOCH},
+    ffi::c_void,
+    sync::{OnceLock, atomic::Ordering},
 };
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{
-    MH_ApplyQueued, MH_Initialize, MH_QueueDisableHook, MH_QueueEnableHook, MH_STATUS, MhHook,
-};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        // The comdlg32 imports this block used to carry now live in `save_picker_os_dialog.rs`,
-        // where they are actually used; keep this module limited to its own window-message imports.
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR, PCWSTR},
-};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 #[allow(unused_imports)]
 use crate::*;
@@ -62,8 +26,6 @@ pub(crate) static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::n
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
 pub(crate) static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
-pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_FAILURES;
-pub(crate) use er_telemetry::counters::OPTIONS_02_040_QUIT4_RUNTIME_SERVES;
 
 /// Arm the product-default runtime 05_000_title strip. The old env-driven memory-GFX overrides
 /// (`load_memory_gfx_from_env` and the `TITLE_SCALEFORM_MEMORY_GFX` /
@@ -435,7 +397,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                 "policy-oracle: queue_enable ToS ctor wrapper failed: {status:?}"
             ));
         } else {
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
     }
     let Ok(selector_wrapper_addr) = game_rva(POLICY_TOS_SELECTOR_WRAPPER_RVA) else {
@@ -456,7 +418,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                 "policy-oracle: queue_enable ToS selector wrapper failed: {status:?}"
             ));
         } else {
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
     }
     let Ok(selector_ctor_addr) = game_rva(POLICY_TOS_SELECTOR_CTOR_RVA) else {
@@ -477,7 +439,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                 "policy-oracle: queue_enable ToS selector ctor failed: {status:?}"
             ));
         } else {
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
     }
     let Ok(predicate_addr) = game_rva(POLICY_TOS_STATUS_PREDICATE_RVA) else {
@@ -498,7 +460,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                 "policy-oracle: queue_enable ToS status predicate failed: {status:?}"
             ));
         } else {
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
     }
     let Ok(flag_setter_addr) = game_rva(POLICY_TOS_FLAG_SETTER_RVA) else {
@@ -519,7 +481,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                 "policy-oracle: queue_enable ToS flag setter failed: {status:?}"
             ));
         } else {
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
     }
     let Ok(ctor_addr) = game_rva(POLICY_TOS_TITLE_CTOR_RVA) else {
@@ -544,7 +506,7 @@ pub(crate) fn install_policy_tos_title_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     POLICY_TOS_TITLE_HOOK_INSTALLED
                         .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -639,7 +601,7 @@ pub(crate) fn install_server_status_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SERVER_STATUS_HOOK_INSTALLED
                         .store(SERVER_STATUS_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -703,9 +665,7 @@ pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize) {
     if c <= null {
         return;
     }
-    if let Some(text) =
-        unsafe { read_dlw_string(unsafe { safe_read_usize(c + 0x8e0) }.unwrap_or(null), 80) }
-    {
+    if let Some(text) = unsafe { read_dlw_string(safe_read_usize(c + 0x8e0).unwrap_or(null), 80) } {
         append_autoload_debug(format_args!("spec #{n}: text@*(r8+0x8e0)=\"{text}\""));
     }
     let mut off = 0usize;
@@ -715,10 +675,10 @@ pub(crate) unsafe fn dump_msgbox_spec(c: usize, n: usize) {
             append_autoload_debug(format_args!("spec #{n}: inline[r8+0x{off:x}]=\"{text}\""));
         }
         // Pointer-to-DLW-string at r8+off.
-        if let Some(ptr) = unsafe { safe_read_usize(c + off) } {
-            if let Some(text) = unsafe { read_dlw_string(ptr, 80) } {
-                append_autoload_debug(format_args!("spec #{n}: *[r8+0x{off:x}]=\"{text}\""));
-            }
+        if let Some(ptr) = unsafe { safe_read_usize(c + off) }
+            && let Some(text) = unsafe { read_dlw_string(ptr, 80) }
+        {
+            append_autoload_debug(format_args!("spec #{n}: *[r8+0x{off:x}]=\"{text}\""));
         }
         off += 8;
     }

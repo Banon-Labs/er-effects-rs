@@ -1,5 +1,3 @@
-#![allow(unused_imports)]
-
 #[cfg(not(windows))]
 pub fn host_diagnostic_stub() {}
 
@@ -9,45 +7,31 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 #[cfg(windows)]
-use crate::input_blocker::InputBlocker;
-#[cfg(windows)]
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-#[cfg(windows)]
 use eldenring::{
-    cs::{
-        CSTaskGroupIndex, CSTaskImp, ChrInsExt, FaceData, FaceDataBuffer, GameDataMan, GameMan,
-        PlayerGameData, PlayerIns,
-    },
-    dlkr::DLAllocator,
+    cs::{CSTaskGroupIndex, CSTaskImp, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
 #[cfg(windows)]
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
+use er_save_loader::{SaveLoadContext, SaveLoader};
 #[cfg(windows)]
-use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
+use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 #[cfg(windows)]
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        Foundation::HINSTANCE,
         System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            LibraryLoader::{GetProcAddress, LoadLibraryA},
             SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
+    core::PCSTR,
 };
 
 #[cfg(windows)]

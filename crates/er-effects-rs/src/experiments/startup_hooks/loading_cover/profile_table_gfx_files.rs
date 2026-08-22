@@ -36,7 +36,7 @@ pub(crate) fn install_profile_select_table_diag_hook() {
                 ));
                 return;
             }
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -88,7 +88,7 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
                 ));
                 return;
             }
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -181,7 +181,11 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         u8,
         u32,
     ) -> usize = unsafe { std::mem::transmute(base + CREATE_TPF_RESCAP_RVA) };
-    for slot in 0..STATS_PANEL_SLOT_COUNT {
+    for (slot, systex_key) in STATS_PANEL_SYSTEX_KEYS
+        .iter()
+        .enumerate()
+        .take(STATS_PANEL_SLOT_COUNT)
+    {
         if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & (1 << slot) != 0 {
             continue;
         }
@@ -189,7 +193,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
             STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_BLOB_EMPTY, Ordering::SeqCst);
             continue;
         };
-        let name_z: Vec<u16> = STATS_PANEL_SYSTEX_KEYS[slot]
+        let name_z: Vec<u16> = systex_key
             .encode_utf16()
             .chain(core::iter::once(0))
             .collect();

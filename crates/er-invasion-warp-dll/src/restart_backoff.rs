@@ -191,10 +191,12 @@ mod tests {
             now += last;
         }
         assert_eq!(last, MAX_DELAY_MS);
-        assert!(
-            MAX_DELAY_MS < 15_000,
-            "a backed-off retry must stay faster than Seamless's own retry"
-        );
+        const {
+            assert!(
+                MAX_DELAY_MS < 15_000,
+                "a backed-off retry must stay faster than Seamless's own retry"
+            )
+        };
     }
 
     /// ONE GOOD ATTEMPT CLEARS THE PENALTY. The live condition lasted ~40s and then cleared on its

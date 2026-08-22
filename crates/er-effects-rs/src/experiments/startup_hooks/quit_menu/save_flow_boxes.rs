@@ -53,10 +53,9 @@ use er_game_base::fnv1a::fnv1a64_mix;
 // keeps the native MessageBoxBuilder/queue integration in the product DLL until the hooked surfaces
 // move in S8.
 pub(crate) use er_quit_menu::save_flow_boxes::{
-    SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE, SAVE_FLOW_PROMPT_CAPACITY, SaveFlowBoxRecipe,
-    SaveFlowButton, SaveFlowDecision, save_flow_box_add_order, save_flow_box_counter_bump,
-    save_flow_box_label, save_flow_box_prompt, save_flow_box_yes_index, save_flow_decision_label,
-    save_flow_yes_button_desc,
+    SAVE_FLOW_BOX_NONE, SaveFlowBoxRecipe, SaveFlowButton, SaveFlowDecision,
+    save_flow_box_add_order, save_flow_box_counter_bump, save_flow_box_label, save_flow_box_prompt,
+    save_flow_decision_label, save_flow_yes_button_desc,
 };
 
 /// Stack scratch for `CS::MessageBoxBuilder`. 16-byte aligned: the builder ctor stores xmm
@@ -359,6 +358,7 @@ pub(crate) struct SaveFlowBoxSnapshot {
 ///     `CS::MenuJob::EmitResult` (vtable `+0x60`, which then sets the `+0x3b0` latch) or
 ///     stores it at `dialog+0x1e8`, depending on `*(u8*)(dialog+0x127c)`;
 ///   * cancel/auto-close (`FUN_1407ac890`) emits `Failed` through the same slot.
+///
 /// So we read `+0x1e8` AND latch what the emit hook saw for this exact dialog. Both are the
 /// game's own verdict; neither exists until the user answers.
 ///

@@ -2,37 +2,18 @@ use std::{
     ffi::c_void,
     fs,
     path::PathBuf,
-    sync::{
-        Arc, Mutex, Once,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, Program, SharedTaskImpExt};
+use crate::mh::{MH_Initialize, MH_STATUS};
+use fromsoftware_shared::Program;
 use pelite::pe64::Pe;
 use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
+    Win32::System::{
+            LibraryLoader::GetModuleHandleA,
             Threading::GetCurrentProcessId,
         },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
+    core::PCSTR,
 };
 
 #[allow(unused_imports)]
@@ -209,9 +190,9 @@ fn av_stack_game_returns(rsp: usize, base: usize) -> String {
     {
         let addr = rsp + slot * std::mem::size_of::<usize>();
         if let Some(val) = unsafe { safe_read_usize(addr) } {
-            if base != NULL_MODULE_BASE {
-                if let Some(rva) = val.checked_sub(base) {
-                    if (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva)
+            if base != NULL_MODULE_BASE
+                && let Some(rva) = val.checked_sub(base)
+                    && (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva)
                         && game_found < AV_STACK_MAX_RETURNS
                     {
                         if game_found != 0 {
@@ -220,19 +201,15 @@ fn av_stack_game_returns(rsp: usize, base: usize) -> String {
                         game.push_str(&format!("0x{rva:x}"));
                         game_found += 1;
                     }
-                }
-            }
-            if self_base != NULL_MODULE_BASE {
-                if let Some(rva) = val.checked_sub(self_base) {
-                    if rva < self_size && self_found < AV_STACK_MAX_RETURNS {
+            if self_base != NULL_MODULE_BASE
+                && let Some(rva) = val.checked_sub(self_base)
+                    && rva < self_size && self_found < AV_STACK_MAX_RETURNS {
                         if self_found != 0 {
                             selfret.push(',');
                         }
                         selfret.push_str(&format!("0x{rva:x}"));
                         self_found += 1;
                     }
-                }
-            }
         }
         slot += 1;
     }
@@ -273,8 +250,8 @@ fn av_module_backtrace(rsp: usize, modules: &[(usize, usize, String)]) -> String
     let mut slot = 0usize;
     while slot < AV_STACK_SCAN_SLOTS && emitted < AV_MODULE_BT_MAX_FRAMES {
         let addr = rsp + slot * std::mem::size_of::<usize>();
-        if let Some(val) = unsafe { safe_read_usize(addr) } {
-            if let Some((name, offset)) = module_for_addr(val, modules) {
+        if let Some(val) = unsafe { safe_read_usize(addr) }
+            && let Some((name, offset)) = module_for_addr(val, modules) {
                 let frame = format!("{name}+0x{offset:x}");
                 if frame != last {
                     if emitted != 0 {
@@ -285,7 +262,6 @@ fn av_module_backtrace(rsp: usize, modules: &[(usize, usize, String)]) -> String
                     last = frame;
                 }
             }
-        }
         slot += 1;
     }
     out.push(']');
@@ -352,21 +328,17 @@ pub(crate) fn record_self_dll_base(base: usize) {
 /// compact `{game+0x..}` / `{self+0x..}` tag, or an empty string when the address is in neither
 /// (a Wine system DLL, the heap, or a smashed value) — the raw hex is already printed alongside.
 fn annotate_addr(addr: usize, game_base: usize) -> String {
-    if game_base != NULL_MODULE_BASE {
-        if let Some(rva) = addr.checked_sub(game_base) {
-            if (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva) {
+    if game_base != NULL_MODULE_BASE
+        && let Some(rva) = addr.checked_sub(game_base)
+            && (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva) {
                 return format!("{{game+0x{rva:x}}}");
             }
-        }
-    }
     let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
-    if self_base != NULL_MODULE_BASE {
-        if let Some(rva) = addr.checked_sub(self_base) {
-            if rva < SELF_DLL_SIZE.load(Ordering::SeqCst) {
+    if self_base != NULL_MODULE_BASE
+        && let Some(rva) = addr.checked_sub(self_base)
+            && rva < SELF_DLL_SIZE.load(Ordering::SeqCst) {
                 return format!("{{self+0x{rva:x}}}");
             }
-        }
-    }
     String::new()
 }
 
@@ -734,7 +706,7 @@ pub(crate) unsafe fn arm_c30_watchpoint(target_addr: usize) -> i32 {
 /// Resolve GameMan+0xc30 live and (re-)arm the watchpoint until the first hit. Re-arms
 /// every C30_WATCH_REARM_INTERVAL frames to cover load threads spawned after the first
 /// arm. No-op once a write has been caught.
-pub(crate) unsafe fn maybe_arm_c30_watch(module_base: usize, tick: u64) {
+pub(crate) unsafe fn maybe_arm_c30_watch(_module_base: usize, tick: u64) {
     if C30_WATCH_HITS.load(Ordering::SeqCst) > C30_WATCH_NEVER_ARMED {
         return;
     }

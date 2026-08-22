@@ -237,7 +237,7 @@ fn install_focus_override_hook() {
                 if unsafe { hook.queue_enable() }.is_ok()
                     && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
                 {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "can-move: focus-override installed at 0x{addr:x} (IsEnableControlOnDisactiveWindow->1 ONLY while harness injecting; real value otherwise -- user input never reaches ER while unfocused)"
                     ));
@@ -275,7 +275,7 @@ fn install_pad_poll_hook() {
                 if unsafe { hook.queue_enable() }.is_ok()
                     && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
                 {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "can-move: pad-poll hook installed at 0x{addr:x} (faithful stick injection boundary)"
                     ));

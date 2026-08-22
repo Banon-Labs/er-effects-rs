@@ -287,14 +287,14 @@ pub(crate) unsafe fn diagnostic_job_tree_walk(
             // Unknown FD4 decorator: decode the single forwarded-child offset from its Update
             // prologue (`mov rcx,[node+disp]`) and descend into [node+disp] ONLY -- a precise
             // single-child follow, never a field scan (which wandered into the GUI graph).
-            if let Some(off) = unsafe { decorator_child_offset(update) } {
-                if (GEN_SCAN_LO..=GEN_SCAN_HI).contains(&off) {
-                    let child = unsafe { safe_read_usize(node + off) }.unwrap_or(null);
-                    if child != null && child != node {
-                        let cvt = unsafe { safe_read_usize(child) }.unwrap_or(null);
-                        if in_module(cvt) {
-                            stack.push((child, depth + WALK_STEP));
-                        }
+            if let Some(off) = unsafe { decorator_child_offset(update) }
+                && (GEN_SCAN_LO..=GEN_SCAN_HI).contains(&off)
+            {
+                let child = unsafe { safe_read_usize(node + off) }.unwrap_or(null);
+                if child != null && child != node {
+                    let cvt = unsafe { safe_read_usize(child) }.unwrap_or(null);
+                    if in_module(cvt) {
+                        stack.push((child, depth + WALK_STEP));
                     }
                 }
             }
@@ -363,7 +363,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         OWN_STEPPER_B80_IDLE
     };
     let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
-    let (io10, io18, io20) = if iodev != null {
+    let (_io10, io18, io20) = if iodev != null {
         (
             unsafe { safe_read_usize(iodev + IODEV_INFLIGHT_10_OFFSET) }.unwrap_or(null),
             unsafe { safe_read_usize(iodev + IODEV_REQHANDLE_18_OFFSET) }.unwrap_or(null),
@@ -419,7 +419,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         // the ctx item+0x10 from the descriptor item+0x58 before firing the functor) builds the
         // ProfileLoadDialog with a NATIVE ctx (no synthesis) and zero input. Build-only;
         // idempotent; no save write.
-        if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
+        if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
             let ret = unsafe { drive_menu_item_update(item, base, framectx) }.unwrap_or(null);
             OWN_STEPPER_INVOKED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             let dlg130b = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
@@ -675,7 +675,7 @@ pub(crate) unsafe fn own_stepper_stage2(
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             return;
         }
-        if OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
+        if OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
             let shim = &raw mut OWN_STEPPER_SHIM;
             unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
             let shim_ptr = shim as usize;
@@ -711,14 +711,14 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
     }
     // Optional slot override from the trigger file ("slot=N"); -1/absent => the game's
     // own most-recent selection.
-    if let Some(dir) = game_directory_path() {
-        if let Ok(content) = std::fs::read_to_string(dir.join("er-effects-own-stepper.txt")) {
-            for line in content.lines() {
-                if let Some(rest) = line.trim().strip_prefix("slot=") {
-                    if let Ok(v) = rest.trim().parse::<i32>() {
-                        OWN_STEPPER_SLOT.store(v, Ordering::SeqCst);
-                    }
-                }
+    if let Some(dir) = game_directory_path()
+        && let Ok(content) = std::fs::read_to_string(dir.join("er-effects-own-stepper.txt"))
+    {
+        for line in content.lines() {
+            if let Some(rest) = line.trim().strip_prefix("slot=")
+                && let Ok(v) = rest.trim().parse::<i32>()
+            {
+                OWN_STEPPER_SLOT.store(v, Ordering::SeqCst);
             }
         }
     }
@@ -730,10 +730,10 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
     let slot6 = module_base + TITLE_STEP_IDX6_SLOT_RVA;
     let orig6 = unsafe { *(slot6 as *const usize) };
     OWN_STEPPER_ORIG_IDX6.store(orig6, Ordering::SeqCst);
-    unsafe { *(slot6 as *mut usize) = own_stepper_idx6 as usize };
-    unsafe { *(slot as *mut usize) = own_stepper_idx10 as usize };
+    unsafe { *(slot6 as *mut usize) = own_stepper_idx6 as *const () as usize };
+    unsafe { *(slot as *mut usize) = own_stepper_idx10 as *const () as usize };
     OWN_STEPPER_PATCHED.store(OWN_STEPPER_PATCHED_YES, Ordering::SeqCst);
-    let handler = own_stepper_idx10 as usize;
+    let handler = own_stepper_idx10 as *const () as usize;
     let _ = TITLE_STEP_PLAY_GAME;
     append_autoload_debug(format_args!(
         "own_stepper: PATCHED idx10 slot=0x{slot:x} orig=0x{orig:x} -> handler=0x{handler:x} owner=0x{owner:x}"

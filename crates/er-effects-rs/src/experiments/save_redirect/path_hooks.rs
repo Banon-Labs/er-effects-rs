@@ -1,63 +1,33 @@
 use std::{
     ffi::c_void,
-    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock,
+        OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
 use er_game_base::fnv1a::fnv1a64;
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use er_save_redirect::{
     DIRECT_STAGE_ROOT_DIR_NAME, DirectStageNoSteamIdKind, DirectStageRequestPlan,
     SAVE_REDIRECT_ORIG_COPYFILEW, SAVE_REDIRECT_ORIG_CREATEFILEW, SAVE_REDIRECT_ORIG_FINDFIRSTW,
-    SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SAVE_REDIRECT_ORIG_GETDISKFREEW,
-    SAVE_REDIRECT_ORIG_NTCREATEFILE, SAVE_REDIRECT_ORIG_NTQUERYVOLINFO,
-    SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW, SaveDetourDepth, SaveHookInstallState, SavePathKind,
-    SavePathTelemetryBucket, StagedEntryFate, TerminalRejectionGuard, TerminalRejectionObservation,
-    classify_copyfile_endpoint, classify_save_query_path, createfile_diag_hit_should_log,
-    dedupe_dirs_by_identity, default_save_file_path, direct_stage_case_dirs,
-    is_inside_direct_stage_root, is_save_file_or_backup_path, is_staged_save_container_name,
-    plan_create_file_open, plan_direct_stage_request, plan_save_path_telemetry,
-    plan_save_query_path, plausible_steam_id64, probe_direct_stage_file_status,
+    SAVE_REDIRECT_ORIG_GETATTREXW, SAVE_REDIRECT_ORIG_GETATTRW, SaveDetourDepth,
+    SaveHookInstallState, SavePathKind, SavePathTelemetryBucket, StagedEntryFate,
+    TerminalRejectionGuard, TerminalRejectionObservation, classify_copyfile_endpoint,
+    createfile_diag_hit_should_log, dedupe_dirs_by_identity, default_save_file_path,
+    direct_stage_case_dirs, is_inside_direct_stage_root, plan_create_file_open,
+    plan_direct_stage_request, plan_save_path_telemetry, plan_save_query_path,
+    plausible_steam_id64, probe_direct_stage_file_status,
     redirect_wide_save_path_with_side_effects, save_detour_disk_io_allowed, save_file_is_readonly,
     staged_entry_fate, steam_id64_from_dir_name, steam_id64_from_wide_save_path,
-    wide_contains_ci_ascii, wide_ends_with_ci_ascii,
 };
 use er_telemetry::counters::{
     SAVE_DIRECT_STAGE_CONTAINERS_WRITTEN, SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED,
     SAVE_DIRECT_STAGE_STALE_REMOVED, SAVE_REDIRECT_DETOUR_MAX_DEPTH,
     SAVE_REDIRECT_DETOUR_REENTRANT_PASSTHROUGHS,
 };
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use windows::{Win32::System::LibraryLoader::GetModuleHandleA, core::PCSTR};
 
 #[allow(unused_imports)]
 use crate::*;
@@ -1339,6 +1309,9 @@ fn make_file_writable(path: &Path) {
     if let Ok(meta) = std::fs::metadata(path) {
         let mut perms = meta.permissions();
         if perms.readonly() {
+            // Windows-only DLL: this clears FILE_ATTRIBUTE_READONLY, the one bit we mean. The
+            // lint is about the UNIX behaviour (0o666 for everyone), which cannot occur here.
+            #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             let _ = std::fs::set_permissions(path, perms);
         }
@@ -1706,10 +1679,10 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
         if plan.should_wait_for_missing_save_dialog() {
             wait_for_missing_save_dialog_if_pending(path);
         }
-        if plan.should_normalize_on_save_open() {
-            if let Ok(base) = game_module_base() {
-                normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
-            }
+        if plan.should_normalize_on_save_open()
+            && let Ok(base) = game_module_base()
+        {
+            normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
         }
         if let Some(redirected) = plan.redirected {
             let ret = unsafe {
@@ -1916,6 +1889,7 @@ pub(super) unsafe extern "system" fn save_redirect_findfirstw_hook(
 #[cfg(test)]
 mod save_container_mode_lock_tests {
     use super::*;
+    use er_save_redirect::is_staged_save_container_name;
 
     /// The mode lock is ASYMMETRIC and must stay that way (user spec 2026-08-02). A symmetric
     /// one-container-per-mode rule is what softlocked the loading screen for 46s on 2026-08-02

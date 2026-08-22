@@ -154,7 +154,7 @@ pub const NODE_VISIT_BUDGET_FLOOR: u64 = 64;
 /// True when `addr` could be a live 8-byte-aligned heap object in this process.
 #[must_use]
 pub const fn plausible_object_pointer(addr: u64) -> bool {
-    addr >= MIN_PLAUSIBLE_ADDRESS && addr < MAX_PLAUSIBLE_ADDRESS && addr % 8 == 0
+    addr >= MIN_PLAUSIBLE_ADDRESS && addr < MAX_PLAUSIBLE_ADDRESS && addr.is_multiple_of(8)
 }
 
 fn unavailable(reason: String) -> InvasionWarpCatalogError {
@@ -403,6 +403,7 @@ impl CatalogMemory for ProcessMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::invasion_warp::AUTHORED_YAW_EXTREME;
 
     /// An in-memory address space: a flat image mapped at `base`, plus an optional readable
     /// span so a test can model "this pointer is not mapped".
@@ -513,7 +514,10 @@ mod tests {
         write_points(
             &mut memory,
             POINTS_0,
-            &[([103.79, 456.07, -66.27], -1.09), ([1.0, 2.0, 3.0], -6.28)],
+            &[
+                ([103.79, 456.07, -66.27], -1.09),
+                ([1.0, 2.0, 3.0], AUTHORED_YAW_EXTREME),
+            ],
         );
         write_points(&mut memory, POINTS_1, &[([4.0, 5.0, 6.0], 0.0)]);
         write_points(
@@ -730,6 +734,6 @@ mod tests {
         assert!(!plausible_object_pointer(MIN_PLAUSIBLE_ADDRESS - 8));
         assert!(!plausible_object_pointer(MIN_PLAUSIBLE_ADDRESS + 1));
         assert!(!plausible_object_pointer(MAX_PLAUSIBLE_ADDRESS));
-        assert!(!plausible_object_pointer(u64::MAX & !7));
+        assert!(!plausible_object_pointer(u64::MAX - 7));
     }
 }

@@ -45,3 +45,14 @@ path = "../er-hook"
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows. The single crate-root
+# `cfg_attr(not(windows), allow(dead_code, unused_imports))` is a cfg artifact of the HOST
+# build -- every consumer in this shell is `DllMain` and the `#[cfg(windows)]` hooks/tasks it
+# installs, so a host compile cfg's the callers out -- not shipping-target debt. See the
+# comment beside it in `src/lib.rs`.
+[lints]
+workspace = true

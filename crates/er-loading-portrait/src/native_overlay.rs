@@ -16,15 +16,13 @@
 //! This file is the MINIMAL PROOF stage: create the window + device + swapchain, clear to a visible color
 //! while shown, and honor the SHOW/HIDE flag. Content (bar/portrait/stats/picker) is layered on next.
 
-#![allow(unused_imports)]
-
 use crate::prelude::*;
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
@@ -53,10 +51,9 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, MSG,
-    PM_REMOVE, PeekMessageW, RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOWNOACTIVATE,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetSystemMetrics, MSG, PM_REMOVE,
+    PeekMessageW, RegisterClassW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
+    TranslateMessage, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{Interface, w};
 
@@ -113,7 +110,7 @@ unsafe fn overlay_transition(
     before: D3D12_RESOURCE_STATES,
     after: D3D12_RESOURCE_STATES,
 ) {
-    let mut barrier = D3D12_RESOURCE_BARRIER {
+    let barrier = D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
         Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
         Anonymous: D3D12_RESOURCE_BARRIER_0 {
@@ -474,85 +471,85 @@ unsafe fn native_overlay_run() {
         // OUR backbuffer at its placement.
         let frame = boot_view_render_frame(win_w as usize, win_h as usize);
         let mut drew = false;
-        if let Some(up) = upload.as_ref() {
-            if frame.w > 0 && frame.h > 0 {
-                let region_desc = region_desc_for(frame.w, frame.h);
-                let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-                let mut total: u64 = 0;
+        if let Some(up) = upload.as_ref()
+            && frame.w > 0
+            && frame.h > 0
+        {
+            let region_desc = region_desc_for(frame.w, frame.h);
+            let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+            let mut total: u64 = 0;
+            unsafe {
+                device.GetCopyableFootprints(
+                    &region_desc,
+                    0,
+                    1,
+                    0,
+                    Some(&mut footprint),
+                    None,
+                    None,
+                    Some(&mut total),
+                )
+            };
+            let row_pitch = footprint.Footprint.RowPitch as usize;
+            let src_row = frame.w * 4;
+            let mut mapped: *mut c_void = std::ptr::null_mut();
+            if total > 0
+                && unsafe { up.Map(0, None, Some(&mut mapped)) }.is_ok()
+                && !mapped.is_null()
+            {
+                let dst =
+                    unsafe { std::slice::from_raw_parts_mut(mapped as *mut u8, total as usize) };
+                for y in 0..frame.h {
+                    let so = y * src_row;
+                    let d = y * row_pitch;
+                    if d + src_row <= dst.len() && so + src_row <= frame.rgba.len() {
+                        dst[d..d + src_row].copy_from_slice(&frame.rgba[so..so + src_row]);
+                    }
+                }
+                unsafe { up.Unmap(0, None) };
                 unsafe {
-                    device.GetCopyableFootprints(
-                        &region_desc,
-                        0,
-                        1,
-                        0,
-                        Some(&mut footprint),
-                        None,
-                        None,
-                        Some(&mut total),
+                    overlay_transition(
+                        &list,
+                        bb,
+                        D3D12_RESOURCE_STATE_RENDER_TARGET,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
                     )
                 };
-                let row_pitch = footprint.Footprint.RowPitch as usize;
-                let src_row = frame.w * 4;
-                let mut mapped: *mut c_void = std::ptr::null_mut();
-                if total > 0
-                    && unsafe { up.Map(0, None, Some(&mut mapped)) }.is_ok()
-                    && !mapped.is_null()
-                {
-                    let dst = unsafe {
-                        std::slice::from_raw_parts_mut(mapped as *mut u8, total as usize)
-                    };
-                    for y in 0..frame.h {
-                        let so = y * src_row;
-                        let d = y * row_pitch;
-                        if d + src_row <= dst.len() && so + src_row <= frame.rgba.len() {
-                            dst[d..d + src_row].copy_from_slice(&frame.rgba[so..so + src_row]);
-                        }
-                    }
-                    unsafe { up.Unmap(0, None) };
-                    unsafe {
-                        overlay_transition(
-                            &list,
-                            bb,
-                            D3D12_RESOURCE_STATE_RENDER_TARGET,
-                            D3D12_RESOURCE_STATE_COPY_DEST,
-                        )
-                    };
-                    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-                        pResource: ManuallyDrop::new(Some(bb.clone())),
-                        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                            SubresourceIndex: 0,
-                        },
-                    };
-                    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
-                        pResource: ManuallyDrop::new(Some(up.clone())),
-                        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                            PlacedFootprint: footprint,
-                        },
-                    };
-                    unsafe {
-                        list.CopyTextureRegion(
-                            &dst_loc,
-                            frame.dx as u32,
-                            frame.dy as u32,
-                            0,
-                            &src_loc,
-                            None,
-                        )
-                    };
-                    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
-                    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
-                    unsafe {
-                        overlay_transition(
-                            &list,
-                            bb,
-                            D3D12_RESOURCE_STATE_COPY_DEST,
-                            D3D12_RESOURCE_STATE_PRESENT,
-                        )
-                    };
-                    drew = true;
-                }
+                let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+                    pResource: ManuallyDrop::new(Some(bb.clone())),
+                    Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                        SubresourceIndex: 0,
+                    },
+                };
+                let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                    pResource: ManuallyDrop::new(Some(up.clone())),
+                    Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                        PlacedFootprint: footprint,
+                    },
+                };
+                unsafe {
+                    list.CopyTextureRegion(
+                        &dst_loc,
+                        frame.dx as u32,
+                        frame.dy as u32,
+                        0,
+                        &src_loc,
+                        None,
+                    )
+                };
+                unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+                unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+                unsafe {
+                    overlay_transition(
+                        &list,
+                        bb,
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                        D3D12_RESOURCE_STATE_PRESENT,
+                    )
+                };
+                drew = true;
             }
         }
         if !drew {

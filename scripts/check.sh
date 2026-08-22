@@ -55,6 +55,16 @@ command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# LINT PARITY WITH ../fromsoftware-rs. Standing user requirement (2026-08-21): this code must
+# be AT LEAST as strict as the parent project. Cargo cannot inherit that -- `[lints] workspace =
+# true` resolves only against THIS workspace root and lint levels never propagate from a path
+# dependency -- so parity is asserted rather than inherited. The gate READS upstream's CI and
+# manifests, so it goes red when upstream gets stricter instead of us finding out months later.
+# It also fails if a blanket `-Awarnings` returns to .cargo/config.toml, which silently defeats
+# `[workspace.lints.rust] warnings = "deny"` (measured, not theorised). Selftest first, so the
+# gate is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-lint-parity.py" --selftest
+python3 "$repo_root/scripts/check-lint-parity.py"
 # FNV-1a has one zero-dependency owner below every caller. Prove the scanner catches copied
 # implementations before trusting the live ownership check.
 python3 "$repo_root/scripts/check-fnv1a-owner.py" --selftest

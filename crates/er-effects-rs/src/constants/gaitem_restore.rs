@@ -54,8 +54,11 @@ pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize =
 /// 0x140aed820 so the builder creates the m10 load-states. Gap 2: the resmgr
 /// ([InGameStep+0x250]) streaming-enable flag [resmgr+0xb7c1]==0; the virtual
 /// enabler 0x14066e2e4 sets it + builds the session singletons + starts the IO jobs.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_TARGET_COORD_100_OFFSET: usize = 0x100;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
 /// `InGameStep::RequestMoveMap` (deobf 0x140aebdc0). Builds the world-res loadlist virtual path via
 /// `DlFixedString::FormatV` -- but ONLY when its `param_2` target BlockId (`*rdx`) is valid
@@ -72,9 +75,11 @@ pub(crate) const REQUEST_MOVE_MAP_RVA: usize = 0xaebdc0;
 /// Area-id ceiling of `IsNonDebugArea` (deobf 0x140720210 == `areaId < 0x59`). A BlockId whose area
 /// byte `((blockid >> 24) & 0xff)` is >= this is a debug area for which RequestMoveMap skips FormatV.
 pub(crate) const REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL: u32 = 0x59;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
-pub(crate) use er_title_flow::RESMGR_STREAM_ENABLE_B7C1_OFFSET;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SESSION_SINGLETON_A_RVA: usize = TitleSessionRva::SessionA as usize;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as usize;
 /// Corrected streaming-enable (worldres-enable-0x14066e2e4-decoded-receiver-and-
 /// driver-singleton-2026): the CORRECT resmgr is deref(deref(MoveMapStep+0xf0)+0x10)
@@ -82,8 +87,8 @@ pub(crate) const SESSION_SINGLETON_B_RVA: usize = TitleSessionRva::SessionB as u
 /// 0x142a7de60 -- the wrong object that crashed). The hard floor is the streaming/
 /// session driver singleton 0x143d7c088 (job machine asserts if null); build it via
 /// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
-pub(crate) use er_title_flow::STREAMING_DRIVER_SINGLETON_RVA;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
@@ -109,11 +114,13 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 /// World/scene singletons built by MoveMapStep::STEP_MsbLoad 0x140af8f00. Non-null
 /// == MsbLoad ran (the IsResident-relevant world exists). Diagnostic for whether the
 /// worker is servicing the stream vs the b80 lane stalling first.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const WORLD_SINGLETON_A_RVA: usize = er_game_base::rva::FIELD_AREA_PTR_RVA;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
 pub(crate) use er_title_flow::MOVEMAPSTEP_WORLDRES_F0_OFFSET;
 pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
-pub(crate) use er_title_flow::RESMGR_BLOCK_COUNT_B3140_OFFSET;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// The block coord/map-id the MoveMapStep requests in STEP_WorldResWait: at
 /// [[MoveMapStep+0xf0]+0x2c] (0x140624bd0 reads byte3 as the target area). byte3 ==
@@ -145,47 +152,24 @@ pub(crate) const TARGET_AREA_FROM_COORD_MASK: u32 = 0xff;
 pub(crate) const OBSERVER_BLOCK_SCAN_CAP: i64 = 64;
 /// How many distinct areaIds the observer collects for the log line.
 pub(crate) const OBSERVER_AREAID_SAMPLE_MAX: usize = 8;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TARGET_AREA_M10: i32 = 0x0a;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_SCAN_MAX: i32 = 64;
 pub(crate) const BLOCK_ENTRY_STRIDE: usize = 8;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_GETTER_VT_10_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_FLAG_2D_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_PHASE_35_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_GAVEUP_06_OFFSET;
-pub(crate) use er_title_flow::BLOCK_LOADSTATE_FILECAP_SLOTS;
 pub(crate) use er_title_flow::FD4_FILECAP_STATUS_88_OFFSET;
 pub(crate) use er_title_flow::FD4_FILECAP_BYTES_90_OFFSET;
 /// Poison `~MsbFileCap` writes over `msbResCap` after releasing it; see above.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MSB_FILECAP_DESTROYED_SENTINEL: usize = 0xdead_beef;
-pub(crate) use er_title_flow::FD4_FILECAP_NAME_UNION_18_OFFSET;
-pub(crate) use er_title_flow::FD4_FILECAP_NAME_LENGTH_28_OFFSET;
-pub(crate) use er_title_flow::FD4_FILECAP_NAME_CAPACITY_30_OFFSET;
-pub(crate) use er_title_flow::DLSTRING_INLINE_CAPACITY_MAX;
-pub(crate) use er_title_flow::FD4_FILECAP_NAME_MAX_CHARS;
-pub(crate) use er_title_flow::FD4_FILECAP_REFCOUNT_58_OFFSET;
 pub(crate) use er_title_flow::FD4_FILECAP_LOADPROCESS_78_OFFSET;
-pub(crate) use er_title_flow::FD4_FILECAP_FLAGS_89_OFFSET;
-pub(crate) use er_title_flow::DL_FILE_DEVICE_MANAGER_SINGLETON_RVA;
-pub(crate) use er_title_flow::DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
-pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET;
-pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET;
-pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE;
-pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET;
-pub(crate) use er_title_flow::DLSTRING_UNION_08_OFFSET;
-pub(crate) use er_title_flow::DLSTRING_LENGTH_18_OFFSET;
-pub(crate) use er_title_flow::DLSTRING_CAPACITY_20_OFFSET;
-pub(crate) use er_title_flow::FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES;
-pub(crate) use er_title_flow::VIRTUAL_ROOTS_OF_INTEREST;
 
-pub(crate) use er_title_flow::FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET;
-pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET;
-pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_SIZE_28_OFFSET;
-pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET;
 /// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
 /// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
 /// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the
@@ -195,6 +179,7 @@ pub(crate) use er_title_flow::FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET;
 /// It builds the FD4FileLoadProcessor internally + self-enqueues IO to the already-live FD4 workers
 /// (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager). PushTask / AssignFileCap are NOT
 /// needed. Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000;
 /// FD4FileCap layout (struct len 0x90): the cap's EXISTING `FD4FileLoadProcess*` lives at +0x78 --
 /// READ it for arg2, we never construct one. `loadState` at +0x88 == 4 means the cap is already
@@ -202,6 +187,7 @@ pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x1400
 pub(crate) const FILECAP_LOAD_PROCESS_78_OFFSET: usize = 0x78;
 pub(crate) const FILECAP_LOADSTATE_88_OFFSET: usize = 0x88;
 /// `loadState` sentinel meaning the FD4FileCap finished loading (already resident -> do not dispatch).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const FILECAP_LOADSTATE_COMPLETE: i32 = 4;
 /// WorldBlockRes holds the m28 area's FD4FileCap(s): the primary at +0x40 and an OPTIONAL second at
 /// +0x48 (the IsNonDebugArea branch; m28/0x1c populates both, and phase-2 gates on BOTH). Dispatch
@@ -218,9 +204,13 @@ pub(crate) const WORLDBLOCKRES_FILECAP2_48_OFFSET: usize = 0x48;
 pub(crate) const WORLDBLOCK_CONTAINER_COUNT_CD8_OFFSET: usize = 0xcd8;
 pub(crate) const WORLDBLOCK_CONTAINER_ARRAY_CE0_OFFSET: usize = 0xce0;
 pub(crate) const WORLDBLOCKRES_ELEM_STRIDE_B98: usize = 0xb98;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_PHASE_NONE: i32 = -1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_COUNT_ZERO: i32 = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_COUNT_ONE: i32 = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const DIAG_SAMPLE_ZERO: u32 = 0;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
@@ -240,13 +230,6 @@ pub(crate) use er_title_flow::GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET;
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     GameDataMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
-pub(crate) use er_title_flow::SLOT_MANAGER_DATA_OFFSET;
-pub(crate) use er_title_flow::CSFEMAN_SINGLETON_RVA;
-pub(crate) use er_title_flow::SESSION_SINGLETON_RVA;
-pub(crate) use er_title_flow::TITLE_INPUT_MANAGER_RVA;
-pub(crate) use er_title_flow::OBSERVE_INTERVAL;
-pub(crate) use er_title_flow::OBSERVE_SIG_MULT;
-pub(crate) use er_title_flow::OBSERVE_LAST_SIG;
 /// OWN-THE-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
 /// SimpleTitleStep step-fn table (base abs 0x143d71580, owner+0x10) is in WRITABLE
 /// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d71620
@@ -281,7 +264,6 @@ pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
 /// occupant, then `AtomicDecrement`s/releases the PRIOR occupant and zeroes `*src` (move-assign).
 /// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
 pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
-pub(crate) use er_title_flow::MENUJOB_PUSHBACK_RVA;
 /// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
 /// successful PushBackJob; the active job stays at +0x130.
 pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;

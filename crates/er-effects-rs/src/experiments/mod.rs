@@ -1,44 +1,33 @@
 //! experiments module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
 use std::{
     ffi::c_void,
-    fmt::Write as _,
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::input_blocker::InputBlocker;
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
+    cs::{GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
+use er_save_loader::GameManTelemetry;
+use fromsoftware_shared::FromStatic;
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        Foundation::RECT,
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
+        UI::WindowsAndMessaging::GetWindowThreadProcessId,
     },
-    core::{BOOL, PCSTR},
+    core::PCSTR,
 };
 
 #[allow(unused_imports)]
@@ -99,7 +88,6 @@ mod continue_load;
 pub(crate) use continue_load::*;
 
 mod save_picker;
-pub(crate) use save_picker::*;
 
 mod lifecycle;
 pub(crate) use lifecycle::*;

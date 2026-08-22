@@ -21,6 +21,18 @@ static MENU_FONT_RASTER: std::sync::OnceLock<er_gfx::raster::RasterFont> =
 /// Capture the game's menu font from the Scaleform file-open hook. Reads the returned MemoryFile's raw
 /// GFX payload (same guarded read `title_05_000_swap_to_stripped` uses) and stores a COPY (never retains
 /// the game pointer). Called for any file-open whose URL looks like the menu font; one-shot.
+///
+/// # Safety
+///
+/// `base` must be the running `eldenring.exe` image base: the candidate is accepted only
+/// if its vtable equals `base + SCALEFORM_MEMORY_FILE_VTABLE_RVA`, and a wrong base makes
+/// that check meaningless rather than merely wrong.
+///
+/// `file` needs no precondition for the header reads (all guarded), but once the vtable,
+/// length and both end bytes have been probed, the payload is copied with a single
+/// `slice::from_raw_parts` over up to 64 MiB -- an UNGUARDED bulk read. The caller must
+/// therefore call this only from the Scaleform file-open hook, while the `MemoryFile` the
+/// game just produced is still alive and its buffer is not being freed on another thread.
 pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if MENU_FONT_GFX_CAPTURED.get().is_some()
@@ -37,7 +49,7 @@ pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
     }
     let data = unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
     let len = unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
-    if data == 0 || len < 8 || len > 64 * 1024 * 1024 {
+    if data == 0 || !(8..=64 * 1024 * 1024).contains(&len) {
         return;
     }
     // Probe magic + both ends through the guarded reader before touching the range.
@@ -75,6 +87,16 @@ pub fn menu_font() -> Option<&'static er_gfx::raster::RasterFont> {
 
 /// Read the local character's stats for the loading screen. `None` if GameDataMan is not up. Prefers
 /// sources valid pre-load; guards every read.
+///
+/// # Safety
+///
+/// Every game access is a guarded read or a host-seam call, so no argument-level
+/// precondition exists -- an absent GameDataMan or an unpopulated slot returns `None`.
+///
+/// Game thread only. The values it reads (GameDataMan, the slot's ProfileSummary record,
+/// the live PlayerGameData) are the ones the save deserialize rewrites; sampling them from
+/// another thread yields a torn mix of the outgoing and incoming character rather than a
+/// fault, which is exactly the wrong-stats bug the ownership checks here exist to prevent.
 pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -148,7 +170,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         } else {
             let base = game_module_base().unwrap_or(null);
             if valid(base) {
-                let _ = ensure_profile_slot_stats_cached(base);
+                let _ = unsafe { ensure_profile_slot_stats_cached(base) };
             }
             let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
             // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
@@ -222,6 +244,14 @@ static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
 /// content keying a stale bitmap self-heals the moment the new slot's record reads differently, and
 /// identical ticks stay cheap no-ops. Called on the loading screen from the game thread; silently waits
 /// until both the captured font and readable stats exist.
+///
+/// # Safety
+///
+/// Game thread only, for the same reason as `read_loading_screen_stats`, which it calls:
+/// the stats it rasterises must come from one consistent sample of the loading slot.
+///
+/// It performs no unguarded game access of its own -- the rasteriser works on the captured
+/// font copy and on plain Rust data -- so there is no address precondition.
 pub unsafe fn maybe_build_stats_text() {
     let Some(font) = menu_font() else {
         return;
@@ -353,6 +383,21 @@ pub fn stats_text_window_reset() {
 /// Tip-refresh detour: NO-OP the original (er-effects-rs-jsm PIVOT) so the native tip title/body are never
 /// set and the `Main` tip clip stays faded out -- our overlay player-stats text owns the tip region. Only
 /// active while our loading portrait path is enabled; otherwise it calls through so vanilla tips render.
+///
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's knowledge-tip
+/// refresh, so it may only be entered by that patched call site, on the game thread that made the
+/// call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `KNOWLEDGE_TIP_REFRESH_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
+///
+/// After calling through, it blanks the tip's title/body text handles. Those writes go
+/// through the game's own SetText core, which gates on the handle type, so a stale handle
+/// is a no-op -- but they still assume `this` is the tip window the detour was installed
+/// for.
 pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
     let orig = KNOWLEDGE_TIP_REFRESH_ORIG.load(Ordering::SeqCst);
     if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
@@ -396,6 +441,19 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
 /// is `gotoAndPlay('FadeOut')`, whose downstream tip-refresh we already blank), and the per-update
 /// keyguide composer drops the action from the keyguide list, so the "press [button] to advance" prompt
 /// never renders. Calls through when the portrait path is off so vanilla tips keep keyguide + press.
+///
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's tip-advance
+/// enabled predicate, so it may only be entered by that patched call site, on the game thread that
+/// made the call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG`; that static must hold the trampoline this detour was
+/// installed with, or the call transfers to an arbitrary address.
+///
+/// When the portrait path is enabled it returns 0 without touching `functor` at all, so
+/// that argument is only dereferenced by the original on the pass-through path.
 pub unsafe extern "system" fn knowledge_tip_advance_enabled_hook(functor: usize) -> u8 {
     if portrait_overlay_enabled() {
         KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.fetch_add(1, Ordering::SeqCst);
@@ -443,7 +501,9 @@ pub fn install_tip_suppression_hook() {
                 ));
                 return;
             }
-            std::mem::forget(hook);
+            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address -- so letting the handle go does NOT uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -467,7 +527,9 @@ pub fn install_tip_suppression_hook() {
                     .store(hook.trampoline() as usize, Ordering::SeqCst);
                 if unsafe { hook.queue_enable() }.is_ok() {
                     advance_target = target2;
-                    std::mem::forget(hook);
+                    // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                    // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                    // address -- so letting the handle go does NOT uninstall the hook.
                 } else {
                     append_autoload_debug(format_args!(
                         "stats-text: tip-advance queue_enable failed for 0x{target2:x}"
@@ -497,19 +559,23 @@ pub fn install_tip_suppression_hook() {
     }
 }
 
-/// Alpha-blend tightly-packed RGBA8 `src` (`sw`x`sh`) OVER `dst` (`dw`x`dh`) at top-left `(x0, y0)`
+/// A tightly-packed RGBA8 source image: the pixel bytes together with the width/height they are
+/// laid out for. Carrying the three as one value keeps the blend's parameter list honest -- the
+/// bytes and the dimensions that describe them cannot be passed out of step.
+pub struct Rgba8Src<'a> {
+    pub px: &'a [u8],
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Alpha-blend tightly-packed RGBA8 `src` OVER `dst` (`dw`x`dh`) at top-left `(x0, y0)`
 /// (`src.a`/`1-src.a`). Clips to `dst`. Used to lay the rendered stats text over the head/backbuffer.
-#[allow(dead_code)]
-pub fn blend_rgba_over(
-    dst: &mut [u8],
-    dw: u32,
-    dh: u32,
-    src: &[u8],
-    sw: u32,
-    sh: u32,
-    x0: i32,
-    y0: i32,
-) {
+pub fn blend_rgba_over(dst: &mut [u8], dw: u32, dh: u32, src: Rgba8Src<'_>, x0: i32, y0: i32) {
+    let Rgba8Src {
+        px: src,
+        w: sw,
+        h: sh,
+    } = src;
     for sy in 0..sh as i32 {
         let dy = y0 + sy;
         if dy < 0 || dy >= dh as i32 {

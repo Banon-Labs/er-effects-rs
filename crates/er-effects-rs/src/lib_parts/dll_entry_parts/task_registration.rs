@@ -504,17 +504,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     write_telemetry_throttled(&mut state, false);
                     return;
                 }
-                if own_stepper_enabled()
+                if (own_stepper_enabled()
                     || native_load_enabled()
                     || native_continue_enabled()
-                    || native_fullread_enabled()
-                {
-                    if let Ok(base) = game_module_base() {
+                    || native_fullread_enabled())
+                    && let Ok(base) = game_module_base() {
                         unsafe {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
-                }
                 // In-world correctness oracle: on the FIRST frame the local player exists, log
                 // the load-correctness record + the T_controllable timeline marker ONCE. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
@@ -527,8 +525,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     && LOAD_CORRECTNESS_DUMPED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == LOAD_CORRECTNESS_NOT_DUMPED
-                {
-                    if let Ok(base) = game_module_base() {
+                    && let Ok(base) = game_module_base() {
                         timeline_event(
                             "T_controllable",
                             state.game_task_ticks,
@@ -536,7 +533,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         );
                         unsafe { dump_load_correctness(base, state.game_task_ticks) };
                     }
-                }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
                 PLAYER_CURRENT_ANIMATION_ID.store(

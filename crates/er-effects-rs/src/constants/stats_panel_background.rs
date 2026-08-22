@@ -57,9 +57,6 @@ pub(crate) use er_title_flow::TITLE_STEP_END_FLOW;
 pub(crate) use er_title_flow::TITLE_STEP_END_FLOW_WAIT;
 
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = TitleStepState::BeginTitle as i32;
-pub(crate) use er_title_flow::TITLE_STEP_BEGIN_NEW_GAME;
-pub(crate) use er_title_flow::TITLE_STEP_PLAY_GAME;
-pub(crate) use er_title_flow::TITLE_STEP_MENU_JOB_WAIT;
 /// STEP_BeginLogo (idx2, handler 0x140b0c2a0): the native press-any-button advance target.
 /// The parked press-any-button screen is the FIRST state 10; the engine's own press handler
 /// 0x140b0b6b0 issues SetState(owner, 2), then the native pump advances 2->3->10, building
@@ -69,31 +66,22 @@ pub(crate) use er_title_flow::TITLE_STEP_MENU_JOB_WAIT;
 /// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
 /// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
 pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = TitleStepState::BeginLogo as i32;
-pub(crate) use er_title_flow::TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET;
 /// Cleared value (0) for the BeginLogo list-build gate [owner+0xb8].
 pub(crate) const TITLE_OWNER_BEGINLOGO_GATE_CLEAR: u32 = false as u32;
 pub(crate) use er_title_flow::TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
 pub(crate) use er_title_flow::TITLE_OWNER_MENU_LIST_130_OFFSET;
-pub(crate) use er_title_flow::SESSION_SINGLETON_144588E98_RVA;
-pub(crate) use er_title_flow::TitleDialogRva;
 
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_OPEN_MENU_RVA;
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_VTABLE_RVA;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_UPDATE_RVA;
-pub(crate) use er_title_flow::TITLE_TOP_DIALOG_CLEANUP_RVA;
 /// CS::MenuWindow vtable 0x142a93a60 (.?AVMenuWindow@CS@@) (RVA). The live MenuWindow* the LIVE
 /// Load-Game dialog factory needs as its rdx call-frame arg. Located by the active-screen scan.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a93a60;
 /// CS::MenuWindowProxy vtable 0x142a94318 (RVA). The proxy variant of MenuWindow that the
 /// active-screen array may hold instead of the concrete MenuWindow; either is a valid factory rdx.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_PROXY_VTABLE_RVA: usize = 0x2a94318;
-pub(crate) use er_title_flow::ACTIVE_SCREEN_ARRAY_RVA;
-pub(crate) use er_title_flow::ActiveScreenArrayLayout;
 
-pub(crate) use er_title_flow::ACTIVE_SCREEN_ARRAY_SLOTS;
-pub(crate) use er_title_flow::ACTIVE_SCREEN_ARRAY_STRIDE;
-pub(crate) use er_title_flow::ACTIVE_SCREEN_SLOT_START;
-pub(crate) use er_title_flow::ACTIVE_SCREEN_SLOT_STEP;
 /// PROBE-2 GROUND TRUTH (2026-06-18, runtime, REFUTES the static group->holder->screen walk):
 /// the 10 slots of the active-screen array 0x143d6d8d0 each hold a menu MODEL RENDERER (vtable
 /// 0x142b80128 CSMenuProfModelRend / 0x142b7f310 CSMenuAsmModelRend), NOT screen/group controllers,
@@ -103,16 +91,16 @@ pub(crate) use er_title_flow::ACTIVE_SCREEN_SLOT_STEP;
 /// read DETERMINISTICALLY by `locate_live_loadgame_node` from the SceneProxy back-ref at proxy+0x20.
 ///
 /// Field-scan stride: one qword pointer per step (also the SceneProxy diagnostic scan stride).
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const FIELD_SCAN_STRIDE: usize = 8;
-pub(crate) use er_title_flow::TitleTopDialogLayout;
 
 pub(crate) use er_title_flow::DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
 pub(crate) use er_title_flow::LIVE_DIALOG_FACTORY_RVA;
 pub(crate) use er_title_flow::SCENE_OBJ_PROXY_VTABLE_RVA;
 /// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
 pub(crate) use er_title_flow::SCENE_OBJ_PROXY_CONTEXT_20_OFFSET;
-pub(crate) use er_title_flow::TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
 pub(crate) use er_title_flow::TITLE_PRESS_START_SET_VISIBLE_RVA;
 /// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
 /// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched

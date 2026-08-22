@@ -16,8 +16,9 @@ use crate::prelude::*;
 // worker falls behind the render thread DROPS the frame (never blocks) and bumps a dropped counter.
 
 /// A portrait frame handed from the render thread to the consume worker. ALL plain data -- no game
-/// pointer and no D3D12 object crosses the thread boundary. Step 2: the render thread has already resolved
-/// + copied + WAITED (so the game RT is released), leaving the raw copy in ring `slot`'s staging buffers;
+/// pointer and no D3D12 object crosses the thread boundary. Step 2: the render thread has already
+/// resolved + copied + WAITED (so the game RT is released), leaving the raw copy in ring `slot`'s
+/// staging buffers;
 /// the worker maps that slot and de-swizzles color + depth itself from the footprint metadata here.
 pub struct PortraitFrameJob {
     /// Ring slot the render thread copied into (the worker maps `RB_COH_CBUF[slot]`/`RB_COH_DBUF[slot]`,
@@ -233,7 +234,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
     let is_checker = portrait_looks_like_checker(cw, ch, &cpx);
     if is_checker {
         PROFILE_READBACK_CHECKER.fetch_add(1, Ordering::SeqCst);
-        if PROFILE_CHECKER_DUMPED.swap(true, Ordering::SeqCst) != true {
+        if !PROFILE_CHECKER_DUMPED.swap(true, Ordering::SeqCst) {
             dump_portrait_rgba(103, cw, ch, &cpx);
         }
     } else if !color_from_bundle {
@@ -406,7 +407,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 // (off+0x58; 1 == the engine re-renders the RT per frame).
                 pub use er_telemetry::counters::MOTION_LOG_TICKS;
                 let n = MOTION_LOG_TICKS.fetch_add(1, Ordering::SeqCst);
-                if n % 60 == 0 {
+                if n.is_multiple_of(60) {
                     let anim_t = job.anim_t;
                     let dt = job.dt_cap;
                     let dt_own = job.dt_own;
@@ -437,7 +438,12 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // share; the 0 < share < floor band is counted separately (lowmask)
         // to attribute partial-mask frames vs fully-unkeyed ones.
         let total_px = (cpx.len() / 4).max(1);
-        let transparent_px = cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
+        let transparent_px = cpx
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] < 128)
+            .count();
         let share_pct = transparent_px * 100 / total_px;
         let keyed = share_pct >= PORTRAIT_MIN_TRANSPARENT_PCT;
         let partial_mask = !keyed && transparent_px > 0;
@@ -565,7 +571,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             // surface as oracle_portrait_publish_skipped_torn climbing.
             let n = PROFILE_PUBLISH_SKIPPED_TORN.fetch_add(1, Ordering::SeqCst);
             PORTRAIT_LAST_SKIP_CLASS.store(1, Ordering::SeqCst);
-            if n % 64 == 0 {
+            if n.is_multiple_of(64) {
                 append_autoload_debug(format_args!(
                     "portrait-tear: skipped torn keyed frame tear={tear} > limit={tear_limit} (ema={ema}, max={}, #torn={})",
                     PROFILE_TEAR_SCORE_MAX.load(Ordering::SeqCst),

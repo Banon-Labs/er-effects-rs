@@ -44,7 +44,6 @@ const VK_DOWN: u32 = 0x28;
 const VK_INSERT: u32 = 0x2d;
 const VK_0: u32 = 0x30;
 const VK_NUMPAD0: u32 = 0x60;
-const VK_NUMPAD9: u32 = 0x69;
 const VK_MULTIPLY: u32 = 0x6a;
 const VK_ADD: u32 = 0x6b;
 const VK_SUBTRACT: u32 = 0x6d;
@@ -199,7 +198,6 @@ pub(crate) struct EffectCatalog {
     pub(crate) file_name: String,
     pub(crate) name: String,
     pub(crate) call_indices: Vec<usize>,
-    pub(crate) invalid_ids: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -216,6 +214,9 @@ struct EffectTriggerKey {
 
 #[derive(Clone)]
 pub(crate) struct EffectTriggerHotkey {
+    /// The `name` key of `er-net-effects-hotkeys.json`, defaulted to `"<effect_id> x<count>"`.
+    /// Nothing displays it yet; the field is the only in-source record of that config key.
+    #[allow(dead_code)]
     pub(crate) name: String,
     pub(crate) key_name: String,
     key: EffectTriggerKey,
@@ -275,12 +276,9 @@ impl NetEffectsState {
             })
             .or_else(|| {
                 selected_effect_index.and_then(|selected| {
-                    catalogs.iter().position(|catalog| {
-                        catalog
-                            .call_indices
-                            .iter()
-                            .any(|call_index| *call_index == selected)
-                    })
+                    catalogs
+                        .iter()
+                        .position(|catalog| catalog.call_indices.contains(&selected))
                 })
             })
             .or_else(|| (!catalogs.is_empty()).then_some(0));
@@ -542,10 +540,7 @@ fn load_effect_trigger_hotkeys() -> Result<Vec<EffectTriggerHotkey>, String> {
 fn parse_effect_trigger_key(raw: &str) -> Result<EffectTriggerKey, String> {
     let mut alt = false;
     let mut key_name = raw.trim().to_ascii_lowercase();
-    loop {
-        let Some((prefix, rest)) = key_name.split_once('+') else {
-            break;
-        };
+    while let Some((prefix, rest)) = key_name.split_once('+') {
         match prefix.trim() {
             "alt" => alt = true,
             "" => {}
@@ -676,7 +671,6 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
     for raw in raw_catalogs {
         let mut seen = HashSet::new();
         let mut call_indices = Vec::new();
-        let mut invalid_ids = 0usize;
         for id in raw.ids {
             if !seen.insert(id) {
                 continue;
@@ -693,8 +687,8 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
                 }
             }
             let name = if let Some(names) = master_names.as_ref() {
+                // An id the master param does not name cannot be offered, so it is skipped.
                 let Some(name) = names.get(&id).cloned() else {
-                    invalid_ids = invalid_ids.saturating_add(1);
                     continue;
                 };
                 name
@@ -718,7 +712,6 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
                 name: catalog_display_name(&raw.file_name),
                 file_name: raw.file_name,
                 call_indices,
-                invalid_ids,
             });
         }
     }
@@ -901,7 +894,10 @@ pub(crate) fn ensure_effect_hotkey_hook() {
                 UnhookWindowsHookEx, WH_KEYBOARD_LL,
             };
 
-            let Ok(hook) = (unsafe {
+            // `_hook` is only read by the unreachable cleanup block below (the message pump
+            // loop never breaks), so it is underscore-prefixed to keep `unused_variables`
+            // quiet while retaining the documented teardown path.
+            let Ok(_hook) = (unsafe {
                 SetWindowsHookExW(
                     WH_KEYBOARD_LL,
                     Some(effect_hotkey_ll_keyboard_proc),
@@ -933,7 +929,7 @@ pub(crate) fn ensure_effect_hotkey_hook() {
             }
             #[allow(unreachable_code)]
             unsafe {
-                let _ = UnhookWindowsHookEx(hook);
+                let _ = UnhookWindowsHookEx(_hook);
                 EFFECT_HOTKEY_HOOK_ACTIVE.store(false, Ordering::SeqCst);
                 EFFECT_HOTKEY_HOOK_STARTED.store(false, Ordering::SeqCst);
             }
@@ -1463,12 +1459,11 @@ fn apply_effect_trigger_now(
     state.effect_setting_last_id = Some(hotkey.effect_id);
     if let Some(index) = find_call_index_by_id(&state.calls, hotkey.effect_id) {
         state.selected_effect_index = Some(index);
-        if let Some(catalog_index) = state.catalogs.iter().position(|catalog| {
-            catalog
-                .call_indices
-                .iter()
-                .any(|call_index| *call_index == index)
-        }) {
+        if let Some(catalog_index) = state
+            .catalogs
+            .iter()
+            .position(|catalog| catalog.call_indices.contains(&index))
+        {
             state.selected_catalog_index = Some(catalog_index);
         }
     }
@@ -1732,12 +1727,10 @@ pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut NetE
         })
         .or_else(|| {
             state.selected_effect_index.and_then(|selected| {
-                state.catalogs.iter().position(|catalog| {
-                    catalog
-                        .call_indices
-                        .iter()
-                        .any(|call_index| *call_index == selected)
-                })
+                state
+                    .catalogs
+                    .iter()
+                    .position(|catalog| catalog.call_indices.contains(&selected))
             })
         })
         .or_else(|| (!state.catalogs.is_empty()).then_some(0));
@@ -1776,19 +1769,12 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut NetEf
     let current_catalog_contains_id = state
         .selected_catalog_index
         .and_then(|catalog_index| state.catalogs.get(catalog_index))
-        .is_some_and(|catalog| {
-            catalog
-                .call_indices
-                .iter()
-                .any(|call_index| *call_index == index)
-        });
+        .is_some_and(|catalog| catalog.call_indices.contains(&index));
     if !current_catalog_contains_id
-        && let Some(catalog_index) = state.catalogs.iter().position(|catalog| {
-            catalog
-                .call_indices
-                .iter()
-                .any(|call_index| *call_index == index)
-        })
+        && let Some(catalog_index) = state
+            .catalogs
+            .iter()
+            .position(|catalog| catalog.call_indices.contains(&index))
     {
         state.selected_catalog_index = Some(catalog_index);
     }

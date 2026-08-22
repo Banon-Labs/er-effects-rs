@@ -28,11 +28,15 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
             != 0
     });
     unsafe {
-        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        for (slot, face_hash) in PROFILE_PREVIEW_FACE_HASH
+            .iter()
+            .enumerate()
+            .take(TITLE_PROFILE_SLOT_COUNT)
+        {
             let record = profile_summary_record_address(summary, slot);
             core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
             *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
-            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+            face_hash.store(0, Ordering::SeqCst);
         }
     }
     PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
@@ -46,7 +50,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
     };
     let mut mask = 0usize;
     let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
-    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+    for (slot, slot_stats) in preview_stats.iter_mut().enumerate() {
         if !active_slots.get(slot).copied().unwrap_or(false) {
             continue;
         }
@@ -96,7 +100,7 @@ pub(crate) unsafe fn system_quit_apply_foreign_profile_summary_preview(
                     "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
                 ));
                 if let Some(stats) = pgd.stats_text_utf16() {
-                    preview_stats[slot] = stats;
+                    *slot_stats = stats;
                 }
                 mask |= 1usize << slot;
             }
@@ -203,8 +207,11 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
     // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
     // fingerprints no longer describe any slot, and neither does the preview's record of which slots
     // it could not source a place name for.
-    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
-        PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+    for face_hash in PROFILE_PREVIEW_FACE_HASH
+        .iter()
+        .take(TITLE_PROFILE_SLOT_COUNT)
+    {
+        face_hash.store(0, Ordering::SeqCst);
     }
     PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.store(0, Ordering::SeqCst);
     let _ = system_quit_save_swap_restore_original_file(&st, reason);
@@ -213,7 +220,7 @@ pub(crate) unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str)
 
 pub(crate) unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     let tick = SYSTEM_QUIT_SAVE_SWAP_POLL_TICK.fetch_add(1, Ordering::SeqCst);
-    if tick % SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS != 0 {
+    if !tick.is_multiple_of(SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS) {
         return;
     }
     let (path, original_hash, original_len, original_modified_ns, preview_applied) = {
@@ -342,6 +349,9 @@ pub(crate) fn make_save_file_writable_for_overwrite(path: &str) {
     if let Ok(meta) = fs::metadata(path) {
         let mut perms = meta.permissions();
         if perms.readonly() {
+            // Windows-only DLL: this clears FILE_ATTRIBUTE_READONLY, the one bit we mean. The
+            // lint is about the UNIX behaviour (0o666 for everyone), which cannot occur here.
+            #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             let _ = fs::set_permissions(path, perms);
         }
@@ -489,29 +499,6 @@ pub(crate) unsafe fn patch_profile_offscreen_size_for_slot(base: usize, target: 
 fn incoming_portrait_slot_pending(phase: usize, selected: usize, fresh_deser: usize) -> bool {
     phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
         || (selected < TITLE_PROFILE_SLOT_COUNT && fresh_deser == 0)
-}
-
-#[cfg(test)]
-mod portrait_target_pending_tests {
-    use super::*;
-
-    #[test]
-    fn selected_slot_survives_transient_idle_phase_until_deserialize() {
-        assert!(incoming_portrait_slot_pending(
-            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
-            2,
-            0
-        ));
-    }
-
-    #[test]
-    fn completed_selection_no_longer_overrides_resident_slot() {
-        assert!(!incoming_portrait_slot_pending(
-            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
-            2,
-            1
-        ));
-    }
 }
 
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
@@ -722,8 +709,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if feed_window {
         PROFILE_LOADSCREEN_FEED_TICKS.fetch_sub(1, Ordering::SeqCst);
     }
-    if counter % 240 == 0 || (feed_window && counter % 8 == 0) {
-        let log_this = counter % 240 == 0; // throttle the in-window feed log to once per 240
+    if counter.is_multiple_of(240) || (feed_window && counter.is_multiple_of(8)) {
+        let log_this = counter.is_multiple_of(240); // throttle the in-window feed log to once per 240
         let force_rebuild = portrait_force_rebuild_enabled();
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
@@ -838,7 +825,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             if s == target
                 && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
                 && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                    .map(|m| valid(m))
+                    .map(&valid)
                     .unwrap_or(false)
             {
                 PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
@@ -1014,63 +1001,62 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         // user-chosen fallback ahead of the full Root A teardown fix (unregister the ResMan draw task +
         // free per reload). bd rootB-fd4io-fix-works-load2-resubmits-but-exposes-rootA-spared-renderer-crash-2026-07-23.
         && !crate::experiments::gating::switch_reload_active()
+        && let Ok(base) = game_module_base()
     {
-        if let Ok(base) = game_module_base() {
-            // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch
-            // (SELECTED_SLOT), else the loaded slot (ac0). portrait_target_slot() is what makes the
-            // loading portrait show the character just picked, not the one still resident.
-            let slot = portrait_target_slot();
-            // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
-            // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
-            // table[slot] + a model-built guard if no candidate was recorded.
-            let candidate = PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst);
-            let target_te = portrait_renderer_table_entry(base, slot);
-            // Honor the pre-recorded candidate ONLY if it still sits in the TARGET slot. A candidate
-            // captured for the old character before a switch confirm must not be spared over the
-            // newly-selected one -- in that case fall back to table[target] (its model is built, the
-            // menu rendered all 10 slots). Prevents the loading portrait showing the prior character.
-            let candidate_in_target =
-                valid(candidate) && unsafe { safe_read_usize(target_te) }.unwrap_or(0) == candidate;
-            let (renderer, table, spared_slot) = if candidate_in_target {
-                (candidate, target_te, slot)
-            } else {
-                let r = unsafe { safe_read_usize(target_te) }.unwrap_or(0);
-                let model_built = valid(r)
-                    && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .map(|m| valid(m))
-                        .unwrap_or(false);
-                (if model_built { r } else { 0 }, target_te, slot)
-            };
-            if valid(renderer)
-                && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
-            {
-                LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
-                PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
-                // Ownership ledger: we just excluded this renderer from the native delete, so WE own
-                // its destruction now. Paired with the ownership_release on the drain path below.
-                ownership_take(OwnedClass::SparedRenderer);
-                // Null the table entry so the original's null-guarded delete-enqueue skips it.
-                if table != 0 {
-                    unsafe { (table as *mut usize).write_volatile(0) };
-                }
-                // Re-latch the look-at base from the post-Continue model (a different model instance).
-                if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&spared_slot) {
-                    let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
-                        Ok(g) => g,
-                        Err(p) => p.into_inner(),
-                    };
-                    if let Some(s) = guard[spared_slot as usize].as_mut() {
-                        s.base_latched = false;
-                    }
-                }
-                let model_at_spare =
-                    unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .unwrap_or(0);
-                append_autoload_debug(format_args!(
-                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) model_ins=0x{model_at_spare:x} from teardown -- drive look-at + render it post-Continue"
-                ));
+        // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch
+        // (SELECTED_SLOT), else the loaded slot (ac0). portrait_target_slot() is what makes the
+        // loading portrait show the character just picked, not the one still resident.
+        let slot = portrait_target_slot();
+        // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
+        // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
+        // table[slot] + a model-built guard if no candidate was recorded.
+        let candidate = PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst);
+        let target_te = portrait_renderer_table_entry(base, slot);
+        // Honor the pre-recorded candidate ONLY if it still sits in the TARGET slot. A candidate
+        // captured for the old character before a switch confirm must not be spared over the
+        // newly-selected one -- in that case fall back to table[target] (its model is built, the
+        // menu rendered all 10 slots). Prevents the loading portrait showing the prior character.
+        let candidate_in_target =
+            valid(candidate) && unsafe { safe_read_usize(target_te) }.unwrap_or(0) == candidate;
+        let (renderer, table, spared_slot) = if candidate_in_target {
+            (candidate, target_te, slot)
+        } else {
+            let r = unsafe { safe_read_usize(target_te) }.unwrap_or(0);
+            let model_built = valid(r)
+                && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .map(&valid)
+                    .unwrap_or(false);
+            (if model_built { r } else { 0 }, target_te, slot)
+        };
+        if valid(renderer)
+            && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        {
+            LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
+            PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
+            // Ownership ledger: we just excluded this renderer from the native delete, so WE own
+            // its destruction now. Paired with the ownership_release on the drain path below.
+            ownership_take(OwnedClass::SparedRenderer);
+            // Null the table entry so the original's null-guarded delete-enqueue skips it.
+            if table != 0 {
+                unsafe { (table as *mut usize).write_volatile(0) };
             }
+            // Re-latch the look-at base from the post-Continue model (a different model instance).
+            if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&spared_slot) {
+                let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                if let Some(s) = guard[spared_slot as usize].as_mut() {
+                    s.base_latched = false;
+                }
+            }
+            let model_at_spare =
+                unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) model_ins=0x{model_at_spare:x} from teardown -- drive look-at + render it post-Continue"
+            ));
         }
     }
     let orig = PROFILE_RENDERER_TEARDOWN_HOOK_ORIG.load(Ordering::SeqCst);
@@ -1110,10 +1096,10 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
         let scan_table = |ptrs: &mut [usize; TITLE_PROFILE_SLOT_COUNT]| -> (u32, u32) {
             let mut null_mask = 0u32;
             let mut valid_mask = 0u32;
-            for s in 0..TITLE_PROFILE_SLOT_COUNT {
+            for (s, ptr_slot) in ptrs.iter_mut().enumerate() {
                 let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
                     .unwrap_or(0);
-                ptrs[s] = r;
+                *ptr_slot = r;
                 let is_valid = r != 0
                     && r != null
                     && unsafe { safe_read_usize(r) }.unwrap_or(0)
@@ -1189,4 +1175,27 @@ pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
     }
     let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
     unsafe { f() };
+}
+
+#[cfg(test)]
+mod portrait_target_pending_tests {
+    use super::*;
+
+    #[test]
+    fn selected_slot_survives_transient_idle_phase_until_deserialize() {
+        assert!(incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            0
+        ));
+    }
+
+    #[test]
+    fn completed_selection_no_longer_overrides_resident_slot() {
+        assert!(!incoming_portrait_slot_pending(
+            SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+            2,
+            1
+        ));
+    }
 }

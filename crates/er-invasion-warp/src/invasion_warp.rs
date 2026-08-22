@@ -264,6 +264,23 @@ impl InvasionWarpTarget {
     }
 }
 
+/// The most negative yaw the shipped `.aip` catalog contains: the little-endian point bytes
+/// `C3 F5 C8 C0`, i.e. `-6.28` authored to two decimals.
+///
+/// Measured over the real 365-file extraction (7073 points): 9 points carry exactly this value
+/// -- `m60_35_44_00` point 14, `m60_35_45_00` point 1, `m60_35_48_00` point 2 among them -- and
+/// nothing in the table is more negative. The next distinct value up is `-6.27`.
+///
+/// This is deliberately NOT `-f32::consts::TAU`. `-TAU` as `f32` is `-6.2831855` (bits
+/// `C0C90FDB`), a number the game never ships, and [`wrap_radians`] maps it to exactly `0.0`
+/// whereas it maps the real value to `+0.0032`. Swapping in the std constant would keep the
+/// tests passing while silently retiring the shipped extreme they exist to exercise.
+///
+/// Spelled from its bits because to `clippy::approx_constant` the decimal literal `-6.28` is
+/// indistinguishable from a truncated `TAU`, and this value is the opposite of a truncation:
+/// it is exact authored data.
+pub const AUTHORED_YAW_EXTREME: f32 = f32::from_bits(0xC0C8_F5C3);
+
 /// Wrap an angle in radians into `(-pi, pi]`.
 #[must_use]
 pub fn wrap_radians(radians: f32) -> f32 {
@@ -726,11 +743,12 @@ mod tests {
     #[test]
     fn headings_wrap_the_authored_negative_only_yaw_into_plus_minus_pi() {
         use std::f32::consts::PI;
-        // The authored range is (-2pi, 0]; -6.28 is the shipped extreme and must come back
-        // as a near-zero heading, not as a value outside the range.
-        let extreme = InvasionWarpTarget::new(BlockKey::default(), 0, [0.0; 3], -6.28);
+        // The authored range is (-2pi, 0]; AUTHORED_YAW_EXTREME (-6.28) is the shipped extreme
+        // and must come back as a near-zero heading, not as a value outside the range.
+        let extreme =
+            InvasionWarpTarget::new(BlockKey::default(), 0, [0.0; 3], AUTHORED_YAW_EXTREME);
         assert!(extreme.heading_radians().abs() < 0.01);
-        for yaw in [-0.0f32, -1.09, -2.69, -3.2, -4.0, -6.28] {
+        for yaw in [-0.0f32, -1.09, -2.69, -3.2, -4.0, AUTHORED_YAW_EXTREME] {
             let heading =
                 InvasionWarpTarget::new(BlockKey::default(), 0, [0.0; 3], yaw).heading_radians();
             assert!(

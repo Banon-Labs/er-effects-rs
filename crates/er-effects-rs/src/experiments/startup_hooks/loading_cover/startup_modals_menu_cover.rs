@@ -139,7 +139,7 @@ pub(crate) fn install_auto_accept_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     AUTO_ACCEPT_INSTALLED.store(AUTO_ACCEPT_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "auto-accept: hooked MessageBoxDialog builder 0x{builder_addr:x} (capture -> OnDecide dismiss)"
@@ -284,7 +284,7 @@ pub(crate) fn install_gr_sysmsg_log_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "grsysmsg-log: hooked GetGR_System_Message 0x{addr:x} (log id+caller after menu-open)"
                     ));
@@ -355,10 +355,11 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
         }
     }
     // param_3->base._vfptr = FD4::FD4TimeTemplate<float>::vftable (Run's common-return sets this).
-    if let Ok(base) = game_module_base() {
-        if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
-            unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-        }
+    if let Ok(base) = game_module_base()
+        && r8 > null
+        && unsafe { safe_read_usize(r8) }.is_some()
+    {
+        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
     }
     if NETWORK_CHECK_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -407,7 +408,7 @@ pub(crate) fn install_network_check_shortcircuit_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "network-check-shortcircuit: hooked CS::NetworkCheckJob::Run 0x{addr:x} -- offline modal suppression armed"
                     ));
@@ -602,10 +603,11 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
             *((result + 4) as *mut i32) = 0;
         }
     }
-    if let Ok(base) = game_module_base() {
-        if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
-            unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-        }
+    if let Ok(base) = game_module_base()
+        && r8 > null
+        && unsafe { safe_read_usize(r8) }.is_some()
+    {
+        unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
     }
     if SHOW_PROGRESS_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
         append_autoload_debug(format_args!(
@@ -657,7 +659,7 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "show-progress-shortcircuit: hooked CS::ShowProgressJob::Run 0x{addr:x} -- save-type passthrough + offline-check modal suppression armed"
                     ));
@@ -755,7 +757,7 @@ pub(crate) fn install_title_open_menu_suppress_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "title-open-menu-suppress: hooked CS::TitleTopDialog::open_menu 0x{addr:x} -- native menu-open held while missing-save picker pending (rows build post-pick with the save present)"
                     ));
@@ -823,6 +825,7 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
+#[allow(dead_code)] // Retained: Title-cover part B builder: the native wrapper RVA + telemetry wiring it encodes is the retained result, currently unwired.
 pub(crate) unsafe fn build_profile_select_cover_job(
     base: usize,
     rdx: usize,
@@ -849,6 +852,7 @@ pub(crate) unsafe fn build_profile_select_cover_job(
     ));
 }
 
+#[allow(dead_code)] // Retained: Title-cover part B builder: the native wrapper RVA + telemetry wiring it encodes is the retained result, currently unwired.
 pub(crate) unsafe fn build_black_cover_job(
     base: usize,
     rdx: usize,
@@ -995,9 +999,13 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
     let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
     let set_visible: unsafe extern "system" fn(usize, u8) =
         if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
-            unsafe { std::mem::transmute(orig) }
+            unsafe { std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(orig) }
         } else {
-            unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) }
+            unsafe {
+                std::mem::transmute::<usize, unsafe extern "system" fn(usize, u8)>(
+                    base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+                )
+            }
         };
     unsafe { set_visible(logo, 0) };
     let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)

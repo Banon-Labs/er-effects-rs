@@ -580,7 +580,7 @@ mod tests {
     fn the_whole_band_stays_a_positive_i32() {
         // GetBonfireEntityId answers -1 as 0, so a negative synthetic id would be
         // indistinguishable from "no bonfire".
-        assert!(INVASION_ENTITY_ID_BASE > 0);
+        const { assert!(INVASION_ENTITY_ID_BASE > 0) };
         let end = INVASION_ENTITY_ID_BASE as i64 + INVASION_ENTITY_ID_COUNT as i64;
         assert!(end <= i32::MAX as i64, "band overflows i32");
     }
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn the_band_is_large_enough_for_the_whole_shipped_catalog() {
         // 7073 points with DLC; PerPoint must fit without moving the base.
-        assert!(INVASION_ENTITY_ID_COUNT > 7073);
+        const { assert!(INVASION_ENTITY_ID_COUNT > 7073) };
     }
 
     #[test]

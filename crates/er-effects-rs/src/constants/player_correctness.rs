@@ -33,6 +33,7 @@ pub(crate) const CHR_ASM_SIZE: usize = core::mem::size_of::<ChrAsm>();
 /// sections (which store the same blocks in a different order; see
 /// `SerializedSaveSlot::runtime_chr_asm_image`).
 pub(crate) const CHR_ASM_EQUIPMENT_OFFSET: usize = core::mem::offset_of!(ChrAsm, equipment);
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const CHR_ASM_GAITEM_HANDLES_OFFSET: usize =
     core::mem::offset_of!(ChrAsm, gaitem_handles);
 pub(crate) const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
@@ -52,6 +53,7 @@ pub(crate) const PGD_MAX_CERULEAN_FLASK_102_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, max_fp_flask);
 pub(crate) const PGD_FACE_DATA_OFFSET: usize = core::mem::offset_of!(PlayerGameData, face_data);
 pub(crate) const FACE_DATA_BUFFER_OFFSET: usize = core::mem::offset_of!(FaceData, face_data_buffer);
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const FACE_DATA_BUFFER_MAGIC_OFFSET: usize =
     core::mem::offset_of!(FaceDataBuffer, magic);
 pub(crate) const FACE_DATA_BUFFER_VERSION_OFFSET: usize =
@@ -131,14 +133,19 @@ pub(crate) const CHR_ASM_OVERRIDE_ABSENT: i32 = -1;
 /// The per-category addends `FUN_1409e6fb0` applies to a non-negative `unkd8`/`unk0`
 /// (`lea 0x64(%rax),%ebx`, `lea 0xc8(%rax),%ebx`, `lea 0x12c(%rax),%ebx`). Head takes the override
 /// value verbatim, so it has no addend.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const CHR_ASM_OVERRIDE_CHEST_ADDEND: i32 = 100;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const CHR_ASM_OVERRIDE_HANDS_ADDEND: i32 = 200;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const CHR_ASM_OVERRIDE_LEGS_ADDEND: i32 = 300;
 /// `CS::ChrAsm::GetDefaultProtectorParamId` (deobf 0x140d47420) is a pure switch:
 /// 0 -> 10000, 1 -> 10100, 2 -> 10200, 3 -> 10300, anything else -> -1. The profile feed
 /// `set_model_source` calls it only with 2 and 3, so a portrait's HANDS and LEGS are always these
 /// bare-body rows -- vanilla behaviour, not a defect.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const PROTECTOR_DEFAULT_PARAM_ID_BASE: i32 = 10000;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const PROTECTOR_DEFAULT_PARAM_ID_STRIDE: i32 = 100;
 /// `CSMenuProfModelRend` -> its LIVE stage-0 `ChrAsm`, the one the model build actually reads.
 ///
@@ -212,13 +219,6 @@ pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
 pub(crate) use er_telemetry::counters::LOAD_CORRECTNESS_DUMPED;
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
-/// One-shot latches for the OBSERVE-mode title->menu timing baseline (T0 at the parked title,
-/// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
-/// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
-pub(crate) use er_telemetry::counters::OBSERVE_T0_EMITTED;
-pub(crate) use er_title_flow::OBSERVE_MENU_OPEN_EMITTED;
-pub(crate) use er_title_flow::OBSERVE_MARKER_NOT_EMITTED;
-pub(crate) use er_title_flow::OBSERVE_MARKER_EMITTED;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =

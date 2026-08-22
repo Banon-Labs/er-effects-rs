@@ -252,6 +252,7 @@ pub const AIP_FINGERPRINT_DLC02: AipContainerFingerprint = AipContainerFingerpri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::invasion_warp::AUTHORED_YAW_EXTREME;
 
     fn sample_block() -> BlockKey {
         // m60_34_51_00 -- the smallest shipped entry (one point, 32 bytes).
@@ -263,7 +264,7 @@ mod tests {
         let block = sample_block();
         let points = [
             ([103.79f32, 456.07, -66.27], -1.09f32),
-            ([1.0, 2.0, 3.0], -6.28),
+            ([1.0, 2.0, 3.0], AUTHORED_YAW_EXTREME),
         ];
         let bytes = encode_aip(block, &points);
         assert_eq!(bytes.len(), AIP_HEADER_LEN + AIP_POINT_LEN * points.len());
@@ -310,9 +311,7 @@ mod tests {
         bytes[0] = b'X';
         assert_eq!(
             parse_aip(&bytes),
-            Err(AipParseError::BadMagic {
-                found: [b'X', b'P', b'I', b'A']
-            })
+            Err(AipParseError::BadMagic { found: *b"XPIA" })
         );
     }
 

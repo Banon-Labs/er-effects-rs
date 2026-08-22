@@ -760,7 +760,7 @@ pub fn classify_arrival(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::invasion_warp::BlockKey;
+    use crate::invasion_warp::{AUTHORED_YAW_EXTREME, BlockKey};
 
     #[test]
     fn the_rvas_are_the_byte_checked_vas_minus_the_image_base() {
@@ -807,9 +807,9 @@ mod tests {
 
     #[test]
     fn the_spawn_orientation_passes_the_raw_yaw_through_unwrapped() {
-        // The authored table reaches -6.28. Wrapping it here (as heading_radians does, for
-        // compass display) would rotate half the catalog by a full turn.
-        let raw = -6.28_f32;
+        // The authored table reaches AUTHORED_YAW_EXTREME (-6.28). Wrapping it here (as
+        // heading_radians does, for compass display) would rotate half the catalog by a full turn.
+        let raw = AUTHORED_YAW_EXTREME;
         assert_eq!(spawn_orientation(raw).y, raw);
         let target = InvasionWarpTarget::new(BlockKey::from_parts(60, 34, 51, 0), 0, [0.0; 3], raw);
         assert_ne!(

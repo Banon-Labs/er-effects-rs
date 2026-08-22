@@ -28,3 +28,8 @@ er-loading-bar = { path = "../er-loading-bar" }
 # Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
 # shell's run log and crash log each describe exactly one run.
 er-game-base = { path = "../er-game-base" }
+# LINT PARITY (root `[workspace.lints]`): this crate is at ZERO clippy + rustc warnings on its
+# shipping target (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`),
+# so it opts into the denied `rust.warnings` + `clippy.all` groups with no per-lint escapes.
+[lints]
+workspace = true

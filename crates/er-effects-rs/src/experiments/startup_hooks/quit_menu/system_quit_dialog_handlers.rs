@@ -287,8 +287,7 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
             append_autoload_debug(format_args!(
                 "quit-to-desktop: Return-to-Desktop confirmed at {hook_name} controller=0x{controller:x} action_alias=0x{action_obj:x} cursor={cursor} {verdict_text}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
             ));
-            unsafe { ExitProcess(0) };
-            0
+            unsafe { ExitProcess(0) }
         }
         None => {
             // The patched Quit dialog, row NOT identified. Suppress instead of forwarding:
@@ -530,6 +529,7 @@ pub(crate) fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
     wide_z(&win)
 }
 
+#[allow(dead_code)] // Retained: Wide-picker path decode, beside the live wide/Windows path helpers it belongs with.
 pub(crate) fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
     let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
     if end == 0 {
@@ -1396,15 +1396,15 @@ pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(
 ) -> usize {
     let orig = SCALEFORM_HANDLER_CTOR_ORIG.load(Ordering::SeqCst);
     SCALEFORM_HANDLER_CTORS.fetch_add(1, Ordering::SeqCst);
-    if obj != 0 {
-        if let Ok(mut live) = SCALEFORM_HANDLER_LIVE.lock() {
-            // Cap guard: if a genuine leak fills the table, stop growing (drop tracking of the
-            // oldest) so the probe can't OOM -- the double-free detection still works for recent objs.
-            if live.len() >= SCALEFORM_HANDLER_LIVE_CAP {
-                live.remove(0);
-            }
-            live.push(obj);
+    if obj != 0
+        && let Ok(mut live) = SCALEFORM_HANDLER_LIVE.lock()
+    {
+        // Cap guard: if a genuine leak fills the table, stop growing (drop tracking of the
+        // oldest) so the probe can't OOM -- the double-free detection still works for recent objs.
+        if live.len() >= SCALEFORM_HANDLER_LIVE_CAP {
+            live.remove(0);
         }
+        live.push(obj);
     }
     let _ = parent;
     if orig == HOOK_ORIGINAL_UNSET || orig == 0 {

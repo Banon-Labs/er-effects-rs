@@ -157,7 +157,7 @@ pub(crate) fn gx_cmd_queue_hist_top(n: usize) -> String {
             (key != 0 && count != 0).then_some((key, count))
         })
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.1));
     entries
         .iter()
         .take(n)
@@ -291,7 +291,7 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     }
     if cap > 0 && count >= 0 && count as usize >= (cap as usize) - GX_CMD_QUEUE_NEARFULL_MARGIN {
         let hits = GX_CMD_QUEUE_NEARFULL_HITS.fetch_add(1, Ordering::Relaxed);
-        if hits % GX_CMD_QUEUE_NEARFULL_LOG_EVERY == 0 {
+        if hits.is_multiple_of(GX_CMD_QUEUE_NEARFULL_LOG_EVERY) {
             append_autoload_debug(format_args!(
                 "gx-cmdqueue: NEAR-FULL count={count}/{cap} (hit #{hits}) queue=0x{queue:x} top producers: {} | buckets: {}",
                 gx_cmd_queue_hist_top(8),
@@ -348,7 +348,7 @@ pub(crate) fn install_gx_cmd_queue_telemetry() {
         Ok(hook) => {
             GX_RESERVE_CMD_QUEUE_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -361,7 +361,7 @@ pub(crate) fn install_gx_cmd_queue_telemetry() {
         Ok(hook) => {
             GX_CMD_PUMP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -416,7 +416,7 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
         Ok(hook) => {
             SCALEFORM_HANDLER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -434,7 +434,7 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
         Ok(hook) => {
             SCALEFORM_HANDLER_DTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -484,41 +484,33 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
         let preserved_stale = masquerade_preserved_job_take(job);
         if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
             let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
-            if let Some(window) = unsafe { safe_read_usize(owning_addr) } {
-                if window != 0 {
-                    if let Some((doomed, index)) =
-                        unsafe { menu_window_doomed_event_index(window, base, preserved_stale) }
-                    {
-                        if doomed {
-                            // The finalize would remove the window from its push-target vector, but
-                            // it crashes at the getter first, leaving the window dangling in the
-                            // title-step's active-window vector STEP_MenuJobWait walks (crash rva
-                            // 0x733f80). Do that removal ourselves so no stale entry survives.
-                            let removed =
-                                unsafe { menu_window_remove_from_push_target(job, window, base) };
-                            // Null owningMenuWindow so the finalize skips its own (now-crashing)
-                            // window block entirely.
-                            unsafe { (owning_addr as *mut usize).write_volatile(0) };
-                            let n = MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS
-                                .fetch_add(1, Ordering::SeqCst)
-                                + 1;
-                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW
-                                .store(window, Ordering::SeqCst);
-                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX.store(
-                                index.map(|i| i as usize).unwrap_or(usize::MAX),
-                                Ordering::SeqCst,
-                            );
-                            if preserved_stale {
-                                MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES
-                                    .fetch_add(1, Ordering::SeqCst);
-                            }
-                            if n <= 32 {
-                                append_crash_log(format_args!(
-                                    "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada7c/0x7ada87/0x7adb28/0x733f80)"
-                                ));
-                            }
-                        }
-                    }
+            if let Some(window) = unsafe { safe_read_usize(owning_addr) }
+                && window != 0
+                && let Some((doomed, index)) =
+                    unsafe { menu_window_doomed_event_index(window, base, preserved_stale) }
+                && doomed
+            {
+                // The finalize would remove the window from its push-target vector, but
+                // it crashes at the getter first, leaving the window dangling in the
+                // title-step's active-window vector STEP_MenuJobWait walks (crash rva
+                // 0x733f80). Do that removal ourselves so no stale entry survives.
+                let removed = unsafe { menu_window_remove_from_push_target(job, window, base) };
+                // Null owningMenuWindow so the finalize skips its own (now-crashing)
+                // window block entirely.
+                unsafe { (owning_addr as *mut usize).write_volatile(0) };
+                let n = MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS.fetch_add(1, Ordering::SeqCst) + 1;
+                MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW.store(window, Ordering::SeqCst);
+                MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX.store(
+                    index.map(|i| i as usize).unwrap_or(usize::MAX),
+                    Ordering::SeqCst,
+                );
+                if preserved_stale {
+                    MENU_WINDOW_JOB_DTOR_PRESERVED_STALE_DETACHES.fetch_add(1, Ordering::SeqCst);
+                }
+                if n <= 32 {
+                    append_crash_log(format_args!(
+                        "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} preserved_stale={preserved_stale} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada7c/0x7ada87/0x7adb28/0x733f80)"
+                    ));
                 }
             }
         }
@@ -815,7 +807,7 @@ pub(crate) fn install_menu_window_job_dtor_guard() {
         Ok(hook) => {
             MENU_WINDOW_JOB_DTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -877,7 +869,7 @@ pub(crate) fn install_system_quit_window_list_push_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED
                         .store(SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -917,14 +909,14 @@ pub(crate) unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
 /// table is absent (quit teardown), `ExitProcess(0)` for a fast clean exit instead of the game's
 /// imminent DLPanic; otherwise forward unchanged.
 pub(crate) unsafe extern "system" fn menu_offscr_rend_param_lookup_hook(out: usize, row: u32) {
-    if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
-        if unsafe { menu_offscr_rend_param_table_absent(base) } {
-            let n = QUIT_TO_DESKTOP_CLEAN_KILLS.fetch_add(1, Ordering::SeqCst) + 1;
-            append_crash_log(format_args!(
-                "quit-to-desktop: MenuOffscrRendParam table absent (quit teardown) #{n} row={row} -- native save already issued; clean ExitProcess(0) instead of the MenuOffscrRendParam DLPanic crash"
-            ));
-            unsafe { ExitProcess(0) };
-        }
+    if let Some(base) = game_module_base().ok().filter(|&b| b != 0)
+        && unsafe { menu_offscr_rend_param_table_absent(base) }
+    {
+        let n = QUIT_TO_DESKTOP_CLEAN_KILLS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_crash_log(format_args!(
+            "quit-to-desktop: MenuOffscrRendParam table absent (quit teardown) #{n} row={row} -- native save already issued; clean ExitProcess(0) instead of the MenuOffscrRendParam DLPanic crash"
+        ));
+        unsafe { ExitProcess(0) };
     }
     let orig = MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
@@ -964,7 +956,7 @@ pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
         Ok(hook) => {
             MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            crate::mh::leak_installed_hook(hook);
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -1032,7 +1024,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         SYSTEM_QUIT_NOOP_ACTION_INSTALLED
                             .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
@@ -1073,7 +1065,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED.store(
                             SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES,
                             Ordering::SeqCst,
@@ -1116,7 +1108,7 @@ pub(crate) fn install_system_quit_noop_action_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED.store(
                             PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES,
                             Ordering::SeqCst,
@@ -1175,7 +1167,7 @@ pub(crate) fn install_system_quit_save_game_text_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED
                         .store(SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -1231,7 +1223,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.store(
                         SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES,
                         Ordering::SeqCst,

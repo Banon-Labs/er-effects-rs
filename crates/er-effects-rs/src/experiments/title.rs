@@ -2,6 +2,4 @@
 //! (docs/plans/title-flow-crate-extraction.md). This shim preserves the old
 //! `experiments::title::*` namespace for every root-crate call site.
 
-#![allow(unused_imports)]
-
 pub(crate) use er_title_flow::*;
