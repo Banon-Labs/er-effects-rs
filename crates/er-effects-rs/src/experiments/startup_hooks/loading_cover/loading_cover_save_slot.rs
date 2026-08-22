@@ -101,7 +101,7 @@ pub(crate) unsafe fn count_live_profile_models(base: usize) -> usize {
             && unsafe { safe_read_usize(r) }.unwrap_or(0)
                 == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
             && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                .map(|m| valid(m))
+                .map(&valid)
                 .unwrap_or(false)
         {
             n += 1;
@@ -233,11 +233,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         return;
     }
     let nowload = unsafe { now_loading_active(base) };
-    if !force_loading_screen_rebuild
-        && !(nowload
-            || profile_select_window_open
-            || loading_screen_started
-            || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
+    if !(force_loading_screen_rebuild
+        || nowload
+        || profile_select_window_open
+        || loading_screen_started
+        || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
     {
         return;
     }
@@ -486,7 +486,7 @@ pub(crate) fn portrait_loaded_slot() -> i32 {
 ///   3. ac0, then the `OWN_STEPPER_SLOT` autoload hint.
 pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
-        .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
+        .map(er_save_loader::GameManSaveAccess::save_slot)
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
     // The user's boot pick outranks everything the game infers -- but ONLY for its own load. The
     // missing-save picker is a BOOT surface, so its pick is spent the moment the world it asked for
@@ -536,12 +536,11 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         ));
     } else if let (Some(held), Some(fresh)) = (target, resolved)
         && held != fresh
+        && PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.fetch_add(1, Ordering::SeqCst) == 0
     {
-        if PORTRAIT_WINDOW_RETARGETS_SUPPRESSED.fetch_add(1, Ordering::SeqCst) == 0 {
-            append_autoload_debug(format_args!(
-                "loading-portrait: SUPPRESSED a mid-window retarget {held} -> {fresh} (picker={picker:?} b78={request:?} ac0={ac0}) -- the face the user clicked stays on screen for this window"
-            ));
-        }
+        append_autoload_debug(format_args!(
+            "loading-portrait: SUPPRESSED a mid-window retarget {held} -> {fresh} (picker={picker:?} b78={request:?} ac0={ac0}) -- the face the user clicked stays on screen for this window"
+        ));
     }
     target
 }
@@ -577,7 +576,7 @@ pub(crate) fn portrait_tear_score(cpx: &[u8], w: usize, h: usize) -> usize {
         }
         y += 1;
     }
-    if n == 0 { 0 } else { (sum / n) as usize }
+    sum.checked_div(n).unwrap_or(0) as usize
 }
 
 /// The slot whose portrait the loading-screen pipeline should TARGET (spare + render + display): the
@@ -617,7 +616,7 @@ pub(crate) fn portrait_target_slot() -> i32 {
 pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     // The new-game / not-yet-resolved saved-map sentinel and the "is this a real packed BlockId"
     // predicate both live in er-loading-portrait, where they are host-tested.
-    use er_loading_portrait::portrait_identity::{DEFAULT_MAP_C30, packed_maps_disagree};
+    use er_loading_portrait::portrait_identity::packed_maps_disagree;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
 
     // GAME side: require a REAL loaded character before asserting anything.
@@ -688,7 +687,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     // were in scope and thrown away, so every FAIL had to be re-litigated by hand.
     let gm_ptr = game_man_ptr_or_null();
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
-        .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
+        .map(er_save_loader::GameManSaveAccess::save_slot)
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
     let b78 = if gm_ptr != null {
         unsafe { safe_read_i32(gm_ptr + GAME_MAN_SLOT_SELECT_B78_OFFSET) }.unwrap_or(i32::MIN)
@@ -725,12 +724,8 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     }
 }
 
-/// Body-relative offset of the slot's saved `BlockId`. NOT a literal here on purpose -- the single
-/// declaration lives in `er_save_loader::bnd4`, next to the Ghidra proof and the corpus test that
-/// pins it, so this cannot silently drift back to the `0x14` that read a `CSRandXorshift` dword
-/// and wrote it into the live `CS::ProfileSummary` record at +0x30 (bd er-effects-rs-qoqc).
-pub(crate) use er_save_loader::bnd4::SLOT_BODY_MAP_OFFSET as SAVE_SLOT_MAP_OFFSET;
 pub(crate) const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
+#[allow(dead_code)] // Retained: Save-format fact beside the live SAVE_FACE_MAGIC.
 pub(crate) const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
 
 /// Per-slot FNV-1a64 (truncated to usize) of the FOREIGN character's inner `FaceDataBuffer` as written
@@ -809,8 +804,6 @@ pub(crate) const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
 pub(crate) const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
 pub(crate) const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
 pub(crate) const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
-pub(crate) use er_telemetry::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 
 #[derive(Default)]
 pub(crate) struct SystemQuitSaveSwapState {
@@ -859,8 +852,6 @@ pub(crate) unsafe fn profile_slot_has_character(slot: i32) -> bool {
     let (name, len) = unsafe { read_utf16_name_units(rec) };
     !utf16_name_empty_like(&name, len)
 }
-
-pub(crate) use er_save_picker::{SaveSlotInfo, parse_save_character_slots};
 
 pub(crate) fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
     SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
@@ -954,12 +945,6 @@ impl<'a> SerializedSaveSlot<'a> {
         self.body
             .get(offset..offset + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    fn read_i32(self, offset: usize) -> Option<i32> {
-        self.body
-            .get(offset..offset + 4)
-            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
     fn add_offset(offset: &mut usize, len: usize) -> Option<()> {
@@ -1205,7 +1190,9 @@ impl<'a> SerializedPlayerGameData<'a> {
         let bytes = self.name_bytes()?;
         Some(
             bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|u| u16::from_le_bytes([u[0], u[1]]))
                 .take_while(|u| *u != 0)
                 .collect(),

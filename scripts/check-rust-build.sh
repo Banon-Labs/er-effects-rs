@@ -133,6 +133,25 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		fi
 	done
 	echo "[check-rust-build] linked ${#me3_shells[@]} me3 shells + the product DLL"
+
+	# LINT PARITY WITH ../fromsoftware-rs (2026-08-21). The parent project's entire
+	# strictness is `RUSTFLAGS=-Dwarnings` around `cargo clippy --all-targets`, and the
+	# user requires this workspace be AT LEAST as strict. The root `[workspace.lints]`
+	# table carries the deny levels, but a `cargo build` only enforces the RUSTC half --
+	# clippy's own lints exist only under `cargo clippy`, so without this step the clippy
+	# half of parity is declared in the manifest and never actually run.
+	#
+	# NOTE the deliberate absence of `--no-deps`, which upstream passes. Upstream's
+	# default-members covers its whole workspace so `--no-deps` still lints everything
+	# there; here it would restrict linting to the shells and skip every library crate
+	# they depend on (er-game-base, er-telemetry, er-title-flow, er-quit-menu, ...).
+	# Registry dependencies are unaffected either way -- cargo applies `--cap-lints allow`
+	# to them automatically -- so dropping the flag costs nothing and closes that hole.
+	#
+	# `scripts/check-lint-parity.py` asserts the configuration; this asserts the code.
+	echo "[check-rust-build] cargo xwin clippy --all-targets (lint parity with ../fromsoftware-rs)"
+	cargo xwin clippy --release "${shell_pkg_args[@]}" -p er-effects-rs --all-targets \
+		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 	# FEATURE MATRIX. `er-quit-menu` takes `er-save-picker` with `default-features = false`
 	# so a standalone quit-menu DLL links the OS-native fallback surface WITHOUT the boot
 	# missing-save flow. Cargo unifies features across a build graph, so the line above

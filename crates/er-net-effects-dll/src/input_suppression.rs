@@ -4,7 +4,7 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
@@ -31,7 +31,6 @@ static DINPUT_NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEAT_STATE: OnceLock<Mutex<HoldRepeat>> = OnceLock::new();
 
 const DIRECTINPUT_VERSION: u32 = 0x0800;
-const DINPUT_KEYBOARD_BUFFER_LEN: usize = 256;
 const DIK_0: usize = 0x0b;
 const DIK_LEFT_ALT: usize = 0x38;
 const DIK_NUMPAD0: usize = 0x52;
@@ -417,11 +416,12 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         };
         DINPUT_MOUSE_GET_STATE_ORIG.store(mouse_hook.trampoline() as usize, Ordering::Relaxed);
         unsafe { mouse_hook.queue_enable()? };
-        std::mem::forget(mouse_hook);
+        // `MhHook` is not `Drop`: the hook stays installed for the life of the process once
+        // queued, and the handle is deliberately not kept for a later uninstall.
     }
 
     unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
-    std::mem::forget(kb_hook);
+    // Same as the mouse hook above: nothing uninstalls these, and `MhHook` has no `Drop`.
     HOOKS_INSTALLED.store(true, Ordering::Relaxed);
     Ok(())
 }

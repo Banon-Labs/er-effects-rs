@@ -54,5 +54,10 @@ pub(crate) unsafe fn sample_invade_destination() {
     ));
 }
 
+/// Host-build stub: there is no game to read, so this does nothing.
+///
+/// # Safety
+/// Nothing to uphold -- the body is empty. `unsafe` only so the signature matches the
+/// `cfg(windows)` twin above, which does read game memory.
 #[cfg(not(windows))]
 pub(crate) unsafe fn sample_invade_destination() {}

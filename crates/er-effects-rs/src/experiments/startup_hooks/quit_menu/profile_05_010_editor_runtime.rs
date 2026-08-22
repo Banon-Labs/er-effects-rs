@@ -5,7 +5,7 @@ use er_gfx::profile_05_010_protocol::{
     SelectedKind,
 };
 use er_telemetry::counters::{PROFILE_EDITOR_DEFERRED_APPLIES, PROFILE_SELECT_WINDOW_RUN_TICKS};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 static PROFILE_EDITOR_LAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -94,7 +94,7 @@ fn write_status_text(dir: &PathBuf, text: &str) {
 /// process keeps SAYING, not something a file once claimed.
 fn heartbeat_status(dir: &PathBuf) {
     let ticks = PROFILE_EDITOR_HEARTBEAT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
-    if ticks % 2 != 0 {
+    if !ticks.is_multiple_of(2) {
         return;
     }
     let cached = PROFILE_EDITOR_LAST_STATUS_TEXT
@@ -122,7 +122,7 @@ fn heartbeat_status(dir: &PathBuf) {
     }
 }
 
-fn read_command(dir: &PathBuf) -> Result<Option<ProfileEditorCommand>, String> {
+fn read_command(dir: &Path) -> Result<Option<ProfileEditorCommand>, String> {
     let path = dir.join(CONTROL_FILE_NAME);
     if !path.exists() {
         return Ok(None);
@@ -274,12 +274,12 @@ fn utf16_status_preview(utf16: &[u16]) -> String {
 /// component directly. The row-populate parent `SceneObjProxy` is a short-lived stack proxy, so using
 /// it after native teardown is a UAF trap. The component object returned by the field component's
 /// native GetValue path is the stable body we cache; every tick revalidates its vtable before using it.
-pub(crate) unsafe fn profile_editor_necromancy_tick(base: usize) {
+pub(crate) unsafe fn profile_editor_necromancy_tick(_base: usize) {
     let Some(dir) = editor_dir() else {
         return;
     };
     let tick = PROFILE_EDITOR_NECROMANCY_POLL_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
-    if tick % 15 != 0 {
+    if !tick.is_multiple_of(15) {
         return;
     }
     let command = match read_command(&dir) {
@@ -699,7 +699,12 @@ unsafe fn apply_profile_editor_drive_button_probe(
     let relative = &command.layout.row_chrome.drive_button;
     let mut applied = 0u32;
     let mut unsupported = 0u32;
-    for index in 0..live_drive_cell_count.min(DRIVE_BUTTON_FIELD_NAMES.len()) {
+    for (index, native_name) in DRIVE_BUTTON_FIELD_NAMES
+        .iter()
+        .copied()
+        .enumerate()
+        .take(live_drive_cell_count)
+    {
         let absolute = er_gfx::profile_05_010_layout::TransformLayout {
             x: field0.x - 2.0 + field0.width as f32 * 0.5 + pitch * index as f32 + relative.x,
             y: field0.y - 2.0 + field0.clip_height as f32 * 0.5 + relative.y,
@@ -710,7 +715,6 @@ unsafe fn apply_profile_editor_drive_button_probe(
             editable: relative.editable,
             source: relative.source.clone(),
         };
-        let native_name = DRIVE_BUTTON_FIELD_NAMES[index];
         match unsafe { resolve_row_child_proxy(base, row_proxy, native_name) } {
             Some((child_proxy, _component_slot)) => {
                 let (this_applied, this_unsupported, _) = unsafe {
@@ -1347,7 +1351,7 @@ unsafe fn apply_profile_editor_one_field(
     base: usize,
     row_proxy: usize,
     _row_model: usize,
-    native_slot: i32,
+    _native_slot: i32,
     command: &ProfileEditorCommand,
     field_name: &str,
 ) -> (u32, u32, String) {
@@ -1411,9 +1415,8 @@ unsafe fn apply_profile_editor_one_field(
             let (moved, text_repush, width_result, error) = if guard_note.is_empty()
                 || source != "none"
             {
-                let moved = unsafe {
-                    set_scaleform_value_position(base, cs_value, field.x as f32, field.y as f32)
-                };
+                let moved =
+                    unsafe { set_scaleform_value_position(base, cs_value, field.x, field.y) };
                 let text_repush = if let Some(utf16) = repush_utf16.as_ref() {
                     unsafe {
                         crate::experiments::startup_hooks::loading_cover::push_stats_text_on_resolved_field(

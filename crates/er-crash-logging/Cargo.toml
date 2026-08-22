@@ -9,3 +9,6 @@ name = "er_crash_logging"
 
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

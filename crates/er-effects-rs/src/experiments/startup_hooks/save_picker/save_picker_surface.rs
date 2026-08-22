@@ -11,7 +11,7 @@ pub(crate) use er_save_picker::{
 
 /// True when this session's picker surface is the OS dialog.
 ///
-/// Reads the latch `init_runtime_config` set from `os_native_save_picker_enabled()`, so the config
+/// Reads the latch `init_runtime_config` set from `os_native_save_picker_from()`, so the config
 /// is walked once at attach and every runtime decision is a single load. It also inherits the same
 /// fail-safe direction: a session where the config never loaded leaves the latch at 0, the in-game
 /// browser.

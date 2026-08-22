@@ -2,42 +2,31 @@ use crate::prelude::*;
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-    D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE,
-    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK,
-    D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
-    D3D12_RANGE, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
+    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK, D3D12_MEMORY_POOL_UNKNOWN,
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
     D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
     D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
-    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES,
-    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
-    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12CommandAllocator,
-    ID3D12CommandList, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
-    ID3D12Resource,
+    D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION,
+    D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+    D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+    ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
+    ID3D12GraphicsCommandList, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R10G10B10A2_UNORM,
     DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
-use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
-use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapSource, IWICImagingFactory,
-    WICConvertBitmapSource, WICDecodeMetadataCacheOnDemand,
-};
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-use windows::core::{IUnknown, Interface, PCSTR, PCWSTR};
+use windows::core::{IUnknown, Interface, PCSTR};
 
 /// Bytes per RGBA8 texel.
 pub const RGBA8_BPP: usize = 4;
@@ -115,6 +104,15 @@ unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
 }
 
 /// `[base, base+SizeOfImage)` for a loaded module by null-terminated ASCII name, or `None`.
+///
+/// # Safety
+///
+/// `name` MUST be NUL-terminated -- it is passed straight to `GetModuleHandleA` as a
+/// `PCSTR`, which reads until it finds a zero byte. A slice without a terminator reads off
+/// the end of the allocation. Pass a `b"...\0"` literal.
+///
+/// Everything after that is safe against a bad handle: the PE header walk is done with
+/// fault-tolerant reads and returns `None` rather than faulting.
 pub unsafe fn module_range(name: &[u8]) -> Option<(usize, usize)> {
     let h = unsafe { GetModuleHandleA(PCSTR(name.as_ptr())) }.ok()?;
     unsafe { pe_image_range(h.0 as usize) }
@@ -165,6 +163,18 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// vtable-module rather than hard-code a fragile offset chain (see bd
 /// `live-portrait-d3d12-resource-buried-in-gx-wrapper-nest-2026-06-29`). Returns the validated,
 /// QI-owned resource. Pure read-only pointer-walking until the QI on a confirmed-d3d12 candidate.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
 pub unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
     unsafe { find_d3d12_resource_ex(start, 0, false, 0) }.map(|(r, _)| r)
 }
@@ -235,6 +245,18 @@ pub use er_telemetry::counters::DEPTH_CHAIN_DIAG;
 /// frames). So: first walk the static-RE'd member chain straight to OUR scene's DSV view object
 /// and QI the resource out of that tiny nest (deterministic, slot-local by construction); only if
 /// a chain link is null/redirected fall back to the historical BFS from the offscreen object.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
 pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
     // Deterministic bundle-paired DSV FIRST, walked with NO pin (prefer=0): the color RTV (bundle+0x30)
     // and depth DSV (bundle+0x40) are the SAME render-target bundle, so this view already points at the
@@ -242,17 +264,17 @@ pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize
     // pointer with a foreign larger buffer (user 2026-07-03: share the paired pointer, don't heuristically
     // re-pin). The pin is kept ONLY in the BFS fallback below, for mid-load renderers whose DSV chain is
     // null/redirected.
-    if let Some(dsv_view) = unsafe { offscreen_depth_view(start) } {
-        if let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, 0) } {
-            PROFILE_DEPTH_FROM_CHAIN.fetch_add(1, Ordering::SeqCst);
-            if DEPTH_CHAIN_DIAG.fetch_or(1, Ordering::SeqCst) & 1 == 0 {
-                append_autoload_debug(format_args!(
-                    "depth-chain: resolved DSV view 0x{dsv_view:x} from off=0x{start:x} -> depth resource cand 0x{:x}",
-                    found.1
-                ));
-            }
-            return Some(found);
+    if let Some(dsv_view) = unsafe { offscreen_depth_view(start) }
+        && let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, 0) }
+    {
+        PROFILE_DEPTH_FROM_CHAIN.fetch_add(1, Ordering::SeqCst);
+        if DEPTH_CHAIN_DIAG.fetch_or(1, Ordering::SeqCst) & 1 == 0 {
+            append_autoload_debug(format_args!(
+                "depth-chain: resolved DSV view 0x{dsv_view:x} from off=0x{start:x} -> depth resource cand 0x{:x}",
+                found.1
+            ));
         }
+        return Some(found);
     }
     let prefer = PROFILE_DEPTH_PIN.load(Ordering::SeqCst);
     if DEPTH_CHAIN_DIAG.fetch_or(2, Ordering::SeqCst) & 2 == 0 {
@@ -277,6 +299,21 @@ pub unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize
 /// (missing bundle/RTV/frame -> no clear, the frame simply keeps its previous content); the
 /// redirect-to-global-target case fails closed inside `offscreen_target_bundle` so the swapchain
 /// can never be cleared by mistake.
+///
+/// # Safety
+///
+/// This transmutes three `base + RVA` addresses into function pointers and CALLS them
+/// (GX frame-context pop, ClearRTV wrapper, frame-context release). The caller must
+/// guarantee:
+///
+/// * `base` is the running `eldenring.exe` image base AND that image is the version these
+///   RVAs were reverse-engineered against -- otherwise this calls into arbitrary code;
+/// * `off` is the offscreen render object of a live renderer, so the bundle/RTV it resolves
+///   still belongs to a scene that exists (the bundle walk itself is guarded and fails
+///   closed, including the redirect-to-global-target case, so the swapchain cannot be
+///   cleared by mistake);
+/// * the call is made on the render thread immediately before this frame's model update and
+///   draw, which is the only point where popping a GX frame context is balanced correctly.
 pub unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -390,6 +427,21 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// `prefer_v` (0 = none): a previously PINNED candidate -- if the scan reaches it and it still QIs as a
 /// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
 /// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// `exclude_v` and `prefer_v` are compared as raw candidate pointers only and are never
+/// dereferenced without the same QI validation, so a stale pin is a miss, not a fault.
 pub unsafe fn find_d3d12_resource_ex(
     start: usize,
     exclude_v: usize,
@@ -483,35 +535,35 @@ pub unsafe fn find_d3d12_resource_ex(
         visited.push(obj);
         let mut off = 0usize;
         while off < 0x60 {
-            if let Some(v) = unsafe { safe_read_usize(obj + off) } {
-                if v > 0x10000 && v < 0x8000_0000_0000 {
-                    if let Some(vt) = unsafe { safe_read_usize(v) } {
-                        if d3d_vtable_ok(vt, &d3d) {
-                            // Confirmed d3d12-module vtable -> safe to QI for ID3D12Resource.
-                            d3d_hits += 1;
-                            if v == exclude_v {
-                                // Caller-excluded texture (e.g. the SRV) -- skip so we pick a different one.
-                            } else if let Some((res, area)) = unsafe {
-                                if want_depth {
-                                    try_depth_texture2d(v)
-                                } else {
-                                    try_texture2d(v)
-                                }
-                            } {
-                                if prefer_v != 0 && v == prefer_v {
-                                    // Pinned candidate still reachable + valid: it wins outright.
-                                    return Some((res, v));
-                                }
-                                if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
-                                    best = Some((res, area, v));
-                                }
-                            } else {
-                                qi_fails += 1;
-                            }
-                        } else if depth < 6 && in_ranges(vt, std::slice::from_ref(&er)) {
-                            queue.push((v, depth + 1));
+            if let Some(v) = unsafe { safe_read_usize(obj + off) }
+                && v > 0x10000
+                && v < 0x8000_0000_0000
+                && let Some(vt) = unsafe { safe_read_usize(v) }
+            {
+                if d3d_vtable_ok(vt, &d3d) {
+                    // Confirmed d3d12-module vtable -> safe to QI for ID3D12Resource.
+                    d3d_hits += 1;
+                    if v == exclude_v {
+                        // Caller-excluded texture (e.g. the SRV) -- skip so we pick a different one.
+                    } else if let Some((res, area)) = unsafe {
+                        if want_depth {
+                            try_depth_texture2d(v)
+                        } else {
+                            try_texture2d(v)
                         }
+                    } {
+                        if prefer_v != 0 && v == prefer_v {
+                            // Pinned candidate still reachable + valid: it wins outright.
+                            return Some((res, v));
+                        }
+                        if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
+                            best = Some((res, area, v));
+                        }
+                    } else {
+                        qi_fails += 1;
                     }
+                } else if depth < 6 && in_ranges(vt, std::slice::from_ref(&er)) {
+                    queue.push((v, depth + 1));
                 }
             }
             off += 8;
@@ -531,6 +583,17 @@ pub unsafe fn find_d3d12_resource_ex(
 
 /// Record a one-subresource state transition into `list` for `res`, balancing the AddRef the
 /// `ManuallyDrop<Option<ID3D12Resource>>` field requires (clone + explicit drop = net zero on `res`).
+///
+/// # Safety
+///
+/// `list` must be a command list in the RECORDING state, and `before` must be the
+/// resource's ACTUAL current state on the GPU timeline. A wrong `before` is not caught
+/// here -- the driver acts on it, which is a device-removal-class error, and the debug
+/// layer would flag it.
+///
+/// `res` is borrowed: the clone placed in the barrier is explicitly dropped afterwards, so
+/// the caller's reference count is left unchanged. It must stay alive until the recorded
+/// list has finished executing.
 pub unsafe fn record_transition(
     list: &ID3D12GraphicsCommandList,
     res: &ID3D12Resource,
@@ -560,6 +623,18 @@ pub unsafe fn record_transition(
 ///
 /// Returns `(width, height, rgba8)` on success, `None` on ANY failure. Never panics, never crashes,
 /// never Releases the game's resource, never touches the game's command queue.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
 pub unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         readback_offscreen_rgba8_inner(gpu_child)
@@ -578,6 +653,20 @@ pub unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, u32, Ve
 /// so the scan can't race a teardown free.
 /// (Step 2: no longer called -- it was the coherent read's scan fallback, dropped with the staged split.
 /// Kept as the proven standalone color readback for reference.)
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// Also inherits the single-thread rule of the cached `RB_FAST_*` objects it copies with.
 #[allow(dead_code)]
 pub unsafe fn readback_offscreen_fast(gpu_child: usize) -> Option<(u32, u32, Vec<u8>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -647,6 +736,23 @@ impl Drop for SlotGuard {
 /// (KEEPING the wait on the render thread so the game RT is released here), and returns the slot + footprint
 /// metadata. Does NOT map or de-swizzle -- the worker does that from the staging buffers. `None` on any
 /// resolve/copy failure (caller skips). Never touches the game's queues; catch_unwind; fault-guarded.
+///
+/// # Safety
+///
+/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// This one claims a ring slot and hands its staging buffers to the consume worker. The
+/// returned `StagedReadback` names a slot the worker will map; the caller must publish it
+/// to the worker (or release it) exactly once, or that slot stays BUSY and every later
+/// frame is dropped.
 pub unsafe fn readback_offscreen_color_depth_staged(gpu_child: usize) -> Option<StagedReadback> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Pick + CLAIM the next ring slot (round-robin). If it is still BUSY the worker has not finished
@@ -701,7 +807,7 @@ unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<St
         // fence, but not IDENTITY-coherent). Fall back to the RT-pin scan only if the bundle RTV view is
         // unavailable (mid-load renderers whose scene chain is null/redirected).
         let bundle_color = offscreen_color_view(gpu_child)
-            .and_then(|rtv| unsafe { find_d3d12_resource_ex(rtv, 0, false, 0) });
+            .and_then(|rtv| find_d3d12_resource_ex(rtv, 0, false, 0));
         let (color_res, color_cand, color_identity_proven) = match bundle_color {
             Some((r, c)) => (r, c, true),
             None => {

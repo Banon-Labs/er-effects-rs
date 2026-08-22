@@ -416,7 +416,6 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             "native-fullread: continue_confirm returned + req_slot disarmed -- native pump now streams the real world (#{n}) -> DONE"
         ));
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
-        return;
     }
 }
 pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
@@ -548,7 +547,7 @@ pub(crate) use er_loading_portrait::char_fingerprint;
 /// 8-stat block). A native-menu load and a DLL-driven load produce comparable records;
 /// correctness == field-for-field match (name non-empty, level/runes/stats equal). Pure reads,
 /// fault-tolerant; safe to call once at the first in-world frame.
-pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
+pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const BAD_I32: i32 = -1;
     const ZERO_U16: u16 = 0;

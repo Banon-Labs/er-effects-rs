@@ -101,7 +101,7 @@ pub fn apply_depth_alpha_key(
         if iou < MASK_HEAD_IOU_MIN {
             let streak = PROFILE_MASK_HEAD_MISMATCH_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
             PROFILE_MASK_HEAD_MISMATCH_TOTAL.fetch_add(1, Ordering::SeqCst);
-            if streak == 1 || streak % 16 == 0 {
+            if streak == 1 || streak.is_multiple_of(16) {
                 append_autoload_debug(format_args!(
                     "MASK-HEAD-MISMATCH: IoU={iou}% < {MASK_HEAD_IOU_MIN}% (kept cutout vs colour head) streak={streak} -- fresh-but-wrong depth silhouette on this head"
                 ));
@@ -354,8 +354,8 @@ fn compute_depth_mask(
     let empty_thresh = ((w * h) / 2000).max(1) as u32;
     let (mut best_lo, mut best_len) = (0usize, 0usize);
     let (mut cur_lo, mut cur_len) = (0usize, 0usize);
-    for b in 0..NB {
-        if hist[b] <= empty_thresh {
+    for (b, &count) in hist.iter().enumerate() {
+        if count <= empty_thresh {
             if cur_len == 0 {
                 cur_lo = b;
             }
@@ -466,8 +466,8 @@ fn compute_depth_mask(
             let low_thresh = ((w * h) / 200).max(1) as u32;
             let (mut b_lo, mut b_len) = (0usize, 0usize);
             let (mut c_lo, mut c_len) = (0usize, 0usize);
-            for b in 0..NB {
-                if hist2[b] <= low_thresh {
+            for (b, &count) in hist2.iter().enumerate() {
+                if count <= low_thresh {
                     if c_len == 0 {
                         c_lo = b;
                     }
@@ -496,7 +496,7 @@ fn compute_depth_mask(
                 let share2 = masked2 * 100 / (w * h).max(1);
                 if share2 >= PORTRAIT_MIN_TRANSPARENT_PCT {
                     let n = DEPTH_KEY_SECOND_PASS.fetch_add(1, Ordering::SeqCst);
-                    if n % 64 == 0 {
+                    if n.is_multiple_of(64) {
                         append_autoload_debug(format_args!(
                             "depth-key: SECOND-PASS recovered mask -- interior[{imin},{imax}] gap[bins {b_lo}..+{b_len}/{NB}] thr={thr2} keep_high={keep_high2} masked={share2}% (first pass degenerate: clear-plane extremes excluded)"
                         ));
@@ -539,6 +539,17 @@ fn compute_depth_mask(
 /// stays black), so we do the copy ourselves every render-thread frame. Returns true on a completed copy
 /// (or when src==dst so no copy is needed). Same safety contract as the readback: our OWN
 /// queue/allocator/list/fence, game resources borrowed (never Released), never panics/crashes.
+///
+/// # Safety
+///
+/// Neither `src_gpu_child` nor `dst_gpu_child` has a value precondition -- both nests are
+/// walked with fault-tolerant reads and the whole body is wrapped in `catch_unwind`.
+///
+/// The caller owns LIFETIME: resolving each side ends in a `QueryInterface`, which faults
+/// uncatchably against a freed COM object, so both offscreen renderers must still be
+/// alive (vtable-validated by the caller) for the duration of the call. The copy uses our
+/// OWN queue/allocator/list/fence, shared without locking -- render thread only. The
+/// game's resources are borrowed and never Released.
 pub unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         copy_offscreen_rt_to_srv_inner(src_gpu_child, dst_gpu_child)
@@ -688,6 +699,13 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
 /// dims) into subresource 0 of an already-resolved game texture `dst`, on our OWN queue with a CPU fence
 /// wait. `dst` is borrowed (never Released). `false` on any COM failure or dim mismatch. Never Releases
 /// the game resource; the barrier clone is balanced by `record_transition`.
+#[expect(
+    dead_code,
+    reason = "GPU upload path for writing a CPU-composited portrait back into a game texture. The \
+              shipping composite blends into the backbuffer region with the cached COPY buffers \
+              instead, so this has no caller; kept as the worked example of the UPLOAD-heap + \
+              copyable-footprint + own-queue-fence sequence against a borrowed game resource."
+)]
 unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: &[u8]) -> bool {
     if pixels.len() < (w as usize) * (h as usize) * RGBA8_BPP {
         return false;

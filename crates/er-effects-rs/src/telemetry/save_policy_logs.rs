@@ -458,11 +458,7 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
         sampled += 1;
         i += stride;
     }
-    let neutral_pct = if sampled > 0 {
-        neutral * 100 / sampled
-    } else {
-        0
-    };
+    let neutral_pct = (neutral * 100).checked_div(sampled).unwrap_or(0);
     LS_PORTRAIT_LAST_W.store(w as usize, Ordering::SeqCst);
     LS_PORTRAIT_LAST_H.store(h as usize, Ordering::SeqCst);
     LS_PORTRAIT_LAST_NEUTRAL_PCT.store(neutral_pct, Ordering::SeqCst);
@@ -821,12 +817,6 @@ pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments
         epoch.elapsed().as_millis()
     };
     append_autoload_debug(format_args!("EVENT {name} frame={frame} ms={ms} {fields}"));
-}
-
-pub(crate) fn trace_continue_default_path() -> PathBuf {
-    game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-trace-continue.txt")
 }
 
 // ENV-GATE RATIONALE: ER_EFFECTS_TRACE_CONTINUE_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.

@@ -107,6 +107,3 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
 // "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
 // connection-error dialog, and writing +0x25e0/+0x25e8 corrupts the dialog (+0x25e8 is the
 // button COUNT). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)
-
-pub(crate) use er_title_flow::CURRENT_PROCESS_PSEUDO_HANDLE;
-pub(crate) use er_title_flow::SCAN_CHUNK_SIZE;

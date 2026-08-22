@@ -5,8 +5,6 @@
 //! and can be listed as its own ME3 `[[natives]]` entry without pulling in the
 //! product autoload/save/portrait/rendering dependencies.
 
-#![allow(non_snake_case)]
-
 #[cfg(windows)]
 mod config;
 #[cfg(windows)]
@@ -35,7 +33,7 @@ use std::sync::{Arc, Mutex, Once};
 
 #[cfg(windows)]
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, PlayerIns},
+    cs::{CSTaskGroupIndex, CSTaskImp, PlayerIns},
     fd4::FD4TaskData,
 };
 #[cfg(windows)]

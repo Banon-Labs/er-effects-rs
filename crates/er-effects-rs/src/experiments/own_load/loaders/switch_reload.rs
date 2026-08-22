@@ -329,7 +329,7 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
                 ));
                 // fall through this frame to the normal reload path (old behavior; no softlock)
             } else {
-                if waited == 1 || waited % 120 == 0 {
+                if waited == 1 || waited.is_multiple_of(120) {
                     append_autoload_debug(format_args!(
                         "outgoing-teardown: waiting for OUTGOING _Common_Finalize (calls={calls} baseline={baseline} waited={waited}/{OUTGOING_TEARDOWN_WAIT_MAX}) -- holding continue_confirm so the reload rebuilds fresh (#{n})"
                     ));

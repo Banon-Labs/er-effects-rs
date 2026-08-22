@@ -117,6 +117,15 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
 
+      # Parity with the parent project's lint strictness. Asserts the CONFIGURATION here;
+      # the code itself is linted by scripts/check-rust-build.sh below. This step reads the
+      # ../fromsoftware-rs checkout made above, so it also fails when upstream adds a lint
+      # knob we have not adopted.
+      - name: Lint parity with fromsoftware-rs
+        run: |
+          python3 scripts/check-lint-parity.py --selftest
+          python3 scripts/check-lint-parity.py
+
       - name: Test host-buildable crates
         run: cargo test -p er-soulsformats -p er-param-inspect
 

@@ -21,7 +21,7 @@ pub(crate) fn snapshot_game_man_on_change() {
     // GameMan resolves only once the boot is far along; the session-liveness words below matter
     // EARLIER (the boot load), so sample with a default GameMan view instead of returning.
     let t = unsafe { GameMan::instance() }
-        .map(|game_man| GameManTelemetry::from_game_man(game_man))
+        .map(GameManTelemetry::from_game_man)
         .unwrap_or_default();
     let gm = game_man_ptr_or_null();
     let (c30, bc4, b73) = if gm != TITLE_OWNER_SCAN_START_ADDRESS {

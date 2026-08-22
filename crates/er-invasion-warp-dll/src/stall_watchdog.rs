@@ -413,13 +413,17 @@ mod tests {
     /// so a later "tidy up the constant" cannot quietly move it onto either side.
     #[test]
     fn threshold_sits_between_measured_healthy_and_measured_stall() {
-        assert!(
-            STALL_THRESHOLD_MS > 2_000,
-            "must not fire on the slowest healthy cancel (2s, n=8)"
-        );
-        assert!(
-            STALL_THRESHOLD_MS < 30_000,
-            "must notice the observed 30s stall well before it ends"
-        );
+        const {
+            assert!(
+                STALL_THRESHOLD_MS > 2_000,
+                "must not fire on the slowest healthy cancel (2s, n=8)"
+            )
+        };
+        const {
+            assert!(
+                STALL_THRESHOLD_MS < 30_000,
+                "must notice the observed 30s stall well before it ends"
+            )
+        };
     }
 }

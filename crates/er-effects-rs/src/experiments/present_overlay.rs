@@ -12,8 +12,6 @@
 //! log that it fires + the backbuffer format/dims. NO backbuffer writes yet (lowest crash risk) -- proves
 //! the hook mechanism before adding the draw.
 
-#![allow(unused_imports)]
-
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -592,14 +590,14 @@ unsafe fn log_backbuffer_desc(this: *mut c_void) {
         return;
     }
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if let Some(sc) = unsafe { IDXGISwapChain1::from_raw_borrowed(&this) } {
-            if let Ok(desc) = unsafe { sc.GetDesc1() } {
-                PRESENT_BACKBUFFER_FORMAT.store(desc.Format.0 as usize, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "present-overlay: backbuffer {}x{} format={} buffers={}",
-                    desc.Width, desc.Height, desc.Format.0, desc.BufferCount
-                ));
-            }
+        if let Some(sc) = unsafe { IDXGISwapChain1::from_raw_borrowed(&this) }
+            && let Ok(desc) = unsafe { sc.GetDesc1() }
+        {
+            PRESENT_BACKBUFFER_FORMAT.store(desc.Format.0 as usize, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: backbuffer {}x{} format={} buffers={}",
+                desc.Width, desc.Height, desc.Format.0, desc.BufferCount
+            ));
         }
     }));
 }
@@ -687,10 +685,11 @@ fn vt_module_kind(vt_module: usize, game_base: usize) -> usize {
     if vt_module == game_base {
         return 2;
     }
-    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") } {
-        if lo <= vt_module && vt_module < hi {
-            return 1;
-        }
+    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") }
+        && lo <= vt_module
+        && vt_module < hi
+    {
+        return 1;
     }
     3
 }
@@ -828,7 +827,7 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
 /// minute at frame cadence) so a session-length retry stays visible without flooding the log.
 fn log_find_miss(stage: usize) {
     let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
-    if !(t == 1 || t == 300 || t == 1200 || (t > 0 && t % 3600 == 0)) {
+    if !(t == 1 || t == 300 || t == 1200 || (t > 0 && t.is_multiple_of(3600))) {
         return;
     }
     let candidate = PRESENT_FIND_CANDIDATE.load(Ordering::SeqCst);
@@ -933,15 +932,15 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     PRESENT1_ORIG.store(present22, Ordering::SeqCst);
     let slot8 = vt + PRESENT_VTABLE_INDEX * 8;
     let slot22 = vt + PRESENT1_VTABLE_INDEX * 8;
-    let swap8 = unsafe { vtable_swap_slot(slot8, present_hook as usize) }.is_some();
-    let swap22 = unsafe { vtable_swap_slot(slot22, present1_hook as usize) }.is_some();
+    let swap8 = unsafe { vtable_swap_slot(slot8, present_hook as *const () as usize) }.is_some();
+    let swap22 = unsafe { vtable_swap_slot(slot22, present1_hook as *const () as usize) }.is_some();
     // Read the slots back so a failed patch is visible in the log (self-validating: a later FIRED line plus
     // readback=true proves the redirect took; readback=true with no FIRED means the game presents elsewhere).
     let now8 = unsafe { safe_read_usize(slot8) }.unwrap_or(0);
     let now22 = unsafe { safe_read_usize(slot22) }.unwrap_or(0);
     append_autoload_debug(format_args!(
         "present-overlay: VMT-swap game swapchain 0x{sc:x} (tries={tries}) Present8=0x{present8:x} Present1_22=0x{present22:x} slot8@0x{slot8:x} swap={swap8} readback={} slot22@0x{slot22:x} swap={swap22} readback={}",
-        now8 == present_hook as usize,
-        now22 == present1_hook as usize,
+        now8 == present_hook as *const () as usize,
+        now22 == present1_hook as *const () as usize,
     ));
 }

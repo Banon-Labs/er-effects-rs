@@ -127,10 +127,6 @@ pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
     runtime_config().and_then(|config| config.save_file.clone())
 }
 
-pub(crate) fn configured_save_file_string() -> Option<String> {
-    configured_save_file().map(|path| path.to_string_lossy().into_owned())
-}
-
 /// Optional boot background image override from `er-effects.toml`. This is intentionally TOML-only:
 /// the production DLL can be configured without shipping a helper script or hard-coding Steam account IDs.
 pub(crate) fn configured_boot_background_image() -> Option<PathBuf> {
@@ -165,13 +161,6 @@ pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
     runtime_config()
         .map(|config| config.save_picker.autoupdate_preferred_picker_dir_enabled())
         .unwrap_or(true)
-}
-
-/// True when the OS file dialog -- rather than the in-game `05_010` browser -- is the picker for
-/// BOTH System>Quit surfaces. Read once per picker open; the value cannot change mid-session
-/// because `RUNTIME_CONFIG` is parsed once at attach and nothing rewrites the in-memory copy.
-pub(crate) fn os_native_save_picker_enabled() -> bool {
-    os_native_save_picker_from(runtime_config().map(|config| &config.save_picker))
 }
 
 /// Persist the folder of the last validated missing-save pick into the game-directory

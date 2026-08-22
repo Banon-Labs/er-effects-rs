@@ -23,6 +23,19 @@ pub fn portrait_name_hash_utf16(units: &[u16]) -> usize {
 
 /// Name-hash of a ProfileSummary RECORD (name UTF-16 units at record+0). Game-thread only (guarded
 /// game-memory read through the host seam). 0 = empty/unreadable name.
+///
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// Game thread only, because the record it samples is the one the game rewrites as a save
+/// deserializes -- reading it from another thread yields a torn name, not a fault.
 pub unsafe fn portrait_record_name_hash(record: usize) -> usize {
     let (units, len) = unsafe { read_utf16_name_units(record) };
     portrait_name_hash_utf16(&units[..len])
@@ -30,6 +43,19 @@ pub unsafe fn portrait_record_name_hash(record: usize) -> usize {
 
 /// Name-hash of save `slot`'s ProfileSummary record (same record addressing as
 /// `read_loading_screen_stats`). Game-thread only. 0 = unknown (no gdm/summary, bad slot, empty name).
+///
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// `slot` is range-checked before it is used to address a record. Game thread only, for
+/// the same reason as `portrait_record_name_hash`.
 pub unsafe fn portrait_slot_name_hash(slot: i32) -> usize {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         return 0;
@@ -65,6 +91,15 @@ pub fn loading_portrait_window_reset(reason: &str) {
 /// held head from frame one instead of clearing it 0.1ms after RETARGET's make-before-break claimed it
 /// holds. An identity MISMATCH (or unknown identity on either side) keeps the full 2026-07-06
 /// wrong-character clear. Game-thread only (reads the incoming slot's summary record).
+///
+/// # Safety
+///
+/// The only game access is a guarded read of the incoming slot's ProfileSummary record to
+/// hash its name, so `selected_slot` needs no precondition -- an out-of-range or
+/// not-yet-populated slot simply hashes to 0 and takes the mismatch path.
+///
+/// Game thread only: this decides whether the published portrait survives the switch, and
+/// it is ordered against the publish path by being on the same thread, not by a lock.
 pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reason: &str) {
     // Reject attribution baseline (er-effects-rs-k979). LOADING_BG_PORTRAIT_RGBA_VERSION is
     // cumulative for the whole PROCESS -- it ends a 3-window run in the 1500s and never resets --
@@ -435,7 +470,7 @@ pub fn portrait_looks_like_checker(width: u32, height: u32, pixels: &[u8]) -> bo
             let idx = (y * w + x) * RGBA8_BPP;
             let (r, g, b) = (pixels[idx], pixels[idx + 1], pixels[idx + 2]);
             // pure = every channel near an extreme (0/255) -> checker/placeholder hallmark
-            let is_pure = |c: u8| c < 16 || c > 239;
+            let is_pure = |c: u8| !(16..=239).contains(&c);
             if is_pure(r) && is_pure(g) && is_pure(b) {
                 pure += 1;
             }

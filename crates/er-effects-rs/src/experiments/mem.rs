@@ -1,52 +1,9 @@
 //! experiments module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
-use std::{
-    ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
-
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
-
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
-
-use super::*;
 
 // Fault-safe RAM readers + game base/rva/image primitives now live in the shared
 // er-game-base crate (single source of truth across product + telemetry + the

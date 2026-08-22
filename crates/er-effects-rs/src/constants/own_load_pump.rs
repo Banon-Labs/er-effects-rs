@@ -16,16 +16,16 @@ pub(crate) const LOADGAME_JOB_RUN_RVA: usize = 0x826e10;
 /// `CS::MenuJobResult` size + layout (dump `/auto_structs/MenuJobResult` len 8): `+0x0 MenuJobState
 /// state` (4 bytes), `+0x4 undefined4` (the inner deser sub-code 5/2/6 lands here via `param_2[1]`).
 /// Pass a zero-init 8-byte buffer as `result`; read `state` (+0x0) for the done condition.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENUJOB_RESULT_SIZE: usize = 0x8;
 pub(crate) const MENUJOB_RESULT_STATE_0_OFFSET: usize = 0x0;
 pub(crate) const MENUJOB_RESULT_SUBCODE_4_OFFSET: usize = 0x4;
 /// `CS::MenuJobState` enum (dump `/auto_structs/MenuJobState` len 4): Continue=1, Success=2, Failed=3.
 /// `MenuJobResult::ShouldContinue` (0x1407a92f0) is exactly `Continue < state`, i.e. done == state>1.
 pub(crate) const MENUJOB_STATE_CONTINUE: i32 = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENUJOB_STATE_SUCCESS: i32 = 2;
 pub(crate) const MENUJOB_STATE_FAILED: i32 = 3;
-pub(crate) use er_title_flow::FD4_TIME_SIZE;
-pub(crate) use er_title_flow::FD4_TIME_DELTA_8_OFFSET;
 /// GameDataMan singleton global (.data abs `0x143d5df38`, == `CONTINUE_MANAGER_GLOBAL_RVA` deref base).
 /// `GetMenuSystemSaveLoad() = GLOBAL_GameDataMan->menuSystemSaveLoad`, i.e. `mss = *(*(base+RVA)+0x60)`.
 pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA;
@@ -34,7 +34,9 @@ pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
 /// LoadGame build factory REAL ctx args (golden Continue trace): `ctx_parent = mss + 0x50`,
 /// `owner_ctx = *(mss + 0xa38)` (CS::TitleFlowContext). Non-null real ctx; the prior ctx=0 build AV'd
 /// when the outer profile-selection sub-job dereffed the captured null.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const MSS_CTX_PARENT_50_OFFSET: usize = 0x50;
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const MSS_OWNER_CTX_A38_OFFSET: usize = 0xa38;
 /// CORRECTED LoadGame build ctx args (static RE 2026-06-22, triple-verified: golden factory site
 /// `0x1409ac9cb mov 0xa38(%r13),%r9` where r13 == the live TitleTopDialog; TitleTopDialog ctor
@@ -45,31 +47,12 @@ pub(crate) const MSS_OWNER_CTX_A38_OFFSET: usize = 0xa38;
 /// ctor -> valid at the settled press-any-button title, unlike `mss+0xa38` which read back garbage).
 /// bd `loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22`.
 pub(crate) const DIALOG_CTX_PARENT_50_OFFSET: usize = 0x50;
-pub(crate) use er_title_flow::DIALOG_OWNER_CTX_A38_OFFSET;
-pub(crate) use er_title_flow::TFC_DISPATCH_STATE_14C_OFFSET;
-pub(crate) use er_title_flow::TFC_DISPATCH_STATE_LOAD;
-pub(crate) use er_title_flow::TFC_NOT_RELEASE_FLAG_18C_OFFSET;
-pub(crate) use er_title_flow::TFC_NOT_RELEASE_FLAG_CLEAR;
-pub(crate) use er_title_flow::TITLE_CONTINUE_SELECTOR_RVA;
-pub(crate) use er_title_flow::DIALOG_MENU_QUEUE_10_OFFSET;
-pub(crate) use er_title_flow::MENU_PUMP_KICK_PTR_RVA;
-pub(crate) use er_title_flow::MENU_DRAIN_WRAPPER_RVA;
-pub(crate) use er_title_flow::EXECUTE_MENU_JOB_RVA;
-pub(crate) use er_title_flow::GLOBAL_CSMENUMAN_RVA;
 /// CSMenuManImp -> menuData* at +0x8. Return-title final functor writes `menuData+0x5d = 1`.
 pub(crate) const CSMENUMAN_MENU_DATA_08_OFFSET: usize = 0x8;
 /// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
 pub(crate) const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
 /// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
 pub(crate) const RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA: usize = 0x3d6c5e8;
-pub(crate) use er_title_flow::CSMENUMAN_POPUP_80_OFFSET;
-pub(crate) use er_title_flow::CSPOPUP_TOP_JOB_B0_OFFSET;
-pub(crate) use er_title_flow::MENU_JOB_ASSIGN3_RVA;
-pub(crate) use er_title_flow::MENU_JOB_REFCOUNT_8_OFFSET;
-pub(crate) use er_title_flow::DIALOG_MENUWINDOW_VEC_50_OFFSET;
-pub(crate) use er_title_flow::DLFIXEDVECTOR_COUNT_48_OFFSET;
-pub(crate) use er_title_flow::MSS_SAVE_SLOT_1200_OFFSET;
-pub(crate) use er_title_flow::GAME_SAVE_SLOT_SINGLETON_RVA;
 pub(crate) use er_title_flow::OWNER_CTX_MIN_PLAUSIBLE_PTR;
 pub(crate) use er_title_flow::OWNER_CTX_MAX_PLAUSIBLE_PTR;
 /// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
@@ -84,7 +67,6 @@ pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
 pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED;
 pub(crate) use er_telemetry::counters::TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS;
 
-pub(crate) use er_title_flow::OWN_STEPPER_LOG_INTERVAL;
 pub(crate) use er_title_flow::OWN_STEPPER_CALL_INC;
 
 pub(crate) use er_title_flow::OwnStepperPhase;
@@ -96,12 +78,12 @@ pub(crate) const OWN_STEPPER_MOUNT_POLL_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const OWN_STEPPER_DRIVE_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const OWN_STEPPER_MENU_BUILD_TIMEOUT_MS: u64 = 50_000;
 pub(crate) const OWN_STEPPER_S2_PHASE_TIMEOUT_MS: u64 = 20_000;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const OWN_STEPPER_IDX6_SETTLE_TICKS: u64 = 120;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL_TICKS: usize = 120;
 
 pub(crate) use er_title_flow::OWN_STEPPER_PHASE_MENU;
 pub(crate) const OWN_STEPPER_PHASE_CONTINUE: usize = OwnStepperPhase::Continue as usize;
-pub(crate) use er_title_flow::OWN_STEPPER_PHASE_DONE;
 /// PHASE 3 (MOUNT): mount the slot at state 10 BEFORE SetState(5) -- the only place the
 /// MoveMapStep dispatcher (which resets b80 via its b80==1 lane) is NOT running, so our
 /// own b80 poll can drive the save-IO machine 1->2->3 cleanly (minimal-save-mount-
@@ -280,6 +262,7 @@ pub(crate) const OWN_STEPPER_RETARGET_YES: usize = true as usize;
 pub(crate) enum OwnStepperB80State {
     Idle,
     PreviewLane,
+    #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
     Active,
     Resident,
 }
@@ -292,6 +275,7 @@ pub(crate) const OWN_STEPPER_B80_PREVIEW_LANE: i32 = OwnStepperB80State::Preview
 /// (reusing the resident iodev request the preview started).
 pub(crate) const OWN_STEPPER_B80_IDLE: i32 = OwnStepperB80State::Idle as i32;
 /// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = OWN_STEPPER_IDX6_SETTLE_TICKS;
 pub(crate) use er_title_flow::OWN_STEPPER_SLOT_NONE;
 pub(crate) use er_title_flow::OWN_STEPPER_SLOT_ZERO;
@@ -317,7 +301,10 @@ pub(crate) const OWN_STEPPER_DIRECT_BUILT_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_DIRECT_BUILT_YES: usize = true as usize;
 /// MODEL B (live_dialog_enabled): one-shot latch so the live Load-Game node's native run
 /// 0x1409aaba0 fires at most once per run (a re-fire would double-build / leak the dialog).
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static OWN_STEPPER_LIVE_FIRED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_LIVE_FIRED_NO);
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const OWN_STEPPER_LIVE_FIRED_NO: usize = false as usize;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const OWN_STEPPER_LIVE_FIRED_YES: usize = true as usize;
 

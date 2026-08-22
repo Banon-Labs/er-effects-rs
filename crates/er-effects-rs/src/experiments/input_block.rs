@@ -1,36 +1,18 @@
 //! experiments module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
 use std::{
     ffi::c_void,
-    fmt::Write as _,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicIsize, AtomicU64, AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
+    sync::atomic::{AtomicIsize, AtomicUsize, Ordering},
 };
-
-use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
+use eldenring::cs::GameMan;
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        Foundation::{HWND, LPARAM, RECT},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
         UI::{
@@ -40,11 +22,11 @@ use windows::{
             },
             WindowsAndMessaging::{
                 EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW,
-                GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN, WM_KEYUP,
+                GetWindowThreadProcessId, IsWindowVisible,
             },
         },
     },
-    core::{BOOL, PCSTR},
+    core::{BOOL, PCSTR, s},
 };
 
 #[allow(unused_imports)]
@@ -295,7 +277,7 @@ fn save_picker_latch_wheel_nav_for_message(message: isize, delta: i16) {
     }
     if SAVE_PICKER_WHEEL_LAST_MESSAGE.swap(message, Ordering::SeqCst) == message {
         let n = SAVE_PICKER_WHEEL_DUPLICATE_READS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == 1 || n % 50 == 0 {
+        if n == 1 || n.is_multiple_of(50) {
             append_autoload_debug(format_args!(
                 "save-picker-nav: ignored repeat read #{n} of wheel message 0x{message:x} delta={delta}"
             ));
@@ -530,7 +512,7 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
         return;
     }
     let fg = unsafe { GetForegroundWindow() };
-    if fg.0 as usize != hwnd.0 as usize {
+    if !std::ptr::eq(fg.0, hwnd.0) {
         // ER is not focused -> release any held key and do nothing (respect the user's other window).
         let prev = SQ_REPRO_HELD_VK.swap(0, Ordering::SeqCst) as u32;
         if prev != 0 {
@@ -572,8 +554,8 @@ pub(crate) fn stay_active_enabled() -> bool {
 /// except the waits and DONE. During the between-switch reload (WAIT_RELOAD) the autopilot injects
 /// nothing (set_pad 0) and must NOT fabricate a live pad or hold the block past in-world, because a
 /// fabricated connected pad fed through the title->world advance bounces the reload back to the
-/// front-end/title (observed: switch #1's SetState5 loaded the char then the game jumped to 01_000_FE
-/// + SetState 2/3/10 = press-any-button softlock). Treating WAIT_RELOAD like DONE makes the reload
+/// front-end/title (observed: switch #1's SetState5 loaded the char then the game jumped to 01_000_FE +
+/// SetState 2/3/10 = press-any-button softlock). Treating WAIT_RELOAD like DONE makes the reload
 /// byte-identical to the proven single-switch case (block falls through to the autoload_armed
 /// path, which blocks until in-world with no pad fabrication); the block re-engages at the next
 /// switch's OPEN_MENU. WAIT_WORLD (boot) keeps blocking so the first switch behaves as before.
@@ -968,7 +950,7 @@ unsafe fn install_xinput_block() {
             Ok(h) if !h.is_invalid() => h,
             _ => continue,
         };
-        let proc = unsafe { GetProcAddress(hmod, PCSTR(b"XInputGetState\0".as_ptr())) };
+        let proc = unsafe { GetProcAddress(hmod, s!("XInputGetState")) };
         let Some(addr) = proc else { continue };
         let addr = addr as usize;
         match unsafe { MhHook::new(addr as *mut c_void, xinput_get_state_hook as *mut c_void) } {
@@ -982,7 +964,7 @@ unsafe fn install_xinput_block() {
                     append_autoload_debug(format_args!(
                         "xinput-block: hooked XInputGetState at 0x{addr:x}"
                     ));
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     hooked_any = true;
                 }
             }
@@ -995,22 +977,22 @@ unsafe fn install_xinput_block() {
         let ex = unsafe { GetProcAddress(hmod, PCSTR(XINPUT_GET_STATE_EX_ORDINAL as *const u8)) };
         if let Some(ex_addr) = ex {
             let ex_addr = ex_addr as usize;
-            if ex_addr != addr {
-                if let Ok(hook) = unsafe {
+            if ex_addr != addr
+                && let Ok(hook) = unsafe {
                     MhHook::new(ex_addr as *mut c_void, xinput_get_state_hook as *mut c_void)
-                } {
-                    let _ = unsafe { hook.queue_enable() };
-                    std::mem::forget(hook);
-                    append_autoload_debug(format_args!(
-                        "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x}"
-                    ));
                 }
+            {
+                let _ = unsafe { hook.queue_enable() };
+                crate::mh::leak_installed_hook(hook);
+                append_autoload_debug(format_args!(
+                    "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x}"
+                ));
             }
         }
         // XInputGetCapabilities is the slot-ENUMERATION call the game uses to decide which pads to
         // poll. Hook it so a harness-armed run can keep slot 0 "connected" with no physical
         // controller (see xinput_get_capabilities_hook). Same DLL, resolved by name.
-        let caps = unsafe { GetProcAddress(hmod, PCSTR(b"XInputGetCapabilities\0".as_ptr())) };
+        let caps = unsafe { GetProcAddress(hmod, s!("XInputGetCapabilities")) };
         if let Some(caps_addr) = caps {
             let caps_addr = caps_addr as usize;
             match unsafe {
@@ -1023,7 +1005,7 @@ unsafe fn install_xinput_block() {
                     XINPUT_GET_CAPABILITIES_ORIG
                         .store(hook.trampoline() as usize, Ordering::SeqCst);
                     let _ = unsafe { hook.queue_enable() };
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "xinput-block: hooked XInputGetCapabilities at 0x{caps_addr:x}"
                     ));
@@ -1177,11 +1159,11 @@ unsafe fn install_rawinput_counter() {
             return;
         }
     }
-    let hmod = match unsafe { GetModuleHandleA(PCSTR(b"user32.dll\0".as_ptr())) } {
+    let hmod = match unsafe { GetModuleHandleA(s!("user32.dll")) } {
         Ok(h) if !h.is_invalid() => h,
         _ => return,
     };
-    let Some(addr) = (unsafe { GetProcAddress(hmod, PCSTR(b"GetRawInputData\0".as_ptr())) }) else {
+    let Some(addr) = (unsafe { GetProcAddress(hmod, s!("GetRawInputData")) }) else {
         return;
     };
     let addr = addr as usize;
@@ -1197,7 +1179,7 @@ unsafe fn install_rawinput_counter() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "rawinput-counter: hooked GetRawInputData at 0x{addr:x} -- records user mouse/kb input the game receives (contamination oracle)"
                     ));
@@ -1226,6 +1208,7 @@ pub(crate) use er_telemetry::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 ///      failure -> contained with catch_unwind so the FD4 task never unwinds into C++).
 ///   2. EVERY frame: assert the block flag (sticky, overriding any overlay want-capture
 ///      clear) and install/retry the XInput gamepad hook until the xinput DLL is present.
+///
 /// Genuinely zero-input: it only SUPPRESSES keyboard + gamepad device reads -- it never synthesizes any
 /// input, never blocks the mouse, and never confines the cursor.
 pub(crate) fn enforce_input_block_now() {

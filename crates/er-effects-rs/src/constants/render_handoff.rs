@@ -154,7 +154,6 @@ pub(crate) const CHRCTRL_DISABLE_MOVE_E9_OFFSET: usize = 0xe9;
 /// `CSMenuMan+0x798` -- NowLoading cover MenuJob slot (the STABLE-session marker; != 0 is HEALTHY).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;
-pub(crate) use er_title_flow::CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET;
 /// `CSMenuMan+0x72c` -- `loadingScreenData.field_0xc`, zeroed by deobf `FUN_14067a410` when changing
 /// loading-screen mode.
 #[allow(dead_code)]

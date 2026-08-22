@@ -5,6 +5,13 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 /// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
 /// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
 /// back to the global address. All reads fault-guarded.
+///
+/// # Safety
+///
+/// `base` must be the running `eldenring.exe` image base: `GX_DRAW_CONTEXT_RVA` is added
+/// to it to locate the draw-context global. A wrong base only produces meaningless
+/// telemetry rather than a fault, because every dereference from there is a guarded
+/// `safe_read_*` and nothing is written into the game.
 pub unsafe fn profile_gx_queue_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -64,6 +71,16 @@ pub unsafe fn profile_gx_queue_sample(base: usize) {
 /// engine keeps barely one menu model built at a time (cycling); "changed" is gated to same-slot so a
 /// slot switch (different character) is not mistaken for head motion. Only does the (costly) readback when
 /// a live model exists, so it is free when none is present. Read-only + fault-guarded.
+///
+/// # Safety
+///
+/// `base` must be the running `eldenring.exe` image base (renderer table and vtable RVAs
+/// are resolved from it; a wrong base simply matches nothing).
+///
+/// The caller owns LIFETIME: for a slot whose model reads as live this performs a full
+/// D3D12 readback, which ends in a `QueryInterface` that faults uncatchably against a
+/// freed object. Only call it while the sampled renderers can still be alive -- i.e. from
+/// the render thread during the loading screen, not across teardown.
 pub unsafe fn profile_lookat_rt_sample(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -228,22 +245,21 @@ pub fn profile_lookat_phase_diag_tick() {
         unsafe { profile_lookat_stage_probe(base) };
     }
     let n = PROFILE_LOOKAT_PHASE_DIAG_COUNTER.fetch_add(1, Ordering::SeqCst);
-    if n % 60 == 0 {
+    if n.is_multiple_of(60) {
         // Live phase selector: a single integer in er-effects-lookat-phase.txt picks the active draw phase.
         let path = game_directory_path()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("er-effects-lookat-phase.txt");
-        if let Ok(s) = std::fs::read_to_string(&path) {
-            if let Ok(idx) = s.trim().parse::<usize>() {
-                if idx < LOOKAT_DRAW_PHASE_COUNT {
-                    PROFILE_LOOKAT_SELECTED_PHASE.store(idx, Ordering::SeqCst);
-                }
-            }
+        if let Ok(s) = std::fs::read_to_string(&path)
+            && let Ok(idx) = s.trim().parse::<usize>()
+            && idx < LOOKAT_DRAW_PHASE_COUNT
+        {
+            PROFILE_LOOKAT_SELECTED_PHASE.store(idx, Ordering::SeqCst);
         }
         // Cursor/head tracking self-tests are retired; keep the cached toggles false.
         PROFILE_LOOKAT_SELFTEST_ON.store(false, Ordering::SeqCst);
     }
-    if n % 240 == 0 {
+    if n.is_multiple_of(240) {
         let ticks: Vec<String> = (0..LOOKAT_DRAW_PHASE_COUNT)
             .map(|i| {
                 format!(
@@ -301,7 +317,7 @@ pub fn profile_lookat_phase_diag_tick() {
     // only ~2s on a fast gold-save load, far shorter than the 240-tick coarse sweep above. Once a renderer
     // has actually been spared (LOADING_BG_PORTRAIT_SPARED_RENDERER != 0), emit a compact sweep every 20
     // ticks so the post-Continue rasterization (model_ok / rt changed) is sampled inside that brief window.
-    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0 && n % 20 == 0 {
+    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0 && n.is_multiple_of(20) {
         let spared_ptr = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
         // Raw live read of renderer+model_ins: distinguishes the field being ZEROED (renderer detached from
         // its model) from a DANGLING pointer (field intact but the model object behind it freed).
@@ -341,7 +357,7 @@ pub fn profile_lookat_phase_diag_tick() {
         // (CSEzOffscreenRend) -> +0x10 (CSRuntimeTexResCap) -> +GX (CSGxTexture) -- the exact texture the
         // forge re-bind should publish. And read the bound container's CURRENT first-TexResCap GX. If
         // chain_gx != bound_gx, the re-bind is publishing the wrong (stale menu) texture, not our live RT.
-        let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) =
+        let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, bound_gx) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
         if let Ok(b) = game_module_base() {
             let slot = portrait_loaded_slot();
@@ -407,6 +423,15 @@ pub fn profile_lookat_phase_diag_tick() {
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
 /// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
 /// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
+///
+/// # Safety
+///
+/// Same contract as `profile_lookat_realtime_draw_tick`, which it forwards to: it must run
+/// as a registered `GameSceneDraw`-phase task on the render thread, with `task_data` the
+/// live `FD4TaskData` the engine passed to that task.
+///
+/// `phase_index` is bounds-checked against `LOOKAT_DRAW_PHASE_COUNT` before it indexes the
+/// per-phase counters, so an out-of-range index only skips the counter.
 pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
     if phase_index < LOOKAT_DRAW_PHASE_COUNT {
         PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
@@ -431,6 +456,22 @@ pub unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4
 /// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
 /// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
 /// live), so it naturally tracks the engine's model build/teardown cycling.
+///
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's per-frame per-
+/// model push task (deobf `0x140bba6e0`), so it may only be entered by that patched call site, on
+/// the game thread that made the call, with the arguments and `extern "system"` ABI the original
+/// declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `PROFILE_PERFRAME_HOOK_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
+///
+/// `renderer` is acted on only after its vtable is confirmed to be the profile-renderer
+/// vtable in the running image; anything else is passed straight through. `frame` is the
+/// engine's own render context and is stored for our re-drives -- it is only valid for
+/// the frame the engine passed it in.
 pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // CAPTURE the engine's live render context (param_2/frame) on its OWN calls only (not our re-drives),
@@ -445,43 +486,43 @@ pub unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize)
             ));
         }
     }
-    if portrait_overlay_enabled() && renderer != 0 && renderer != null {
-        if let Ok(base) = game_module_base() {
-            let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
-                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
-            if vt_ok {
-                // Map renderer -> slot index (the look-at indices/base are cached per slot by the
-                // FrameBegin apply_profile_lookat); skip if this renderer isn't in the profile table.
-                let mut slot = usize::MAX;
-                for s in 0..TITLE_PROFILE_SLOT_COUNT {
-                    if unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
-                        .unwrap_or(0)
-                        == renderer
-                    {
-                        slot = s;
-                        break;
-                    }
-                }
-                // Post-Continue the menu table is torn down, so the SPARED renderer isn't in it: map it to
-                // its original autoload slot, whose cached look-at indices (base re-latches) we reuse.
-                if slot == usize::MAX
-                    && renderer == LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst)
+    if portrait_overlay_enabled()
+        && renderer != 0
+        && renderer != null
+        && let Ok(base) = game_module_base()
+    {
+        let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
+            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+        if vt_ok {
+            // Map renderer -> slot index (the look-at indices/base are cached per slot by the
+            // FrameBegin apply_profile_lookat); skip if this renderer isn't in the profile table.
+            let mut slot = usize::MAX;
+            for s in 0..TITLE_PROFILE_SLOT_COUNT {
+                if unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
+                    .unwrap_or(0)
+                    == renderer
                 {
-                    let own = portrait_loaded_slot();
-                    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
-                        slot = own as usize;
-                    }
+                    slot = s;
+                    break;
                 }
-                if slot != usize::MAX {
-                    if let Some(holder) = unsafe { profile_pose_holder(renderer) } {
-                        let yaw =
-                            f32::from_bits(PROFILE_LOOKAT_YAW_BITS.load(Ordering::SeqCst) as u32);
-                        let pitch =
-                            f32::from_bits(PROFILE_LOOKAT_PITCH_BITS.load(Ordering::SeqCst) as u32);
-                        if unsafe { lookat_apply_realtime(holder, slot, yaw, pitch) } {
-                            PROFILE_PERFRAME_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
-                        }
-                    }
+            }
+            // Post-Continue the menu table is torn down, so the SPARED renderer isn't in it: map it to
+            // its original autoload slot, whose cached look-at indices (base re-latches) we reuse.
+            if slot == usize::MAX
+                && renderer == LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst)
+            {
+                let own = portrait_loaded_slot();
+                if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
+                    slot = own as usize;
+                }
+            }
+            if slot != usize::MAX
+                && let Some(holder) = unsafe { profile_pose_holder(renderer) }
+            {
+                let yaw = f32::from_bits(PROFILE_LOOKAT_YAW_BITS.load(Ordering::SeqCst) as u32);
+                let pitch = f32::from_bits(PROFILE_LOOKAT_PITCH_BITS.load(Ordering::SeqCst) as u32);
+                if unsafe { lookat_apply_realtime(holder, slot, yaw, pitch) } {
+                    PROFILE_PERFRAME_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
                 }
             }
         }
@@ -518,7 +559,9 @@ pub fn install_per_frame_push_hook() {
                 ));
                 return;
             }
-            std::mem::forget(hook);
+            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address -- so letting the handle go does NOT uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -675,6 +718,23 @@ unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
 /// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
 /// `renderer` must already be a validated live CSMenuProfModelRend (vtable checked by the caller).
 /// Returns true once the camera was pushed. See bd `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
+///
+/// # Safety
+///
+/// This WRITES camera fields into the game's renderer and CALLS three game functions
+/// resolved as `base + RVA`. The caller must guarantee:
+///
+/// * `base` is the running `eldenring.exe` image base AND the image is the version these
+///   RVA constants were reverse-engineered against -- a mismatch calls into the middle of
+///   an unrelated function;
+/// * `renderer` is an already-validated live `CSMenuProfModelRend` (the caller checks its
+///   vtable; this function does not re-check it) whose offscreen render at `+0xa8` is
+///   populated, which it verifies before the push;
+/// * the call runs on the render thread, so the field writes and the engine's own camera
+///   setup do not interleave.
+///
+/// `slot` is range-checked against `TITLE_PROFILE_SLOT_COUNT` before it indexes the
+/// per-slot baseline.
 pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if renderer == 0 || renderer == null {

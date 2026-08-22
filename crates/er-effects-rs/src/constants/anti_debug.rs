@@ -31,6 +31,7 @@ pub(crate) const PE_FILE_NUM_SECTIONS_OFFSET: usize = 0x6;
 pub(crate) const PE_FILE_SIZE_OPT_HEADER_OFFSET: usize = 0x14;
 pub(crate) const PE_OPT_HEADER_OFFSET: usize = 0x18;
 pub(crate) const PE_SECTION_HEADER_SIZE: usize = 0x28;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const PE_SECTION_NAME_LEN: usize = 8;
 pub(crate) const PE_SECTION_VSIZE_OFFSET: usize = 0x8;
 pub(crate) const PE_SECTION_VADDR_OFFSET: usize = 0xc;
@@ -106,10 +107,10 @@ pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // matched the live object.
 pub(crate) use er_title_flow::TitleSessionRva;
 
-pub(crate) use er_title_flow::TITLE_OWNER_VTABLE_RVA;
 pub(crate) use er_title_flow::TitleOwnerLayout;
 
 #[repr(C)]
+#[allow(dead_code)] // Retained RE layout: decoded struct shape, nothing constructs it today.
 pub(crate) struct TitleOwnerLoadJobLayout {
     pub(crate) unknown_000: [u8; 0xd8],
     pub(crate) pending: i32,
@@ -117,27 +118,16 @@ pub(crate) struct TitleOwnerLoadJobLayout {
 
 pub(crate) use er_title_flow::TITLE_OWNER_STATE_OFFSET;
 pub(crate) use er_title_flow::TITLE_OWNER_STATE_COMMITTED_OFFSET;
-pub(crate) use er_title_flow::TITLE_OWNER_INSTANCE_TABLE_OFFSET;
-pub(crate) use er_title_flow::INNER_TITLE_STATE_TABLE_RVA;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_ALIGNMENT;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_MAX_ADDRESS;
 pub(crate) use er_title_flow::TraceSampleLimit;
 
-pub(crate) use er_title_flow::TITLE_OWNER_TRACE_LIMIT;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_CALL_INTERVAL;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_STEP;
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_READY;
 pub(crate) use er_title_flow::MenuTraceRva;
 
-pub(crate) use er_title_flow::TITLE_MENU_JOB_WAIT_RVA;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_MIN_TICK;
-pub(crate) use er_title_flow::MEM_COMMIT_NUMERIC;
-pub(crate) use er_title_flow::PAGE_NOACCESS_NUMERIC;
-pub(crate) use er_title_flow::PAGE_GUARD_NUMERIC;
 pub(crate) const TRACE_MENU_CONTINUE_WRAPPER_RVA: u32 = MenuTraceRva::ContinueWrapper as u32;
 pub(crate) const TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = MenuTraceRva::NewOrLoadWrapper as u32;
 pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
     er_save_loader::MENU_OTHER_LOAD_WRAPPER_RVA;
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = MenuTraceRva::TaskUpdateTable as u32;
 pub(crate) const TRACE_TASK_ENQUEUE_RVA: u32 = MenuTraceRva::TaskEnqueue as u32;
 pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = MENU_JOB_EMIT_RESULT_RVA;
@@ -169,28 +159,13 @@ pub(crate) const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
 pub(crate) const WINDOW_PID_UNSET: u32 = 0;
 pub(crate) const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
 pub(crate) const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
-pub(crate) use er_title_flow::DIRECT_INPUT_FAILURE_HRESULT;
 pub(crate) const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
 pub(crate) use er_title_flow::MENU_TRACE_UNSEEN_SEQ;
 pub(crate) const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
-pub(crate) use er_title_flow::TITLE_OWNER_QUERY_FAILED_BYTES;
-pub(crate) use er_title_flow::PAGE_PROTECTION_NO_FLAGS;
-pub(crate) use er_title_flow::TITLE_OWNER_MIN_STATE;
-pub(crate) use er_title_flow::TITLE_OWNER_MAX_STATE;
 pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
-pub(crate) use er_title_flow::TITLE_TRACE_SEQUENCE_INCREMENT;
-pub(crate) use er_title_flow::TitleNativeJobTaskData;
 
-pub(crate) use er_title_flow::TitleNativeJobTiming;
 
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_TASK_DATA_ZERO;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_TASK_DATA_BYTES;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_FRAME_DELTA_NUMERATOR;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_FRAME_RATE;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_DELTA_OFFSET_START;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_DELTA_OFFSET_END;
-pub(crate) use er_title_flow::TITLE_NATIVE_JOB_CALLED_VALUE;
 
 // ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
 // The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
@@ -200,7 +175,7 @@ pub(crate) use er_title_flow::TITLE_NATIVE_JOB_CALLED_VALUE;
 // in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
 // (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
 // desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
-pub(crate) use er_title_flow::TITLE_ANIM_SPEEDUP_MIN;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
 /// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
@@ -208,11 +183,6 @@ pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
 /// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
-/// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
-pub(crate) use er_telemetry::counters::TITLE_ANIM_DIAG_CALLS;
-pub(crate) use er_title_flow::TITLE_ANIM_DIAG_INTERVAL;
-pub(crate) use er_title_flow::TITLE_FD4_SETSTATE_RVA;
-pub(crate) use er_title_flow::TITLE_FADEIN_SKIP_FIRED;
 /// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
 /// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
 /// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
@@ -281,6 +251,7 @@ pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_
 /// current==dialog)` on each -- showing ONLY the active tab's pane, hiding the rest. This is the game's
 /// own per-tab visibility application. Re-invoking it on restore re-shows the active OptionSetting pane
 /// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
 /// OptionSettingTopDialog (menu_id 0x25) -> embedded CS::CompositeOptionSettingDialog.
 pub(crate) const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
@@ -324,23 +295,7 @@ pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_SYSTEX_TARGET;
 pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754;
-pub(crate) use er_title_flow::TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -358,23 +313,29 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// MenuWindowJob::Run (dump 0x1407ad2b0 -> deobf/live 0x1407ad1c0). Part B uses the native
 /// title job's own pump context to run the separately-built ProfileSelect cover job alongside the
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_INSTALLED;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
 pub(crate) use er_telemetry::counters::TITLE_CUSTOM_COVER_RUN_CALLS;
 /// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
 /// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
 /// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
 pub(crate) use er_telemetry::counters::PAB_RUN_POST_CALLS;
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
 
 // Mechanism and its version-anchored Scaleform identities live in `er-scaleform-hooks` (R8).
@@ -436,6 +397,7 @@ const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 
 /// per-frame CSScaleform pump registers our texture name and GFx composites the portrait as the
 /// loading background. `fn(rti: *mut CSScaleformReplaceTexInfo /rcx/, symbol: *mut DLString<u16>
 /// /rdx/) -> u8` (1 = bound; producer then lists the rti).
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
 /// In-memory TPF -> TpfResCap factory `CreateTpfResCap` (dump 0x140b83770 -> deobf 0x140b83680).
 /// `fn(tpfRepo /rcx = *GLOBAL_TpfRepository/, name: *const u16 /rdx/, bytes: *const u8 /r8/, size: u64
@@ -443,6 +405,7 @@ pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
 pub(crate) const CREATE_TPF_RESCAP_RVA: usize = 0xb83680;
 /// `CS::TpfFileCap::TpfFileCap` ctor (dump 0x140226010 -> deobf 0x140225f60). `fn(this: *mut /0x98
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
 /// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
 /// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
@@ -450,6 +413,7 @@ pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
 pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
 /// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
 /// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
 // `GLOBAL_TpfRepository` singleton pointer (deref -> rcx for CreateTpfResCap) is defined below as
 // the existing `GLOBAL_TPF_REPOSITORY_RVA` (0x3d73fb8).
@@ -458,18 +422,30 @@ pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
 pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize =
     er_game_base::rva::GLOBAL_MAIN_HEAP_ALLOCATOR_RVA;
 /// CSScaleformReplaceTexInfo (size 0x50) field offsets.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const REPLACE_TEX_INFO_REFCOUNT_OFFSET: usize = 0x8; // i32 DLReferenceCountObject refcount
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const REPLACE_TEX_INFO_SYMBOL_OFFSET: usize = 0x10; // DLString<u16>
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const REPLACE_TEX_INFO_ENCODING_OFFSET: usize = 0x38; // u8
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET: usize = 0x40; // TpfFileCap*
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const REPLACE_TEX_INFO_READY_OFFSET: usize = 0x48; // u8 (leave 0 so the pump processes it)
 /// TpfFileCap (size 0x98) field offsets.
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TPF_FILE_CAP_LOAD_STATE_OFFSET: usize = 0x88; // u8
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TPF_FILE_CAP_FLAGS_OFFSET: usize = 0x89; // u8
+#[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const TPF_FILE_CAP_TEX_RESCAP_OFFSET: usize = 0x90; // -> TpfResCap container
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TPF_FILE_CAP_LOADED_STATE: u8 = 4;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TPF_FILE_CAP_READY_FLAG_BIT: u8 = 0x20;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TPF_FILE_CAP_ALLOC_SIZE: usize = 0x98;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
 
 

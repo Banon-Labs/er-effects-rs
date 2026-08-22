@@ -1,5 +1,3 @@
-use super::*;
-
 macro_rules! own_stepper_idx10_fallbacks {
     ($owner:ident, $framectx:ident, $n:ident, $base:ident, $phase:ident, $gm:ident, $c30:ident, $b80:ident, $want_slot:ident, $pass_through:ident) => {{
         // `format_args!` implicit captures resolve at this macro's definition site.

@@ -8,18 +8,12 @@
 // character applied, b80-INDEPENDENT), then `continue_confirm` 0x140b0e180 -> SetState(5).
 // All offsets VERIFIED against the on-disk decrypted exe (STAGE-2 spec 2026-06-16).
 // ============================================================================================
-pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_INVOKE;
 pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_ACTIVATE;
-pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_MOUNT_POLL;
-pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_CONFIRM;
 pub(crate) use er_title_flow::ProfileLoadMenuRva;
 
 pub(crate) use er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA;
-pub(crate) use er_title_flow::ProfileLoadDialogVtableLayout;
 
-pub(crate) use er_title_flow::DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET;
 
-pub(crate) use er_title_flow::ProfileLoadDialogLayout;
 
 pub(crate) use er_title_flow::DIALOG_SLOT_CURSOR_B0C_OFFSET;
 pub(crate) use er_title_flow::DIALOG_SLOT_BOUND_B08_OFFSET;
@@ -61,9 +55,13 @@ pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;
 pub(crate) const MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET: usize = 0x60;
 /// Tiny FD4 event constructor: writes `{ code: edx, payload: r8d }` to the output slot.
 pub(crate) const FD4_EVENT_CONSTRUCTOR_RVA: usize = 0x007a91e0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_MODE_EVENT3: i32 = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_MODE_EVENT4: i32 = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_EVENT4_CODE: i32 = 4;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_EVENT4_PAYLOAD: i32 = -1;
 /// GameMan+0xc30 new-game DEFAULT map (m10_01_00_00). The mount writes the slot's REAL map
 /// here; for a NON-m10 char `c30 != this` corroborates the mount (for an m10 char it is
@@ -113,7 +111,7 @@ pub(crate) const OWN_STEPPER_DESER_SUCCESS_RET: i32 = true as i32;
 pub(crate) use er_title_flow::OWN_STEPPER_TITLE_FIRED;
 /// The RESOLVED target slot the mount is expected to land on: the configured `slot=N` if
 /// >=0, else (slot=-1 "most-recent") the dialog's natural highlight cursor read live at
-/// PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.
+/// > PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.
 pub(crate) static OWN_STEPPER_EXPECTED_SLOT: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(OWN_STEPPER_SLOT_NONE);
 /// Latched real GameMan+0xc30 at the moment the mount is detected; re-read & required-equal

@@ -59,7 +59,18 @@ pub fn overlay_stats_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     // no crop, so (5%, 60%) is the direct screen coordinate.
     let x0 = (w * 5 / 100) as i32;
     let y0 = (h * 60 / 100) as i32;
-    crate::blend_rgba_over(buf, w as u32, h as u32, &rgba, sw, sh, x0, y0);
+    crate::blend_rgba_over(
+        buf,
+        w as u32,
+        h as u32,
+        crate::Rgba8Src {
+            px: &rgba,
+            w: sw,
+            h: sh,
+        },
+        x0,
+        y0,
+    );
     OVERLAY_STATS_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
     true
 }

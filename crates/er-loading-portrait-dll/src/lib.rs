@@ -11,7 +11,12 @@
 //! NEVER load this DLL alongside `er_effects_rs.dll` in one me3 profile (double Present
 //! detour / double MinHook) -- see Cargo.toml.
 
-#![allow(non_snake_case)]
+// Everything this shell does -- the log writer, the gates, the host seam it installs, the
+// portrait/stats composition -- exists to serve `#[cfg(windows)]` entry points. Off Windows those
+// entry points are not compiled, so the helpers are unused BY CONSTRUCTION; the `rlib` half still
+// builds on the host so the seam-install tests can run. Scoped to `not(windows)` deliberately: the
+// shipping target (x86_64-pc-windows-msvc) keeps full dead-code enforcement over this file.
+#![cfg_attr(not(windows), allow(dead_code))]
 
 use std::{
     path::PathBuf,
@@ -77,8 +82,10 @@ type VectoredHandler = unsafe extern "system" fn(*mut ExceptionPointersMin) -> i
 #[cfg(windows)]
 unsafe extern "system" {
     fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
-    fn GetModuleHandleA(module_name: *const u8) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
+    // `LPCSTR` in the Win32 headers -- declared as `c_char` so call sites can pass a `c""`
+    // literal's pointer directly instead of hand-rolling a NUL-terminated byte string.
+    fn GetModuleHandleA(module_name: *const core::ffi::c_char) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const core::ffi::c_char) -> *mut c_void;
     fn RtlCaptureStackBackTrace(
         frames_to_skip: u32,
         frames_to_capture: u32,
@@ -169,9 +176,9 @@ fn is_wine() -> bool {
         2 => return false,
         _ => {}
     }
-    let ntdll = unsafe { GetModuleHandleA(b"ntdll.dll\0".as_ptr()) };
+    let ntdll = unsafe { GetModuleHandleA(c"ntdll.dll".as_ptr()) };
     let wine = !ntdll.is_null()
-        && !unsafe { GetProcAddress(ntdll, b"wine_get_version\0".as_ptr()) }.is_null();
+        && !unsafe { GetProcAddress(ntdll, c"wine_get_version".as_ptr()) }.is_null();
     CACHED.store(if wine { 1 } else { 2 }, Ordering::SeqCst);
     wine
 }
@@ -231,7 +238,7 @@ fn compose_portrait_stats_rgba(bw: usize, bh: usize) -> Option<Vec<u8>> {
     let mut rgba = vec![0u8; bw * bh * 4];
     // Opaque black background so the keyed-out head silhouette shows black, exactly like
     // the product boot view's canvas.
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     let drew_portrait = er_loading_portrait::portrait_onto(&mut rgba, bw, bh);
@@ -391,7 +398,7 @@ fn address_tag(addr: usize) -> String {
             return format!("self+0x{rva:x}");
         }
     }
-    let game = unsafe { GetModuleHandleA(b"eldenring.exe\0".as_ptr()) } as usize;
+    let game = unsafe { GetModuleHandleA(c"eldenring.exe".as_ptr()) } as usize;
     if game != 0 && addr >= game {
         let rva = addr - game;
         if rva < 0x600_0000 {
@@ -414,7 +421,7 @@ mod tests {
         // 8x8 opaque red source.
         let (sw, sh) = (8u32, 8u32);
         let mut src = vec![0u8; (sw * sh * 4) as usize];
-        for px in src.chunks_exact_mut(4) {
+        for px in src.as_chunks_mut::<4>().0 {
             px[0] = 255;
             px[3] = 255;
         }
@@ -426,7 +433,9 @@ mod tests {
             compose_portrait_stats_rgba(bw, bh).expect("published portrait must produce a frame");
         assert_eq!(rgba.len(), bw * bh * 4);
         let red_px = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] > 200 && px[1] < 30 && px[2] < 30 && px[3] == 255)
             .count();
         // The head fills 80% of the canvas height, so a large share of pixels are red.

@@ -1,42 +1,6 @@
 //! ffi module (split from lib.rs; pure code reorganization, no behavior change).
 
-#![allow(unused_imports)]
-
-use std::{
-    ffi::c_void,
-    fs,
-    path::PathBuf,
-    sync::{
-        Arc, Mutex, Once,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::{Duration, Instant},
-};
-
-use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use std::ffi::c_void;
 
 #[allow(unused_imports)]
 use crate::*;
@@ -62,16 +26,24 @@ unsafe extern "system" {
     pub(crate) fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
 }
 
-/// USER32 window-management calls used to replicate the boot-movie WNDPROC's
-/// WM_CLOSE teardown natively (no posted message, no input): hide + repaint the
-/// dedicated movie window so the intro thread's fade/quiesce completes cleanly.
-/// HWND is passed as a raw pointer read from the movie object (M+8).
+// USER32 window-management calls used to replicate the boot-movie WNDPROC's
+// WM_CLOSE teardown natively (no posted message, no input): hide + repaint the
+// dedicated movie window so the intro thread's fade/quiesce completes cleanly.
+// HWND is passed as a raw pointer read from the movie object (M+8).
 #[cfg(windows)]
 #[link(name = "user32")]
 unsafe extern "system" {
+    #[allow(dead_code)]
+    // Retained: USER32 declaration for the boot-movie WM_CLOSE teardown block; no live caller today.
     pub(crate) fn GetSystemMenu(hwnd: *mut c_void, brevert: i32) -> *mut c_void;
+    #[allow(dead_code)]
+    // Retained: USER32 declaration for the boot-movie WM_CLOSE teardown block; no live caller today.
     pub(crate) fn DeleteMenu(hmenu: *mut c_void, uposition: u32, uflags: u32) -> i32;
+    #[allow(dead_code)]
+    // Retained: USER32 declaration for the boot-movie WM_CLOSE teardown block; no live caller today.
     pub(crate) fn ShowWindow(hwnd: *mut c_void, ncmdshow: i32) -> i32;
+    #[allow(dead_code)]
+    // Retained: USER32 declaration for the boot-movie WM_CLOSE teardown block; no live caller today.
     pub(crate) fn UpdateWindow(hwnd: *mut c_void) -> i32;
     pub(crate) fn VirtualProtect(
         addr: *mut c_void,
@@ -86,6 +58,8 @@ unsafe extern "system" {
     /// raising an access violation -- used by the title-owner scan so the TOCTOU
     /// race against the booting game (a region freed between VirtualQuery and the
     /// deref) cannot crash the process.
+    #[allow(dead_code)]
+    // Retained: Fault-tolerant read declaration; the live callers now go through er-game-base's copy.
     pub(crate) fn ReadProcessMemory(
         process: isize,
         base: *const c_void,
@@ -147,8 +121,8 @@ pub(crate) struct SystemTimeMin {
     pub(crate) w_milliseconds: u16,
 }
 
-/// Wall-clock + own-module-path FFI for the self-describing log header (local time per line + the
-/// DLL's on-disk path so its bytes can be md5'd to name the exact build in the log).
+// Wall-clock + own-module-path FFI for the self-describing log header (local time per line + the
+// DLL's on-disk path so its bytes can be md5'd to name the exact build in the log).
 #[cfg(windows)]
 unsafe extern "system" {
     pub(crate) fn GetLocalTime(time: *mut SystemTimeMin);
@@ -159,9 +133,9 @@ unsafe extern "system" {
     pub(crate) fn ExitProcess(code: u32) -> !;
 }
 
-/// Thread + debug-register FFI for the GameMan+0xc30 hardware write-watchpoint:
-/// enumerate the game's threads (ToolHelp) and set DR0/DR7 on each via
-/// Suspend/Get/SetThreadContext so the writing instruction traps into our VEH.
+// Thread + debug-register FFI for the GameMan+0xc30 hardware write-watchpoint:
+// enumerate the game's threads (ToolHelp) and set DR0/DR7 on each via
+// Suspend/Get/SetThreadContext so the writing instruction traps into our VEH.
 #[cfg(windows)]
 unsafe extern "system" {
     pub(crate) fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> isize;

@@ -109,11 +109,12 @@ pub fn build_menu_font_from_gfx(bytes: &[u8]) -> Option<er_gfx::raster::RasterFo
         best_n: &mut usize,
     ) {
         for t in tags {
-            if let er_gfx::Tag::DefineFont3 { glyphs, codes, .. } = t {
-                if glyphs.len() == codes.len() && glyphs.len() > *best_n {
-                    *best_n = glyphs.len();
-                    *best = Some(t);
-                }
+            if let er_gfx::Tag::DefineFont3 { glyphs, codes, .. } = t
+                && glyphs.len() == codes.len()
+                && glyphs.len() > *best_n
+            {
+                *best_n = glyphs.len();
+                *best = Some(t);
             }
             if let er_gfx::Tag::DefineSprite { tags, .. } = t {
                 best_font(tags, best, best_n);

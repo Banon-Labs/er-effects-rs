@@ -37,10 +37,12 @@ pub(crate) use er_telemetry::counters::OWNED_LEDGER_VIOLATIONS;
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES: usize = 1;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
@@ -159,39 +161,50 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED: usize = 2;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
+#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_PICKER_COUNT;
@@ -200,17 +213,6 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT;
-/// Times the CSGaitemImp singleton was reset to pristine right before a switch-reload's native deserialize
-/// (clears char#1's stale items so char#2's deserialize does not dispatch a freed vtable -> the 0x67141a AV).
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT;
-pub(crate) use er_telemetry::counters::SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
@@ -267,20 +269,6 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_MENU_FREE_STABLE_TICKS;
 /// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
 /// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
 pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
-/// PROGRAMMATIC PER-SLOT SWITCH TRIGGER (2026-07-18, RE workflow wf_b4dae22c). Replaces the brittle
-/// simulated-input autopilot: the harness writes a target slot to a game-dir control file, the DLL
-/// (in-world, world resident @ MoveMapStep 18) arms the menu-free switch by writing menuData+0x5d=1
-/// (the game-polled teardown flag -- no menu-pump/Scaleform op) then phase=RETURN_TITLE_REQUESTED;
-/// the existing ending-recovery -> own_load_switch_reload_fire -> completion-latch chain does the rest.
-/// Counters (surfaced in telemetry) prove each switch with zero simulated input.
-pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_ARM_COUNT;
-pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_TEARDOWN_COUNT;
-pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_LAST_SLOT;
-pub(crate) use er_telemetry::counters::SWITCH_TRIGGER_DEFERRED_COUNT;
-/// Last-seen mtime (unix secs) of the switch-slot control file; a change == a new harness request.
-pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_MTIME;
-/// 0 until the first poll records the baseline mtime, so a stale control file at boot never arms.
-pub(crate) use er_telemetry::counters::SWITCH_SLOT_CONTROL_PRIMED;
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
@@ -298,7 +286,6 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FOR
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED;
-pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN;
 pub(crate) use er_title_flow::SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_PHASE;
 /// Continuous in-world game-task frames observed while a return-title reload is still ARMED
@@ -323,50 +310,27 @@ pub(crate) use er_telemetry::counters::SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT;
 ///     about to load. `armed_while_absent = 1`.
 ///   * GENUINE in-world switch -- the user (or the harness) is already in-world (player PRESENT) and
 ///     initiates System->Quit->Load-Profile to a different character. `armed_while_absent = 0`.
+///
 /// The time-based disarm below is only correct for the SPURIOUS case; gating it on this flag stops it
 /// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
 /// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT;
-/// ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine-switch mms18 stall, bd
-/// live-genuine-switch-stalls-mms18-end5e0-2026-07-18). Continuous frames the exact stuck signature
-/// (in-world, ig_d8==1, mms_step==18, menuData+0x5e==0, +0x5d==0, b7c1==1, blocks>0) has held while a
-/// switch's OLD world refuses to tear down. A normally-advancing load leaves step 18 within a few
-/// frames, so this never accumulates on a healthy load. Reset whenever the signature breaks.
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_STALL_STREAK;
 /// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
 /// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
 /// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
 pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET;
 /// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
 pub(crate) use er_telemetry::counters::ENDING_REQUEST_SET_COUNT;
-/// Diagnostic counter: frozen-at-mms18 frames where the rt5d drive's stuck signature was NOT met
-/// (so a run can name which sub-condition blocked the drive).
-pub(crate) use er_telemetry::counters::ENDING_REQUEST_WHYNOT_COUNT;
-/// IN-WORLD finalize-drive recovery (runs BEFORE the title_owner gate via the cached owner, so it
-/// reaches load2's in-world frozen mms18 which the title_owner-gated path never does). Sustained
-/// frozen-frame streak, one-shot latch, and fire count.
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_STREAK;
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_SET;
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_COUNT;
-/// Diagnostic counter: frames at mms18 where the in-world drive's frozen signature was NOT met.
-pub(crate) use er_telemetry::counters::INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT;
 /// The MoveMapStep pointer as resolved by write_oracle (the ONLY resolution that reliably tracks
 /// load2's in-world step; the game-task's fresh title_owner scan reads a stale owner -> stale step).
 /// Published each telemetry write; the in-world finalize drive consumes it instead of re-resolving.
 /// 0 == not currently resolved.
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_INGAME_PTR;
 pub(crate) use er_telemetry::counters::ORACLE_RELIABLE_MMS_PTR;
-pub(crate) use er_title_flow::CHILD_DONE_QUERY_RVA;
-pub(crate) use er_title_flow::MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET;
-pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_ORIG;
-pub(crate) use er_telemetry::counters::CHILD_DONE_QUERY_HOOK_INSTALLED;
-pub(crate) use er_telemetry::counters::CHILD_DONE_HELD_COUNT;
-pub(crate) use er_telemetry::counters::CHILD_DONE_DIAG_COUNT;
-pub(crate) use er_title_flow::INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES;
-pub(crate) use er_title_flow::ENDING_REQUEST_STALL_RELEASE_FRAMES;
 pub(crate) use er_telemetry::counters::SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 /// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).
 /// It sets `CSMenuMan->menuData+0x5d` and `DAT_143d6c5e8`, which request the real title/menu rebuild.
+#[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_RVA: u32 = 0x7a3900;

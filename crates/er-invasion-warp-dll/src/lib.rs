@@ -22,7 +22,13 @@
 //! it owns no Present detour and no MinHook instance. That stays true only while it installs
 //! nothing; the first detour it adds must go through the `er-hook` union.
 
-#![allow(non_snake_case)]
+// A cdylib whose every consumer is `DllMain` and the game hooks/tasks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out, so
+// `dead_code`/`unused_imports` there report the cfg, not real debt (measured 2026-08-21: 119 on
+// the host, 0 on the shipping target). The SHIPPING target (x86_64-pc-windows-msvc) carries the
+// full deny with no allows. `check.sh` host-runs this crate's tests, which is why the host build
+// has to stay clean at all.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
 pub mod drive;
@@ -40,7 +46,7 @@ pub mod restart_backoff;
 mod seamless_probe;
 pub mod stall_watchdog;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -69,7 +75,7 @@ fn log_dir() -> PathBuf {
 /// This DLL is the reason the repo has that rule. It used to open the log with a plain
 /// `append(true)`, so twelve separate launches accumulated into one 565 KB file and a count
 /// taken over it read as one run doing something twelve times over.
-fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
+fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     er_game_base::log::append_line(
         &dir.join(LOG_FILE_NAME),
         format_args!("er-invasion-warp-dll: {args}"),

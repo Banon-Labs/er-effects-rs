@@ -9,6 +9,7 @@
 //! ECL). So:
 //!   - `gpu_frame_us` large (~50ms on the reload) => the frame is genuinely RENDER-BOUND;
 //!   - `gpu_frame_us` small while `oracle_present_qpc_delta_us` stays ~50ms => a present/vblank throttle.
+//!
 //! This is exactly the split issue 03ma asks for -- attributing the reload-20fps residual to GPU
 //! render cost vs present-wait -- and the localization tool the parity goal's §4 delta protocol uses.
 //!
@@ -274,7 +275,7 @@ unsafe fn install_inner(sc_ptr: usize) -> Option<()> {
     ECL_ORIG.store(orig, Ordering::SeqCst);
     PROBE_QUEUE_PTR.store(probe_raw, Ordering::SeqCst);
     let _ = probe_queue.into_raw(); // keep the probe queue alive (its vtable is what we patched).
-    unsafe { vtable_swap_slot(slot, execute_command_lists_hook as usize) }?;
+    unsafe { vtable_swap_slot(slot, execute_command_lists_hook as *const () as usize) }?;
     GPU_FRAME_ORACLE_STATE.store(2, Ordering::SeqCst); // hooked; render queue latched at first ECL
     append_autoload_debug(format_args!(
         "gpu-frame-oracle: hook installed (game device via swapchain 0x{sc_ptr:x}, probe queue 0x{probe_raw:x}, ECL slot 0x{slot:x} orig=0x{orig:x}, ts_freq={freq}); awaiting first DIRECT-queue ECL to latch the render queue"

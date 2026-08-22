@@ -135,7 +135,3 @@ pub(crate) fn splash_skip_enabled() -> bool {
 pub(crate) fn online_disable_enabled() -> bool {
     !save_override_telemetry_only() || own_stepper_enabled()
 }
-// ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_UNPIN is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn ingamestep_unpin_enabled() -> bool {
-    false
-}

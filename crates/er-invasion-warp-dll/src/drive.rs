@@ -334,7 +334,7 @@ impl InvasionWarpDrive {
         // The heartbeat exists because every "nothing happened" path below is silent, and
         // during the first live run they were indistinguishable: no focus, no keypress and no
         // driver all looked identical in the log.
-        if self.ticks % HEARTBEAT_TICK_INTERVAL == 0 {
+        if self.ticks.is_multiple_of(HEARTBEAT_TICK_INTERVAL) {
             // (passed, queried) per bucket -- the visibility oracle. `ours 0/N` with a healthy
             // shipped ratio means our rows are reaching the filter and being REJECTED, which is
             // a field problem; `ours 0/0` means the filter never saw them at all, which is a

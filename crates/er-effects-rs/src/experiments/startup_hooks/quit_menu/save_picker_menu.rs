@@ -36,11 +36,6 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_COUNT;
 /// 1 = a file was ingested from the picker; the menu-pump Run hook must resubmit `05_010` as the
 /// NORMAL slot view (picker mode already cleared) so the user picks a character slot next.
 pub(crate) use er_telemetry::counters::SAVE_PICKER_OPEN_SLOTS_PENDING;
-/// 1 while a modal OS file dialog is blocking the menu pump. Freeze predicate, re-entrancy claim
-/// and stage-3 liveness term, all one word.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;
-/// Game-task ticks whose save-flow deadline accrual was suppressed while a dialog was open.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 /// Dialog whose row list must be rebuilt in menu-pump ownership (0 = none). Set by a
@@ -52,9 +47,6 @@ pub(crate) use er_telemetry::counters::SAVE_PICKER_REOPEN_PENDING;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_REPOPULATE_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_RESUBMIT_COUNT;
 pub(crate) use er_telemetry::counters::SAVE_PICKER_STAGED_ROW_COUNT;
-/// Which picker surface this session runs (0 = this in-game browser, 1 = the OS file dialog).
-/// Latched once in `init_runtime_config`; exported as `oracle_save_picker_surface`.
-pub(crate) use er_telemetry::counters::SAVE_PICKER_SURFACE;
 /// System/Quit dialog the live picker window was submitted from; the menu-pump resubmit reopens
 /// through it (the destination picker is opened by the save flow, which has no row action object).
 /// Do not use this as the live `05_010_ProfileSelect` dialog: cursor/rebuild work uses
@@ -78,12 +70,12 @@ pub(crate) fn save_picker_windows_path_string(path: &str) -> String {
 /// Starting directory for the picker: last picked dir (session, then er-effects.toml) when it
 /// still exists, else the active save's directory, else the default save root.
 pub(crate) fn save_picker_start_dir() -> Option<PathBuf> {
-    if let Some(preferred) = crate::config::preferred_save_picker_dir_now() {
-        if let Some(text) = preferred.to_str() {
-            let windows = PathBuf::from(save_picker_windows_path_string(text));
-            if windows.is_dir() {
-                return Some(windows);
-            }
+    if let Some(preferred) = crate::config::preferred_save_picker_dir_now()
+        && let Some(text) = preferred.to_str()
+    {
+        let windows = PathBuf::from(save_picker_windows_path_string(text));
+        if windows.is_dir() {
+            return Some(windows);
         }
     }
     if let Ok(dir) = system_quit_env_save_dir() {
@@ -124,10 +116,14 @@ pub(crate) unsafe fn save_picker_write_row_records(
         .min(TITLE_PROFILE_SLOT_COUNT)
         .min(crate::experiments::save_picker::PICKER_ROW_COUNT);
     unsafe {
-        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        for (slot, face_hash) in PROFILE_PREVIEW_FACE_HASH
+            .iter()
+            .enumerate()
+            .take(TITLE_PROFILE_SLOT_COUNT)
+        {
             let record = profile_summary_record_address(summary, slot);
             core::ptr::write_bytes(record as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
-            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+            face_hash.store(0, Ordering::SeqCst);
             if slot >= visible {
                 // Beyond the listing: no row. The record is already zeroed above, so nothing stale
                 // survives if the game's own save path (`FUN_140262270`, which also runs
@@ -445,7 +441,7 @@ mod save_picker_row_hit_tests {
 #[cfg(test)]
 mod save_picker_menu_stage_transition_tests {
     use super::save_flow_menu_stage_cas;
-    use super::*;
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -483,49 +479,51 @@ pub(crate) unsafe fn save_dest_handle_picked_target(
     target: PathBuf,
     source: &'static str,
 ) {
-    match save_dest_route_picked_target(&target) {
-        DestRoute::ConfirmOverwrite => {
-            SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
-            // NO CONFIRM MEANS NO OVERWRITE. On a build whose MessageBoxBuilder recipe failed its
-            // prologue check the question cannot be asked, and the answer to "may I destroy this
-            // file without asking" is no. The user stays in the browser and can still save to a
-            // free name; the refusal is counted so a run can tell it from a decline.
-            if !save_flow_box_recipe_available() {
-                SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
-                save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
-                    "CANNOT CONFIRM OVERWRITE",
-                    "This build cannot show the overwrite prompt; choose a new file instead.",
-                ));
-                append_autoload_debug(format_args!(
-                    "save-dest: REFUSED to overwrite '{}' (source={source}) -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Staying in the destination list with visible reason; a new file name still saves",
-                    target.display()
-                ));
-                return;
+    unsafe {
+        match save_dest_route_picked_target(&target) {
+            DestRoute::ConfirmOverwrite => {
+                SAVE_DEST_TARGET_EXISTING_COUNT.fetch_add(1, Ordering::SeqCst);
+                // NO CONFIRM MEANS NO OVERWRITE. On a build whose MessageBoxBuilder recipe failed its
+                // prologue check the question cannot be asked, and the answer to "may I destroy this
+                // file without asking" is no. The user stays in the browser and can still save to a
+                // free name; the refusal is counted so a run can tell it from a decline.
+                if !save_flow_box_recipe_available() {
+                    SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.fetch_add(1, Ordering::SeqCst);
+                    save_picker_set_visible_status(er_save_picker::PickerStatusMessage::new(
+                        "CANNOT CONFIRM OVERWRITE",
+                        "This build cannot show the overwrite prompt; choose a new file instead.",
+                    ));
+                    append_autoload_debug(format_args!(
+                        "save-dest: REFUSED to overwrite '{}' (source={source}) -- the overwrite confirm cannot be built on this build, and an unconfirmed overwrite is not something this flow performs. Staying in the destination list with visible reason; a new file name still saves",
+                        target.display()
+                    ));
+                    return;
+                }
+                save_dest_set_target(target, source);
+                // The confirm is hosted by the PICKER dialog (the game raises its own confirms over
+                // 05_010 the same way), so it does not contend with the System dialog queue that owns
+                // the picker window job. Submitted inline here (menu thread); a not-ready queue leaves
+                // the pending latch for the next menu pump.
+                save_flow_box_set_host_dialog(dialog);
+                SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
+                if !save_flow_menu_enter_stage(
+                    SAVE_FLOW_STAGE_DEST_BROWSE,
+                    SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
+                    "picked existing destination -> overwrite confirm",
+                ) {
+                    save_flow_box_clear();
+                    save_dest_clear_target("stale overwrite-confirm stage transition");
+                    return;
+                }
+                if save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) {
+                    SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+                }
             }
-            save_dest_set_target(target, source);
-            // The confirm is hosted by the PICKER dialog (the game raises its own confirms over
-            // 05_010 the same way), so it does not contend with the System dialog queue that owns
-            // the picker window job. Submitted inline here (menu thread); a not-ready queue leaves
-            // the pending latch for the next menu pump.
-            save_flow_box_set_host_dialog(dialog);
-            SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
-            if !save_flow_menu_enter_stage(
-                SAVE_FLOW_STAGE_DEST_BROWSE,
-                SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
-                "picked existing destination -> overwrite confirm",
-            ) {
-                save_flow_box_clear();
-                save_dest_clear_target("stale overwrite-confirm stage transition");
-                return;
+            DestRoute::CommitDirect => {
+                SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
+                save_dest_set_target(target, source);
+                save_dest_stage_commit_and_close_picker(dialog, "new-file");
             }
-            if unsafe { save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE) } {
-                SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
-            }
-        }
-        DestRoute::CommitDirect => {
-            SAVE_DEST_TARGET_NEW_COUNT.fetch_add(1, Ordering::SeqCst);
-            save_dest_set_target(target, source);
-            save_dest_stage_commit_and_close_picker(dialog, "new-file");
         }
     }
 }
@@ -1093,6 +1091,7 @@ fn save_picker_drive_strip_cell_from_x(x: f32, cell_count: usize) -> Option<usiz
 #[cfg(test)]
 mod drive_strip_hit_tests {
     use super::*;
+    use er_save_picker::DRIVE_STRIP_MAX_CELLS;
 
     #[test]
     fn every_possible_drive_cell_lives_in_the_clickable_player_name_band() {
@@ -1408,16 +1407,16 @@ pub(crate) unsafe fn save_picker_menu_pump_drive_strip_mouse() {
                 return;
             }
             let mut moved = false;
-            if target != cursor {
-                if let (Ok(index), Ok(select)) = (
+            if target != cursor
+                && let (Ok(index), Ok(select)) = (
                     u32::try_from(target),
                     game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32),
-                ) {
-                    let select: unsafe extern "system" fn(usize, u32) -> u64 =
-                        unsafe { std::mem::transmute(select) };
-                    unsafe { select(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, index) };
-                    moved = true;
-                }
+                )
+            {
+                let select: unsafe extern "system" fn(usize, u32) -> u64 =
+                    unsafe { std::mem::transmute(select) };
+                unsafe { select(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, index) };
+                moved = true;
             }
             append_autoload_debug(format_args!(
                 "save-picker: left click selects row={hit_row} (was native_cursor={cursor} model_row={model_row}) moved={moved}; the game owns the activation"
@@ -1603,6 +1602,7 @@ static SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// Selection moves with no key/pad/wheel behind them, i.e. the pointer; diagnostic only.
 static SAVE_PICKER_POINTER_CURSOR_MOVES: AtomicUsize = AtomicUsize::new(0);
 /// Times the grid scrolled its own view during a select and had to be put back.
+#[allow(dead_code)] // Retained: Picker diagnostic counter, beside the sibling counters that are live.
 static SAVE_PICKER_GRID_VIEW_RESTORES: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_GRID_GEOMETRY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
@@ -1690,7 +1690,7 @@ pub(crate) unsafe extern "system" fn save_picker_set_cursor_hook(list: usize, in
     if after != before {
         unsafe { save_picker_set_grid_view_base(list, before) };
         let n = SAVE_PICKER_SET_CURSOR_NEUTRALISED.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 20 || n % 50 == 0 {
+        if n <= 20 || n.is_multiple_of(50) {
             append_autoload_debug(format_args!(
                 "save-picker: native select neutralised #{n} index={index} view {before:?} (call left {after:?})"
             ));
@@ -1726,7 +1726,7 @@ pub(crate) fn install_save_picker_set_cursor_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "save-picker: hooked list select-index FUN_14073bc10 0x{addr:x}"
                     ));
@@ -1792,7 +1792,7 @@ unsafe extern "system" fn save_picker_wheel_delta_hook(msg: usize, out: *mut i32
             out.add(1).write_unaligned(0);
         }
         let n = SAVE_PICKER_WHEEL_DELTA_SILENCED.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 20 || n % 50 == 0 {
+        if n <= 20 || n.is_multiple_of(50) {
             append_autoload_debug(format_args!(
                 "save-picker: silenced native wheel notch #{n} (the pump owns the wheel)"
             ));
@@ -1828,7 +1828,7 @@ pub(crate) fn install_save_picker_wheel_delta_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "save-picker: hooked wheel-delta FUN_140757c70 0x{addr:x}"
                     ));
@@ -1877,7 +1877,7 @@ unsafe fn save_picker_wheel_step_native_cursor(
         Ordering::SeqCst,
     );
     let n = SAVE_PICKER_WHEEL_NATIVE_STEPS.fetch_add(1, Ordering::SeqCst) + 1;
-    if n <= 20 || n % 25 == 0 {
+    if n <= 20 || n.is_multiple_of(25) {
         append_autoload_debug(format_args!(
             "save-picker: wheel step #{n} the grid declined from={from_cursor} to_index={index} select_ret={ret}"
         ));
@@ -1937,7 +1937,7 @@ unsafe extern "system" fn save_picker_hit_test_hook(list: usize, point: usize) -
     let ret = unsafe { orig(list, point) };
     unsafe { save_picker_set_grid_view_base(list, before) };
     let n = SAVE_PICKER_HIT_TEST_REBASED.fetch_add(1, Ordering::SeqCst) + 1;
-    if n <= 20 || n % 100 == 0 {
+    if n <= 20 || n.is_multiple_of(100) {
         append_autoload_debug(format_args!(
             "save-picker: hit test rebased #{n} view {before:?} -> (0, 0) index={ret}"
         ));
@@ -1972,7 +1972,7 @@ pub(crate) fn install_save_picker_hit_test_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     append_autoload_debug(format_args!(
                         "save-picker: hooked pointer hit test FUN_140736c90 0x{addr:x}"
                     ));
@@ -2120,20 +2120,20 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
     } else {
         None
     };
-    if let Some(blocked_down) = blocked {
-        if unsafe { save_picker_clear_vertical_menu_event(blocked_down) } {
-            let n = SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
-            if n == 1 || n % 50 == 0 {
-                append_autoload_debug(format_args!(
-                    "save-picker: suppressed vertical menu event #{n} at listing limit down={blocked_down} cursor={cursor} last_visible_row={last_visible_row}"
-                ));
-            }
-            SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
-                usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
-                Ordering::SeqCst,
-            );
-            return;
+    if let Some(blocked_down) = blocked
+        && unsafe { save_picker_clear_vertical_menu_event(blocked_down) }
+    {
+        let n = SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 || n.is_multiple_of(50) {
+            append_autoload_debug(format_args!(
+                "save-picker: suppressed vertical menu event #{n} at listing limit down={blocked_down} cursor={cursor} last_visible_row={last_visible_row}"
+            ));
         }
+        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
+            usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
+            Ordering::SeqCst,
+        );
+        return;
     }
     // NATIVE SELECTION MOVE: the cursor changed with no latched input of ours behind it. Named for
     // what it measures rather than a guessed cause -- reading it as "the pointer" is how a wheel
@@ -2148,7 +2148,7 @@ pub(crate) unsafe fn save_picker_menu_pump_edge_scroll() {
         && prev_cursor != usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR)
     {
         let n = SAVE_PICKER_POINTER_CURSOR_MOVES.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 40 || n % 25 == 0 {
+        if n <= 40 || n.is_multiple_of(25) {
             let (offset, max) = {
                 let guard = crate::experiments::save_picker::active_save_picker_lock();
                 guard
@@ -2805,7 +2805,7 @@ pub(crate) fn install_save_picker_list_builder_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     SAVE_PICKER_LIST_BUILDER_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "save-picker: hooked ProfileSelect list builder FUN_140875590 0x{addr:x}; browse rows re-stage at every native list build"
@@ -2874,12 +2874,12 @@ pub(crate) fn save_picker_reset(source: &str) {
 /// Start dir for the STARTUP overlay picker: remembered dir when valid, else the default save
 /// root (`%APPDATA%\EldenRing`), else the Wine system drive root. Windows-form paths.
 pub(crate) fn save_picker_title_start_dir() -> PathBuf {
-    if let Some(preferred) = crate::config::preferred_save_picker_dir_now() {
-        if let Some(text) = preferred.to_str() {
-            let windows = PathBuf::from(save_picker_windows_path_string(text));
-            if windows.is_dir() {
-                return windows;
-            }
+    if let Some(preferred) = crate::config::preferred_save_picker_dir_now()
+        && let Some(text) = preferred.to_str()
+    {
+        let windows = PathBuf::from(save_picker_windows_path_string(text));
+        if windows.is_dir() {
+            return windows;
         }
     }
     if let Some(root) = default_save_root()

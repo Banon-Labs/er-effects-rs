@@ -1,5 +1,14 @@
 use crate::prelude::*;
 
+/// # Safety
+///
+/// `s` is treated as an untrusted address of a native `DLString<char>` header: the
+/// capacity and the heap pointer are both read through `safe_read_*`, so any value is
+/// safe to pass and a bad one yields the sentinel.
+///
+/// The RETURNED value is likewise only an address, not a borrow -- it may already be
+/// dangling by the time it is used, so it is only valid to feed back into the same
+/// fault-tolerant readers, never to dereference directly.
 pub unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
     if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_OWNER_SCAN_START_ADDRESS;
@@ -12,6 +21,18 @@ pub unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
     }
 }
 
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// The scan is bounded to 96 bytes and stops at the first NUL or first unreadable byte,
+/// so a non-string address cannot run away.
 pub unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
         return false;
@@ -40,6 +61,18 @@ pub unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
     false
 }
 
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// The copy is bounded by `out.len()` and by a hard 80-byte cap, and stops at the first
+/// NUL or unreadable byte, so a non-string address cannot overrun `out`.
 pub unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
         return 0;
@@ -62,6 +95,20 @@ pub unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     n
 }
 
+/// # Safety
+///
+/// THIS ONE WRITES INTO THE GAME'S HEAP, and the write is a plain `write_volatile` with
+/// no fault guard. The caller must guarantee all of:
+///
+/// * `s` really is a live native `DLString<char>` (the header layout at `+0x8`/`+0x18`/
+///   `+0x20` is assumed, only the capacity read is guarded);
+/// * the string stays alive and is not concurrently read or written by the game for the
+///   duration of the call -- there is no lock, and the length field at `+0x18` is updated
+///   after the bytes, so a reader racing us can observe a torn value;
+/// * `value` fits the string's own capacity (checked here) and is ASCII (checked here).
+///
+/// Passing a non-`DLString` address writes `value.len() + 1` bytes plus a `usize` at
+/// attacker-chosen offsets, which is memory corruption, not a failed read.
 pub unsafe fn rewrite_native_dlstring_ascii(s: usize, value: &str) -> Option<usize> {
     if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS || !value.is_ascii() {
         return None;
@@ -109,6 +156,16 @@ unsafe fn sample_now_loading_helper(this: usize) {
     NOW_LOADING_HELPER_LAST_FLAGS.store(request_done | (load_done << 8), Ordering::SeqCst);
 }
 
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// `CSNowLoadingHelperImp` constructor, so it may only be entered by that patched call site, on the
+/// game thread that made the call, with the arguments and `extern "system"` ABI the original
+/// declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `NOW_LOADING_HELPER_CTOR_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = NOW_LOADING_HELPER_CTOR_ORIG.load(Ordering::SeqCst);
@@ -130,6 +187,16 @@ pub unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize
     ret
 }
 
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// `CSNowLoadingHelperImp::Update`, so it may only be entered by that patched call site, on the
+/// game thread that made the call, with the arguments and `extern "system"` ABI the original
+/// declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `NOW_LOADING_HELPER_UPDATE_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn now_loading_helper_update_hook(this: usize, time: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = NOW_LOADING_HELPER_UPDATE_ORIG.load(Ordering::SeqCst);
@@ -228,6 +295,15 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     }
 }
 
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's
+/// `CS::LoadingScreen::Update`, so it may only be entered by that patched call site, on the game
+/// thread that made the call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `LOADING_SCREEN_UPDATE_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, param3: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = LOADING_SCREEN_UPDATE_ORIG.load(Ordering::SeqCst);
@@ -273,6 +349,18 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
     }
 }
 
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's `Scaleform
+/// label-goto`, so it may only be entered by that patched call site, on the game thread that made
+/// the call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `SCALEFORM_LABEL_GOTO_ORIG`; that static must hold the trampoline this detour was installed
+/// with, or the call transfers to an arbitrary address.
+///
+/// `label` is only ever inspected through the bounded, fault-guarded ASCII scan, so a
+/// non-string second argument is a miss rather than a fault.
 pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
     if unsafe { bounded_ascii_contains(label, b"fadeout") } {
         stamp_loading_gfx_fadeout("label-goto", this, label);
@@ -286,6 +374,15 @@ pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usiz
     }
 }
 
+/// # Safety
+///
+/// Do NOT call this directly. It is the detour body MinHook installs over the game's loading-screen
+/// GFx fade-out method, so it may only be entered by that patched call site, on the game thread
+/// that made the call, with the arguments and `extern "system"` ABI the original declares.
+///
+/// It calls the saved original through a `transmute` of the trampoline address held in
+/// `LOADING_SCREEN_GFX_FADEOUT_ORIG`; that static must hold the trampoline this detour was
+/// installed with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
     stamp_loading_gfx_fadeout("knowledge-method", this, 0);
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -352,7 +449,9 @@ pub fn install_now_loading_helper_observer_hooks() {
         Ok(hook) => {
             NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address -- so letting the handle go does NOT uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -370,7 +469,9 @@ pub fn install_now_loading_helper_observer_hooks() {
         Ok(hook) => {
             NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             ok &= unsafe { hook.queue_enable() }.is_ok();
-            std::mem::forget(hook);
+            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+            // address -- so letting the handle go does NOT uninstall the hook.
         }
         Err(status) => {
             append_autoload_debug(format_args!(
@@ -389,7 +490,9 @@ pub fn install_now_loading_helper_observer_hooks() {
             Ok(hook) => {
                 LOADING_SCREEN_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -409,7 +512,9 @@ pub fn install_now_loading_helper_observer_hooks() {
             Ok(hook) => {
                 SCALEFORM_LABEL_GOTO_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -429,7 +534,9 @@ pub fn install_now_loading_helper_observer_hooks() {
             Ok(hook) => {
                 LOADING_SCREEN_GFX_FADEOUT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
                 ok &= unsafe { hook.queue_enable() }.is_ok();
-                std::mem::forget(hook);
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -464,6 +571,17 @@ pub fn install_now_loading_helper_observer_hooks() {
     }
 }
 
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// The UTF-16 scan is bounded to 128 units and stops at the first NUL or unreadable unit.
 pub unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
         return false;
@@ -487,6 +605,18 @@ pub unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
     hay[..n].windows(needle.len()).any(|w| w == needle)
 }
 
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// The copy is bounded by `out.len()` and a hard 96-unit cap, so a non-string address
+/// cannot overrun `out`.
 pub unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
         return 0;
@@ -512,6 +642,13 @@ pub unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
 /// Read an incoming `DLString<wchar_t>` (the producer's symbol arg) into a `Vec<u16>` (no trailing
 /// NUL) plus its encodingType byte. SSO-aware: the data is a heap pointer at `+0x8` when capacity
 /// `> 7`, otherwise inline at `+0x8`.
+#[expect(
+    dead_code,
+    reason = "Reverse-engineered DLString<wchar_t> SSO layout reader. Its caller (the now-loading \
+              symbol producer hook) was retired when the loading text moved to `stats_loading_text`; \
+              the decoded offsets are the record of that layout and are still the reference for any \
+              future wide-DLString read."
+)]
 unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
     if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
@@ -551,6 +688,13 @@ pub fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
 
 /// Walk the CSMenuProfModelRend chain for `slot` to its live portrait `CSGxTexture`, or 0 if the
 /// renderer/offscreen/tex-rescap chain is not present (e.g. already torn down). Read-only.
+#[expect(
+    dead_code,
+    reason = "Records the renderer -> offscreen -> tex-rescap -> CSGxTexture wrapper chain for a \
+              profile slot. The capture path now resolves the D3D12 resource deterministically in \
+              `cached_depth_readback`, so nothing calls this walk, but it is the readable statement of \
+              the chain those offsets came from."
+)]
 unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let renderer =
@@ -738,18 +882,20 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
     }
 }
 
-/// FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, `force_profile_render_enabled`). Runs each
-/// menu-phase frame (no local player). One-shot: mark the target slot used
-/// (`MarkProfileIndexAsUsed` -- the ONLY gate the refresh checks per STEP-0 RE: it sets
-/// `ProfileSummary->saveSlotsStates[slot]=true` with no other side effect), then call the argless
-/// profile-render refresh (`0x9aa680`), which equips ChrAsm + copies FaceData + kicks the async
-/// character-model build that eventually sets `renderer+0x778`. The menu's OWN per-frame callbacks
-/// then composite the live 3D head into the renderer's offscreen (no compositor call from us).
-/// `maybe_capture_portrait_gxtexture` keeps the rendered gx once `+0x778` latches. Menu-phase only
-/// (the user holds ProfileSelect; we never commit Continue) so there is no teardown/world-load crash
-/// path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
-/// gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
-/// save; the autoload path passes its own target slot).
+// FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, `force_profile_render_enabled`). Runs each
+// menu-phase frame (no local player). One-shot: mark the target slot used
+// (`MarkProfileIndexAsUsed` -- the ONLY gate the refresh checks per STEP-0 RE: it sets
+// `ProfileSummary->saveSlotsStates[slot]=true` with no other side effect), then call the argless
+// profile-render refresh (`0x9aa680`), which equips ChrAsm + copies FaceData + kicks the async
+// character-model build that eventually sets `renderer+0x778`. The menu's OWN per-frame callbacks
+// then composite the live 3D head into the renderer's offscreen (no compositor call from us).
+// `maybe_capture_portrait_gxtexture` keeps the rendered gx once `+0x778` latches. Menu-phase only
+// (the user holds ProfileSelect; we never commit Continue) so there is no teardown/world-load crash
+// path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
+// gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
+// save; the autoload path passes its own target slot).
+// (Design note only: the function it described is gone, so this is NOT a doc comment -- as `///` it
+// would silently attach to the next item.)
 // `read_cursor_normalized` lived here: an OS `GetCursorPos` reading normalized against the ER window
 // rect. Its last consumer was the System->Quit pointer band, a guessed screen rectangle that mapped
 // the lower half of the WINDOW onto the two added rows -- which is how a click on Return to Desktop
@@ -782,6 +928,20 @@ pub fn quat_from_yaw_pitch(yaw: f32, pitch: f32) -> [f32; 4] {
 
 /// Read a bounded null-terminated ASCII bone name from an `hkStringPtr` (low bit is an ownership flag,
 /// masked by the caller). `None` on unmapped memory or non-UTF8 (bone names are ASCII; no lossy decode).
+///
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// Bounded to 64 bytes. `ptr` is expected to have had the `hkStringPtr` ownership flag
+/// (bit 0) masked off by the caller; an unmasked pointer simply reads one byte early and
+/// returns a wrong name, not an unsound one.
 pub unsafe fn read_bone_name(ptr: usize) -> Option<String> {
     if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
@@ -802,6 +962,21 @@ pub unsafe fn read_bone_name(ptr: usize) -> Option<String> {
 
 /// Reach the live Havok `PoseHolder` from the renderer: `poseHolder = *(*(R+0x948)+0x20) + 0x48`,
 /// guarded on the built model (`R+0x778`). `None` until the model + animation location are live.
+///
+/// # Safety
+///
+/// No precondition on the address: every game read goes through the fault-tolerant
+/// `safe_read_*` helpers, so 0, a freed pointer, or wholly unmapped memory returns the
+/// empty/`None` result rather than faulting.
+///
+/// What the caller owns is INTERPRETATION: a successful read only proves those bytes
+/// were mapped at that instant, not that they are the object this expects, and another
+/// thread may overwrite them immediately afterwards. Treat the result as a sample.
+///
+/// The returned address is an OFFSET into a live Havok `PoseHolder` only for as long as
+/// the renderer's model stays built; the engine rebuilds and frees these on its own
+/// schedule, so the value is a sample to be re-read through guarded readers, never a
+/// handle to retain across frames.
 pub unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
@@ -822,6 +997,8 @@ pub unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
 
 /// Enumerate the skeleton's bones, dump names+indices ONCE per slot (diagnostic), and resolve the
 /// Head/Neck/Spine2 indices by name. Returns `(head, neck, spine2)` indices (`-1` = not found).
+// No `expect(dead_code)` needed: its only caller, `apply_profile_lookat`, carries one, and an
+// allowed-dead item still counts as a live use of everything it calls.
 unsafe fn dump_and_resolve_lookat_bones(bones: usize, count: usize, slot: i32) -> (i32, i32, i32) {
     let (mut head, mut neck, mut spine2) = (-1i32, -1i32, -1i32);
     let dump = (PROFILE_LOOKAT_BONES_DUMPED_MASK.load(Ordering::SeqCst) & (1usize << slot)) == 0;
@@ -856,6 +1033,13 @@ unsafe fn dump_and_resolve_lookat_bones(bones: usize, count: usize, slot: i32) -
 
 /// Retired look-at internals: resolve and cache the loaded character's Head/Neck/Spine2 pose-holder
 /// metadata for diagnostics. Product portrait rendering now publishes a neutral pose and does not use cursor input.
+#[expect(
+    dead_code,
+    reason = "Retired look-at internals: the product portrait publishes a neutral pose and takes no \
+              cursor input, so nothing drives this. Retained because it documents the renderer -> \
+              anim-location -> importer -> PoseHolder -> hkaSkeleton chain and the engine's ~6 Hz \
+              pose-holder refresh throttle."
+)]
 unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;

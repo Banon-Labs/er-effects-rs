@@ -1,41 +1,14 @@
 use std::{
     ffi::c_void,
-    fmt::Write as _,
-    fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
 };
 
-use std::os::windows::ffi::OsStrExt as _;
-
-use crate::input_blocker::{InputBlocker, InputFlags};
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
-use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
-    fd4::FD4TaskData,
-};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-        System::{
-            LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
-        },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
-    },
-    core::{BOOL, PCSTR},
-};
+use fromsoftware_shared::FromStatic;
 
 #[allow(unused_imports)]
 use crate::*;
@@ -210,7 +183,7 @@ pub(crate) fn install_own_load_hook() -> bool {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     OWN_LOAD_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "own-load: hooked 0x{read_addr:x} (GATED feed of sliced .sl2 body; pass-through until armed)"
@@ -273,6 +246,7 @@ pub(crate) use er_telemetry::counters::OWN_LOAD_M28_DISPATCH_FIRED;
 /// `AppendFileLoadProcessor` does NOT early-out on an already-present processor, so a double-call
 /// would append a second processor -- this set makes each cap fire exactly once. Const-constructible
 /// (`Mutex::new(Vec::new())`) so no lazy init is needed.
+#[allow(dead_code)] // Retained: One-shot guard for the m28 dispatch lever; kept with the AppendFileLoadProcessor finding its doc records.
 static OWN_LOAD_M28_DISPATCHED_CAPS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 /// Trampoline to the original `WorldBlockRes::Update` (set on hook install).
 static WBR_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -347,7 +321,7 @@ pub(crate) unsafe extern "system" fn wbr_update_hook(this: usize) -> usize {
                         let info8 = rd(this + 0x08);
                         append_autoload_debug(format_args!(
                             "wbr-phase2-cap0: cap0=0x{cap0:x} +00=0x{:x} +08=0x{:x} +10=0x{:x} +18=0x{:x} +20=0x{:x} +28=0x{:x} +30=0x{:x} +38=0x{:x} +40=0x{:x} +48=0x{:x} +50=0x{:x} +98=0x{:x} +a0=0x{:x} +a8=0x{:x} | info8=0x{info8:x} info8+0x28=0x{:x} #{n}",
-                            rd(cap0 + 0x00),
+                            rd(cap0),
                             rd(cap0 + 0x08),
                             rd(cap0 + 0x10),
                             rd(cap0 + 0x18),
@@ -367,10 +341,10 @@ pub(crate) unsafe extern "system" fn wbr_update_hook(this: usize) -> usize {
                 }
             }
         }
-        if let Some(gate) = unsafe { safe_read_u8(this + WBR_GATE_2F_OFFSET) } {
-            if gate != 0 {
-                OWN_LOAD_WBR_ANY_GATE_SET.store(true, Ordering::SeqCst);
-            }
+        if let Some(gate) = unsafe { safe_read_u8(this + WBR_GATE_2F_OFFSET) }
+            && gate != 0
+        {
+            OWN_LOAD_WBR_ANY_GATE_SET.store(true, Ordering::SeqCst);
         }
     }
     let orig = WBR_UPDATE_ORIG.load(Ordering::SeqCst);
@@ -411,7 +385,7 @@ pub(crate) fn install_wbr_update_hook() -> bool {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     WBR_UPDATE_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "wbr-update: hooked 0x{update_addr:x} (OBSERVE-ONLY phase/gate diagnostic; pure pass-through)"
@@ -509,7 +483,7 @@ pub(crate) fn install_common_finalize_hook() -> bool {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     er_telemetry::counters::COMMON_FINALIZE_HOOK_INSTALLED
                         .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -589,44 +563,44 @@ pub(crate) unsafe extern "system" fn request_move_map_fix_hook(
 ) -> usize {
     REQUEST_MOVE_MAP_HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
     let armed = REQUEST_MOVE_MAP_ARM_COUNTDOWN.load(Ordering::SeqCst);
-    if armed > 0 && param2 != TITLE_OWNER_SCAN_START_ADDRESS {
-        if let Some(before) = unsafe { safe_read_i32(param2) } {
-            let before_u = before as u32;
-            let before_area = (before_u >> 24) & 0xff;
-            let invalid =
-                before_u == u32::MAX || before_area >= REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
-            let gm = game_man_ptr_or_null();
-            let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-                unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
-            } else {
-                -1
-            };
-            let c30_u = c30 as u32;
-            let c30_area = (c30_u >> 24) & 0xff;
-            let c30_valid =
-                c30_u != u32::MAX && c30 != 0 && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
-            if invalid && c30_valid {
-                // The actual load's stale/-1 target -- fix it and disarm (done for this load).
-                unsafe {
-                    *(param2 as *mut i32) = c30;
-                }
-                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(0, Ordering::SeqCst);
-                REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
-                REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
-                REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} armed_left={armed} -- FormatV will now build the loadlist path"
-                ));
-            } else {
-                // Benign intervening call (valid BlockId, or c30 not yet mounted): DO NOT consume the
-                // arm -- just decrement the window so the real stale load call a few calls later is
-                // still caught. (The earlier one-shot consumed the arm here and missed the load call.)
-                REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(armed - 1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "request-move-map-fix: armed passthrough param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} armed_left={} -- window decremented, arm kept",
-                    armed - 1
-                ));
+    if armed > 0
+        && param2 != TITLE_OWNER_SCAN_START_ADDRESS
+        && let Some(before) = unsafe { safe_read_i32(param2) }
+    {
+        let before_u = before as u32;
+        let before_area = (before_u >> 24) & 0xff;
+        let invalid = before_u == u32::MAX || before_area >= REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+        let gm = game_man_ptr_or_null();
+        let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+        } else {
+            -1
+        };
+        let c30_u = c30 as u32;
+        let c30_area = (c30_u >> 24) & 0xff;
+        let c30_valid =
+            c30_u != u32::MAX && c30 != 0 && c30_area < REQUEST_MOVE_MAP_NONDEBUG_AREA_CEIL;
+        if invalid && c30_valid {
+            // The actual load's stale/-1 target -- fix it and disarm (done for this load).
+            unsafe {
+                *(param2 as *mut i32) = c30;
             }
+            REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(0, Ordering::SeqCst);
+            REQUEST_MOVE_MAP_FIXUPS.fetch_add(1, Ordering::SeqCst);
+            REQUEST_MOVE_MAP_LAST_BEFORE.store(u64::from(before_u), Ordering::SeqCst);
+            REQUEST_MOVE_MAP_LAST_C30.store(u64::from(c30_u), Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: FIXED *param_2 0x{before_u:x}(area=0x{before_area:x} invalid) -> c30 0x{c30_u:x}(area=0x{c30_area:x}) ingame=0x{ingame:x} armed_left={armed} -- FormatV will now build the loadlist path"
+            ));
+        } else {
+            // Benign intervening call (valid BlockId, or c30 not yet mounted): DO NOT consume the
+            // arm -- just decrement the window so the real stale load call a few calls later is
+            // still caught. (The earlier one-shot consumed the arm here and missed the load call.)
+            REQUEST_MOVE_MAP_ARM_COUNTDOWN.store(armed - 1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "request-move-map-fix: armed passthrough param_2=0x{before_u:x}(area=0x{before_area:x} invalid={invalid}) c30=0x{c30_u:x}(valid={c30_valid}) ingame=0x{ingame:x} armed_left={} -- window decremented, arm kept",
+                armed - 1
+            ));
         }
     }
     let orig = REQUEST_MOVE_MAP_ORIG.load(Ordering::SeqCst);
@@ -676,7 +650,7 @@ pub(crate) fn install_request_move_map_fix_hook() -> bool {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     REQUEST_MOVE_MAP_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "request-move-map-fix: hooked 0x{addr:x} (armed-only BlockId fixup; passthrough otherwise)"
@@ -952,7 +926,7 @@ pub(crate) fn install_worldreswait_gate_hook() -> bool {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     er_telemetry::counters::WORLDRESWAIT_GATE_HOOK_INSTALLED
                         .store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -1386,7 +1360,7 @@ pub(crate) unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_own
     OWN_LOAD_STREAM_C30.store(c30, Ordering::SeqCst);
     let frames = OWN_LOAD_STREAM_FRAMES.fetch_add(1, Ordering::SeqCst);
     // Throttled human-readable trend line.
-    if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
+    if frames.is_multiple_of(OWN_LOAD_STREAM_LOG_INTERVAL) {
         let ig = ingame.unwrap_or(null);
         let mms = movemapstep.unwrap_or(null);
         let rm = resmgr.unwrap_or(null);
@@ -1424,7 +1398,7 @@ unsafe fn own_load_m28_dispatch(
     // (skip lines), which is exactly why the lever was a silent no-op on the first clean run.
     let diag_n = OWN_LOAD_M28_DISPATCH_DIAG_CALLS.fetch_add(1, Ordering::SeqCst);
     let diag = diag_n < OWN_LOAD_M28_DISPATCH_DIAG_HEAD
-        || diag_n % OWN_LOAD_M28_DISPATCH_DIAG_INTERVAL == 0;
+        || diag_n.is_multiple_of(OWN_LOAD_M28_DISPATCH_DIAG_INTERVAL);
     // The resmgr 0xb3030 array entry `block` is a WRAPPER (WorldBlockData), NOT the WorldBlockRes --
     // its +0x40/+0x48 are unrelated wrapper fields (observed null at runtime). The real WorldBlockRes
     // (FD4FileCaps at +0x40/+0x48, phase byte at +0x35) is what the engine reaches via the native
@@ -1632,43 +1606,38 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     let mut target_block_count: i64 = 0;
     let mut distinct_areaids: Vec<u8> = Vec::with_capacity(OBSERVER_AREAID_SAMPLE_MAX);
     let mut scan_chain_ok = false;
-    if let (Some(rm), true) = (resmgr, block_count != OWN_LOAD_STREAM_FIELD_UNREAD) {
-        if block_count > 0 {
-            scan_chain_ok = true;
-            let base_arr = rm + RESMGR_BLOCK_ARRAY_B3030_OFFSET;
-            let n = block_count.min(OBSERVER_BLOCK_SCAN_CAP);
-            let mut i: i64 = 0;
-            while i < n {
-                let slot = base_arr + (i as usize) * BLOCK_ENTRY_STRIDE;
-                if let Some(block) = deref(slot) {
-                    if let Some(inner) = deref(block + BLOCK_INNER_8_OFFSET) {
-                        if let Some(area_u8) =
-                            unsafe { safe_read_usize(inner + BLOCK_AREA_C_OFFSET) }
-                                .map(|v| (v as u32 & TARGET_AREA_FROM_COORD_MASK) as u8)
-                        {
-                            if area_u8 == target_area {
-                                target_block_count += 1;
-                                // `block` IS the matched player-area (m28, 0x1c) WorldBlockRes.
-                                // Drive its FD4FileCap(s) to residency via the direct-enqueue lever.
-                                // Double-gated: own_dispatch armed AND our OWN-LOAD continue fired.
-                                if own_dispatch_enabled()
-                                    && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
-                                {
-                                    unsafe {
-                                        own_load_m28_dispatch(base, block, &deref);
-                                    }
-                                }
-                            }
-                            if distinct_areaids.len() < OBSERVER_AREAID_SAMPLE_MAX
-                                && !distinct_areaids.contains(&area_u8)
-                            {
-                                distinct_areaids.push(area_u8);
-                            }
+    if let (Some(rm), true) = (resmgr, block_count != OWN_LOAD_STREAM_FIELD_UNREAD)
+        && block_count > 0
+    {
+        scan_chain_ok = true;
+        let base_arr = rm + RESMGR_BLOCK_ARRAY_B3030_OFFSET;
+        let n = block_count.min(OBSERVER_BLOCK_SCAN_CAP);
+        let mut i: i64 = 0;
+        while i < n {
+            let slot = base_arr + (i as usize) * BLOCK_ENTRY_STRIDE;
+            if let Some(block) = deref(slot)
+                && let Some(inner) = deref(block + BLOCK_INNER_8_OFFSET)
+                && let Some(area_u8) = unsafe { safe_read_usize(inner + BLOCK_AREA_C_OFFSET) }
+                    .map(|v| (v as u32 & TARGET_AREA_FROM_COORD_MASK) as u8)
+            {
+                if area_u8 == target_area {
+                    target_block_count += 1;
+                    // `block` IS the matched player-area (m28, 0x1c) WorldBlockRes.
+                    // Drive its FD4FileCap(s) to residency via the direct-enqueue lever.
+                    // Double-gated: own_dispatch armed AND our OWN-LOAD continue fired.
+                    if own_dispatch_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
+                        unsafe {
+                            own_load_m28_dispatch(base, block, &deref);
                         }
                     }
                 }
-                i += 1;
+                if distinct_areaids.len() < OBSERVER_AREAID_SAMPLE_MAX
+                    && !distinct_areaids.contains(&area_u8)
+                {
+                    distinct_areaids.push(area_u8);
+                }
             }
+            i += 1;
         }
     }
     let target_block_present: i64 = if scan_chain_ok {
@@ -1697,7 +1666,7 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     let wbr_max_phase = OWN_LOAD_WBR_MAX_PHASE.load(Ordering::SeqCst);
     let wbr_any_gate_set = OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst);
     let frames = OWN_LOAD_STREAM_RECUR_FRAMES.fetch_add(1, Ordering::SeqCst);
-    if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
+    if frames.is_multiple_of(OWN_LOAD_STREAM_LOG_INTERVAL) {
         let ig = ingame.unwrap_or(null);
         let mms = movemapstep.unwrap_or(null);
         let rm = resmgr.unwrap_or(null);

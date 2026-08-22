@@ -46,7 +46,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         PLAYER_GAME_DATA_NAME_GETTER_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "stats-text: hooked main-player name getter FUN_14025f8e0 0x{addr:x}; raw PGD name overrides word-checked summary name"
@@ -85,7 +85,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
@@ -128,7 +128,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         PROFILE_ROW_MODEL_BUILD_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "stats-text: hooked ProfileSelect row-model builder FUN_1408752c0 0x{addr:x}; a slot whose summary record is another character's is lent the PlaceName this save evidences for its body's map"
@@ -168,7 +168,7 @@ pub(crate) fn install_profile_row_populate_hook() {
                 }
                 match unsafe { MH_ApplyQueued() } {
                     MH_STATUS::MH_OK => {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         append_autoload_debug(format_args!(
                             "stats-text: hooked title-load current row-populate FUN_140951220 0x{addr:x}; pushes ErCharStats after native current-row populate"
                         ));
@@ -263,7 +263,7 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
@@ -305,7 +305,7 @@ pub(crate) fn install_title_logo_force_hidden_hooks() {
                             "title-cover-part-a: queue_enable logo SetVisible failed: {status:?}"
                         ));
                     } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         TITLE_LOGO_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} SetVisible 0x{addr:x}; forcing visible=false"
@@ -336,7 +336,7 @@ pub(crate) fn install_title_logo_force_hidden_hooks() {
                             "title-cover-part-a: queue_enable logo ctor failed: {status:?}"
                         ));
                     } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
-                        std::mem::forget(hook);
+                        crate::mh::leak_installed_hook(hook);
                         TITLE_LOGO_CTOR_INSTALLED.store(1, Ordering::SeqCst);
                         append_autoload_debug(format_args!(
                             "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} ctor 0x{addr:x}; hiding immediately after construction"
@@ -391,7 +391,7 @@ pub(crate) fn install_title_logo_start_login_hide_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_TOP_START_LOGIN_HIDE_INSTALLED
                         .store(TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -446,7 +446,7 @@ pub(crate) fn install_title_pab_information_visual_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_PAB_INFORMATION_VISUAL_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "title-cover-part-a: hooked PAB/TitleInformation wrapper 0x{addr:x}; native {TITLE_PAB_INFORMATION_VISUAL_NAME} preserved and covered"
@@ -501,7 +501,7 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.store(
                         TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES,
                         Ordering::SeqCst,
@@ -559,7 +559,7 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
+                    crate::mh::leak_installed_hook(hook);
                     TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.store(
                         TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES,
                         Ordering::SeqCst,
@@ -730,7 +730,7 @@ pub(crate) unsafe fn system_quit_hide_real_system_windows(base: usize, source: &
 /// Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if the
 /// composite / selected tab / cached pane can't be resolved.
 pub(crate) unsafe fn system_quit_reapply_optionsetting_pane_visibility(
-    base: usize,
+    _base: usize,
     option_window: usize,
     forced_tab: Option<usize>,
     source: &str,
@@ -922,7 +922,7 @@ pub(crate) unsafe fn system_quit_clear_disable_save_menu(base: usize, source: &s
     if prev != 0 {
         unsafe { dsm.write_volatile(0) };
         let n = SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 5 || n % 120 == 0 {
+        if n <= 5 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: cleared stale CSMenuMan->disableSaveMenu (was {prev}) #{n} source={source} -- native quit-save was gated OFF (bc4 freezes at 1, world never tears down); now unblocked so bc4 pumps 1->2->3"
             ));
@@ -974,7 +974,7 @@ pub(crate) unsafe fn system_quit_log_save_gates(base: usize, source: &str) {
     const FORCE_LATCH_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
     const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;
     let n = SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    if !(n <= 8 || n % 240 == 0) {
+    if !(n <= 8 || n.is_multiple_of(240)) {
         return;
     }
     let force = unsafe { safe_read_u8(base + FORCE_LATCH_RVA) }.unwrap_or(0xff);
@@ -1058,7 +1058,7 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
         let waits = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT
             .fetch_add(1, Ordering::SeqCst)
             + 1;
-        if waits <= 3 || waits % 60 == 0 {
+        if waits <= 3 || waits.is_multiple_of(60) {
             let head = unsafe { safe_read_usize(queue) }.unwrap_or(NULL);
             let pending6 = unsafe { safe_read_usize(queue + 0x30) }.unwrap_or(NULL);
             append_autoload_debug(format_args!(
@@ -1266,6 +1266,8 @@ pub(crate) struct OptionSettingPaneSample {
     /// `assignComponentWithName` returned a live out proxy (not 0 / not the null sentinel).
     resolved: bool,
     /// The resolved child's CSScaleformValue is a live DisplayObject (`(dataType & MASK) == VALUE`).
+    #[allow(dead_code)]
+    // Retained: Populated for the gate diagnosis this sample exists to record; nothing reads it back yet.
     is_display: bool,
     /// DisplayInfo.Visible byte was nonzero after the `GetDisplayInfo` vcall.
     visible: bool,
@@ -1367,7 +1369,7 @@ pub(crate) unsafe fn read_scaleform_pane_visible(
 }
 
 pub(crate) fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
-    if ptr < TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
+    if ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
         return false;
     }
     for (idx, &want) in ascii.iter().enumerate() {
@@ -1404,7 +1406,7 @@ pub(crate) fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
 
 pub(crate) fn hash_wide_label_ptr(label_ptr: usize) -> usize {
     let mut hash = FNV1A64_OFFSET_BASIS as usize;
-    if label_ptr < TITLE_OWNER_SCAN_START_ADDRESS {
+    if label_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return hash;
     }
     for idx in 0..48usize {
@@ -1647,17 +1649,18 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     // counter while DisplayInfo.Visible remains false and the stale Quit visual list can stay over Game
     // Options. Before calling native select, repair composite+0xb8 to current_dialog so its state-copy
     // step is self-copy instead of stale Quit->Game.
-    if real_blank && current_tab < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
-        if let Ok(select_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
-            unsafe {
-                *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) =
-                    current_dialog;
-            }
-            let select_tab: unsafe extern "system" fn(usize, i32) =
-                unsafe { std::mem::transmute(select_addr) };
-            unsafe { select_tab(composite, current_tab as i32) };
-            OPTIONSETTING_PANE_FIX_APPLIED.fetch_add(1, Ordering::SeqCst);
+    if real_blank
+        && current_tab < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT
+        && let Ok(select_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA)
+    {
+        unsafe {
+            *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) =
+                current_dialog;
         }
+        let select_tab: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(select_addr) };
+        unsafe { select_tab(composite, current_tab as i32) };
+        OPTIONSETTING_PANE_FIX_APPLIED.fetch_add(1, Ordering::SeqCst);
     }
 
     OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED.store(wl.resolved as usize, Ordering::SeqCst);
@@ -1817,34 +1820,30 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             filename.as_str(),
             "02_040_OptionSetting" | "02_041_OptionSetting_Trial"
         ) && owner != 0
+            && let Ok(base) = game_module_base()
         {
-            if let Ok(base) = game_module_base() {
-                unsafe { sample_optionsetting_pane_visibility(base, owner) };
-            }
+            unsafe { sample_optionsetting_pane_visibility(base, owner) };
         }
-        if filename == "05_010_ProfileSelect" {
-            if let Ok(base) = game_module_base() {
-                if owner == 0 {
-                    // Picker navigation/pick closes the window with a queued resubmit; keep the
-                    // System UI hidden and let the resubmit block below reopen 05_010 instead of
-                    // restoring (a restore here would clobber the staged rows and flash the
-                    // System menu between pages).
-                    if !save_picker_resubmit_pending() {
-                        unsafe {
-                            system_quit_restore_real_system_windows(
-                                base,
-                                "restore-real-profile-owner-cleared",
-                            )
-                        };
-                    }
-                } else {
+        if filename == "05_010_ProfileSelect"
+            && let Ok(base) = game_module_base()
+        {
+            if owner == 0 {
+                // Picker navigation/pick closes the window with a queued resubmit; keep the
+                // System UI hidden and let the resubmit block below reopen 05_010 instead of
+                // restoring (a restore here would clobber the staged rows and flash the
+                // System menu between pages).
+                if !save_picker_resubmit_pending() {
                     unsafe {
-                        system_quit_hide_real_system_windows(
+                        system_quit_restore_real_system_windows(
                             base,
-                            "hide-real-after-profile-select-run",
+                            "restore-real-profile-owner-cleared",
                         )
                     };
                 }
+            } else {
+                unsafe {
+                    system_quit_hide_real_system_windows(base, "hide-real-after-profile-select-run")
+                };
             }
         }
     }
@@ -1871,15 +1870,15 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         let gm = game_man_ptr_or_null();
         if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
             let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
-            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) } {
-                if ss == GAME_MAN_SAVE_STATE_READING || ss == FULLREAD_B80_RESIDENT {
-                    unsafe { *ss_ptr = GAME_MAN_SAVE_STATE_IDLE };
-                    let n = SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n <= 8 || n % 120 == 0 {
-                        append_autoload_debug(format_args!(
-                            "system-quit-quickload: aborted stuck in-world load transition #{n} saveState={ss}->0 (old world still up) so return-title chain can run"
-                        ));
-                    }
+            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) }
+                && (ss == GAME_MAN_SAVE_STATE_READING || ss == FULLREAD_B80_RESIDENT)
+            {
+                unsafe { *ss_ptr = GAME_MAN_SAVE_STATE_IDLE };
+                let n = SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 8 || n.is_multiple_of(120) {
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: aborted stuck in-world load transition #{n} saveState={ss}->0 (old world still up) so return-title chain can run"
+                    ));
                 }
             }
         }
@@ -1939,19 +1938,17 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         .contains(&quickload_phase)
         && SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
         && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
+        && let Ok(base) = game_module_base()
     {
-        if let Ok(base) = game_module_base() {
-            let system_dialog =
-                SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
-            if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
-                let _ = unsafe {
-                    system_quit_submit_direct_return_title_chain(
-                        base,
-                        system_dialog,
-                        "menu-pump-run-hook",
-                    )
-                };
-            }
+        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+        if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+            let _ = unsafe {
+                system_quit_submit_direct_return_title_chain(
+                    base,
+                    system_dialog,
+                    "menu-pump-run-hook",
+                )
+            };
         }
     }
 }

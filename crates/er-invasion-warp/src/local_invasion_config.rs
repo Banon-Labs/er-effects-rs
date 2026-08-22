@@ -26,8 +26,6 @@
 //! `[local_invasion]` section's body and it behaves identically. [`SECTION_NAME`] is exported for
 //! that purpose.
 
-use std::collections::BTreeSet;
-
 use crate::local_invasion::{LocalInvasionConfig, LocalInvasionMode, PlaceNameTextId};
 
 /// File name looked for next to the DLL.
@@ -706,9 +704,11 @@ mod tests {
     /// rewrite this file and would otherwise erase the player's choice on the first mark.
     #[test]
     fn a_renamed_key_survives_a_write_and_reparse() {
-        let mut config = LocalInvasionConfig::default();
-        config.mark_key = crate::keybind::parse_key("F7").expect("F7 is a key");
-        config.unmark_key = crate::keybind::parse_key("]").expect("] is a key");
+        let config = LocalInvasionConfig {
+            mark_key: crate::keybind::parse_key("F7").expect("F7 is a key"),
+            unmark_key: crate::keybind::parse_key("]").expect("] is a key"),
+            ..Default::default()
+        };
         let rendered = render_local_invasion_config(&config);
         assert!(rendered.contains("mark_key = \"F7\""), "{rendered}");
         // Rendered as the SYMBOL: it is the first name in the table and is what a player typing a

@@ -4,21 +4,6 @@ use super::*;
 mod fallback_drives;
 use fallback_drives::own_stepper_idx10_fallbacks;
 
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_GAME_DATA_MAN;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_IODEV;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_PRESS_START;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_READY;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_SESSION;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_DIALOG;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_STATE;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_TITLE_TABLE;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_UNKNOWN;
-pub(crate) use er_title_flow::PRODUCT_CORE_BLOCKER_UNSEEN;
-
 pub(crate) use er_telemetry::counters::COLD_CHAR_MOUNT_FILE_ARMED;
 /// Module-level mirror of cold_char_mount_drive's internal MOUNT_PHASE, stored as `phase + 1`
 /// (0 = the cold mount never ran; 5 = PHASE_DONE = terminal, evidence collected). Exposed in
@@ -212,18 +197,6 @@ pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_LAST_STATE_BITS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_STATE_REJECTS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_TABLE_REJECTS;
 pub(crate) use er_telemetry::counters::TITLE_OWNER_SCAN_VTABLE_HITS;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_BLOCKER;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_MENU_OPENED_LATCH;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_OWNER;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PHASE;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_CONTEXT;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_PROXY;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_PRESS_START_VT;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_TITLE_DIALOG;
-pub(crate) use er_title_flow::PRODUCT_CORE_LAST_TITLE_DIALOG_VT;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_LAST_CANDIDATE;
-pub(crate) use er_title_flow::TITLE_OWNER_SCAN_LAST_TABLE;
 pub(crate) static MENU_CONTINUE_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_ITEM: AtomicUsize =
@@ -395,28 +368,11 @@ pub(crate) const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
 pub(crate) use er_telemetry::counters::TFC_AUTO_MENU_OPENED;
 /// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
 pub(crate) use er_telemetry::counters::TFC_CONTINUE_FIRED;
-/// The queue-owner dialog whose MenuJobQueue (`dialog+0x10`) holds the posted LoadGame job, for the
-/// per-frame drain (`tfc_continue_drain_tick`). 0 = nothing to drain. Set by `maybe_fire_tfc_continue`
-/// after a successful PushBackJob.
-pub(crate) use er_telemetry::counters::TFC_DRAIN_DIALOG;
-/// The built LoadGame job pointer (selector's out[0]) to pump directly via `ExecuteMenuJob` each
-/// frame. 0 = nothing to pump. Set by `maybe_fire_tfc_continue`; cleared when the job completes
-/// (ExecuteMenuJob zeroes the slot) or the tick cap is hit. Pumping our own job avoids the dialog's
-/// +0x8 slot that AV'd the queue-drain wrapper.
-pub(crate) use er_telemetry::counters::TFC_DRAIN_JOB;
-/// Per-frame drain tick counter (caps the drain so a stuck job cannot spin forever).
-pub(crate) use er_telemetry::counters::TFC_DRAIN_TICKS;
 /// Throttle counter for the dialog+0x50 load-vector readiness gate in `maybe_fire_tfc_continue`
 /// (logs the count value occasionally while waiting for it to become a valid has-room vector).
 pub(crate) use er_telemetry::counters::TFC_LOAD_VEC_WAIT_TICKS;
-/// One-shot guard for installing the TitleTopDialog::update hook (`install_title_update_hook`).
-pub(crate) use er_telemetry::counters::TITLE_UPDATE_HOOK_INSTALLED;
 /// Trampoline for the hooked TitleTopDialog::update (`title_update_detour` -> original). 0 = not hooked.
 pub(crate) use er_telemetry::counters::TITLE_UPDATE_ORIG;
-pub(crate) use er_title_flow::TFC_DRAIN_TICK_CAP;
-
-/// One-shot log latch for `force_offline_connection_bytes` (only logs the first 1->0 clear).
-pub(crate) use er_telemetry::counters::FORCE_OFFLINE_BYTES_CLEARED;
 
 /// Detour for CS::TitleTopDialog::update (0x1409aac10, vtable slot 2). Runs IN THE PUMP'S FRAME with
 /// the LIVE dialog (rcx) -- the in-context timing our recurring-game-task build lacked. Calls the
@@ -428,12 +384,12 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
     // TitleTopDialog::update reads the global accept byte and invokes open_menu at the tail of this
     // exact frame. Delivering it from the recurring game task races menu handlers that clear the
     // byte before that read; product autoload therefore arms it immediately before the original.
-    if product_autoload_enabled() {
-        if let Ok(base) = game_module_base() {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                er_title_flow::maybe_set_title_accept_byte(base)
-            }));
-        }
+    if product_autoload_enabled()
+        && let Ok(base) = game_module_base()
+    {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            er_title_flow::maybe_set_title_accept_byte(base)
+        }));
     }
     let orig_addr = TITLE_UPDATE_ORIG.load(Ordering::SeqCst);
     if orig_addr != TITLE_OWNER_SCAN_START_ADDRESS && orig_addr != 0 {
@@ -459,23 +415,8 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
 // cap-8 overflow), no replace, no file mod, no input. Distinct from the DEAD latch-force 0x143d856a0
 // (skipped bookkeeping -> crash). bd press-any-button-golden-lever-job1e8-readiness-2026-06-23.
 
-pub(crate) use er_title_flow::PAB_ADVANCE_SETTLE_FRAMES;
-pub(crate) use er_title_flow::PAB_COUNT_SANITY_MAX;
-pub(crate) use er_title_flow::PAB_JOB_KEYCODE_180_OFFSET;
-pub(crate) use er_title_flow::PAB_JOB_PRESS_COUNT_1E8_OFFSET;
-pub(crate) use er_title_flow::PAB_JOB_SLOT_130_OFFSET;
-pub(crate) use er_title_flow::PAB_MIN_HEAP_PTR;
-pub(crate) use er_title_flow::PAB_NODE_UPDATE_RVA;
-pub(crate) use er_title_flow::PAB_PRESS_COUNT_SATISFIED;
-
-/// One-shot latch: the readiness advance has fired (0 = not yet).
-pub(crate) use er_telemetry::counters::PAB_ADVANCE_FIRED;
-/// One-shot guard for installing the PAB node-update hook.
-pub(crate) use er_telemetry::counters::PAB_ADVANCE_HOOK_INSTALLED;
 /// Trampoline to the original PAB node-update. 0 = not hooked.
 pub(crate) use er_telemetry::counters::PAB_ADVANCE_ORIG;
-/// Valid-job-frame settle counter for the readiness advance.
-pub(crate) use er_telemetry::counters::PAB_ADVANCE_SETTLE;
 
 /// Detour for the press-any-button node-update 0x1407ad1c0. Calls the original (builds/updates the job
 /// at `[step+0x130]`) then runs the gated, fail-closed, one-shot readiness advance. Pass-through return.
@@ -511,7 +452,7 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
     if crate::constants::TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) == 0 {
         crate::constants::TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
         let n = crate::constants::PAB_RUN_POST_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == 1 || n % 1200 == 0 {
+        if n == 1 || n.is_multiple_of(1200) {
             append_autoload_debug(format_args!(
                 "pab-run-post: PAB detour (deterministic 0x7ad1c0 winner) drove system_quit_menu_window_run_post #{n}"
             ));
@@ -524,9 +465,8 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
     ret
 }
 
-pub(crate) use er_title_flow::MenuActionNode;
-
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // Retained: Decoded layout of one native Continue menu entry (entry/functor/do_call/router/index/cursor), beside the live NativeContinueItemAction.
 pub(crate) struct NativeContinueEntry {
     pub(crate) entry: usize,
     pub(crate) functor: usize,
@@ -545,17 +485,7 @@ pub(crate) struct NativeContinueItemAction {
     pub(crate) do_call: usize,
 }
 
-pub(crate) use er_title_flow::LiveDialogFireReady;
-
-pub(crate) use er_title_flow::ProfileLoadDialogReady;
-
 pub(crate) use er_title_flow::StartupModalBlockingState;
-
-pub(crate) use er_title_flow::ProductCoreAutoloadReady;
-
-pub(crate) use er_title_flow::TitlePressButtonComponent;
-
-pub(crate) use er_title_flow::TitleDialogState;
 
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the

@@ -30,12 +30,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use super::map_hooks::{
     DORMANT_NEXT_SLOT, DORMANT_SPAN_BEGIN, DORMANT_SPAN_END, INJECTED_REGISTRY, LIVE_LIST_BEGIN,
     LIVE_RESTYLE_SIGNATURE, LIVE_SPAN_BEGIN, LIVE_SPAN_END, LIVE_VIEW_MODEL, MapCoordinates,
-    PIN_ROW_STRIDE, PinListGeometry, RESTYLE_GENERATION, ROW_ENTITY_ID_OFFSET, ROW_ICON_ID_OFFSET,
-    ROW_ID_OFFSET, ROW_LAYER_MASK_OFFSET, ROW_PARAM_POINTER_OFFSET, authoritative_view_model,
-    block_area, layer_bit_for_converter, map_dialog_is_attached, msb_block_targets,
-    nearest_place_name_text_id, param_slab_bounds, project_to_map, read_pin_list, read_row_icon,
-    record_place_name, record_top_up_target, row_is_verifiably_ours, stamped_row_id,
-    write_row_icon,
+    PIN_ROW_STRIDE, PinListGeometry, RESTYLE_GENERATION, ROW_ENTITY_ID_OFFSET, ROW_ID_OFFSET,
+    ROW_LAYER_MASK_OFFSET, ROW_PARAM_POINTER_OFFSET, authoritative_view_model, block_area,
+    layer_bit_for_converter, map_dialog_is_attached, msb_block_targets, nearest_place_name_text_id,
+    param_slab_bounds, project_to_map, read_pin_list, read_row_icon, record_place_name,
+    record_top_up_target, row_is_verifiably_ours, stamped_row_id, write_row_icon,
 };
 
 /// Re-colour the pins that already exist, in place.
@@ -614,7 +613,7 @@ unsafe fn hide_injected_row_for_param_index(
         return false;
     }
     for row in (span_begin..span_end).step_by(PIN_ROW_STRIDE) {
-        if unsafe { row_is_verifiably_ours(row, slab) } != Some(param_index) {
+        if row_is_verifiably_ours(row, slab) != Some(param_index) {
             continue;
         }
         // SAFETY: the row carries our own param pointer at the exact slab stride, so it is one this

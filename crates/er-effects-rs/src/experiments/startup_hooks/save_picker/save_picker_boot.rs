@@ -387,9 +387,8 @@ pub(crate) fn boot_os_perform_cancel_exit() -> ! {
             " -- the state mutex was not available, so er-effects-telemetry.json predates this cancel; er-effects-bootstrap.jsonl carries the outcome"
         }
     ));
-    unsafe { windows::Win32::System::Threading::ExitProcess(0) };
-    // ExitProcess never returns; this is unreachable and only satisfies the `!` return type.
-    unreachable!("ExitProcess(0) does not return")
+    // ExitProcess never returns, so it IS the `!` tail expression.
+    unsafe { windows::Win32::System::Threading::ExitProcess(0) }
 }
 
 #[cfg(test)]
@@ -408,13 +407,15 @@ mod save_picker_boot_tests {
     #[test]
     fn the_cancel_path_waits_for_nothing() {
         assert!(BOOT_OS_CORE_HOOK_WAIT > Duration::ZERO);
-        assert!(
-            BOOT_EXIT_FLUSH_ATTEMPTS >= 1,
-            "at least one flush attempt, or a healthy run would never refresh the file"
-        );
-        assert!(
-            BOOT_EXIT_FLUSH_ATTEMPTS <= 8,
-            "the flush is best-effort; retrying a lock nobody releases only delays the user's quit"
-        );
+        const {
+            assert!(
+                BOOT_EXIT_FLUSH_ATTEMPTS >= 1,
+                "at least one flush attempt, or a healthy run would never refresh the file"
+            );
+            assert!(
+                BOOT_EXIT_FLUSH_ATTEMPTS <= 8,
+                "the flush is best-effort; retrying a lock nobody releases only delays the user's quit"
+            );
+        }
     }
 }

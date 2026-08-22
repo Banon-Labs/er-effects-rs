@@ -752,7 +752,9 @@ mod tests {
 
     #[test]
     fn path_limit_exceeds_the_native_name_presets_without_becoming_unbounded() {
-        assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS > 16);
-        assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS <= 1024);
+        const {
+            assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS > 16);
+            assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS <= 1024);
+        }
     }
 }
