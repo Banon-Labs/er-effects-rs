@@ -64,3 +64,29 @@ members = [
 ]
 resolver = "2"
 default-members = ["crates/er-effects-rs"]
+
+# LINT PARITY WITH `../fromsoftware-rs` (2026-08-21).
+#
+# The user's requirement is that this workspace be AT LEAST as strict as the parent project.
+# Upstream has no `clippy.toml`, no `[lints]` table, and exactly one `#![allow]` in its whole
+# tree -- its entire strictness is `RUSTFLAGS=-Dwarnings` + `RUSTDOCFLAGS=-Dwarnings` around
+# `cargo clippy --all-targets --no-deps` in `.github/workflows/rust.yml`. So parity is "stock
+# lint set, denied", and this table is the declarative equivalent of those env vars.
+#
+# WHY BOTH ENTRIES, when `rust.warnings` already covers clippy lints under clippy:
+# a blanket `-Awarnings` in `.cargo/config.toml` DEFEATS `rust.warnings = "deny"` (same lint
+# group, and the config's flag is applied later) but does NOT defeat `clippy.all = "deny"`
+# (a named group beats the blanket allow). Measured 2026-08-21 across four configurations
+# with forced rebuilds. Keeping both means that if `-Awarnings` is ever reintroduced -- or
+# cargo-xwin re-propagates it, which it does -- the clippy half degrades gracefully instead
+# of silently switching every lint in the workspace off.
+#
+# `priority = -1` makes these groups apply BEFORE any single-lint entry, so a crate that is
+# not yet at parity can allow specific lints in its own `[lints]` table without abandoning
+# the deny. Every such allow must carry a `# DEBT:` comment and is enforced by
+# `scripts/check-lint-parity.py`.
+[workspace.lints.rust]
+warnings = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
