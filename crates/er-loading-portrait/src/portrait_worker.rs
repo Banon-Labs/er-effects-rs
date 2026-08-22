@@ -548,6 +548,10 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
                 // ... and mark a keyed frame available for display (persists across the
                 // window reset/retarget so the bridge holds until the next keyed frame).
                 PROFILE_HAVE_KEYED_FRAME.store(1, Ordering::SeqCst);
+                // This window now owns the bridge content, so a provisional same-identity hold
+                // taken at its rearm is superseded: there is no previous window's head left to
+                // revoke, and the hold must not be reported unproven at the next switch.
+                loading_portrait_bridge_hold_superseded_by_publish();
                 if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
                     append_autoload_debug(format_args!(
                         "live-feed: published built RT content {cw}x{ch} (real head, !checker, keyed, clean tear={tear}, target-only) -> overlay (version bump)"

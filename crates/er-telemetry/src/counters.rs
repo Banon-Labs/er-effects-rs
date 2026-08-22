@@ -297,6 +297,25 @@ pub static PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST: AtomicUsize = AtomicUsize::new(0
 /// Same-identity bridge holds across an own-menu-switch rearm (bd er-effects-rs-dpf6 Phase 3): the
 /// incoming slot+name-hash matched the published head, so the window reset KEPT the bridge.
 pub static PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS: AtomicUsize = AtomicUsize::new(0);
+/// The OUTSTANDING provisional bridge hold, as slot+1 (0 = none). A hold is taken at the switch
+/// rearm on a name-hash comparison whose two operands both come from the SAME ProfileSummary
+/// record, so it cannot detect that the record itself is wrong (2026-08-22, see
+/// `same_identity_bridge_hold`). It is therefore recorded as PROVISIONAL and stays that way until
+/// something independent resolves it: this window's own publish clears it (proof), a
+/// face-fingerprint mismatch revokes it (refutation), and reaching the NEXT rearm still set means
+/// neither ever happened.
+pub static PORTRAIT_BRIDGE_HOLD_PROVISIONAL: AtomicUsize = AtomicUsize::new(0);
+/// Provisional holds REVOKED by the record-vs-preview face fingerprint -- the one portrait identity
+/// signal that compares the record against a source outside itself. A revocation drops the held head
+/// and the frozen crop envelope, so the window shows NO portrait rather than the previous
+/// character's. `> 0` is a defect signal about the RECORD, not a healthy safety check firing: an
+/// intact record cannot produce one (bd k979 -- do not gate on this being non-zero).
+pub static PORTRAIT_BRIDGE_HOLD_REVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Provisional holds that reached the NEXT switch rearm having neither published nor been revoked:
+/// a whole loading window rode a held head that nothing ever confirmed. That is the shape of the
+/// 2026-08-22 `displayed-stale` window (65 frames displayed, 0 published, 0 captured). The hold is
+/// refused a second window when this fires, so a stale head can own at most one.
+pub static PORTRAIT_BRIDGE_HOLD_UNPROVEN: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_IS_CHECKER: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_DIMS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_FORMAT: AtomicUsize = AtomicUsize::new(0);
