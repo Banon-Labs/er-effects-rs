@@ -18,8 +18,11 @@
 //! CROSS-DLL STATE: separate DLLs do not share Rust statics, so this DLL re-derives menu/game state by
 //! reading GAME memory directly (game_mem) instead of reading product statics.
 
-#![allow(clippy::missing_safety_doc)]
-#![allow(non_snake_case)]
+// A cdylib whose every consumer is `DllMain` and the per-frame game task it registers, all of
+// them `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out,
+// so `dead_code`/`unused_imports` there report the cfg, not real debt (measured 2026-08-21: 108
+// on the host, 0 on the shipping target). The SHIPPING target carries the full deny.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 #[cfg(windows)]
 mod drive;

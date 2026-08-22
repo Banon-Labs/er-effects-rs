@@ -1,5 +1,3 @@
-#![allow(non_snake_case)]
-
 use std::{
     ffi::c_void,
     fmt,
@@ -45,7 +43,15 @@ const MENU_DATA_ENDING_5E_OFFSET: usize = 0x5e;
 // ShouldSave() reads GameMan->saveRequested (0xb72); FUN_140679370() reads GameMan+0xb73 (gated by
 // bc4!=3). The suppressed in-world quit-save leaves these set, so !ShouldSave()/!FUN_140679370() fail
 // and load2 parks at field25=7 even after rt5d unblocks case 0. The rt5d drive clears them natively.
+#[allow(
+    dead_code,
+    reason = "retained RE fact: the case-7 save-drain gate offset, kept after the drive that cleared it was removed"
+)]
 const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
+#[allow(
+    dead_code,
+    reason = "retained RE fact: the case-7 save-drain gate offset, kept after the drive that cleared it was removed"
+)]
 const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_LOAD_PHASE_B80_OFFSET: usize = 0xb80;
@@ -102,6 +108,10 @@ static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
 /// Once a SINGLE MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
 /// calls (load1 flips at ~call#133, so this only ever fires for a genuinely-stuck load2), supply rt5d=1
 /// once so the game's OWN finalize completes -- then observe complete(field25->9, movable) vs teardown.
+#[allow(
+    dead_code,
+    reason = "retained RE fact: the removed rt5d drive's stuck-call threshold, kept with its sibling drive statics"
+)]
 const RT5D_DRIVE_THRESHOLD: u64 = 30;
 static RT5D_DRIVE_MMS: AtomicUsize = AtomicUsize::new(0);
 static RT5D_DRIVE_ZERO_STREAK: AtomicU64 = AtomicU64::new(0);
@@ -112,13 +122,6 @@ static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
 /// reach a large global count). Also lets the same logic catch load3 after load2 completes.
 static COMPLETION_SEEN_MMS: AtomicUsize = AtomicUsize::new(0);
 static ORIG_FINALIZE_ADVANCER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Child-done query FUN_140eb5550 (deobf 0x140eb5530 / rva 0xeb5530): STEP_MoveMap_Update calls it and,
-/// if it returns nonzero (done), tears the MoveMapStep child down. HYPOTHESIS: it returns done
-/// PREMATURELY for load2 (child field25 still 0) -> premature teardown -> advancer stops. Log-only: logs
-/// the return on change + heartbeat to confirm load2 returns done while load1 returns not-done.
-static ORIG_CHILD_DONE_QUERY: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static LAST_CHILD_DONE: AtomicI32 = AtomicI32::new(-2);
-static CHILD_DONE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Child-teardown instrumentation (FUN_140eb54e0): every teardown logs the child + its MoveMapStep
 /// state/field25, so load2's MoveMapStep child teardown (if any) is visible.
 static ORIG_CHILD_TEARDOWN: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -370,23 +373,6 @@ unsafe extern "system" fn hook_loadlist_init(a: usize, b: usize, c: usize, d: us
         snapshot()
     ));
     unsafe { call_original(&ORIG_LOADLIST_INIT, a, b, c, d) }
-}
-
-/// Log-only detour for the child-done query FUN_140eb5550 (rva 0xeb5530). Logs its return (done flag)
-/// on change + a 600-call heartbeat. If load2 returns done=1 while load1 returns done=0 during the
-/// mms18 freeze, the premature-teardown chain is confirmed.
-unsafe extern "system" fn hook_child_done_query(a: usize, b: usize, c: usize, d: usize) -> usize {
-    let calls = CHILD_DONE_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-    let ret = unsafe { call_original(&ORIG_CHILD_DONE_QUERY, a, b, c, d) };
-    let done = (ret & 0xff) as i32;
-    let last = LAST_CHILD_DONE.swap(done, Ordering::SeqCst);
-    if last != done || calls % 600 == 0 {
-        log_line(format_args!(
-            "child_done_query_eb5530 call#{calls} rcx=0x{a:x} returned done={done} {}",
-            snapshot()
-        ));
-    }
-    ret
 }
 
 /// Log-only detour for the child teardown FUN_140eb54e0 (rva 0xeb54c0). Logs every teardown with the
@@ -887,8 +873,11 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_child_teardown,
         original: &ORIG_CHILD_TEARDOWN,
     },
-    // child_done_query_eb5530 removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
+    // child_done_query_eb5530 (FUN_140eb5550 in the dump / deobf 0x140eb5530 / rva 0xeb5530 -- the
+    // child-done query STEP_MoveMap_Update calls, tearing the MoveMapStep child down when it returns
+    // nonzero) removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
     // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
+    // Its log-only trace detour + statics were deleted with the spec entry rather than left parked.
 ];
 
 /// Resolve the product DLL's `er_effects_union_register` export, polling briefly since both natives
@@ -1012,6 +1001,12 @@ fn install_one(base: usize, spec: &HookSpec) {
     ));
 }
 
+/// Windows loader entry point.
+///
+/// # Safety
+/// Called by the Windows loader with the loader lock held. `module`/`reserved` are the loader's own
+/// pointers and are not dereferenced here; the attach path only spawns a thread, so no loader-lock
+/// reentrancy is introduced.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DllMain(
     _module: *mut c_void,

@@ -42,6 +42,15 @@ pub fn game_rva(rva: u32) -> Result<usize, String> {
 }
 
 /// Cheap heap-pointer sanity check: above the low 64 KiB reserve and 8-byte aligned.
+///
+/// # Safety
+///
+/// There is NO precondition and no unsafety here: this function dereferences nothing.
+/// It is integer arithmetic on `ptr` -- a range test against the low 64 KiB reserve and
+/// an alignment mask -- and would be sound as a safe `fn`. The `unsafe` marker is
+/// vestigial, kept only because removing it would change the signature of a function
+/// called across every DLL in this workspace. A `true` result is a cheap plausibility
+/// screen, NOT proof that `ptr` is mapped or points at a live object.
 pub unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     const PTR_ALIGN_MASK: usize = 0x7;
@@ -57,6 +66,23 @@ pub fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
 
 /// Fault-tolerant pointer-sized read: returns `None` on unmapped/freed memory
 /// instead of raising an access violation.
+///
+/// # Safety
+///
+/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
+/// validates the range in the kernel and returns `FALSE` rather than raising an access
+/// violation, so this function cannot fault on a bad address -- that fault-tolerance is
+/// the entire reason it exists.
+///
+/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// only proves those bytes were mapped at that instant; it does not prove they are a
+/// live object of the expected type, and the game may free or overwrite the region on
+/// another thread immediately afterwards. Treat the value as a sample, not a borrow.
+///
+/// The `unsafe` marker is therefore about interpretation, not memory validity, and is
+/// retained rather than removed only because dropping it would change the signature of
+/// a function every DLL in this workspace calls.
 pub unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
     let mut value: usize = ZERO;
     let mut read: usize = ZERO;
@@ -77,6 +103,23 @@ pub unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
 }
 
 /// Fault-tolerant i32 read (None on unmapped memory).
+///
+/// # Safety
+///
+/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
+/// validates the range in the kernel and returns `FALSE` rather than raising an access
+/// violation, so this function cannot fault on a bad address -- that fault-tolerance is
+/// the entire reason it exists.
+///
+/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// only proves those bytes were mapped at that instant; it does not prove they are a
+/// live object of the expected type, and the game may free or overwrite the region on
+/// another thread immediately afterwards. Treat the value as a sample, not a borrow.
+///
+/// The `unsafe` marker is therefore about interpretation, not memory validity, and is
+/// retained rather than removed only because dropping it would change the signature of
+/// a function every DLL in this workspace calls.
 pub unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
     let mut value: i32 = 0;
     let mut read: usize = ZERO;
@@ -97,6 +140,23 @@ pub unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
 }
 
 /// Fault-tolerant f32 read (None on unmapped memory).
+///
+/// # Safety
+///
+/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
+/// validates the range in the kernel and returns `FALSE` rather than raising an access
+/// violation, so this function cannot fault on a bad address -- that fault-tolerance is
+/// the entire reason it exists.
+///
+/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// only proves those bytes were mapped at that instant; it does not prove they are a
+/// live object of the expected type, and the game may free or overwrite the region on
+/// another thread immediately afterwards. Treat the value as a sample, not a borrow.
+///
+/// The `unsafe` marker is therefore about interpretation, not memory validity, and is
+/// retained rather than removed only because dropping it would change the signature of
+/// a function every DLL in this workspace calls.
 pub unsafe fn safe_read_f32(addr: usize) -> Option<f32> {
     let mut value: f32 = 0.0;
     let mut read: usize = ZERO;
@@ -117,6 +177,23 @@ pub unsafe fn safe_read_f32(addr: usize) -> Option<f32> {
 }
 
 /// Fault-tolerant single-byte read (None on unmapped memory).
+///
+/// # Safety
+///
+/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
+/// validates the range in the kernel and returns `FALSE` rather than raising an access
+/// violation, so this function cannot fault on a bad address -- that fault-tolerance is
+/// the entire reason it exists.
+///
+/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// only proves those bytes were mapped at that instant; it does not prove they are a
+/// live object of the expected type, and the game may free or overwrite the region on
+/// another thread immediately afterwards. Treat the value as a sample, not a borrow.
+///
+/// The `unsafe` marker is therefore about interpretation, not memory validity, and is
+/// retained rather than removed only because dropping it would change the signature of
+/// a function every DLL in this workspace calls.
 pub unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
     let mut value: u8 = 0;
     let mut read: usize = ZERO;
@@ -139,6 +216,17 @@ pub unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
 /// Fault-tolerant bulk read into `out`. Returns true only if the whole slice was
 /// read (None-equivalent for byte buffers). Used by the `.text` AOB scanner so a
 /// drifted/unmapped region fails closed instead of faulting.
+///
+/// # Safety
+///
+/// `addr` has NO precondition -- see [`safe_read_usize`]; the read is performed by
+/// `ReadProcessMemory` and fails closed on an unmapped range instead of faulting. This
+/// is what lets the `.text` AOB scanner walk a drifted or partially-unmapped image
+/// without crashing the game.
+///
+/// `out` is an ordinary Rust slice and is only written on a fully successful read, so a
+/// `false` return leaves its contents unspecified but initialised. The caller owns the
+/// meaning of the bytes, exactly as above.
 pub unsafe fn read_bytes(addr: usize, out: &mut [u8]) -> bool {
     if out.is_empty() {
         return true;
@@ -204,6 +292,23 @@ pub fn module_text_range() -> Option<(usize, usize)> {
 }
 
 /// Fault-tolerant u16 read (None on unmapped memory).
+///
+/// # Safety
+///
+/// `addr` has NO precondition: any value, including 0, a freed pointer, or a wholly
+/// unmapped address, is safe to pass. The read goes through `ReadProcessMemory`, which
+/// validates the range in the kernel and returns `FALSE` rather than raising an access
+/// violation, so this function cannot fault on a bad address -- that fault-tolerance is
+/// the entire reason it exists.
+///
+/// What the CALLER owns is the meaning of the bytes that come back. A successful read
+/// only proves those bytes were mapped at that instant; it does not prove they are a
+/// live object of the expected type, and the game may free or overwrite the region on
+/// another thread immediately afterwards. Treat the value as a sample, not a borrow.
+///
+/// The `unsafe` marker is therefore about interpretation, not memory validity, and is
+/// retained rather than removed only because dropping it would change the signature of
+/// a function every DLL in this workspace calls.
 pub unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
     let mut value: u16 = 0;
     let mut read: usize = ZERO;

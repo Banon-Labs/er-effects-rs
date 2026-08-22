@@ -59,6 +59,14 @@ pub fn picker_dim_cover_factory(label: &str) -> Option<PickerCover> {
 /// same way the in-game arm does it: the menu-pump resubmit reopens `05_010` through that dialog and
 /// abandons the reopen if it is 0. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is already 0 in OS mode
 /// (there is no picker window), so the resubmit's precondition holds with no window to close.
+///
+/// # Safety
+///
+/// `action_obj` must be a live `CS::MenuJob` action object for the row press that is calling
+/// this, and the call must be on the game thread that owns it: the body reads through it
+/// (`system_dialog_from_action_obj`) and then blocks in comdlg32, so the object has to stay
+/// alive for the read. Pass 0 rather than a stale pointer -- a 0 is checked for, a freed
+/// object is not.
 pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
@@ -180,6 +188,12 @@ pub unsafe fn os_open_save_picker_load(action_obj: usize) -> PickerOpenOutcome {
 ///    cancel and reopened the dialog on the next pump, ~57 ms later, forever (bd
 ///    `er-effects-rs-rsxi`). The cancel path still needs no latch of its own -- what it needs is to
 ///    say `Dismissed` rather than "the open failed", which is what discharges that request.
+///
+/// # Safety
+///
+/// `system_dialog` must be a live `CS::SystemDialog` owned by the game thread this runs on;
+/// the staging path reads through it to build the confirm. The heap-likeness test at the top
+/// rejects an obviously bogus value, but it cannot tell a freed dialog from a live one.
 pub unsafe fn os_open_save_dest_picker(system_dialog: usize) -> PickerOpenOutcome {
     const HEAP_LO: usize = 0x10000;
     if system_dialog < HEAP_LO || system_dialog == usize::MIN {

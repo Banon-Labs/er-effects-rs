@@ -476,15 +476,7 @@ impl SaveLoader {
                         context.game_module_base,
                         slot,
                         self.attempts,
-                        self.request.method == SaveLoadMethod::DirectMapLoad
-                            || self.request.method == SaveLoadMethod::DirectCombinedLoad,
-                        self.request.method == SaveLoadMethod::DirectCombinedLoad
-                            || self.request.method == SaveLoadMethod::DirectCombinedOnly
-                            || self.request.method == SaveLoadMethod::DirectBootstrapCombined
-                            || self.request.method == SaveLoadMethod::DirectBootstrapPump,
-                        self.request.method == SaveLoadMethod::DirectBootstrapCombined
-                            || self.request.method == SaveLoadMethod::DirectBootstrapPump,
-                        self.request.method == SaveLoadMethod::DirectBootstrapPump,
+                        DirectMenuLoadCalls::for_method(self.request.method),
                         &mut debug,
                     )
                 } {

@@ -7,8 +7,6 @@
 //! lives in `er-loading-bar` for this validation slice; once proven, it can move
 //! behind a smaller shared compositor crate seam.
 
-#![allow(non_snake_case)]
-
 use std::{
     fs,
     path::PathBuf,
@@ -286,7 +284,7 @@ fn address_tag(addr: usize) -> String {
             return format!("self+0x{rva:x}");
         }
     }
-    let game = unsafe { GetModuleHandleA(b"eldenring.exe\0".as_ptr()) } as usize;
+    let game = unsafe { GetModuleHandleA(c"eldenring.exe".as_ptr().cast()) } as usize;
     if game != 0 && addr >= game {
         let rva = addr - game;
         if rva < 0x600_0000 {
@@ -329,8 +327,9 @@ mod tests {
         assert!(
             frame
                 .pixels
-                .chunks_exact(er_loading_bar::RGBA8_BPP)
-                .any(|px| px == [226, 223, 214, 255])
+                .as_chunks::<{ er_loading_bar::RGBA8_BPP }>()
+                .0
+                .contains(&[226, 223, 214, 255])
         );
     }
 }

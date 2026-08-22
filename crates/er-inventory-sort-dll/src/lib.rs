@@ -5,8 +5,6 @@
 //! name, own config file, own log file, and no dependency on save/autoload/render
 //! product crates.
 
-#![allow(non_snake_case)]
-
 use std::{
     fmt,
     path::PathBuf,

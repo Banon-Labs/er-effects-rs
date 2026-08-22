@@ -92,7 +92,7 @@ pub fn parse_sampler_register(name: &str) -> Option<(u32, String)> {
 /// Lowercased `.matxml` leaf, the join key between FLVER `mtd` and matbin `source_path`.
 pub fn matxml_key(path: &str) -> String {
     let leaf = path
-        .rsplit(|c| c == '\\' || c == '/')
+        .rsplit(['\\', '/'])
         .next()
         .unwrap_or(path)
         .to_lowercase();

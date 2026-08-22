@@ -16,3 +16,6 @@ er-loading-bar = { path = "../er-loading-bar" }
 # Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
 # shell's run log and crash log each describe exactly one run.
 er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

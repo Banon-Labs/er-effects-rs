@@ -36,8 +36,6 @@
 //! proves the SL submit is the only *known* write path, and the census is what would
 //! catch an unknown one.
 
-#![allow(non_snake_case)]
-
 #[cfg(windows)]
 mod hooks;
 mod telemetry;
@@ -137,7 +135,7 @@ fn spawn_census_task() {
                 match er_game_base::mem::game_module_base() {
                     Ok(base) => break base,
                     Err(err) => {
-                        if attempts == 0 || attempts % 4096 == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(4096) {
                             log_message(format_args!(
                                 "install: waiting for game module base: {err}"
                             ));

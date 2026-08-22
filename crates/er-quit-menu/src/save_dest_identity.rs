@@ -200,8 +200,8 @@ pub fn save_dest_normalize_path(text: &str) -> Option<String> {
     let lower = windows.to_ascii_lowercase();
     // Split the root off first so a `..` can never walk above it.
     let bytes = lower.as_bytes();
-    let (root, rest) = if lower.starts_with("\\\\") {
-        ("\\\\".to_owned(), &lower[2..])
+    let (root, rest) = if let Some(rest) = lower.strip_prefix("\\\\") {
+        ("\\\\".to_owned(), rest)
     } else if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
         (lower[..2].to_owned(), &lower[2..])
     } else {

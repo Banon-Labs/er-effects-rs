@@ -35,3 +35,6 @@ serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Name wgpu::VertexFormat in the native_draw example (unified with er-shaderkit's wgpu).
 wgpu = { version = "29", default-features = false }
+
+[lints]
+workspace = true

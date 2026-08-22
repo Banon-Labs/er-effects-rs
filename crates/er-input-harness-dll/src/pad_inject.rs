@@ -48,8 +48,8 @@ const VK_ID_MIN: u32 = 1000;
 const VK_ID_MAX: u32 = 1080;
 const HEAP_LO: usize = 0x10000;
 
-/// The virtual-key id the drive currently wants held (0 = released). The probe sets a raw id; the drive
-/// sets it via `set_pad_button` once the id->action map is known.
+/// The virtual-key id the drive currently wants held (0 = released). Set through `set_vk_id`; the
+/// id->action map this was meant to be driven by was never recovered (see `set_vk_id`).
 static DESIRED_VK_ID: AtomicU32 = AtomicU32::new(0);
 static ORIG_BUILDER_A: AtomicUsize = AtomicUsize::new(0);
 static ORIG_BUILDER_B: AtomicUsize = AtomicUsize::new(0);
@@ -62,7 +62,6 @@ static BUILDER_FIRES: AtomicU32 = AtomicU32::new(0);
 static WRITER_FIRES: AtomicU32 = AtomicU32::new(0);
 static GAME_SOURCE: AtomicUsize = AtomicUsize::new(0); // rcx of the real writer = the game's source
 static MY_SOURCE: AtomicUsize = AtomicUsize::new(0); // source my inject_vk computed
-static TREEWALK_DIAG: AtomicUsize = AtomicUsize::new(0); // one-time padMaps tree-walk structure dump
 static CACHED_PAD: AtomicUsize = AtomicUsize::new(0); // resolved CSInGamePad, cached to skip per-frame RPM
 static OBSERVED_IDS: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)]; // 81-bit set of ids the game's writer fired (id-1000)
 
@@ -81,52 +80,19 @@ pub fn pad_snapshot() -> (u32, u32, usize, usize, [u32; 3]) {
     )
 }
 
-/// Menu-nav buttons -> DLUID virtual-key ids.
-///
-/// The planned source+0x88 id map was never recovered: the only concrete probe evidence is negative for
-/// the in-world pause menu (`DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep...`), with all ids
-/// 1000..1080 producing no reproducible job/flags/tab/return-title response. Keep the typed API inert
-/// instead of inventing ids; `set_vk_id` remains available for diagnostic raw-id probes if a later RE pass
-/// finds the real consumer.
-#[derive(Clone, Copy)]
-pub enum PadButton {
-    None,
-    Up,
-    Down,
-    Confirm,
-    Cancel,
-    TabLeft,
-    TabRight,
-}
-
-impl PadButton {
-    fn vk_id(self) -> u32 {
-        match self {
-            PadButton::None
-            | PadButton::Up
-            | PadButton::Down
-            | PadButton::Confirm
-            | PadButton::Cancel
-            | PadButton::TabLeft
-            | PadButton::TabRight => 0,
-        }
-    }
-}
-
-/// Drive API: set the button to inject (`None` = release, for a clean edge). This typed source+0x88 path
-/// is intentionally inert because the id sweep produced no concrete pause-menu action map; use
-/// `set_vk_id` only for explicit raw-id diagnostics.
-pub fn set_pad_button(button: PadButton) {
-    DESIRED_VK_ID.store(button.vk_id(), Ordering::SeqCst);
-}
-
 /// Probe API: inject a RAW virtual-key id (1000..1080) into `source+0x88` each frame (0 = release).
+///
+/// This stays a RAW-id API on purpose. A typed `PadButton` wrapper used to sit in front of it and was
+/// removed 2026-08-21: the planned `source+0x88` id -> action map was never recovered, so every one of
+/// its variants mapped to id `0` and the enum carried no reverse-engineered information at all.
+///
+/// The evidence behind that is negative and specific (bd
+/// `DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep`): ids 1000..1080 were swept against the
+/// in-world pause menu and NONE produced a reproducible job/flags/tab/return-title response. The menu
+/// is driven through `inputmgr+0x90+eventId` (`crate::input_inject::tap_menu_event`) instead. This entry
+/// point survives only for explicit raw-id diagnostics, should a later RE pass find the real consumer.
 pub fn set_vk_id(id: u32) {
     DESIRED_VK_ID.store(id, Ordering::SeqCst);
-}
-
-pub fn pad_hook_active() -> bool {
-    HOOKS_ACTIVE.load(Ordering::SeqCst) != 0
 }
 
 /// After a builder rebuilds `source+0x88`, stamp the desired key id down. `manager` is the builder's
@@ -330,7 +296,10 @@ fn install_one(
         Ok(hook) => {
             orig.store(hook.trampoline() as usize, Ordering::SeqCst);
             if unsafe { hook.queue_enable() }.is_ok() {
-                std::mem::forget(hook);
+                // The hook must stay installed for the life of the process. `er_hook` declares no
+                // `Drop` impl at all (uninstalling is `MH_RemoveHook`, which nothing here calls), so
+                // letting the handle fall out of scope leaks it by construction -- the
+                // `std::mem::forget` that used to sit here was a no-op dressed up as an intent.
                 harness_log!("pad-inject: hooked {name} at 0x{:x}", addr as usize);
                 true
             } else {

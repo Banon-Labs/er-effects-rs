@@ -53,10 +53,10 @@ fn walk(
                 imports.push((url.clone(), symbols.clone()));
             }
             Tag::DefineFont3 { font_id, .. } => local_fonts.push(*font_id),
-            Tag::DefineEditText { font_id, .. } => {
-                if let Some(f) = font_id {
-                    edit_text_fonts.push(*f);
-                }
+            Tag::DefineEditText {
+                font_id: Some(f), ..
+            } => {
+                edit_text_fonts.push(*f);
             }
             // `DefineEditText` lives inside the sprite that places it, so a top-level-only
             // scan reports zero text fields for every movie and proves nothing.

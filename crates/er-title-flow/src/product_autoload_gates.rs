@@ -635,7 +635,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     .unwrap_or(usize::MAX);
     if load_vec_count >= 8 {
         let waits = TFC_LOAD_VEC_WAIT_TICKS.fetch_add(1, Ordering::SeqCst);
-        if waits % 120 == 0 {
+        if waits.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "fire-tfc-continue: WAIT -- dialog+0x50 load vector not ready (count@dialog+0x98=0x{load_vec_count:x} >= 8, likely uninitialized/garbage) dialog=0x{dialog:x} waits={waits}; not firing"
             ));
@@ -657,7 +657,7 @@ pub unsafe fn maybe_fire_tfc_continue(base: usize) {
     let want_slot = unsafe { resolve_active_load_slot(configured) };
     if want_slot < OWN_STEPPER_SLOT_ZERO {
         let waits = TFC_LOAD_VEC_WAIT_TICKS.fetch_add(1, Ordering::SeqCst);
-        if waits % 120 == 0 {
+        if waits.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "fire-tfc-continue: REFUSE to fire -- no ACTIVE save slot (configured={configured}; profile records not real/ready). Never loading a null slot (would spawn the new-game intro). waits={waits}"
             ));

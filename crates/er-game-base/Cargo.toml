@@ -23,3 +23,6 @@ game-types = ["dep:eldenring", "dep:fromsoftware-shared"]
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring", optional = true }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared", optional = true }
+
+[lints]
+workspace = true

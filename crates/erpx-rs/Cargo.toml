@@ -20,3 +20,6 @@ png = ["dep:png"]
 [[bin]]
 name = "erpx2png"
 required-features = ["png"]
+
+[lints]
+workspace = true

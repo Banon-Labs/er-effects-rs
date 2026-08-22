@@ -492,8 +492,8 @@ mod system_quit_row_identity_tests {
             return_desktop_index: 1,
             load_profile_index: 2,
             load_save_profiles_index: 3,
-            table_dialog: 0x1758_4208_0,
-            activation_dialog: 0x1758_4208_0,
+            table_dialog: 0x175842080,
+            activation_dialog: 0x175842080,
             cursor: 1,
             row_count: 4,
             cursor_row_label: Some(QuitRowLabel::Foreign),
@@ -590,7 +590,7 @@ mod system_quit_row_identity_tests {
     #[test]
     fn a_stale_row_table_from_another_dialog_never_quits() {
         let mut f = facts();
-        f.activation_dialog = 0x1758_4308_0;
+        f.activation_dialog = 0x175843080;
         assert_eq!(
             resolve_quit_row(&f),
             QuitRowVerdict::Ambiguous(QuitRowAmbiguity::DialogMismatch)

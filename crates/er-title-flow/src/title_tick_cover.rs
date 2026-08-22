@@ -55,7 +55,7 @@ pub unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
         ));
         return;
     }
-    if ticks == 1 || ticks % (OWN_LOAD_STREAM_LOG_INTERVAL as usize) == 0 {
+    if ticks == 1 || ticks.is_multiple_of(OWN_LOAD_STREAM_LOG_INTERVAL as usize) {
         append_autoload_debug(format_args!(
             "tfc-drain: tick {ticks} ExecuteMenuJob(job=0x{job:x}) delta={frame_delta} (pumping)"
         ));
@@ -544,7 +544,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // a run is conclusive even if the drive never fires (throttled). Only at cstate==18.
             if cstate == MOVEMAPSTEP_STEP_MOVEMAP_INDEX {
                 let w = INWORLD_FINALIZE_DRIVE_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                if w <= 20 || w % 20 == 0 {
+                if w <= 20 || w.is_multiple_of(20) {
                     append_autoload_debug(format_args!(
                         "IN-WORLD FINALIZE DRIVE WHY-NOT #{w}: frozen_mms18=false at cstate=18 -- active_switch={active_switch}(phase={}) creq={creq} cfin={cfin} c5d={c5d} c5e={c5e} cmenu={} (needs active_switch && creq==1 && cfin==0 && c5d==0 && c5e==0)",
                         SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst),
@@ -803,9 +803,6 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             let mut ls_2c: i32 = -1;
             let mut ls_2d: i32 = -1;
             let mut ls_35: i32 = -1;
-            let mut ls_2f: i32 = -1;
-            let mut ls_3c: i32 = -1;
-            let mut ls_06: i32 = -1;
             // Rendered once at the end rather than threaded out as seven more tuple slots.
             let mut ls_phase2 = String::new();
             let mut areas = String::new();
@@ -849,8 +846,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     // mapId2 != 0x1c000000, i.e. a STALE block-res left over from the prior in-world
                     // load and never reset on the switch. Dump each entry's mapId2 to identify the
                     // stale block. Change-detected (base ^ first ^ count) so a steady stall logs once.
-                    if ar_bres > 0 && ar_bres <= 64 {
-                        if let Some(ce0_base) =
+                    if ar_bres > 0 && ar_bres <= 64
+                        && let Some(ce0_base) =
                             unsafe { safe_read_usize(bp + 0xce0) }.filter(|&v| v > 0x10000)
                         {
                             let mut mapids = String::new();
@@ -882,7 +879,6 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                 ));
                             }
                         }
-                    }
                     // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
@@ -920,17 +916,17 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                                 // 2, so the caps phase 2 actually waits on may be the BLOCK's own.
                                 // Sample both those and the `[+0x2f]` gate that decides whether phase
                                 // 2 polls at all. Read-only; no call, no write.
-                                ls_2f = unsafe {
+                                let ls_2f = unsafe {
                                     safe_read_u8(ls + BLOCK_LOADSTATE_ASSET_GATE_2F_OFFSET)
                                 }
                                 .map(|v| v as i32)
                                 .unwrap_or(-1);
-                                ls_3c = unsafe {
+                                let ls_3c = unsafe {
                                     safe_read_u8(ls + BLOCK_LOADSTATE_COUNTDOWN_3C_OFFSET)
                                 }
                                 .map(|v| v as i32)
                                 .unwrap_or(-1);
-                                ls_06 =
+                                let ls_06 =
                                     unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_GAVEUP_06_OFFSET) }
                                         .map(|v| v as i32)
                                         .unwrap_or(-1);
@@ -1218,8 +1214,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             && !movement_proven_for_reload
             && mms_step == 18
             && !crate::compat::gating::outgoing_teardown_suppresses_holds()
-        {
-            if let Some(mms_ptr) = mms {
+            && let Some(mms_ptr) = mms {
                 let old_gate =
                     unsafe { safe_read_u8(mms_ptr + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) }
                         .unwrap_or(0);
@@ -1236,7 +1231,6 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     }
                 }
             }
-        }
         // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
         // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
         // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
@@ -1395,7 +1389,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     let w = ENDING_REQUEST_WHYNOT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
                     let epoch_dbg =
                         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-                    if w <= 40 || w % 10 == 0 {
+                    if w <= 40 || w.is_multiple_of(10) {
                         append_autoload_debug(format_args!(
                             "MMS18 RT5D DRIVE WHY-NOT #{w} epoch={epoch_dbg}: stuck_mms18=false at frozen mms18 -- active_switch={active_switch_phase}(phase={quickload_phase}) ig_d8={ig_d8} md_5e={md_5e} md_5d={md_5d} b7c1={mms_b7c1} blocks={mms_blocks} (drive needs active_switch && ig_d8==1 && md_5e==0 && md_5d==0 && b7c1==1 && blocks>0)"
                         ));
@@ -1485,8 +1479,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
             let warp_req = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
-            if warp_req == 0 {
-                if let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
+            if warp_req == 0
+                && let Some(md) = (unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
                     .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
                     .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -1508,7 +1502,6 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                         }
                     }
                 }
-            }
         }
         // Unblock the finalize case-7->8 gate on the warm reload. The gate is
         // FUN_14067a170() (== saveState==0) && !ShouldSave() (saveRequested==0) && !FUN_140679460()
@@ -1632,7 +1625,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             mms_step,
             sf as i64,
         );
-        if n <= 10 || n % 30 == 0 || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed
+        if n <= 10 || n.is_multiple_of(30) || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed
         {
             let cls = if peak >= 300 {
                 "LOADED_STABLE"
@@ -1693,7 +1686,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             }
             return_title_job_predicate_bc4 = 0;
             let n = SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-            if n <= 5 || n % 60 == 0 {
+            if n <= 5 || n.is_multiple_of(60) {
                 let source = if post_continue_stable_pending_for_bc4 {
                     "post-Continue stable wait"
                 } else {
@@ -1741,9 +1734,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
     // 12 of them -- reported quickload phase 3. Zero fired at phase >= 4. So this bound is inert on a
     // run that behaves, and only bites the stuck-latch shape above.
     let b78_guard_quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    let b78_guard_window_open = b78_guard_quickload_phase
-        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
-        && b78_guard_quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+    let b78_guard_window_open = (SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF).contains(&b78_guard_quickload_phase)
         && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO;
@@ -1798,7 +1789,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let n = er_telemetry::counters::SWITCH_RELOAD_B78_GUARD_STANDDOWNS
             .fetch_add(1, Ordering::SeqCst)
             + 1;
-        if n <= 5 || n % 120 == 0 {
+        if n <= 5 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: b78 guard STOOD DOWN #{n} -- fd4io reload phase={} (COMMIT) owns GameMan+0xb78 as the warp target through finalize; not forcing -1 (phase={} slot={slot} bc4=0x{return_title_job_predicate_bc4:x})",
                 er_telemetry::counters::SWITCH_RELOAD_FD4IO_PHASE.load(Ordering::SeqCst),
@@ -1847,7 +1838,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     let n = SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT
                         .fetch_add(1, Ordering::SeqCst)
                         + 1;
-                    if n <= 5 || n % 120 == 0 {
+                    if n <= 5 || n.is_multiple_of(120) {
                         append_autoload_debug(format_args!(
                             "system-quit-quickload: [game-task] cleared stale CSMenuMan->disableSaveMenu (was {prev}) #{n} at switch-2 stall (world_up=true bc4=1) -- native quit-save was gated OFF via ShouldSave/CanShowSaveMenu (+0x13c); now unblocked so bc4 pumps 1->2->3 and the world tears down"
                         ));
@@ -1947,9 +1938,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) }.unwrap_or(0xff);
             let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) }.unwrap_or(-99);
             let bc4_not3 = return_title_job_predicate_bc4 != 3;
-            let bvar5_est = (dsg_b72 != 0 && dsg_menu_ok && bc4_not3)
-                || (dsg_b73 != 0 && dsg_menu_ok && bc4_not3)
-                || (dsg_b78 != -1);
+            let dsg_should_save = dsg_b72 != 0 && dsg_menu_ok && bc4_not3;
+            let dsg_679460 = dsg_b73 != 0 && dsg_menu_ok && bc4_not3;
+            let bvar5_est = dsg_should_save || dsg_679460 || dsg_b78 != -1;
             // The REAL bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
             // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS BACK
             // to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and clears
@@ -1965,7 +1956,7 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             } else {
                 -1
             };
-            let pump_fallback = dsg_slot < 0 || dsg_slot > 9 || dsg_dsm != 0;
+            let pump_fallback = !(0..=9).contains(&dsg_slot) || dsg_dsm != 0;
             let dsg_blocker = if pump_fallback {
                 "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0 -> plain save, bc4 NOT advanced)"
             } else if dsg_force != 0 {

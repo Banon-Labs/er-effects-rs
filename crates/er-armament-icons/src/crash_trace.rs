@@ -87,14 +87,14 @@ unsafe fn trace_exception(tag: &str, info: *mut ExceptionPointers) {
     let mut logged = 0u32;
     let mut off = 0usize;
     while off < 0x400 && logged < 12 {
-        if let Some(v) = unsafe { safe_read_usize(rsp.wrapping_add(off)) } {
-            if in_mod(v) {
-                log_message(format_args!(
-                    "CRASH {tag} bt: [rsp+0x{off:x}] -> game+0x{:x}",
-                    v - base
-                ));
-                logged += 1;
-            }
+        if let Some(v) = unsafe { safe_read_usize(rsp.wrapping_add(off)) }
+            && in_mod(v)
+        {
+            log_message(format_args!(
+                "CRASH {tag} bt: [rsp+0x{off:x}] -> game+0x{:x}",
+                v - base
+            ));
+            logged += 1;
         }
         off += 8;
     }
@@ -127,8 +127,8 @@ pub(crate) fn install() {
     if INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let h = unsafe { AddVectoredExceptionHandler(1, veh as usize) };
-    let prev = unsafe { SetUnhandledExceptionFilter(ueh as usize) };
+    let h = unsafe { AddVectoredExceptionHandler(1, veh as *const () as usize) };
+    let prev = unsafe { SetUnhandledExceptionFilter(ueh as *const () as usize) };
     log_message(format_args!(
         "crash-trace: installed (veh=0x{h:x} prev_ueh=0x{prev:x})"
     ));

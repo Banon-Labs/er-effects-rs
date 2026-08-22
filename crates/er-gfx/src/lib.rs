@@ -44,7 +44,6 @@
 //! we encode it as such and reject a long-form End as malformed so a regression
 //! would fail loudly rather than silently diverge.
 
-use bitflags::bitflags;
 use std::fmt;
 
 pub mod announce_notice;
@@ -72,10 +71,9 @@ pub const TWIPS_PER_PIXEL: i32 = 20;
 /// [`TWIPS_PER_PIXEL`] for the float paths (live text-document bounds are `f32`).
 pub const TWIPS_PER_PIXEL_F32: f32 = TWIPS_PER_PIXEL as f32;
 
-/// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
-/// then a NESTED tag stream parsed with the same parser and terminated by its
-/// own `End(0)`.
-
+// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
+// then a NESTED tag stream parsed with the same parser and terminated by its
+// own `End(0)`. (A plain comment, not a doc comment: `include!` takes no docs.)
 include!("codec/tag_codes.rs");
 include!("codec/types.rs");
 include!("codec/io.rs");

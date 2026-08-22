@@ -32,3 +32,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [[example]]
 name = "render_png"
 required-features = ["gpu"]
+
+# Same gate as `render_png`: this probe imports `er_shaderkit::render`, which only exists
+# under the `gpu` feature. Without this entry `cargo clippy --all-targets` fails E0432.
+[[example]]
+name = "ubo_lavapipe_probe"
+required-features = ["gpu"]
+
+[lints]
+workspace = true

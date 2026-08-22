@@ -62,6 +62,18 @@ unsafe extern "system" fn scaleform_descriptor_advance_hook(this: usize, count: 
     unsafe { advance(this, count) }
 }
 
+/// Hand the installed detour over to MinHook and stop tracking its handle here.
+///
+/// This install site used to end in `std::mem::forget(hook)`. That was a no-op: `MhHook` is
+/// three raw pointers with no `Drop` impl, so dropping it never uninstalled anything --
+/// MinHook has owned the detour since `MH_CreateHook`. `clippy::forget_non_drop` flags
+/// exactly that. Same statement (and same wording) as `er_effects_rs::mh::leak_installed_hook`,
+/// restated here so this crate needs no dependency on the product DLL.
+///
+/// Takes `MhHook` by value rather than a generic on purpose: a generic would silently accept a
+/// type that *does* implement `Drop` and really run its destructor.
+fn leak_installed_hook(_hook: MhHook) {}
+
 /// Install the always-on descriptor-heap null guard.
 ///
 /// This owns only the native mechanism. The product caller decides how an
@@ -91,7 +103,7 @@ pub fn install_scaleform_descriptor_guard()
     if unsafe { hook.queue_enable() }.is_err() {
         return Err(DescriptorGuardInstallError::QueueEnable);
     }
-    std::mem::forget(hook);
+    leak_installed_hook(hook);
 
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {

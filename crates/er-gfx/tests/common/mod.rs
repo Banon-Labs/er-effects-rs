@@ -23,6 +23,9 @@ pub fn corpus_root() -> PathBuf {
 
 /// Read a known vanilla movie from the local corpus, or skip the caller's test
 /// when the corpus file is absent.
+// `mod common;` is compiled separately into EVERY integration-test binary, including the
+// ones that only want `corpus_root`, so this is unused in some of them by construction.
+#[allow(dead_code)]
 pub fn read_vanilla_or_skip(
     file_name: &str,
     expected_len: usize,

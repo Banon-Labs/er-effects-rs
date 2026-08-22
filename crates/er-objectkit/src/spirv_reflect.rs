@@ -42,11 +42,12 @@ const SC_UNIFORM: u32 = 2; // cbuffers (and SSBO under some lowerings)
 const SC_OUTPUT: u32 = 3;
 const SC_STORAGE_BUFFER: u32 = 12;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Stage {
     Vertex,
     Fragment,
     Compute,
+    #[default]
     Other,
 }
 
@@ -81,12 +82,6 @@ pub struct Reflection {
     /// Fragment output locations = render-target count (fragment stage).
     pub output_locations: Vec<u32>,
     pub bindings: Vec<Binding>,
-}
-
-impl Default for Stage {
-    fn default() -> Self {
-        Stage::Other
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -200,9 +195,9 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
                     ptr_pointee.insert(operands[0], operands[2]);
                 }
             }
-            OP_VARIABLE => {
+            OP_VARIABLE
                 // result type (a pointer), result id, storage class
-                if operands.len() >= 3 {
+                if operands.len() >= 3 => {
                     let ptr_type = operands[0];
                     let result = operands[1];
                     let sc = operands[2];
@@ -213,7 +208,6 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
                         output_ids.push(result);
                     }
                 }
-            }
             _ => {}
         }
         i += len;

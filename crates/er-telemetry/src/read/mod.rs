@@ -34,10 +34,10 @@ mod title_binding;
 /// `renderdoc_slow_ms`'s `er-effects-rdoc-slow-ms.txt`).
 #[cfg(windows)]
 fn marker_exists(name: &str) -> bool {
-    if let Some(dir) = er_game_base::log::game_directory_path() {
-        if dir.join(name).exists() {
-            return true;
-        }
+    if let Some(dir) = er_game_base::log::game_directory_path()
+        && dir.join(name).exists()
+    {
+        return true;
     }
     std::path::Path::new(name).exists()
 }

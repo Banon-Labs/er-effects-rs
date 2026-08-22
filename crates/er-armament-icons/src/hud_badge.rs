@@ -617,7 +617,7 @@ unsafe extern "system" fn hud_weapon_update_hook(
         }
     }
 
-    if n % 512 == 0 {
+    if n.is_multiple_of(512) {
         log_message(format_args!(
             "hud-badge heartbeat: ctors={} bound={} updates={} drawn={} hidden={} \
              no_proxy={} other_slot={}",

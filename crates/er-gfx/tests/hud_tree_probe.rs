@@ -44,7 +44,7 @@ const NATIVE_TILE_CHILDREN: &[&str] = &[
     "ArtsIcon",
 ];
 
-fn sprite<'m>(movie: &'m Movie, id: u16) -> Option<&'m Vec<Tag>> {
+fn sprite(movie: &Movie, id: u16) -> Option<&Vec<Tag>> {
     movie.tags.iter().find_map(|t| match t {
         Tag::DefineSprite { id: sid, tags, .. } if *sid == id => Some(tags),
         _ => None,
@@ -230,9 +230,9 @@ fn hud_armament_tile_structure() {
                 let kids = sprite(&movie, cid).map(|t| named(t)).unwrap_or_default();
                 let has_icon = kids.iter().any(|(k, _, _)| k == "ItemIcon");
                 println!(
-                    "  {:<44} sprite {cid:<5} class={}{}",
+                    "  {:<44} sprite {cid:<5} class={:?}{}",
                     path,
-                    format!("{:?}", class_of(cid)),
+                    class_of(cid),
                     if has_icon {
                         "   <<< TILE (places ItemIcon)"
                     } else {

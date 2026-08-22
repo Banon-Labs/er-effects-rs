@@ -33,12 +33,12 @@ pub fn tokens(name: &str) -> (Vec<String>, bool) {
     let bytes = name.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(end) = name[i + 1..].find(']') {
-                toks.push(name[i + 1..i + 1 + end].to_lowercase());
-                i += 1 + end + 1;
-                continue;
-            }
+        if bytes[i] == b'['
+            && let Some(end) = name[i + 1..].find(']')
+        {
+            toks.push(name[i + 1..i + 1 + end].to_lowercase());
+            i += 1 + end + 1;
+            continue;
         }
         i += 1;
     }

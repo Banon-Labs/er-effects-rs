@@ -6,8 +6,6 @@
 //! state is enabled, calls the game's own refill routine immediately. That preserves the game's
 //! item eligibility, stack/capacity, storage removal, and unlimited-consumables gates.
 
-#![allow(non_snake_case)]
-
 #[cfg(windows)]
 mod crashlog;
 
@@ -140,7 +138,7 @@ fn spawn_better_refills_task(module_base: usize) {
                         break;
                     }
                     Err(err) => {
-                        if attempts == 0 || attempts % 4096 == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(4096) {
                             log_message(format_args!(
                                 "install: waiting for game module base: {err}"
                             ));
@@ -286,9 +284,9 @@ unsafe extern "system" fn set_item_replenish_state_hook(item_id: *mut i32) {
             DepositBackResult::Skipped { reason } => {
                 let deposit_skips = DISABLE_DEPOSIT_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
                 if skipped <= 8
-                    || skipped % 32 == 0
+                    || skipped.is_multiple_of(32)
                     || deposit_skips <= 8
-                    || deposit_skips % 32 == 0
+                    || deposit_skips.is_multiple_of(32)
                 {
                     log_message(format_args!(
                         "toggle#{call_index}: item=0x{raw_item_id:08x} disabled after toggle; no deposit: {reason} (deposit_skips={deposit_skips}, skipped_disabled={skipped})"
@@ -339,7 +337,7 @@ unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core:
 
     if vanilla_request_pending {
         let count = LOAD_COMPLETION_VANILLA_PENDING.fetch_add(1, Ordering::SeqCst) + 1;
-        if count <= 8 || count % 32 == 0 {
+        if count <= 8 || count.is_multiple_of(32) {
             log_message(format_args!(
                 "load-complete#{count}: vanilla itemReplanishFromChestRequested was pending; original UpdatePlayerInfo consumed native refill"
             ));
@@ -349,7 +347,7 @@ unsafe extern "system" fn move_map_step_update_player_info_hook(this: *mut core:
 
     if call_native_refill("load-complete") {
         let count = LOAD_COMPLETION_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
-        if count <= 8 || count % 32 == 0 {
+        if count <= 8 || count.is_multiple_of(32) {
             log_message(format_args!(
                 "load-complete#{count}: called native ReplanishItemsFromChest after MoveMapStep::UpdatePlayerInfo"
             ));
@@ -372,7 +370,7 @@ unsafe extern "system" fn bonfire_first_lvup_hook(
 
     if call_native_refill("first-grace-activation") {
         let count = FIRST_GRACE_REFILLS.fetch_add(1, Ordering::SeqCst) + 1;
-        if count <= 8 || count % 32 == 0 {
+        if count <= 8 || count.is_multiple_of(32) {
             log_message(format_args!(
                 "first-grace#{count}: called native ReplanishItemsFromChest after OnEvent_BonfireFirstLvUp"
             ));
@@ -522,7 +520,7 @@ fn call_native_refill(source: &str) -> bool {
     }
     if unsafe { resolve_item_replenish_state_tracker() }.is_none() {
         let skipped = SKIPPED_NO_TRACKER.fetch_add(1, Ordering::SeqCst) + 1;
-        if skipped <= 8 || skipped % 32 == 0 {
+        if skipped <= 8 || skipped.is_multiple_of(32) {
             log_message(format_args!(
                 "{source}: skipped native ReplanishItemsFromChest: no ItemReplenishStateTracker (skipped_no_tracker={skipped})"
             ));

@@ -9,9 +9,10 @@
 //! thread pegged while N-1 cores sit idle for seconds is a serialized bottleneck.
 //!
 //! Two layers, separately gated:
-//!   * CPU-time sampling (DEFAULT when profiler on): NO thread suspension. Pure `QueryThreadCycleTime`
-//!     + `GetThreadTimes` reads -> safe, cannot perturb the game. This answers "where does wall-clock
-//!     go and is each phase CPU-bound or wait-bound, and is it parallelized".
+//!   * CPU-time sampling (DEFAULT when profiler on): NO thread suspension. Pure
+//!     `QueryThreadCycleTime` + `GetThreadTimes` reads -> safe, cannot perturb the game. This
+//!     answers "where does wall-clock go and is each phase CPU-bound or wait-bound, and is it
+//!     parallelized".
 //!   * RIP sampling (`ER_EFFECTS_PROFILE_RIP=1`, OFF by default): `SuspendThread`+`GetThreadContext`
 //!     to capture each thread's Rip -> hot-function attribution (symbolized offline via the Ghidra
 //!     dump). Suspension is heavier and could be noticed by anti-tamper, so it is opt-in.
@@ -21,6 +22,9 @@
 //! (`scripts/boot-profile-render.py`) diffs consecutive samples per thread.
 
 #![cfg(windows)]
+// PARITY: clippy::too_many_lines is not in clippy::all, so under this workspace's parity
+// table this allow currently suppresses nothing. Retained rather than deleted so that
+// enabling a stricter group later does not silently turn this crate red.
 #![allow(clippy::too_many_lines)]
 
 use std::{
@@ -259,7 +263,7 @@ fn profiler_main(log: fn(std::fmt::Arguments<'_>)) {
 
     while iter < max_samples {
         let ms = epoch.elapsed().as_millis();
-        let do_rip = rip_on && (iter % rip_n == 0);
+        let do_rip = rip_on && iter.is_multiple_of(rip_n);
         // The game module may not have been loaded when the profiler started; resolve the base
         // lazily (constant once loaded) so stack-scan filtering works for the whole boot.
         if module_base == 0 {
@@ -305,10 +309,10 @@ fn profiler_main(log: fn(std::fmt::Arguments<'_>)) {
                 }
             }
 
-            if let std::collections::hash_map::Entry::Vacant(slot) = names.entry(tid) {
-                if let Some(n) = unsafe { thread_name(handle) } {
-                    slot.insert(n);
-                }
+            if let std::collections::hash_map::Entry::Vacant(slot) = names.entry(tid)
+                && let Some(n) = unsafe { thread_name(handle) }
+            {
+                slot.insert(n);
             }
 
             samples.push(ThreadSample {
