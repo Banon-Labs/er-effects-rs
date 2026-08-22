@@ -327,8 +327,9 @@ mod tests {
         assert!(
             frame
                 .pixels
-                .chunks_exact(er_loading_bar::RGBA8_BPP)
-                .any(|px| px == [226, 223, 214, 255])
+                .as_chunks::<{ er_loading_bar::RGBA8_BPP }>()
+                .0
+                .contains(&[226, 223, 214, 255])
         );
     }
 }

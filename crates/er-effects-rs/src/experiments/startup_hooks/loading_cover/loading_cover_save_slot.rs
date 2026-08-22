@@ -1190,7 +1190,9 @@ impl<'a> SerializedPlayerGameData<'a> {
         let bytes = self.name_bytes()?;
         Some(
             bytes
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|u| u16::from_le_bytes([u[0], u[1]]))
                 .take_while(|u| *u != 0)
                 .collect(),

@@ -395,7 +395,9 @@ fn slot_name_units(body: &[u8], pgd_offset: usize) -> Option<Vec<u16>> {
     )?;
     Some(
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|u| u16::from_le_bytes([u[0], u[1]]))
             .take_while(|u| *u != 0)
             .collect(),
@@ -852,7 +854,7 @@ pub fn md5_digest(input: &[u8]) -> [u8; 16] {
     let mut c0 = 0x98badcfeu32;
     let mut d0 = 0x10325476u32;
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut m = [0u32; 16];
         for (i, word) in m.iter_mut().enumerate() {
             let j = i * 4;

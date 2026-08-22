@@ -2,11 +2,11 @@
 //!
 //! The portrait capture pipeline (staged color+depth readback, depth-key worker,
 //! portrait/stats CPU compositors, frame bridge) moved to the `er-loading-portrait`
-//! crate (portrait crate split); the glob shim below re-exports it so every remaining
-//! flat-namespace reference (BootViewFrame, portrait_onto, RGBA8_BPP, MAX_RT_DIM,
-//! OVERLAY_FENCE_VAL, record_transition, ...) keeps compiling unchanged.
-
-pub(crate) use er_loading_portrait::*;
+//! crate (portrait crate split). A `pub(crate) use er_loading_portrait::*` shim used to sit here
+//! so every remaining flat-namespace reference (BootViewFrame, portrait_onto, RGBA8_BPP,
+//! MAX_RT_DIM, OVERLAY_FENCE_VAL, record_transition, ...) kept compiling unchanged. Those
+//! references are gone -- the 2026-08-21 lint-parity sweep pruned the last of them -- so the shim
+//! resolved nothing and rustc 1.98 flagged it. What this module still needs it names directly.
 
 use super::*;
 

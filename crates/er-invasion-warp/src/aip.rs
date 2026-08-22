@@ -311,9 +311,7 @@ mod tests {
         bytes[0] = b'X';
         assert_eq!(
             parse_aip(&bytes),
-            Err(AipParseError::BadMagic {
-                found: [b'X', b'P', b'I', b'A']
-            })
+            Err(AipParseError::BadMagic { found: *b"XPIA" })
         );
     }
 

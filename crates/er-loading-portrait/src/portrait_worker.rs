@@ -438,7 +438,12 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
         // share; the 0 < share < floor band is counted separately (lowmask)
         // to attribute partial-mask frames vs fully-unkeyed ones.
         let total_px = (cpx.len() / 4).max(1);
-        let transparent_px = cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
+        let transparent_px = cpx
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] < 128)
+            .count();
         let share_pct = transparent_px * 100 / total_px;
         let keyed = share_pct >= PORTRAIT_MIN_TRANSPARENT_PCT;
         let partial_mask = !keyed && transparent_px > 0;

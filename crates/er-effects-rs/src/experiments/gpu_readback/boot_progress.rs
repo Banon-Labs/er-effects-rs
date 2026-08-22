@@ -1940,7 +1940,7 @@ unsafe fn fill_boot_view_fade_upload(
         },
         None,
     );
-    for px in tight.chunks_exact_mut(RGBA8_BPP) {
+    for px in tight.as_chunks_mut::<RGBA8_BPP>().0 {
         px[3] = alpha;
     }
     let mut map: *mut c_void = std::ptr::null_mut();

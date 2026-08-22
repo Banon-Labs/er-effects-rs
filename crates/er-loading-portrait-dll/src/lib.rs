@@ -238,7 +238,7 @@ fn compose_portrait_stats_rgba(bw: usize, bh: usize) -> Option<Vec<u8>> {
     let mut rgba = vec![0u8; bw * bh * 4];
     // Opaque black background so the keyed-out head silhouette shows black, exactly like
     // the product boot view's canvas.
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
     let drew_portrait = er_loading_portrait::portrait_onto(&mut rgba, bw, bh);
@@ -421,7 +421,7 @@ mod tests {
         // 8x8 opaque red source.
         let (sw, sh) = (8u32, 8u32);
         let mut src = vec![0u8; (sw * sh * 4) as usize];
-        for px in src.chunks_exact_mut(4) {
+        for px in src.as_chunks_mut::<4>().0 {
             px[0] = 255;
             px[3] = 255;
         }
@@ -433,7 +433,9 @@ mod tests {
             compose_portrait_stats_rgba(bw, bh).expect("published portrait must produce a frame");
         assert_eq!(rgba.len(), bw * bh * 4);
         let red_px = rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0] > 200 && px[1] < 30 && px[2] < 30 && px[3] == 255)
             .count();
         // The head fills 80% of the canvas height, so a large share of pixels are red.

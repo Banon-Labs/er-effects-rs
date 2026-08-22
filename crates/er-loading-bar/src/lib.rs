@@ -671,7 +671,7 @@ mod tests {
     fn draw_text_sets_only_clamped_pixels() {
         let mut buf = vec![0; 8 * 8 * RGBA8_BPP];
         draw_text_rgb(&mut buf, 8, 8, 0, 0, "A", [1, 2, 3], 2);
-        assert!(buf.chunks_exact(RGBA8_BPP).any(|px| px == [1, 2, 3, 255]));
+        assert!(buf.as_chunks::<RGBA8_BPP>().0.contains(&[1, 2, 3, 255]));
         assert_eq!(buf.len(), 8 * 8 * RGBA8_BPP);
     }
 
@@ -680,8 +680,10 @@ mod tests {
         let mut buf = vec![0; 3 * 3 * RGBA8_BPP];
         fill_rect_rgb(&mut buf, 3, 3, 2, 2, 8, 8, [9, 8, 7]);
         let lit = buf
-            .chunks_exact(RGBA8_BPP)
-            .filter(|px| *px == [9, 8, 7, 255])
+            .as_chunks::<RGBA8_BPP>()
+            .0
+            .iter()
+            .filter(|px| **px == [9, 8, 7, 255])
             .count();
         assert_eq!(lit, 1);
     }
@@ -698,12 +700,16 @@ mod tests {
         let row = &frame.pixels
             [(bar_y * frame.width * RGBA8_BPP)..((bar_y + 1) * frame.width * RGBA8_BPP)];
         let fill_pixels = row
-            .chunks_exact(RGBA8_BPP)
-            .filter(|px| *px == [226, 223, 214, 255])
+            .as_chunks::<RGBA8_BPP>()
+            .0
+            .iter()
+            .filter(|px| **px == [226, 223, 214, 255])
             .count();
         let track_pixels = row
-            .chunks_exact(RGBA8_BPP)
-            .filter(|px| *px == [26, 26, 26, 255])
+            .as_chunks::<RGBA8_BPP>()
+            .0
+            .iter()
+            .filter(|px| **px == [26, 26, 26, 255])
             .count();
         assert_eq!(fill_pixels, 25);
         assert_eq!(track_pixels, 75);

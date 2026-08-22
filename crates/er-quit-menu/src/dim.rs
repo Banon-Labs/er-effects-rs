@@ -464,7 +464,7 @@ pub mod picker_dim {
         /// afterwards only repaints the indicator's box, so an animating full-screen cover costs a
         /// ~250x250 redraw per frame instead of a 1920x1080 one.
         fn fill_dim(&self, pixels: &mut [u8]) {
-            for chunk in pixels.chunks_exact_mut(4) {
+            for chunk in pixels.as_chunks_mut::<4>().0 {
                 // Premultiplied black: the colour channels of black are zero at every alpha.
                 chunk[0] = 0;
                 chunk[1] = 0;
@@ -1090,7 +1090,7 @@ pub mod picker_dim {
                     let start = (row * width + x0) * 4;
                     let end = (row * width + x1) * 4;
                     if end <= pixels.len() {
-                        for chunk in pixels[start..end].chunks_exact_mut(4) {
+                        for chunk in pixels[start..end].as_chunks_mut::<4>().0 {
                             chunk[0] = 0;
                             chunk[1] = 0;
                             chunk[2] = 0;

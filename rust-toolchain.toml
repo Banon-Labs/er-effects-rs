@@ -1,0 +1,17 @@
+# Mirrors `../fromsoftware-rs/rust-toolchain.toml`, which this workspace must be at least as
+# strict as. Upstream declares its toolchain and required components; this repo did not, and
+# that gap cost a full round trip on 2026-08-21.
+#
+# WHAT HAPPENED, so the next person does not repeat it: the lint-parity sweep was verified
+# locally on rustc 1.96.1 while CI runs `rustup toolchain install stable`, which by then was
+# 1.98.0. Every crate measured "zero violations" against a WEAKER lint set than CI enforces,
+# and CI failed on three `unused_imports` (1.98 detects dead glob re-exports that 1.96 does
+# not) plus `clippy::chunks_exact_to_as_chunks`, a lint that did not exist in 1.96.
+#
+# READ THIS BEFORE TRUSTING A GREEN LOCAL LINT RUN: `channel = "stable"` pins the CHANNEL, not
+# the version. rustup will not update an already-installed stable on its own, so a local
+# toolchain can sit months behind the one CI installs and every lint gate here will agree with
+# itself while disagreeing with CI. Run `rustup update stable` before believing a clean sweep.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

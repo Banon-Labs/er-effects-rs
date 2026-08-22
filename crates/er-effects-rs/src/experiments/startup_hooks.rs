@@ -22,10 +22,11 @@
 
 pub(crate) use er_loading_portrait::*;
 
-// Shared imports preserved from the former flat startup-hook namespace.
-// Child modules glob-import their parent while this refactor exposes real module boundaries.
-pub(crate) use crate::*;
-pub(crate) use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
+// The former flat startup-hook namespace used to be re-exported here wholesale
+// (`crate::*` plus `crashlog/ffi/hooks/telemetry::*`) so child modules could glob-import their
+// parent and keep compiling unqualified. Both shims are gone: after the 2026-08-21 lint-parity
+// sweep pruned the dead imports, nothing resolves through them any more, and rustc 1.98 says so.
+// The named re-exports below are the ones that actually carry references.
 pub(crate) use er_quit_menu::save_dest_identity::*;
 pub(crate) use er_quit_menu::save_flow_boxes::{
     SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision, save_flow_box_label,
