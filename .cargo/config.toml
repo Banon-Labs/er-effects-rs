@@ -1,8 +1,18 @@
-# Keep routine agent builds/checks concise. Existing warning backlog is large and otherwise
-# drowns runtime-probe evidence in Pi context. Explicit warning-audit commands can still pass
-# their own lint flags when warning cleanup is the task.
-[build]
-rustflags = ["-Awarnings"]
-
+# LINT PARITY WITH `../fromsoftware-rs`: this file used to carry a blanket
+# `rustflags = ["-Awarnings"]` on both entries, which made the workspace strictly LESS strict
+# than the parent project. It is removed deliberately -- see `[workspace.lints]` in the root
+# `Cargo.toml`, which replaces it with the declarative equivalent of upstream's
+# `RUSTFLAGS=-Dwarnings`.
+#
+# DO NOT REINTRODUCE `-Awarnings` HERE. Measured 2026-08-21 across four configurations with
+# forced rebuilds: a blanket `-Awarnings` in this file DEFEATS `[workspace.lints.rust] warnings
+# = "deny"` outright -- same lint group, and this file's flag is applied later, so the deny is
+# silently discarded and every rustc lint in the workspace switches off with no diagnostic
+# saying so. `scripts/check-lint-parity.py` fails if it comes back.
+#
+# The trap that hid this for months: cargo-xwin re-propagates the target rustflags below, so an
+# env `RUSTFLAGS=...` does NOT override them. A lint audit run that way reports zero warnings on
+# a crate that has hundreds -- a false pass. `scripts/check-save-disable-warnings.py` documents
+# the same trap from the other direction.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-Awarnings", "-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static"]
