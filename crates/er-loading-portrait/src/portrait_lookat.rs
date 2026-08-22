@@ -319,11 +319,10 @@ pub use er_telemetry::counters::PROFILE_TEARDOWN_FENCE_TIMEOUTS;
 /// Teardowns that found the pump mid-drive and waited for it to exit (any value is fine; proves the fence
 /// engaged rather than racing).
 pub use er_telemetry::counters::PROFILE_TEARDOWN_FENCE_WAITS;
-/// Minimum percent of transparent pixels a frame's mask must cut for the frame to count as keyed
-/// (er-effects-rs-hi2): a real portrait mask removes a large background share; a partial mask
-/// (few cut pixels on an opaque IBL box) previously passed "any transparent pixel" and displayed
-/// as an unmasked head. 5% is far below any real mask's share and far above the partial band.
-pub const PORTRAIT_MIN_TRANSPARENT_PCT: usize = 5;
+// `PORTRAIT_MIN_TRANSPARENT_PCT` moved to `bridge` (2026-08-21). It is no longer only the capture
+// half's publish floor: the compositor now applies the same floor before it draws, and this module
+// is `#[cfg(windows)]` while `portrait_overlay` is not, so the shared number had to live somewhere
+// both can see. It still arrives here through the crate prelude, so the uses below are unchanged.
 /// Frames whose mask cut SOMETHING but under the floor (the partial-mask band) -- held, counted.
 pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_LOWMASK;
 pub use er_telemetry::counters::PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK;

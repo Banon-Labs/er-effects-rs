@@ -110,7 +110,46 @@ PORTRAIT_KEYS = [
     "oracle_now_loading", "oracle_player_present", "oracle_char_name", "oracle_char_level",
     "system_quit_quickload_phase", "system_quit_quickload_selected_slot",
     "oracle_switch_slot_control_primed",
+    # ---- FRAMING + MASK (added 2026-08-22). Until these existed, this harness could pass a run
+    # exhibiting BOTH reported defects: it checked dimensions, draw hits, rejects, identity and
+    # armor, and nothing about whether the composited frame was actually keyed or how large the
+    # head ended up on screen.
+    #
+    # The crop bounds are the framing evidence. Apparent size is set at portrait_overlay.rs:105-131
+    # -- the head's alpha bounding box unioned over the first 40 frames, frozen, then scaled so the
+    # crop HEIGHT is 80% of screen height. So the envelope IS the zoom control, and comparing two
+    # characters means comparing these four numbers.
+    "oracle_portrait_crop_minx", "oracle_portrait_crop_miny",
+    "oracle_portrait_crop_maxx", "oracle_portrait_crop_maxy",
+    "oracle_portrait_crop_seed_frames",
+    "oracle_portrait_alpha_cover_pct",
+    "oracle_depth_key_bg_pct",
+    # Refusal counters for the mask gate. Recorded as EVIDENCE, deliberately not gated on == 0:
+    # er-effects-rs-k979 established that a gate counting "did the safety check ever fire" fails
+    # every healthy run, because a working safety check fires.
+    "oracle_portrait_draw_refused_unmasked",
+    "oracle_portrait_bake_publish_refused_unmasked",
+    # The applied camera, as seven floats. bd
+    # portrait-orbit-camera-already-standard-param-row-20-all-slots-2026-08-22 proves the engine
+    # baseline is MenuOffscrRendParam row 20 for ALL ten slots, so every character SHOULD report
+    # the same seven numbers. A slot that does not is the interesting one -- and before these
+    # oracles existed there was no way to check that claim from a run's artifacts at all.
+    "oracle_profile_cam_last_target_x", "oracle_profile_cam_last_target_y",
+    "oracle_profile_cam_last_target_z", "oracle_profile_cam_last_distance",
+    "oracle_profile_cam_last_pitch", "oracle_profile_cam_last_yaw",
+    "oracle_profile_cam_last_fov",
 ]
+
+# A frozen crop envelope this close to the whole source frame means the alpha bounding box spanned
+# essentially the entire square -- which a head occupying ~24% of the pixels cannot do. It is the
+# signature of a FULLY OPAQUE (unmasked) frame landing inside the 40-frame seed window and maxing
+# the union, after which the head is scaled against a full-square rect and renders too small.
+#
+# Measured on run br-20260822-032711-f064 (before the mask gate): alpha_cover_pct = 99 against
+# depth_key_bg_pct = 76. CALIBRATION NOTE: 95 is a deliberately conservative ceiling chosen to
+# catch that degenerate case, NOT a measured "good" value. Once a gated run produces a healthy
+# envelope, retune this from the observed number rather than leaving the guess in place.
+PORTRAIT_CROP_DEGENERATE_PCT = 95
 
 
 class GameDirWatch:
@@ -469,9 +508,42 @@ def main() -> int:
             ) - (base_s.get("oracle_ls_portrait_rejects_after_window_publish") or 0)
             sw["rejects_after_publish"] = rejects_after_publish
             sw["reject_last_neutral_pct"] = final.get("oracle_ls_portrait_reject_last_neutral_pct")
+            # ---- MASK + FRAMING EVIDENCE. The crop envelope is the zoom control, so a degenerate
+            # (near-whole-frame) envelope is a real user-visible defect -- the head renders too
+            # small -- AND it is the fingerprint of an unmasked frame having been composited.
+            # Gate on it directly; it is the symptom the user actually reported.
+            cover_pct = final.get("oracle_portrait_alpha_cover_pct")
+            sw["alpha_cover_pct"] = cover_pct
+            sw["depth_key_bg_pct"] = final.get("oracle_depth_key_bg_pct")
+            sw["crop_box"] = [
+                final.get("oracle_portrait_crop_minx"), final.get("oracle_portrait_crop_miny"),
+                final.get("oracle_portrait_crop_maxx"), final.get("oracle_portrait_crop_maxy"),
+            ]
+            sw["crop_seed_frames"] = final.get("oracle_portrait_crop_seed_frames")
+            # Evidence only, never a pass condition (er-effects-rs-k979): a working gate fires.
+            sw["draw_refused_unmasked"] = (
+                final.get("oracle_portrait_draw_refused_unmasked") or 0
+            ) - (base_s.get("oracle_portrait_draw_refused_unmasked") or 0)
+            sw["bake_refused_unmasked"] = (
+                final.get("oracle_portrait_bake_publish_refused_unmasked") or 0
+            ) - (base_s.get("oracle_portrait_bake_publish_refused_unmasked") or 0)
+            sw["camera"] = {
+                k.replace("oracle_profile_cam_last_", ""): final.get(k)
+                for k in PORTRAIT_KEYS
+                if k.startswith("oracle_profile_cam_last_")
+            }
+            # Only meaningful once the window actually displayed something; a window that drew
+            # nothing has no envelope to judge, and `short_window` already excuses those.
+            crop_ok = (
+                cover_pct is None
+                or window_display_frames == 0
+                or int(cover_pct) < PORTRAIT_CROP_DEGENERATE_PCT
+            )
+            sw["crop_ok"] = crop_ok
             sw["portrait_pass"] = (
                 result == "LOADED"
                 and rejects_after_publish == 0
+                and crop_ok
                 and (short_window or (max(max_w, max_h) >= 1024 and window_display_frames > 0))
             )
             sw["portrait_short_window"] = short_window

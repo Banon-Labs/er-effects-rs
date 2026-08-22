@@ -854,8 +854,23 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
             LOADING_BG_PORTRAIT_DIMS.store(((w as usize) << 16) | (h as usize), Ordering::SeqCst);
             let bytes = px.len();
             dump_portrait_rgba(slot, w, h, &px);
+            // MASK GATE, same rule and same reason as the bake writer in `save_swap_profile_table.rs`
+            // (user 2026-08-21): this is another COLOUR-ONLY `readback_offscreen_rgba8`, so nothing on
+            // this path ever runs the depth key and the buffer is opaque everywhere. Publishing it would
+            // put the character's scene background on the loading screen and pin the compositor's frozen
+            // crop envelope at full size. Refuse instead of keying here -- the depth-keyed worker is the
+            // one path that owns a matching depth readback.
+            //
+            // This caller is default-OFF (`portrait_real_pixels_enabled`, diagnostic), so it is not the
+            // live defect; it is gated anyway because a bridge writer that can publish an unmasked buffer
+            // is a live defect the moment someone turns the diagnostic on, and because the three writers
+            // agreeing on one admission rule is what makes the rule readable at all.
+            let masked = portrait_frame_is_masked(&px);
+            if !masked {
+                PORTRAIT_BAKE_PUBLISH_REFUSED_UNMASKED.fetch_add(1, Ordering::SeqCst);
+            }
             // Readiness gate: hold back neutral/too-small transient captures (Bug A/B).
-            if note_ls_portrait_capture(w, h, &px) {
+            if masked && note_ls_portrait_capture(w, h, &px) {
                 if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                     *g = Some((w, h, px));
                 }
@@ -869,10 +884,11 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
                     .store(unsafe { portrait_slot_name_hash(slot) }, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "portrait-readback: dims={w}x{h} format={} nonblack={} is_checker={} (real-face proof = nonblack && !is_checker) bytes={bytes}",
+                "portrait-readback: dims={w}x{h} format={} nonblack={} is_checker={} masked={} (real-face proof = nonblack && !is_checker; masked=0 was REFUSED, see the mask gate above) bytes={bytes}",
                 LOADING_BG_PORTRAIT_FORMAT.load(Ordering::SeqCst),
                 nonblack as usize,
-                is_checker as usize
+                is_checker as usize,
+                masked as usize
             ));
         } else {
             append_autoload_debug(format_args!(

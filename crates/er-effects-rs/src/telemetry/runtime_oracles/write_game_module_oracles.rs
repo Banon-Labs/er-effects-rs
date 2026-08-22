@@ -1882,6 +1882,10 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_alpha_cover_pct",
             PORTRAIT_ALPHA_COVER_PCT.load(Ordering::SeqCst),
         );
+        // The raw crop envelope behind that percentage, plus the orbit camera the portrait was
+        // rendered with. Split into `portrait_framing_oracles.rs` because this file has no room left
+        // under the hard size gate; see that file's header for what each key answers.
+        write_portrait_framing_oracles(body);
         // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
         // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
         // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,

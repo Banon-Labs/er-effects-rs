@@ -511,6 +511,28 @@ pub static ER_TPF_COVER_TARGET_REWRITE_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_CAM_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_CAM_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_CAM_LAST_MATRIX_OK: AtomicUsize = AtomicUsize::new(0);
+/// The APPLIED orbit camera of the last `apply_profile_camera_override` -- the values actually written
+/// into the renderer (engine baseline * the PROFILE_CAM_*_SCALE/DELTA transform), not the baseline.
+///
+/// WHY these exist (2026-08-21): the portrait camera was believed to be identical for every character,
+/// because the engine baseline is read from `MenuOffscrRendParam` row `DAT_143b39858[slot * 0x20]` and
+/// that row id is 20 for ALL TEN slots (dumped from `eldenring-deobf.bin`, RVA 0x3b39848, stride 0x20).
+/// Believed, but never CONFIRMED FROM A RUN: no oracle reported a single camera VALUE, so an artifact
+/// set could not distinguish "every character is framed the same" from "the framing differs and the
+/// difference is what we are chasing". These seven make the applied camera comparable across runs.
+///
+/// TRANSPORT: raw `f32::to_bits()` widened into the `AtomicUsize` counter, decoded back with
+/// `f32::from_bits(v as u32)` at the oracle writer. Same encoding as `PROFILE_LOOKAT_YAW_BITS` /
+/// `PROFILE_LOOKAT_PITCH_BITS`; it is lossless and keeps the sign, which a scaled-integer counter
+/// would not (pitch, yaw and the target components are all routinely negative). 0 bits == +0.0 ==
+/// never applied, which is also what `oracle_profile_cam_apply_calls == 0` says.
+pub static PROFILE_CAM_LAST_TARGET_X_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_TARGET_Y_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_TARGET_Z_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_DISTANCE_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_PITCH_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_YAW_BITS: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_CAM_LAST_FOV_BITS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE: AtomicUsize = AtomicUsize::new(0);
@@ -1275,6 +1297,25 @@ pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_CROP_MAXY: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_CROP_SEED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Frames the portrait compositor REFUSED to draw because the source frame was not depth-keyed --
+/// every pixel opaque, i.e. the mask cut nothing. Written by the mask gate in
+/// `er_loading_portrait::portrait_onto`; read by `oracle_portrait_draw_refused_unmasked`.
+///
+/// WHY the gate needs it (2026-08-21): a live run measured `oracle_portrait_alpha_cover_pct = 99`
+/// against `oracle_depth_key_bg_pct = 76`. Those cannot both describe a keyed frame -- 99% coverage
+/// means the crop envelope grew to (near) the whole render target, which is what a single fully
+/// opaque frame folded into the 40-frame seed union does. An unmasked frame therefore does not just
+/// look wrong for one frame: it permanently pollutes the FROZEN crop rect and so the apparent size
+/// of the portrait for the rest of the loading screen. Refusing it is the fix; counting the refusals
+/// is how a run proves the gate engaged (0 with a bad cover_pct = the gate is not catching it).
+pub static PORTRAIT_DRAW_REFUSED_UNMASKED: AtomicUsize = AtomicUsize::new(0);
+/// Same refusal one stage earlier: bakes/publishes rejected because the captured frame was unmasked,
+/// so an opaque frame never reaches the published head at all. Split from the draw counter because
+/// the two say different things -- publish refusals mean the capture side produced a bad frame, draw
+/// refusals mean one got past publish. Written by the two colour-only readback writers (the
+/// FrameBegin bake in `save_swap_profile_table.rs` and the default-off diagnostic publish in
+/// `dlstring_lookat_math.rs`); read by `oracle_portrait_bake_publish_refused_unmasked`.
+pub static PORTRAIT_BAKE_PUBLISH_REFUSED_UNMASKED: AtomicUsize = AtomicUsize::new(0);
 pub static ALPHA_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static MOTION_LOG_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static OVERLAY_STATS_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);

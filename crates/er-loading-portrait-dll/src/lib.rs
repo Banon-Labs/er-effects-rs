@@ -413,17 +413,28 @@ mod tests {
     use super::*;
 
     /// Host smoke: publish a synthetic head into the crate's LOADING_BG_PORTRAIT_RGBA
-    /// bridge and prove the standalone composition actually blends it -- an 8x8 opaque
-    /// red square must land red pixels on the otherwise-black canvas, and clearing the
+    /// bridge and prove the standalone composition actually blends it -- a keyed red
+    /// square must land red pixels on the otherwise-black canvas, and clearing the
     /// bridge must return the provider to "nothing to draw".
+    ///
+    /// The fixture used to be a FULLY OPAQUE 8x8 red square, and the mask gate added on
+    /// 2026-08-21 correctly refuses that: alpha 255 everywhere is precisely the unmasked
+    /// buffer that put a character's scene background on the loading screen, and
+    /// `portrait_onto` now declines to draw one from either host. So the source gained a
+    /// real alpha cut -- a transparent 1px border around a 6x6 opaque core, 28 of 64
+    /// texels keyed out (~44%, comfortably over PORTRAIT_MIN_TRANSPARENT_PCT). That is
+    /// what a keyed capture looks like in miniature, so the test now exercises the path
+    /// a real published head takes rather than one the product must reject.
     #[test]
     fn compose_blends_published_portrait_onto_black_canvas() {
-        // 8x8 opaque red source.
+        // 8x8 red source with a transparent 1px border: a keyed head, in miniature.
         let (sw, sh) = (8u32, 8u32);
         let mut src = vec![0u8; (sw * sh * 4) as usize];
-        for px in src.as_chunks_mut::<4>().0 {
+        for (i, px) in src.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i % sw as usize, i / sw as usize);
+            let edge = x == 0 || y == 0 || x == sw as usize - 1 || y == sh as usize - 1;
             px[0] = 255;
-            px[3] = 255;
+            px[3] = if edge { 0 } else { 255 };
         }
         if let Ok(mut g) = er_loading_portrait::LOADING_BG_PORTRAIT_RGBA.lock() {
             *g = Some((sw, sh, src));

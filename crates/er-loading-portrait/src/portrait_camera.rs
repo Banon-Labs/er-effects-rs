@@ -83,6 +83,20 @@ pub use er_telemetry::counters::PROFILE_CAM_APPLY_CALLS;
 pub use er_telemetry::counters::PROFILE_CAM_LATCHED_MASK;
 pub static PROFILE_CAM_LAST_SLOT: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub use er_telemetry::counters::PROFILE_CAM_LAST_MATRIX_OK;
+
+/// The camera VALUES the last apply actually wrote, as `f32` bits (see the counters' own docs for the
+/// transport). The mask/apply counters above prove the override RAN; these say what it ran WITH, which
+/// is the only way an artifact set can answer "is the portrait camera identical for every character?".
+/// The engine baseline they derive from comes from `MenuOffscrRendParam` row 20 for all ten slots, so
+/// the expectation is that every slot reports the same seven numbers -- and a slot that does not is
+/// the interesting one.
+pub use er_telemetry::counters::PROFILE_CAM_LAST_DISTANCE_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_FOV_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_PITCH_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_TARGET_X_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_TARGET_Y_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_TARGET_Z_BITS;
+pub use er_telemetry::counters::PROFILE_CAM_LAST_YAW_BITS;
 /// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
 /// VERIFIED RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
 /// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
