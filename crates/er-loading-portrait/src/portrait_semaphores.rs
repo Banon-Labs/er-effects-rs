@@ -47,7 +47,13 @@ pub use er_telemetry::counters::LS_PORTRAIT_REJECTED_PUBLISHES;
 /// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
 /// `LOADING_BG_PORTRAIT_RGBA_VERSION` at first detection (0 == never seen).
 pub use er_telemetry::counters::LS_PORTRAIT_TOO_SMALL_SEEN_VERSION;
-/// Same-identity bridge holds across own-menu-switch rearms (bd er-effects-rs-dpf6 Phase 3).
+/// Same-identity bridge holds across own-menu-switch rearms (bd er-effects-rs-dpf6 Phase 3), and
+/// what became of them: the outstanding provisional hold (slot+1, 0 = none), holds revoked by the
+/// record-vs-preview face fingerprint, and holds that rode a whole window with neither outcome.
+/// Exposed as `oracle_portrait_bridge_hold_*`.
+pub use er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_PROVISIONAL;
+pub use er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_REVOCATIONS;
+pub use er_telemetry::counters::PORTRAIT_BRIDGE_HOLD_UNPROVEN;
 pub use er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS;
 /// Confirm (RETARGET) timestamp + measured confirm->publish latency (bd er-effects-rs-dpf6 Phase 1).
 pub use er_telemetry::counters::PORTRAIT_CONFIRM_MS;

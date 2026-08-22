@@ -2258,7 +2258,8 @@ fn write_game_module_oracles(body: &mut String) {
         );
         // Publish identity + race measurability (bd er-effects-rs-dpf6 Phase 1): which character the
         // published head belongs to (slot+1 / FNV-1a64 name hash; 0 = no head/unknown), the last
-        // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds.
+        // measured switch-confirm -> publish latency, and the Phase-3 same-identity bridge holds
+        // (with their outcomes, in `portrait_bridge_hold_oracles.rs`).
         push_json_usize(
             body,
             "oracle_ls_portrait_slot",
@@ -2274,11 +2275,7 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_confirm_to_publish_ms",
             er_telemetry::counters::PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST.load(Ordering::SeqCst),
         );
-        push_json_usize(
-            body,
-            "oracle_portrait_bridge_same_identity_holds",
-            er_telemetry::counters::PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.load(Ordering::SeqCst),
-        );
+        write_portrait_bridge_hold_oracles(body);
         // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
         // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
         // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character

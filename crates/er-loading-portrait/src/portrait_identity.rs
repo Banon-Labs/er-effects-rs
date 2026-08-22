@@ -164,6 +164,113 @@ pub fn portrait_window_target_slot(
     }
 }
 
+/// The same-identity bridge hold: may the head published for the PREVIOUS loading window keep
+/// displaying across a switch rearm, instead of being cleared as a possible wrong character?
+///
+/// **THIS PREDICATE CANNOT FAIL ON A SAME-SLOT REPEAT LOAD, AND THAT IS THE POINT OF WRITING IT
+/// DOWN HERE.** `incoming_name_hash` is hashed from slot N's ProfileSummary record at rearm time.
+/// `published_name_hash` was hashed from slot N's ProfileSummary record at the previous window's
+/// build kick and carried to the bridge at publish. Both operands are the same record read twice,
+/// so the comparison answers "did this record's name change between the two reads" -- never "does
+/// this record describe the character that is about to load". Re-select the same slot and it
+/// matches trivially, which is exactly what happened on 2026-08-22 (run br-20260822-040913-f0f4):
+/// slot 0's record said `Maddened Bean` while the character actually resident was `Ordinary Bean`,
+/// and the hold matched anyway and kept the previous head for the whole window.
+///
+/// It is kept as-is, because as a CHEAP FIRST FILTER it is still right: a changed name hash proves
+/// a different character and must clear. What changed is its STATUS -- a match is now provisional,
+/// not a decision, and the caller must arrange for something independent to confirm or revoke it
+/// (see [`bridge_hold_face_verdict`]).
+///
+/// `*_slot_tag` is the wire form used by `LS_PORTRAIT_PUBLISHED_SLOT`: **slot + 1**, so 0 means
+/// "no slot". A 0 hash means "unknown name", which is never treated as agreement.
+#[must_use]
+pub const fn same_identity_bridge_hold(
+    have_head: bool,
+    incoming_slot_tag: usize,
+    incoming_name_hash: usize,
+    published_slot_tag: usize,
+    published_name_hash: usize,
+) -> bool {
+    have_head
+        && incoming_slot_tag != 0
+        && incoming_slot_tag == published_slot_tag
+        && incoming_name_hash != 0
+        && incoming_name_hash == published_name_hash
+}
+
+/// What an independent identity signal says about an outstanding provisional bridge hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeHoldVerdict {
+    /// No provisional hold is outstanding -- either none was taken, or this window already
+    /// published its own head and superseded it. Nothing to say.
+    NoHold,
+    /// The signal is about a different slot than the held head. Not evidence either way.
+    OtherSlot,
+    /// No fingerprint exists for this slot, so the record cannot be checked against anything
+    /// outside itself. The hold stays up, still unproven. Fails CLOSED in the sense that matters:
+    /// absence of evidence is never reported as agreement.
+    NoEvidence,
+    /// The record agrees with its fingerprint. Deliberately NOT called "confirmed": it proves the
+    /// record was not rewritten under the slot, not that the held head is the loading character
+    /// (the 2026-08-22 record was intact against nothing and still named the wrong person). Only
+    /// this window publishing its own frame proves that.
+    Unrefuted,
+    /// The record the portrait is about to build from is a DIFFERENT character than the one whose
+    /// fingerprint was taken for this slot. The held head cannot be right; drop it.
+    Revoke,
+}
+
+/// Judge an outstanding provisional hold against the record-vs-preview FACE fingerprint taken at
+/// the build kick.
+///
+/// This is the only portrait identity signal that compares the ProfileSummary record against a
+/// source OUTSIDE that record: `preview_face_hash` is hashed from the picked save's own bytes when
+/// the foreign-save preview writes the slot, `record_face_hash` is re-hashed off the live record at
+/// the kick. Every other signal in the pipeline (the hold's name hashes, the published-vs-target
+/// name hashes, the loadwin `identity=` tag) reads the record on both sides and therefore agrees
+/// with itself no matter how wrong the record is -- which is why the 2026-08-22 window closed
+/// `identity=ok` while this fingerprint had already disagreed twice.
+///
+/// It is NOT available when the hold is taken. The hold is decided at the switch rearm; the
+/// fingerprint arrives at the first build kick, measured ~1.4s later (`+107006ms` rearm vs
+/// `+108385ms` first mismatch). That timing is the whole reason the hold is provisional-then-
+/// revocable rather than simply being given a better predicate up front.
+///
+/// `held_slot_tag` is slot+1 of the outstanding hold (0 = none); `kick_slot` is the raw slot index
+/// the kick is building. A 0 `preview_face_hash` means the slot has no fingerprint.
+#[must_use]
+pub const fn bridge_hold_face_verdict(
+    held_slot_tag: usize,
+    kick_slot: i32,
+    record_face_hash: usize,
+    preview_face_hash: usize,
+) -> BridgeHoldVerdict {
+    if held_slot_tag == 0 {
+        return BridgeHoldVerdict::NoHold;
+    }
+    if kick_slot < 0 || held_slot_tag != (kick_slot as usize) + 1 {
+        return BridgeHoldVerdict::OtherSlot;
+    }
+    if preview_face_hash == 0 {
+        return BridgeHoldVerdict::NoEvidence;
+    }
+    if record_face_hash == preview_face_hash {
+        BridgeHoldVerdict::Unrefuted
+    } else {
+        BridgeHoldVerdict::Revoke
+    }
+}
+
+impl BridgeHoldVerdict {
+    /// True only when the held head must be dropped, so a caller can act without matching on
+    /// every arm.
+    #[must_use]
+    pub const fn revokes(self) -> bool {
+        matches!(self, Self::Revoke)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +478,107 @@ mod tests {
         assert_eq!(portrait_window_target_slot(None, None), (None, false));
         // ...and a later real resolution still latches normally.
         assert_eq!(portrait_window_target_slot(None, Some(3)), (Some(3), true));
+    }
+
+    /// Literal values from run br-20260822-040913-f0f4, window #3.
+    const RUN_HELD_NAME_HASH: usize = 0x909a_2595_c413_a1b3;
+    const RUN_RECORD_FACE_HASH: usize = 0xbbd2_ad40_6f84_9c65;
+    const RUN_PREVIEW_FACE_HASH: usize = 0xc6af_b8c3_7ec7_b617;
+
+    /// THE DEFECT, stated as a test: on a same-slot repeat the hold predicate agrees with itself.
+    ///
+    /// Both hashes are slot 0's ProfileSummary record read at two different times, so re-selecting
+    /// the same slot makes them equal by construction -- even in the measured run where that record
+    /// said `Maddened Bean` and slot 0's own deserialize produced `Ordinary Bean`. This test is not
+    /// asserting desirable behaviour; it pins the blind spot that makes the hold provisional.
+    #[test]
+    fn the_same_slot_repeat_hold_matches_even_when_the_record_is_wrong() {
+        assert!(
+            same_identity_bridge_hold(true, 1, RUN_HELD_NAME_HASH, 1, RUN_HELD_NAME_HASH),
+            "a same-slot reselect always matches: this predicate compares one record with itself"
+        );
+    }
+
+    /// The cases it still decides correctly, which is why it survives as the first filter.
+    #[test]
+    fn a_changed_name_or_slot_or_missing_head_still_clears() {
+        // Different character in the same slot -- the record's name DID change.
+        assert!(!same_identity_bridge_hold(true, 1, 0xaaaa, 1, 0xbbbb));
+        // Different slot entirely.
+        assert!(!same_identity_bridge_hold(true, 2, 0xaaaa, 1, 0xaaaa));
+        // Nothing published to hold on to.
+        assert!(!same_identity_bridge_hold(false, 1, 0xaaaa, 1, 0xaaaa));
+        // Unknown name on either side is never agreement.
+        assert!(!same_identity_bridge_hold(true, 1, 0, 1, 0));
+        // No incoming slot.
+        assert!(!same_identity_bridge_hold(true, 0, 0xaaaa, 0, 0xaaaa));
+    }
+
+    /// The revocation, replayed with the run's literal hashes: the hold was taken on slot 0 at
+    /// +107006ms, and the first build kick for slot 0 at +108385ms found a record whose face was
+    /// not the one the preview fingerprinted. That is the falsification the hold could not produce
+    /// for itself.
+    #[test]
+    fn the_2026_08_22_face_mismatch_revokes_the_held_head() {
+        let verdict = bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH);
+        assert_eq!(verdict, BridgeHoldVerdict::Revoke);
+        assert!(verdict.revokes());
+    }
+
+    /// MAKE-BEFORE-BREAK MUST SURVIVE. Windows 1/2/4 of the same run held and then published
+    /// 259-281 frames each; an intact record hands back `Unrefuted`, which drops nothing. A fix
+    /// that revoked here would turn every legitimate same-character reload back into a flash of
+    /// empty loading screen.
+    #[test]
+    fn an_intact_record_does_not_revoke_a_legitimate_hold() {
+        let verdict = bridge_hold_face_verdict(1, 0, RUN_PREVIEW_FACE_HASH, RUN_PREVIEW_FACE_HASH);
+        assert_eq!(verdict, BridgeHoldVerdict::Unrefuted);
+        assert!(!verdict.revokes());
+    }
+
+    /// The three arms that must never revoke: no hold outstanding, a kick for another slot, and a
+    /// slot with no fingerprint to compare against. Absence of evidence is not refutation -- but it
+    /// is not agreement either, which is why `NoEvidence` is its own answer rather than `Unrefuted`.
+    #[test]
+    fn absent_or_unrelated_evidence_never_revokes() {
+        assert_eq!(
+            bridge_hold_face_verdict(0, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
+            BridgeHoldVerdict::NoHold
+        );
+        assert_eq!(
+            bridge_hold_face_verdict(1, 4, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
+            BridgeHoldVerdict::OtherSlot
+        );
+        assert_eq!(
+            bridge_hold_face_verdict(1, -1, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
+            BridgeHoldVerdict::OtherSlot
+        );
+        assert_eq!(
+            bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, 0),
+            BridgeHoldVerdict::NoEvidence
+        );
+        for verdict in [
+            BridgeHoldVerdict::NoHold,
+            BridgeHoldVerdict::OtherSlot,
+            BridgeHoldVerdict::NoEvidence,
+        ] {
+            assert!(!verdict.revokes());
+        }
+    }
+
+    /// Slot 0 must be distinguishable from "no hold", the same +1 biasing trap the published-slot
+    /// tag has: without it a hold on slot 0 would be unrevokable.
+    #[test]
+    fn a_hold_on_slot_zero_is_not_read_as_no_hold() {
+        // Tag 1 IS slot 0. The whole measured failure sat on slot 0.
+        assert_eq!(
+            bridge_hold_face_verdict(1, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
+            BridgeHoldVerdict::Revoke
+        );
+        assert_eq!(
+            bridge_hold_face_verdict(0, 0, RUN_RECORD_FACE_HASH, RUN_PREVIEW_FACE_HASH),
+            BridgeHoldVerdict::NoHold,
+            "tag 0 is 'no hold', never slot 0"
+        );
     }
 }

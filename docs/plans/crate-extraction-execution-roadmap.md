@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,605 |
+| all `experiments/**` | 76 | 49,613 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -139,7 +139,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
 | `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,537 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,545 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 902 | Scaleform resource and profile-table families | D2 and R24 |

@@ -429,6 +429,14 @@ pub(crate) unsafe fn kick_target_profile_slot(
                 "loading-portrait: FACE-IDENTITY MISMATCH #{n} at build kick slot={slot}: record face hash 0x{got:x} != preview 0x{expected_face:x} -- the portrait would render the WRONG character"
             ));
         }
+        // AND ACT ON IT, not just count it. This comparison is the pipeline's ONLY identity signal
+        // whose two sides come from different places (the live record vs a fingerprint taken from
+        // the picked save's own bytes at preview time), so it is the only one that can falsify the
+        // same-identity bridge hold -- whose own predicate compares slot N's record with slot N's
+        // record and therefore matches whenever the same slot is re-selected. On 2026-08-22 that
+        // hold kept the previous character's head and its crop envelope for a whole 3.1s window
+        // while this check disagreed twice and nothing consumed the disagreement.
+        er_loading_portrait::loading_portrait_bridge_hold_face_check(slot, got, expected_face);
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(renderer, Ordering::SeqCst);

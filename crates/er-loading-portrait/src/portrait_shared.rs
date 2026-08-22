@@ -110,6 +110,25 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
         LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
+    // ONE WINDOW'S GRACE, NOT TWO. A hold still outstanding here rode the whole window that just
+    // ended without ever publishing a frame of its own and without being revoked -- nothing
+    // confirmed it and nothing refuted it. That is the 2026-08-22 `displayed-stale` shape (65
+    // frames displayed, 0 published, 0 captured), and because the hold's own predicate compares one
+    // record against itself, holding AGAIN on the same unchanged record would re-take it every
+    // switch and let one stale head own window after window. Refuse the re-take instead: an
+    // unproven head gets exactly one window, then the full wrong-character clear applies.
+    //
+    // Deliberately NOT a time or frame threshold. The legitimate bridge routinely covers seconds
+    // (the measured confirm->publish latency is ~2.3s and windows 1/2/4 of that run published
+    // 259-281 frames each after holding), and no measurement exists that separates "still waiting"
+    // from "never coming" inside a window. "Did the last window ever prove it" needs no constant.
+    let outstanding_hold = PORTRAIT_BRIDGE_HOLD_PROVISIONAL.swap(0, Ordering::SeqCst);
+    if outstanding_hold != 0 {
+        let n = PORTRAIT_BRIDGE_HOLD_UNPROVEN.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "loading-portrait: bridge hold UNPROVEN #{n} -- the previous window rode the held head (slot_tag={outstanding_hold}) start to finish without publishing its own frame and without being revoked; refusing to hold it a second window"
+        ));
+    }
     let incoming_hash = unsafe { portrait_slot_name_hash(selected_slot) };
     let incoming_slot_tag = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&selected_slot) {
         (selected_slot + 1) as usize
@@ -119,18 +138,119 @@ pub unsafe fn loading_portrait_window_reset_for_switch(selected_slot: i32, reaso
     let published_slot = LS_PORTRAIT_PUBLISHED_SLOT.load(Ordering::SeqCst);
     let published_hash = LS_PORTRAIT_PUBLISHED_NAME_HASH.load(Ordering::SeqCst);
     let have_head = PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0;
-    let hold = have_head
-        && incoming_slot_tag != 0
-        && incoming_slot_tag == published_slot
-        && incoming_hash != 0
-        && incoming_hash == published_hash;
+    // The predicate moved to `portrait_identity` unchanged, where a host test pins WHY a match here
+    // is worth so little: `incoming_hash` and `published_hash` are the same ProfileSummary record
+    // read at two different times, so a same-slot reselect matches by construction and the hold
+    // cannot see that the record disagrees with the character that will actually load.
+    let hold = outstanding_hold == 0
+        && crate::portrait_identity::same_identity_bridge_hold(
+            have_head,
+            incoming_slot_tag,
+            incoming_hash,
+            published_slot,
+            published_hash,
+        );
     if hold {
         let n = PORTRAIT_BRIDGE_SAME_IDENTITY_HOLDS.fetch_add(1, Ordering::SeqCst) + 1;
+        // PROVISIONAL from this instant. The independent signal that can falsify it -- the record's
+        // face fingerprint vs the one the preview took from the picked save's own bytes -- does not
+        // exist yet; it arrives at the first build kick, ~1.4s later on the measured machine. So the
+        // hold is armed for revocation rather than trusted (`loading_portrait_bridge_hold_face_check`).
+        PORTRAIT_BRIDGE_HOLD_PROVISIONAL.store(incoming_slot_tag, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "loading-portrait: same-identity bridge HOLD #{n} across switch rearm (slot_tag={incoming_slot_tag} name_hash=0x{incoming_hash:x}) -- keeping published head + crop envelope for the new window"
+            "loading-portrait: same-identity bridge HOLD #{n} across switch rearm (slot_tag={incoming_slot_tag} name_hash=0x{incoming_hash:x}) -- PROVISIONAL: keeping published head + crop envelope until this window publishes its own frame or the face fingerprint revokes it"
         ));
     }
     loading_portrait_window_reset_inner(reason, hold);
+}
+
+/// Drop the published head and the frozen crop envelope: after this the loading screen has NO
+/// portrait to draw until something publishes a new one.
+///
+/// Extracted so the window reset's wrong-character clear and a mid-window hold revocation do
+/// literally the same thing. They must: a revocation is the clear that the reset should have
+/// performed and could not, because the evidence for it had not arrived yet.
+fn loading_portrait_drop_published_bridge() {
+    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+        *g = None;
+    }
+    PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
+    // Identity tag lives-and-dies with the bridge content.
+    LS_PORTRAIT_PUBLISHED_SLOT.store(0, Ordering::SeqCst);
+    LS_PORTRAIT_PUBLISHED_NAME_HASH.store(0, Ordering::SeqCst);
+    // Crop envelope: re-seed for the NEW character's silhouette (it was frozen after the first
+    // PORTRAIT_CROP_SEED_N frames and previously never reset, so a different character inherited
+    // the prior head's rect).
+    PORTRAIT_CROP_MINX.store(usize::MAX, Ordering::SeqCst);
+    PORTRAIT_CROP_MINY.store(usize::MAX, Ordering::SeqCst);
+    PORTRAIT_CROP_MAXX.store(0, Ordering::SeqCst);
+    PORTRAIT_CROP_MAXY.store(0, Ordering::SeqCst);
+    PORTRAIT_CROP_SEED_FRAMES.store(0, Ordering::SeqCst);
+}
+
+/// Resolve an outstanding provisional bridge hold against the build kick's record-vs-preview FACE
+/// fingerprint. Returns true when the hold was revoked. Game thread (the caller has just read the
+/// record); no-op when no hold is outstanding.
+///
+/// WHY THE HOLD NEEDED AN OUTSIDE SIGNAL AT ALL. Every other identity check the portrait pipeline
+/// runs reads the ProfileSummary record on BOTH sides of its comparison -- the hold's name hashes,
+/// the published-vs-target name hashes, the loadwin `identity=` tag -- so all of them agree with
+/// themselves no matter how wrong the record is. Run br-20260822-040913-f0f4 is the demonstration:
+/// window #3 closed `identity=ok` while this fingerprint had already disagreed twice, and the
+/// identity semaphore separately logged slot 0's record naming `Maddened Bean` while the resident
+/// character was `Ordinary Bean`. The face fingerprint is the only value in the pipeline taken from
+/// outside the record (the picked save's own bytes, at preview time), so it is the only one that
+/// can say the record is wrong -- and the drift it reported that day is itself the proof the record
+/// had been rewritten since the preview stamped it.
+///
+/// WHY REVOCATION RATHER THAN A BETTER HOLD PREDICATE. This signal does not exist when the hold is
+/// taken. The rearm ran at +107006ms; the first fingerprint comparison ran at +108385ms. Folding it
+/// into the rearm decision is not available -- the only options at rearm are the record-derived
+/// hashes that cannot fail. So the hold is taken optimistically (make-before-break is worth
+/// keeping) and armed to be taken back.
+///
+/// Racing the publish worker is benign in both directions: if the worker publishes this window's
+/// own frame first, the latch is already clear and this is a no-op; if it publishes immediately
+/// after a revocation, the bridge simply holds that fresh frame instead. The one outcome that
+/// cannot happen is the previous character's head surviving a refutation.
+pub fn loading_portrait_bridge_hold_face_check(
+    kick_slot: i32,
+    record_face_hash: usize,
+    preview_face_hash: usize,
+) -> bool {
+    let held = PORTRAIT_BRIDGE_HOLD_PROVISIONAL.load(Ordering::SeqCst);
+    let verdict = crate::portrait_identity::bridge_hold_face_verdict(
+        held,
+        kick_slot,
+        record_face_hash,
+        preview_face_hash,
+    );
+    if !verdict.revokes() {
+        return false;
+    }
+    // Clear the latch first: a second kick for the same slot (the run logged two, 3.6s apart) must
+    // not count as a second revocation of a head that is already gone.
+    if PORTRAIT_BRIDGE_HOLD_PROVISIONAL.swap(0, Ordering::SeqCst) == 0 {
+        return false;
+    }
+    loading_portrait_drop_published_bridge();
+    // The held head's silhouette is gone with it, so the cached depth mask must not key the next
+    // frame with the previous character's cutout.
+    invalidate_portrait_depth_mask();
+    let n = PORTRAIT_BRIDGE_HOLD_REVOCATIONS.fetch_add(1, Ordering::SeqCst) + 1;
+    append_autoload_debug(format_args!(
+        "loading-portrait: bridge hold REVOKED #{n} at build kick slot={kick_slot} -- record face hash 0x{record_face_hash:x} != preview 0x{preview_face_hash:x}, so the held head is not the incoming character; dropped the published head + crop envelope (this loading screen shows NO portrait until one publishes, which is correct -- a wrong face is worse than none)"
+    ));
+    true
+}
+
+/// A publish of THIS window's own frame supersedes any provisional hold: the bridge no longer
+/// holds a previous window's head, so there is nothing left to revoke. Called from the depth-keyed
+/// worker publish, which is the write that `PORTRAIT-LOADWIN VERDICT`'s `publishes=` counts; the
+/// two colour-only bridge writers deliberately do NOT clear it, because neither bumps
+/// `LOADING_BG_PORTRAIT_RGBA_VERSION` and both build from the same possibly-wrong record.
+pub fn loading_portrait_bridge_hold_superseded_by_publish() {
+    PORTRAIT_BRIDGE_HOLD_PROVISIONAL.store(0, Ordering::SeqCst);
 }
 
 fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
@@ -166,22 +286,13 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // cannot show a wrong head -- it shows the right head a full publish-latency (~4s from confirm on
     // the measured machine) earlier. Only the bridge, its identity tag, and the frozen crop envelope
     // are kept; every per-window counter/pin below still resets.
+    //
+    // On a same-identity hold the bridge and its frozen crop envelope stay put -- same character,
+    // same silhouette. `loading_portrait_drop_published_bridge` is the same clear a mid-window hold
+    // REVOCATION performs, which is the point of sharing it: a revocation is exactly this clear,
+    // run late, once the evidence the rearm did not have finally arrives.
     if !hold_bridge {
-        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-            *g = None;
-        }
-        PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
-        // Identity tag lives-and-dies with the bridge content.
-        LS_PORTRAIT_PUBLISHED_SLOT.store(0, Ordering::SeqCst);
-        LS_PORTRAIT_PUBLISHED_NAME_HASH.store(0, Ordering::SeqCst);
-        // Crop envelope: re-seed for the NEW character's silhouette (it was frozen after the first
-        // PORTRAIT_CROP_SEED_N frames and previously never reset, so a different character inherited
-        // the prior head's rect). On a same-identity hold it stays frozen -- same silhouette.
-        PORTRAIT_CROP_MINX.store(usize::MAX, Ordering::SeqCst);
-        PORTRAIT_CROP_MINY.store(usize::MAX, Ordering::SeqCst);
-        PORTRAIT_CROP_MAXX.store(0, Ordering::SeqCst);
-        PORTRAIT_CROP_MAXY.store(0, Ordering::SeqCst);
-        PORTRAIT_CROP_SEED_FRAMES.store(0, Ordering::SeqCst);
+        loading_portrait_drop_published_bridge();
     }
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
