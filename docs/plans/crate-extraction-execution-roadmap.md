@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 49,575 |
+| all `experiments/**` | 76 | 49,580 |
 | excluding `startup_hooks/**` | 44 | 25,245 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 35 | 25,446 |
 | lifecycle S10 split | 5 | 2,304 |
@@ -133,13 +133,13 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
 | `save_redirect/path_hooks.rs` | 2,000 | save source/path policy and redirect adapters | R32-R37 |
-| `startup_hooks.rs` | 103 | product startup root and arming facade | `STAY` |
+| `startup_hooks.rs` | 104 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/dlc_roots_trace.rs` | 169 | product diagnostic | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 383 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/loadlist_wait_trace.rs` | 139 | product diagnostic | D4 |
 | `startup_hooks/diagnostics/mod.rs` | 22 | diagnostics module facade | `STAY` |
 | `startup_hooks/diagnostics/msb_parse_trace.rs` | 139 | product diagnostic | `STAY` |
-| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,535 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
+| `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,537 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 43 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 287 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 902 | Scaleform resource and profile-table families | D2 and R24 |
@@ -147,7 +147,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,083 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,400 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 828 | title message-box and Scaleform families | R22 and R24 |
-| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 471 | window-observation/final-geometry family | R9 |
+| `startup_hooks/loading_cover/window_reconfig_observer.rs` | 473 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/mod.rs` | 68 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,768 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
 | `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,954 | mixed profile-row title, quit, and sampler families | R11 |

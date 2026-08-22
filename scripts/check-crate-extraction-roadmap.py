@@ -153,12 +153,82 @@ def selftest() -> int:
     return 0
 
 
+def refresh() -> int:
+    """Rewrite the ledger's line counts and total from measured source.
+
+    The ledger is a MEASURED MIRROR of `experiments/**`, not a plan of intent -- a row exists
+    if and only if the file exists, with an exact line count, and the total row must match
+    (file count, summed lines). So there is no judgement to apply and the refresh is mechanical,
+    which is exactly why it belongs in the tool rather than in an ad-hoc script written from
+    scratch each time. It had been hand-refreshed at least three times (PR #301 and twice during
+    the 2026-08-21 lint-parity sweep, where any edit that adds or removes a line silently rots
+    the gate) before this mode existed.
+
+    Only the COUNT column is rewritten. The description and R-number columns are authored
+    judgement and are preserved verbatim; a row whose file has left `experiments/**` is dropped,
+    and a file with no row is reported rather than invented, because inventing one would mean
+    inventing the ownership claim next to it.
+    """
+    text = ROADMAP.read_text(encoding="utf-8")
+    inventory = current_inventory()
+    seen: set[str] = set()
+    retuned: list[str] = []
+    dropped: list[str] = []
+
+    full_row = re.compile(r"^\| `([^`]+\.rs)` \| ([0-9,]+) \|(.*)$", re.MULTILINE)
+    out: list[str] = []
+    for line in text.splitlines():
+        match = full_row.match(line)
+        if match is None:
+            out.append(line)
+            continue
+        path, old, rest = match.group(1), match.group(2), match.group(3)
+        if path not in inventory:
+            dropped.append(path)
+            continue
+        seen.add(path)
+        new = f"{inventory[path]:,}"
+        if new != old:
+            retuned.append(f"{path} {old}->{new}")
+        out.append(f"| `{path}` | {new} |{rest}")
+    text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+    text = TOTAL.sub(
+        f"| all `experiments/**` | {len(inventory):,} | {sum(inventory.values()):,} |", text
+    )
+    ROADMAP.write_text(text, encoding="utf-8")
+
+    for entry in retuned:
+        print(f"[check-crate-extraction-roadmap] retuned {entry}")
+    for entry in dropped:
+        print(f"[check-crate-extraction-roadmap] dropped (file left experiments/**): {entry}")
+    missing = sorted(set(inventory) - seen)
+    for entry in missing:
+        print(
+            f"[check-crate-extraction-roadmap] NO ROW for {entry} -- add one by hand with its "
+            "ownership claim; this tool will not invent that column",
+            file=sys.stderr,
+        )
+    print(
+        f"[check-crate-extraction-roadmap] refreshed: {len(inventory)} files / "
+        f"{sum(inventory.values()):,} lines"
+    )
+    return 1 if missing else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="rewrite the ledger line counts + total from measured source (mechanical)",
+    )
     args = parser.parse_args()
     if args.selftest:
         return selftest()
+    if args.refresh:
+        return refresh()
 
     text = ROADMAP.read_text(encoding="utf-8")
     listed = {path: int(lines.replace(",", "")) for path, lines in ROW.findall(text)}
