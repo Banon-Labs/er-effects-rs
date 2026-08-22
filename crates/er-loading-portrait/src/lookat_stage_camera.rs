@@ -799,6 +799,15 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
                 fov,
             });
             PROFILE_CAM_LATCHED_MASK.fetch_or(1usize << idx, Ordering::SeqCst);
+            // The baseline is the engine's OWN framing for this slot, read once and then never
+            // re-read. It was latched silently until 2026-08-21 -- the mask said a baseline existed,
+            // nothing said WHAT it was -- so a claim like "the orbit camera is the same for every
+            // character" (the `MenuOffscrRendParam` row is 20 for all ten slots) rested on a static
+            // dump alone. One line per slot per renderer makes the log itself the confirmation, and
+            // makes a slot whose engine baseline differs impossible to miss.
+            append_autoload_debug(format_args!(
+                "profile-camera: latched engine baseline slot={idx} target=({tx:.4},{ty:.4},{tz:.4}) distance={dist:.4} pitch_rad={pitch:.4} yaw_rad={yaw:.4} fov_rad={fov:.4}"
+            ));
         }
         guard[idx].unwrap()
     };
@@ -864,5 +873,17 @@ pub unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: 
     PROFILE_CAM_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
     PROFILE_CAM_LAST_SLOT.store(idx, Ordering::SeqCst);
     PROFILE_CAM_LAST_MATRIX_OK.store(1, Ordering::SeqCst);
+    // Publish the APPLIED orbit (baseline * the scale/delta transform above) for the oracle writer.
+    // Stored only on the success path, so the value always pairs with the `PROFILE_CAM_LAST_SLOT` and
+    // matrix-ok that the same apply just published -- a half-failed apply never leaves a camera value
+    // that no frame was ever rendered with. `to_bits` keeps the sign and every significand bit; the
+    // reader decodes with `f32::from_bits(v as u32)`.
+    PROFILE_CAM_LAST_TARGET_X_BITS.store(target[0].to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_TARGET_Y_BITS.store(target[1].to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_TARGET_Z_BITS.store(target[2].to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_DISTANCE_BITS.store(distance.to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_PITCH_BITS.store(pitch.to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_YAW_BITS.store(yaw.to_bits() as usize, Ordering::SeqCst);
+    PROFILE_CAM_LAST_FOV_BITS.store(fov.to_bits() as usize, Ordering::SeqCst);
     true
 }

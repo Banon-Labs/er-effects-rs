@@ -898,10 +898,35 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 {
                     let _ = ibl_region;
                     dump_portrait_rgba(110, w, h, &px);
-                    // Readiness gate: hold back neutral/too-small transient captures (Bug A/B). On
-                    // rejection, un-consume the one-shot (the swap fired in the condition above) so a
-                    // later full-size head still bake-captures.
-                    if note_ls_portrait_capture(w, h, &px) {
+                    // MASK GATE (user 2026-08-21: "do not render the portrait until we mask out the
+                    // background"). THIS writer is the one that put an unmasked head on screen.
+                    //
+                    // `readback_offscreen_rgba8` reads the COLOUR offscreen and nothing else -- it never
+                    // touches the depth sibling, so `apply_depth_alpha_key` never runs on this path and
+                    // every texel it returns has alpha 255. The gates above are all colour tests
+                    // (`nonblack`, `!checker`) and cannot see that; the resulting fully opaque buffer went
+                    // into LOADING_BG_PORTRAIT_RGBA, and the compositor drew the character together with
+                    // its whole scene background. It does not even bump LOADING_BG_PORTRAIT_RGBA_VERSION,
+                    // so no reader downstream could have noticed the buffer had changed.
+                    //
+                    // REFUSE rather than key it here. Masking on this path would mean acquiring and
+                    // reading back the matching depth target on the game thread at FrameBegin, i.e.
+                    // duplicating the worker's staged colour+depth pipeline on the wrong thread -- and
+                    // the worker publishes a correctly keyed frame moments later anyway. A refused bake
+                    // costs only that the portrait appears when it is actually ready.
+                    //
+                    // Un-consume the one-shot on refusal, exactly as the readiness gate below does, so a
+                    // later capture can still bake if one ever arrives already keyed.
+                    if !portrait_frame_is_masked(&px) {
+                        PORTRAIT_BAKE_PUBLISH_REFUSED_UNMASKED.fetch_add(1, Ordering::SeqCst);
+                        PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "loading-portrait: BAKE REFUSED slot={s} dims={w}x{h} -- colour-only readback is unmasked (alpha cut < {PORTRAIT_MIN_TRANSPARENT_PCT}%); holding for the depth-keyed worker publish"
+                        ));
+                    } else if note_ls_portrait_capture(w, h, &px) {
+                        // Readiness gate: hold back neutral/too-small transient captures (Bug A/B). On
+                        // rejection, un-consume the one-shot (the swap fired in the condition above) so a
+                        // later full-size head still bake-captures.
                         if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                             *g = Some((w, h, px.clone()));
                         }

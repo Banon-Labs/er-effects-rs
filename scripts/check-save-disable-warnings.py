@@ -84,9 +84,27 @@ def audit_crate(crate: str) -> int:
     # location line; the per-crate "generated N warnings" summary is not a finding.
     lines = completed.stderr.splitlines()
     findings: list[str] = []
+    skipped_linker: list[str] = []
     for index, line in enumerate(lines):
         text = line.strip()
         if not text.startswith("warning:") or "generated" in text:
+            continue
+        # NOT A CRATE WARNING: rustc's `linker_messages` lint relays the LINKER's own stderr
+        # under a `warning:` prefix. Under cargo-xwin every link emits LNK4099 ("Cannot use
+        # debug info for 'libcmt.lib(...)' -- failed to load reference
+        # 'D:\\a\\_work\\1\\s\\binaries\\amd64ret\\lib\\amd64\\libcmt.amd64.pdb'"), because the
+        # xwin-provided MSVC libraries ship without the matching PDBs. It says nothing about
+        # this crate's source, it fires on every crate in the workspace, and rustc itself
+        # documents the lint as ignoring `-D warnings` for exactly that reason.
+        #
+        # This gate exists for dead_code/unused ROT in the suppression crate (see the module
+        # docstring: two dead helpers survived a refactor). Counting an environmental linker
+        # relay as rot fails the gate on a machine's toolchain layout rather than on the code,
+        # which is how a gate gets ignored. The filter is deliberately narrow -- only the
+        # linker relay prefix -- so every genuine rustc lint still counts, and anything skipped
+        # is PRINTED below rather than silently dropped.
+        if text.startswith("warning: linker stderr:"):
+            skipped_linker.append(text)
             continue
         location = lines[index + 1].strip() if index + 1 < len(lines) else ""
         findings.append(f"  {text}\n      {location}")
@@ -117,7 +135,12 @@ def audit_crate(crate: str) -> int:
         )
         return 1
 
-    print(f"save-disable warning audit passed ({crate}, {TARGET}, 0 warnings)")
+    note = ""
+    if skipped_linker:
+        note = f", {len(skipped_linker)} environmental linker relay(s) skipped"
+        for skipped in skipped_linker:
+            print(f"  (not a crate warning, skipped) {skipped}", file=sys.stderr)
+    print(f"save-disable warning audit passed ({crate}, {TARGET}, 0 warnings{note})")
     return 0
 
 
