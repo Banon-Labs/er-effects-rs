@@ -9,6 +9,18 @@
 //! through `er-loading-bar`, save-container parsing through `er-save-loader`, counters
 //! through `er-telemetry`.
 
+// `PickerCover::owner_hwnd` is an HWND read in exactly one place: `os_dialog::os_dialog_owner`
+// (via the `PickerCover::owner_hwnd` method path, which is why a grep for `owner_hwnd()` finds
+// nothing). That reader is gated TWICE -- the module is `#[cfg(feature = "os-dialog")]`, and its
+// body is windows-only -- so the field and its getter are genuinely unreachable in two builds:
+// a host build, and `--no-default-features`, which `scripts/check-rust-build.sh` checks on the
+// SHIPPING target precisely so a feature-off configuration cannot rot unnoticed.
+//
+// Both conditions are named here rather than just `not(windows)`, because the earlier gate said
+// only the first and the no-default-features build stayed red on a crate everyone had measured
+// clean with default features. A shipping build WITH `os-dialog` still carries the full deny.
+#![cfg_attr(any(not(windows), not(feature = "os-dialog")), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 

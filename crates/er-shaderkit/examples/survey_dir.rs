@@ -47,10 +47,7 @@ fn main() {
     // Tally the distinct naga failure reasons so the determination is concrete.
     let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
 
-    println!(
-        "{:<7} {:<8} {:<7} {}",
-        "verdict", "stage", "binds", "member"
-    );
+    println!("{:<7} {:<8} {:<7} member", "verdict", "stage", "binds");
     for path in &members {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");

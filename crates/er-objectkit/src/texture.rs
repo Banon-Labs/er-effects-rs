@@ -46,7 +46,7 @@ impl std::fmt::Debug for DecodedTexture {
 /// `N:\...\tex\c4800_BD_a.tif` -> `c4800_bd_a`.
 pub fn texture_leaf(path: &str) -> String {
     let leaf = path
-        .rsplit(|c| c == '\\' || c == '/')
+        .rsplit(['\\', '/'])
         .next()
         .unwrap_or(path)
         .to_lowercase();

@@ -73,6 +73,11 @@ fn host() -> &'static ScaleformHooksHost {
 /// # Safety
 ///
 /// The caller must provide the untouched values from a live native binder invocation.
+// The dispatch half of the seam this crate exists to define: `install_host` is public and
+// exported, but its only in-crate caller is the shared named-child detour, which does not
+// move here until R24. Kept (with `host`/`DEFAULT_HOST`, live only through it) so the seam
+// stays whole and unit-tested rather than becoming a write-only sink.
+#[allow(dead_code)]
 pub(crate) unsafe fn named_child_bound(event: NamedChildBindEvent) {
     unsafe { (host().named_child_bound)(event) }
 }

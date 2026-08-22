@@ -152,6 +152,10 @@ pub mod picker_dim {
 
     /// Teardown reasons stored in `SAVE_PICKER_DIM_TEARDOWN_REASON`.
     pub(crate) const TEARDOWN_DIALOG_RETURNED: usize = 1;
+    /// Reason 2 is a reserved slot in the reason space, not an unused value: a log or a
+    /// telemetry dump that reads `SAVE_PICKER_DIM_TEARDOWN_REASON == 2` must decode to this
+    /// name, so removing it would silently renumber the meaning of a recorded 3.
+    #[allow(dead_code)]
     pub(crate) const TEARDOWN_ARM_FAILED: usize = 2;
     pub(crate) const TEARDOWN_THREAD_BAILED: usize = 3;
 
@@ -460,7 +464,7 @@ pub mod picker_dim {
         /// afterwards only repaints the indicator's box, so an animating full-screen cover costs a
         /// ~250x250 redraw per frame instead of a 1920x1080 one.
         fn fill_dim(&self, pixels: &mut [u8]) {
-            for chunk in pixels.chunks_exact_mut(4) {
+            for chunk in pixels.as_chunks_mut::<4>().0 {
                 // Premultiplied black: the colour channels of black are zero at every alpha.
                 chunk[0] = 0;
                 chunk[1] = 0;
@@ -1086,7 +1090,7 @@ pub mod picker_dim {
                     let start = (row * width + x0) * 4;
                     let end = (row * width + x1) * 4;
                     if end <= pixels.len() {
-                        for chunk in pixels[start..end].chunks_exact_mut(4) {
+                        for chunk in pixels[start..end].as_chunks_mut::<4>().0 {
                             chunk[0] = 0;
                             chunk[1] = 0;
                             chunk[2] = 0;
@@ -1132,7 +1136,7 @@ pub mod picker_dim {
                 dwFlags: ULW_ALPHA,
                 prcDirty: if full_push { std::ptr::null() } else { &dirty },
             };
-            let pushed = unsafe { UpdateLayeredWindowIndirect(hwnd, &mut info) };
+            let pushed = unsafe { UpdateLayeredWindowIndirect(hwnd, &info) };
             if pushed.as_bool() {
                 SAVE_PICKER_DIM_FRAMES.fetch_add(1, Ordering::SeqCst);
                 if full_push {
@@ -1146,7 +1150,7 @@ pub mod picker_dim {
                 SAVE_PICKER_DIM_FULL_PUSHES.fetch_add(1, Ordering::SeqCst);
                 full_push = true;
                 info.prcDirty = std::ptr::null();
-                if unsafe { UpdateLayeredWindowIndirect(hwnd, &mut info) }.as_bool() {
+                if unsafe { UpdateLayeredWindowIndirect(hwnd, &info) }.as_bool() {
                     SAVE_PICKER_DIM_FRAMES.fetch_add(1, Ordering::SeqCst);
                 } else {
                     SAVE_PICKER_DIM_UPDATE_FAILS.fetch_add(1, Ordering::SeqCst);

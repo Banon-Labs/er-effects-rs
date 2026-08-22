@@ -79,12 +79,10 @@ pub fn neutralize_draw_parameters(spv: &mut [u8]) -> usize {
                     zero_by_type.entry(ty).or_insert_with(|| rd(spv, i + 2));
                 }
             }
-            OP_DECORATE if wc >= 4 => {
-                if rd(spv, i + 2) == DECO_BUILTIN {
-                    let b = rd(spv, i + 3);
-                    if b == BUILTIN_BASE_INSTANCE || b == BUILTIN_BASE_VERTEX {
-                        builtin_vars.insert(rd(spv, i + 1));
-                    }
+            OP_DECORATE if wc >= 4 && rd(spv, i + 2) == DECO_BUILTIN => {
+                let b = rd(spv, i + 3);
+                if b == BUILTIN_BASE_INSTANCE || b == BUILTIN_BASE_VERTEX {
+                    builtin_vars.insert(rd(spv, i + 1));
                 }
             }
             _ => {}
@@ -204,12 +202,14 @@ pub fn force_readonly_ssbo_loads_zero(spv: &mut [u8]) -> usize {
         if wc == 0 || i + wc > total {
             break;
         }
-        if op == OP_LOAD && wc == 4 && from_ssbo.contains(&rd(spv, i + 3)) {
-            if let Some(&zero) = zero_by_type.get(&rd(spv, i + 1)) {
-                wr(spv, i, (4u32 << 16) | OP_COPY_OBJECT as u32);
-                wr(spv, i + 3, zero);
-                patched += 1;
-            }
+        if op == OP_LOAD
+            && wc == 4
+            && from_ssbo.contains(&rd(spv, i + 3))
+            && let Some(&zero) = zero_by_type.get(&rd(spv, i + 1))
+        {
+            wr(spv, i, (4u32 << 16) | OP_COPY_OBJECT as u32);
+            wr(spv, i + 3, zero);
+            patched += 1;
         }
         i += wc;
     }
@@ -333,10 +333,10 @@ pub fn compact_descriptor_bindings_unified(
     }
     // Pass 2: rewrite every module's binding words through the shared map.
     for (mi, word, s, old_b) in word_locs {
-        if let Some(&nb) = newmap.get(&(s, old_b)) {
-            if nb != old_b {
-                wr(modules[mi], word, nb);
-            }
+        if let Some(&nb) = newmap.get(&(s, old_b))
+            && nb != old_b
+        {
+            wr(modules[mi], word, nb);
         }
     }
     mapping

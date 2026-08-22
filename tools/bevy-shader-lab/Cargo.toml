@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 bevy = "0.19"
+
+[lints]
+workspace = true

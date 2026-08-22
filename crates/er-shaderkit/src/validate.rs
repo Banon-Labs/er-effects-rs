@@ -280,9 +280,11 @@ mod tests {
             .validate(&module)
             .expect("validate wgsl");
 
-        let mut options = spv::Options::default();
         // Target a baseline Vulkan SPIR-V; no special capabilities needed.
-        options.flags = spv::WriterFlags::empty();
+        let options = spv::Options {
+            flags: spv::WriterFlags::empty(),
+            ..spv::Options::default()
+        };
         let words = spv::write_vec(&module, &info, &options, None).expect("emit spir-v");
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
 

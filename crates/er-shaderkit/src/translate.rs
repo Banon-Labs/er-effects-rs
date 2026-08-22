@@ -42,10 +42,10 @@ fn home() -> PathBuf {
 /// `~/tools/dxil-spirv/build/dxil-spirv`. Returns `None` if absent so callers
 /// (and tests) can skip cleanly when the tool hasn't been built.
 pub fn discover_dxil_spirv() -> Option<PathBuf> {
-    if let Some(p) = env::var_os(DXIL_SPIRV_ENV).map(PathBuf::from) {
-        if p.is_file() {
-            return Some(p);
-        }
+    if let Some(p) = env::var_os(DXIL_SPIRV_ENV).map(PathBuf::from)
+        && p.is_file()
+    {
+        return Some(p);
     }
     DXIL_SPIRV_CANDIDATES
         .iter()

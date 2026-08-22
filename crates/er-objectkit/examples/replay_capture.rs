@@ -109,7 +109,9 @@ fn validate_decoded_shape(
         wgpu::TextureViewDimension::Cube => {
             Err(format!("shader expects cube view, DDS has {layers} layers"))
         }
-        wgpu::TextureViewDimension::CubeArray if layers >= 6 && layers % 6 == 0 => Ok(layers),
+        wgpu::TextureViewDimension::CubeArray if layers >= 6 && layers.is_multiple_of(6) => {
+            Ok(layers)
+        }
         wgpu::TextureViewDimension::CubeArray => Err(format!(
             "shader expects cube-array view, DDS has invalid layer count {layers}"
         )),

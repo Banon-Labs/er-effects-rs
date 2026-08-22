@@ -37,8 +37,8 @@ impl DdsImage {
         // Round-to-nearest integer src-over on each RGB channel; the result
         // alpha is the standard a + dst_a*(1-a) so blitting onto a transparent
         // background accumulates opacity correctly.
-        for c in 0..3 {
-            let src = color[c] as u32;
+        for (c, &channel) in color.iter().take(3).enumerate() {
+            let src = channel as u32;
             let dst = self.pixels[idx + c] as u32;
             self.pixels[idx + c] = ((src * a + dst * inv + 127) / 255) as u8;
         }
@@ -112,7 +112,7 @@ mod tests {
         // Corner (0,0) untouched.
         assert_eq!(&img.pixels[0..4], &[0, 0, 0, 0]);
         // (1,1) filled.
-        let idx = ((1 * 4 + 1) * 4) as usize;
+        let idx = ((4 + 1) * 4) as usize;
         assert_eq!(&img.pixels[idx..idx + 4], &[10, 20, 30, 255]);
         // (3,3) outside the 1..3 range, untouched.
         let idx = ((3 * 4 + 3) * 4) as usize;
@@ -126,7 +126,7 @@ mod tests {
         img.fill_rect(-2, -2, 4, 4, [9, 9, 9, 255]);
         // (0,0)..(1,1) covered; (2,2) not.
         assert_eq!(&img.pixels[0..4], &[9, 9, 9, 255]);
-        let idx = ((1 * 3 + 1) * 4) as usize;
+        let idx = ((3 + 1) * 4) as usize;
         assert_eq!(&img.pixels[idx..idx + 4], &[9, 9, 9, 255]);
         let idx = ((2 * 3 + 2) * 4) as usize;
         assert_eq!(&img.pixels[idx..idx + 4], &[1, 1, 1, 1]);

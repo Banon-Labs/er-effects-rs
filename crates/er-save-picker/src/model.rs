@@ -765,15 +765,6 @@ impl SavePickerModel {
             .saturating_sub(self.entry_window_capacity())
     }
 
-    fn clamp_scroll_offset(&mut self) {
-        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
-    }
-
-    /// Compatibility name for callers/tests that care how many entries fit without scrolling.
-    fn max_entries_single_page(&self) -> usize {
-        self.entry_window_capacity()
-    }
-
     /// Compatibility name for callers/tests that care how many entries fit in one native window.
     pub fn entries_per_page(&self) -> usize {
         self.entry_window_capacity()
@@ -1012,10 +1003,8 @@ impl SavePickerModel {
             return false;
         };
         let changed = self.switch_to_drive_root(root);
-        if changed {
-            if let Some(row) = self.drive_row() {
-                self.cursor = row;
-            }
+        if changed && let Some(row) = self.drive_row() {
+            self.cursor = row;
         }
         changed
     }
@@ -1109,10 +1098,8 @@ impl SavePickerModel {
         self.cycle_drive(forward);
         self.drive_strip_path_focused = false;
         let changed = self.current_drive_root() != before;
-        if changed {
-            if let Some(row) = self.drive_row() {
-                self.cursor = row;
-            }
+        if changed && let Some(row) = self.drive_row() {
+            self.cursor = row;
         }
         changed
     }

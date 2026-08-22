@@ -143,6 +143,9 @@ pub struct Cxform {
     pub add: Option<[i32; 3]>,
 }
 
+// No typed tag reads or writes a CXFORM yet (see the type's doc above); the bit layout is
+// retained as a tested format primitive for when `PlaceObject`/`DefineButton` need it.
+#[allow(dead_code)]
 impl Cxform {
     const CTX: &'static str = "CXFORM";
 
@@ -548,7 +551,7 @@ impl FillStyle {
                     gradient,
                 })
             }
-            0x40 | 0x41 | 0x42 | 0x43 => {
+            0x40..=0x43 => {
                 let bitmap_id = br.read_u16_aligned(Self::CTX)?;
                 let matrix = Matrix::read(br)?;
                 Ok(FillStyle::Bitmap {

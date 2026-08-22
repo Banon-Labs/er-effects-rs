@@ -59,8 +59,8 @@ impl Movie {
 fn parse_tag_stream(r: &mut GfxReader, body_end: Option<usize>) -> Result<Vec<Tag>, GfxError> {
     let mut tags = Vec::new();
     loop {
-        if let Some(end) = body_end {
-            if r.pos >= end {
+        if let Some(end) = body_end
+            && r.pos >= end {
                 // Bounded stream filled without an explicit End. Unusual, but
                 // re-serialization stays byte-identical (length recomputed).
                 if r.pos > end {
@@ -71,7 +71,6 @@ fn parse_tag_stream(r: &mut GfxReader, body_end: Option<usize>) -> Result<Vec<Ta
                 }
                 break;
             }
-        }
 
         let word = r.read_u16()?;
         let code = word >> 6;
@@ -277,7 +276,7 @@ fn decode_place_object2(body: Vec<u8>, force_long: bool) -> Result<Tag, GfxError
     let depth = u16::from_le_bytes([body[1], body[2]]);
     let mut pos = 3usize;
 
-    let mut read_u16_at = |pos: &mut usize| -> Result<u16, GfxError> {
+    let read_u16_at = |pos: &mut usize| -> Result<u16, GfxError> {
         if *pos + 2 > body.len() {
             return Err(GfxError::UnexpectedEof {
                 pos: *pos,

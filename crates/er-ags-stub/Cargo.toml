@@ -14,3 +14,6 @@ name = "amd_ags_x64"
 crate-type = ["cdylib"]
 
 [dependencies]
+
+[lints]
+workspace = true

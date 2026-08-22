@@ -160,7 +160,7 @@ pub unsafe fn poll_switch_slot_control_file(base: usize) {
     let (eligible, mms_step) = unsafe { switch_world_resident_state(base) };
     if !phase_idle || !eligible {
         let n = SWITCH_TRIGGER_DEFERRED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 3 || n % 120 == 0 {
+        if n <= 3 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "switch-trigger: DEFER slot {slot} -- phase_idle={phase_idle} eligible={eligible} mms_step={mms_step} (waiting for stable in-world; not consuming request)"
             ));

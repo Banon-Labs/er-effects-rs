@@ -277,7 +277,7 @@ impl core::fmt::Display for BadgeError {
 impl std::error::Error for BadgeError {}
 
 /// Immutable ref to a top-level `DefineSprite`'s child tag stream.
-fn sprite_tags<'m>(movie: &'m Movie, id: u16) -> Option<&'m Vec<Tag>> {
+fn sprite_tags(movie: &Movie, id: u16) -> Option<&Vec<Tag>> {
     movie.tags.iter().find_map(|t| match t {
         Tag::DefineSprite { id: sid, tags, .. } if *sid == id => Some(tags),
         _ => None,

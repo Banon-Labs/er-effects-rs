@@ -4,6 +4,9 @@
 //! carries a `pub(crate) use er_title_flow::NAME;` shim, so the root crate and
 //! this crate share the single definition below. Only visibility changed
 //! (`pub(crate)` -> `pub`); bodies and doc comments are untouched.
+// PARITY: DEBT -- verbatim transcription of constants moved out of er-effects-rs, kept
+// import-for-import identical to keep that move reviewable as a pure move. The unused
+// imports are the cost of that fidelity and should go once the move stops being audited.
 #![allow(unused_imports)]
 
 use std::sync::{
@@ -629,6 +632,7 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 ///     BOUNDED, FAILABLE push: it inserts only when `capacity_field == 0 || count < capacity`,
 ///     and otherwise silently drops the job and returns 0. A caller that ignores the return can
 ///     lose an enqueue with no error.
+///
 /// Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
 /// Pointer slot whose [0] is the job))`. Queue targets: `owner+0x130` (ring +0x138, count +0x178;
 /// STEP_MenuJobWait's ExecuteMenuJob ticks it) OR `dialog+0x10` (ring +0x18; the per-frame menu pump

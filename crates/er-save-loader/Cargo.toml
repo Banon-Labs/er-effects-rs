@@ -11,3 +11,6 @@ er-game-base = { path = "../er-game-base" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+
+[lints]
+workspace = true

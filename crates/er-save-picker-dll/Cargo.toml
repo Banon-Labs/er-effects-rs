@@ -38,3 +38,10 @@ er-game-base = { path = "../er-game-base" }
 windows = { version = "0.62", features = [
   "Win32_System_LibraryLoader",
 ] }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows.
+[lints]
+workspace = true

@@ -6,3 +6,6 @@ publish = false
 
 [dependencies]
 er-soulsformats = { path = "../../crates/soulsformats" }
+
+[lints]
+workspace = true

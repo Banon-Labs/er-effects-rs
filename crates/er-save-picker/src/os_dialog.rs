@@ -37,6 +37,12 @@
 // with no game thread blocked Present keeps running and the boot's own overlay keeps drawing --
 // there is nothing frozen for a cover to explain.
 
+// The comdlg32/user32 surfaces below are `#[cfg(windows)]`, so a HOST build compiles their
+// helpers, constants and counter imports with every caller cfg'd out. `dead_code` /
+// `unused_imports` there describe the cfg, not real debt; the SHIPPING target
+// (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use std::{path::Path, sync::atomic::Ordering};
 
 #[cfg(windows)]
@@ -65,11 +71,6 @@ use crate::{
     model::{PickerIntent, PickerStatusMessage, save_picker_accepts},
 };
 
-use er_telemetry::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS;
-use er_telemetry::counters::SAVE_PICKER_DIM_ARMED;
-use er_telemetry::counters::SAVE_PICKER_DIM_GAME_HWND;
-use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_READBACK;
-use er_telemetry::counters::SAVE_PICKER_DIM_OWNER_SET;
 use er_telemetry::counters::SAVE_PICKER_OS_CANCEL_COUNT;
 use er_telemetry::counters::SAVE_PICKER_OS_CLOSED_WITH_PATH;
 use er_telemetry::counters::SAVE_PICKER_OS_DIALOG_OPEN;

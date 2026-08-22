@@ -11,10 +11,7 @@
 //! tick needs; the bulk migration (own_load / move_probe / rawinput / profile /
 //! depth families) lands file-group by file-group per the plan's Step 3.
 
-use std::sync::atomic::{
-    AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, AtomicU16,
-    AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 /// Number of standalone read-side ticks that have executed (proves the game-thread
 /// callback is live in the telemetry-only DLL). Owned here from the start.

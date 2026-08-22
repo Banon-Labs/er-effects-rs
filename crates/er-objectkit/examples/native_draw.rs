@@ -17,6 +17,10 @@ use er_shaderkit::dxbc::parse_input_signature;
 use er_shaderkit::dxil_to_spirv;
 use er_shaderkit::render::{Headless, ObjBind, ObjDrawDesc, ObjVbo, UniformWrite};
 
+/// What the draw actually binds: `(bindings, optional pixel-shader WGSL override,
+/// colour-target count)`. Named so the `NATIVE_PIXEL` selection below stays readable.
+type DrawSelection<'a> = (&'a [(u32, u32, ObjBind)], Option<&'a str>, usize);
+
 // --- tiny row-major 4x4 ------------------------------------------------------
 type M4 = [f32; 16]; // row-major: m[row*4 + col]
 
@@ -385,11 +389,7 @@ fn main() {
         .iter()
         .map(|b| (b.set, b.binding, to_obj_bind(b.kind)))
         .collect();
-    let (draw_bindings, draw_pixel_wgsl, draw_targets): (
-        &[(u32, u32, ObjBind)],
-        Option<&str>,
-        usize,
-    ) = if NATIVE_PIXEL {
+    let (draw_bindings, draw_pixel_wgsl, draw_targets): DrawSelection<'_> = if NATIVE_PIXEL {
         (&bindings, None, pr.output_locations.len().max(1))
     } else {
         (&vs_bindings, Some(SOLID_FS), 1)
@@ -484,15 +484,13 @@ fn main() {
                     bytes: &world_bytes,
                 });
             }
-            if NATIVE_PIXEL {
-                if let Some(eb) = emissive_binding {
-                    writes.push(UniformWrite {
-                        set: 0,
-                        binding: eb,
-                        offset: 48,
-                        bytes: &emissive_bytes,
-                    });
-                }
+            if NATIVE_PIXEL && let Some(eb) = emissive_binding {
+                writes.push(UniformWrite {
+                    set: 0,
+                    binding: eb,
+                    offset: 48,
+                    bytes: &emissive_bytes,
+                });
             }
             let desc = ObjDrawDesc {
                 vertex_spirv: &v_spv,

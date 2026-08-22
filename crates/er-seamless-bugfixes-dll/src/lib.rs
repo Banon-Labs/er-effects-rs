@@ -32,8 +32,6 @@
 //! trampling a trampoline. If the product ever does hook one of these addresses, that check turns
 //! the collision into a log line rather than a silent corruption.
 
-#![allow(non_snake_case)]
-
 pub(crate) mod guards;
 
 use std::{
@@ -109,7 +107,7 @@ fn spawn_install_task() {
                         break;
                     }
                     Err(err) => {
-                        if attempts == 0 || attempts % 4096 == 0 {
+                        if attempts == 0 || attempts.is_multiple_of(4096) {
                             log_message(format_args!(
                                 "install: waiting for game module base: {err}"
                             ));

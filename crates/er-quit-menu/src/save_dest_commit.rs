@@ -2,8 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::save_dest_identity::{save_dest_normalize_path, save_dest_normalized_parent};
+use crate::save_dest_identity::save_dest_normalize_path;
 
+// The BND4 container magic -- the format fact every save-destination write depends on. Kept
+// beside the other container constants (not folded into the test that builds a synthetic
+// container) because it describes the file format, not the test.
+#[allow(dead_code)]
 const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
 const SAVE_DEST_WRITE_ACCESS_MASK: u32 = 0x4000_0000 | 0x2;
 const SAVE_DEST_SEAMLESS_EXTENSION: &str = "co2";
@@ -129,6 +133,7 @@ pub fn save_dest_is_write_access(access: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::save_dest_identity::save_dest_normalized_parent;
     /// Build a minimal, structurally complete BND4 container: header, `names.len()` entry headers
     /// of `entry_len` bytes each, a UTF-16 name table, then the data blobs back to back.
     ///
@@ -248,7 +253,7 @@ mod tests {
     #[test]
     fn normalized_parent_helper_is_shared_with_identity_module() {
         assert_eq!(
-            save_dest_normalized_parent(r"c:\users\steamuser\er0000.sl2").as_deref(),
+            save_dest_normalized_parent(r"c:\users\steamuser\er0000.sl2"),
             Some(r"c:\users\steamuser")
         );
     }

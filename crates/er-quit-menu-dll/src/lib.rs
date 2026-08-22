@@ -10,9 +10,13 @@
 //! `er-hook` union -- never a bare `MhHook::new` -- and the union owner is elected at load
 //! time rather than assumed to be `er_effects_rs.dll`.
 
-#![allow(non_snake_case)]
+// A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
@@ -33,7 +37,7 @@ fn log_dir() -> PathBuf {
 /// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
 /// runs -- mixing evidence from builds that no longer exist is how a count over one file
 /// gets read as one run's behaviour.
-fn append_log(dir: &PathBuf, args: std::fmt::Arguments<'_>) {
+fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
     er_game_base::log::append_line(
         &dir.join(LOG_FILE_NAME),
         format_args!("er-quit-menu-dll: {args}"),

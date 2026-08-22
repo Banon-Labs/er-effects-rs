@@ -10,3 +10,6 @@ description = "Tier-0/Tier-1 in-memory texture-payload builder: an uncompressed 
 
 [dependencies]
 # Intentionally none. The Tier-0 DDS encoder and Tier-1 TPF003 wrap are std-only.
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-use crate::profile_05_010_layout::{Profile05_010Layout, RowChromeLayout, TextAlign};
+use crate::profile_05_010_layout::{Profile05_010Layout, TextAlign};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -526,6 +526,8 @@ fn parse_bool(value: &str, key: &str) -> Result<bool, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests name this type; a crate-level `use` would be dead in the lib build.
+    use crate::profile_05_010_layout::RowChromeLayout;
 
     #[test]
     fn command_round_trips_layout_and_selected_object() {

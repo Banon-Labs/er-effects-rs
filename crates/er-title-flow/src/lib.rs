@@ -5,7 +5,12 @@
 // crates, and the `host` function-pointer boundary. title_load_step_hooks.rs is the
 // verbatim head of the source title_tick_cover.rs, split at a function boundary so
 // both files clear the repo's hard file-size gate.
+// PARITY: DEBT -- see constants_moved.rs; the split that created these two files kept the
+// import blocks intact so the diff read as a move rather than a rewrite.
 #![allow(unused_imports)]
+// PARITY: DEBT -- this suppresses clippy::missing_safety_doc (a clippy::all lint) for the
+// WHOLE crate, so this crate's reported zero rests on it rather than on written contracts.
+// The unsafe fns here read live game memory and each needs a real `# Safety` section.
 #![allow(clippy::missing_safety_doc)]
 
 pub mod boot_hold;

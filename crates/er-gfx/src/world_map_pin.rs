@@ -331,6 +331,9 @@ pub fn dimmed_marker_cxform() -> CxformWithAlpha {
 /// is 156x156 at scale 0.5 with a `-780` twip translate, which is exactly `156/2/2*20`), so the
 /// same rule applied to 146 gives `-730` and the marker lands centred on the pin's anchor
 /// instead of hanging off its corner.
+// The measured value is now produced generally by `PinMarker::translate_twips_at`; this keeps
+// the hand-derivation it was checked against, and the test below pins the two together.
+#[allow(dead_code)]
 const RED_MARKER_TRANSLATE_TWIPS: i32 = -730;
 
 /// 16.16 fixed-point `0.5`, the scale every full-size icon frame uses.
@@ -955,7 +958,7 @@ mod tests {
 
     #[test]
     fn the_target_frame_is_inside_the_declared_range() {
-        assert!(RED_PIN_FRAME >= 1 && RED_PIN_FRAME <= ICON_SPRITE_FRAME_COUNT);
+        const { assert!(RED_PIN_FRAME >= 1 && RED_PIN_FRAME <= ICON_SPRITE_FRAME_COUNT) };
     }
 
     #[test]

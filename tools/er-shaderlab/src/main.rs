@@ -87,8 +87,8 @@ fn run_survey() -> Result<ExitCode, String> {
     let mut containers = shaders::survey(&config).map_err(|e| e.to_string())?;
     containers.sort_by(|a, b| a.path.cmp(&b.path));
     println!(
-        "{:<6} {:>10} {:>11} {:<7} {:>7}  {}",
-        "arch", "stored", "inner", "magic", "members", "path"
+        "{:<6} {:>10} {:>11} {:<7} {:>7}  path",
+        "arch", "stored", "inner", "magic", "members"
     );
     for c in &containers {
         println!(
@@ -109,7 +109,7 @@ fn run_extract(args: &[String]) -> Result<ExitCode, String> {
         "{} ({}) -> {}",
         manifest.path, manifest.archive, manifest.out_dir
     );
-    println!("{:<10} {:<10} {}", "size", "verdict", "name");
+    println!("{:<10} {:<10} name", "size", "verdict");
     for m in &manifest.members {
         let verdict = classify_member(&out_dir.join(&m.file));
         println!("{:<10} {:<10} {}", m.size, verdict, m.name);

@@ -217,7 +217,13 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
         return;
     }
-    if !(title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN) {
+    // Deliberately "not greater", not `<=`: the factor arrives through a host function pointer,
+    // and a NaN has to take the bail. `NaN <= MIN` is false, while `partial_cmp` returning `None`
+    // is not `Greater`, so this keeps the original `!(x > MIN)` behaviour.
+    if !matches!(
+        title_anim_speedup_factor().partial_cmp(&TITLE_ANIM_SPEEDUP_MIN),
+        Some(core::cmp::Ordering::Greater)
+    ) {
         return; // lever off / forced to 1.0
     }
     let Ok(base) = game_module_base() else {
@@ -226,7 +232,7 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     let st = unsafe { title_dialog_sm_state(owner, base) };
     // Light diagnostic so the SM timeline stays visible across boots.
     let n = TITLE_ANIM_DIAG_CALLS.fetch_add(1, Ordering::SeqCst);
-    if n % TITLE_ANIM_DIAG_INTERVAL == 0 {
+    if n.is_multiple_of(TITLE_ANIM_DIAG_INTERVAL) {
         append_autoload_debug(format_args!(
             "title-anim-diag: detour#{n} sm(dialog,fadein,loop,tfo,latch)={st:?}"
         ));
@@ -349,7 +355,7 @@ pub unsafe extern "system" fn movemapstep_step_move_map_gate_detour(
         }
     }
     let ret = unsafe { orig(mms, task_data, r8, r9) };
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let reload_epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let movement_proven_for_reload = crate::compat::CAN_MOVE_CONFIRMED
             .load(Ordering::SeqCst)
@@ -456,7 +462,7 @@ pub unsafe extern "system" fn ingamestep_step_movemap_update_defer_detour(
     {
         let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let n = INGAMESTEP_MOVEMAP_UPDATE_DEFER_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 || n % 120 == 0 {
+        if n <= 4 || n.is_multiple_of(120) {
             let mms = unsafe { safe_read_usize(ingame_step + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }
                 .unwrap_or(0);
             let (mms_step, fin) = if mms > PAB_MIN_HEAP_PTR {
@@ -577,7 +583,7 @@ pub unsafe extern "system" fn child_done_query_override_detour(
                 .unwrap_or(-1);
             let omms = ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst);
             let nd = CHILD_DONE_DIAG_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-            if nd <= 12 || nd % 200 == 0 {
+            if nd <= 12 || nd.is_multiple_of(200) {
                 append_autoload_debug(format_args!(
                     "child-done DIAG #{nd}: done-call child_base=0x{child_base:x} (child_base-0x108=0x{mms_d:x} state={st_d} field25={f_d}) oracle_mms=0x{omms:x} oracle_mms+0x108=0x{:x}",
                     omms.wrapping_add(MOVEMAPSTEP_CHILD_EZSTEP_BASE_OFFSET)
@@ -631,7 +637,7 @@ pub unsafe extern "system" fn child_done_query_override_detour(
     .unwrap_or(false);
     if hold {
         let n = CHILD_DONE_HELD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 || n % 120 == 0 {
+        if n <= 4 || n.is_multiple_of(120) {
             append_autoload_debug(format_args!(
                 "child-done HOLD #{n}: MoveMapStep child (mms+0x108) done->not-done while finalize walking -- keeps child so the advancer completes (load2 premature-teardown fix)"
             ));
@@ -783,8 +789,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
             && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                 >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
             && (state == 2 || state == 3 || state == TITLE_STEP_MENU_JOB_WAIT)
-        {
-            if let Ok(base) = game_module_base() {
+            && let Ok(base) = game_module_base() {
                 let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
                     .unwrap_or(0);
                 if table == base + INNER_TITLE_STATE_TABLE_RVA {
@@ -798,7 +803,6 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
                     }
                 }
             }
-        }
         // BLOCKER ATTRIBUTION (2026-07-19): a post-finalize SetState(owner,2) from committed_was=6
         // tears down the just-entered reload world. To decide native-vs-ours WITHOUT a return-address
         // capture, log the concurrent state: our return-title chain is the only way OUR code can cause

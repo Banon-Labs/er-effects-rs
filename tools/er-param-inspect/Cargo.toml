@@ -7,3 +7,6 @@ publish = false
 [dependencies]
 er-effects-data = { path = "../../crates/effects-data" }
 er-soulsformats = { path = "../../crates/soulsformats" }
+
+[lints]
+workspace = true

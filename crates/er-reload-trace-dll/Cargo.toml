@@ -15,3 +15,6 @@ er-hook = { path = "../er-hook" }
 # Tier A only (default features = zero external deps): the shared singleton RVA table,
 # so 0x3d69918 / 0x3d5df38 / 0x3d6b7b0 are not hand-copied here. See er-game-base/src/rva.rs.
 er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

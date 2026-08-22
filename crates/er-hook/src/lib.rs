@@ -7,6 +7,9 @@
 //!
 //! The product-specific `#[no_mangle] er_effects_union_register` C export is deliberately NOT here --
 //! it stays defined in `er-effects-rs` so only `er_effects_rs.dll` exports that cross-DLL symbol.
+// PARITY: this crate transcribes MinHook's C ABI, so its names, casing and the items it
+// declares-but-does-not-call are the upstream header's shape rather than this repo's.
+// A per-item allow would mean annotating essentially every line of a binding file.
 #![allow(dead_code, non_snake_case, non_camel_case_types, missing_docs)]
 
 use std::ffi::c_void;

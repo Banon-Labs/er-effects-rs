@@ -250,10 +250,10 @@ fn scan_chunk(
     let mut i = 0usize;
     while i + word <= usable {
         let val = usize::from_ne_bytes(buf[i..i + word].try_into().ok()?);
-        if val == want_a || val == want_b {
-            if let Some(d) = validate_active(addr + i, base) {
-                return Some(d);
-            }
+        if (val == want_a || val == want_b)
+            && let Some(d) = validate_active(addr + i, base)
+        {
+            return Some(d);
         }
         i += word;
     }

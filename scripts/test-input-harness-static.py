@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -24,11 +25,40 @@ def test_pad_inject_direct_stamp_writes_are_enabled() -> None:
     assert "crate::win32::write_u8(pad + off, val)" in src
 
 
+def _prose(src: str) -> str:
+    """Comment prose with markers stripped and whitespace collapsed.
+
+    The assertions below are about what the file SAYS, not how it is wrapped. An earlier version
+    matched a literal `"all ids\n/// 1000..1080 ..."` including the line break, so re-flowing the
+    paragraph -- which is what happened when the retired raw-pad cluster was deleted 2026-08-21 and
+    the finding moved onto `set_vk_id` -- broke the gate while the documented fact was intact and in
+    fact more detailed. A gate that fails on rewrapping teaches people to rewrite the gate.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"^\s*(///|//!|//)", " ", src, flags=re.M))
+
+
 def test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids() -> None:
     src = (REPO_ROOT / "crates/er-input-harness-dll/src/pad_inject.rs").read_text()
+    prose = _prose(src)
     assert "TO" + "DO(id-map)" not in src
-    assert "all ids\n/// 1000..1080 producing no reproducible job/flags/tab/return-title response" in src
-    assert "PadButton::TabRight => 0" in src
+    # The NEGATIVE finding must stay written down: the full 1000..1080 sweep produced no response.
+    # Without it, a later pass re-runs a sweep this repo has already paid for.
+    assert "1000..1080" in prose
+    assert "reproducible job/flags/tab/return-title response" in prose
+    # ...and the swept range itself must still be the one the sentence claims was swept.
+    assert "const VK_ID_MIN: u32 = 1000;" in src
+    assert "const VK_ID_MAX: u32 = 1080;" in src
+    # The old `PadButton::TabRight => 0` assertion is deliberately gone. It pinned one arm of a
+    # `PadButton -> vk id` map whose every variant returned 0 -- a placeholder holding no recovered
+    # id, deleted 2026-08-21. The concern it guarded (a SPECULATIVE id being written in) cannot
+    # recur through a map that no longer exists; what guards it now is the sentence above.
+    # Match the TYPE, not the word: the surviving doc comment explains that a typed `PadButton`
+    # wrapper used to sit in front of this raw-id API and why it went. Forbidding the string would
+    # forbid recording the removal, which is the opposite of what this repo wants kept.
+    assert "enum PadButton" not in src and "PadButton::" not in src, (
+        "A PadButton id map reappeared. If a real id->action map was recovered, rewrite this gate "
+        "to assert the recovered ids against their evidence -- do not delete the check."
+    )
 
 
 def test_input_harness_manifest_names_actual_hook_layer() -> None:

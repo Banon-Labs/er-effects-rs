@@ -28,3 +28,6 @@ er-save-suppress = { path = "../er-save-suppress" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
+
+[lints]
+workspace = true

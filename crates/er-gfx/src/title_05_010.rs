@@ -247,14 +247,16 @@ mod tests {
         std::fs::read(path).ok()
     }
 
+    // Measured geometry of the SHIPPED 05_010 movie -- the baseline every `COMPACT_*` value
+    // above is derived against. Kept as a block even where no assertion currently reads one:
+    // the numbers are the record of what vanilla does, not scaffolding for a caller.
+    #[allow(dead_code)]
     const VANILLA_ROW_PITCH_PX: i32 = 156;
     const VANILLA_LIST_HEIGHT_PX: i32 = 780;
+    #[allow(dead_code)]
     const VANILLA_SCROLLBAR_Y_PX: i32 = -369;
+    #[allow(dead_code)]
     const VANILLA_SCROLLBAR_SCALE_Y: f32 = 0.960;
-
-    fn compact_y(y_px: i32) -> i32 {
-        y_px * COMPACT_ROW_PITCH_PX / VANILLA_ROW_PITCH_PX
-    }
 
     fn sprite_tags(movie: &Movie, want: u16) -> &[Tag] {
         movie

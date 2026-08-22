@@ -203,6 +203,12 @@ const OPTIONSETTING_TAB_INDEX_D4_OFFSET: usize = 0xd4;
 const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
 
 /// In-world menu pane ids read at top_window+0x180 (u16).
+///
+/// RETAINED RE FACT: `INGAMETOP_MENU_ID` is the pane id the in-world root menu reports, and it is the
+/// value `top_menu_id()` is read against to tell "root pane" from OptionSetting. Nothing dispatches on
+/// it right now (the drive only tests for `OPTIONSETTING_MENU_ID`), but it is one entry of a reversed
+/// menu-id table, not scaffolding -- deleting it would lose the reversed value.
+#[allow(dead_code)]
 pub const INGAMETOP_MENU_ID: i32 = 0xffff;
 pub const OPTIONSETTING_MENU_ID: i32 = 0x25;
 pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;

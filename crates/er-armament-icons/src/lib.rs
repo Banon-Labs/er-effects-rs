@@ -18,7 +18,11 @@
 //! fires, log sample (tile, gaitem) pointers. Proves the hook target and call volume
 //! across menus before any badge drawing.
 
-#![allow(non_snake_case)]
+// A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
+// `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// target (x86_64-pc-windows-msvc) carries the full deny with no allows.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::{
     fmt,
@@ -215,12 +219,12 @@ fn badge_target_paths() -> impl Iterator<Item = &'static std::ffi::CStr> {
 /// non-empty value, or `None`.
 #[cfg(windows)]
 fn diag_override(env_name: &str, file_name: &str) -> Option<String> {
-    if let Some(dir) = game_directory_path() {
-        if let Ok(s) = std::fs::read_to_string(dir.join(file_name)) {
-            let s = s.trim().to_owned();
-            if !s.is_empty() {
-                return Some(s);
-            }
+    if let Some(dir) = game_directory_path()
+        && let Ok(s) = std::fs::read_to_string(dir.join(file_name))
+    {
+        let s = s.trim().to_owned();
+        if !s.is_empty() {
+            return Some(s);
         }
     }
     match std::env::var(env_name) {
@@ -288,10 +292,9 @@ fn spawn_install_thread() {
             // badge INTO. Diagnostic override examples: AttributeIcon, ItemIcon/IconImage.
             if let Some(v) =
                 diag_override("ER_ARMAMENT_ICONS_TARGET", "er-armament-icons-target.txt")
+                && let Ok(cstr) = std::ffi::CString::new(v)
             {
-                if let Ok(cstr) = std::ffi::CString::new(v) {
-                    let _ = TARGET_CHILD.set(cstr);
-                }
+                let _ = TARGET_CHILD.set(cstr);
             }
             let forced = FORCE_ICON_ID.load(Ordering::Relaxed);
             log_message(format_args!(
@@ -399,7 +402,7 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
         0
     };
     let fires = TILE_POPULATE_FIRES.fetch_add(1, Ordering::SeqCst) + 1;
-    if fires % HEARTBEAT_EVERY_FIRES == 0 {
+    if fires.is_multiple_of(HEARTBEAT_EVERY_FIRES) {
         log_message(format_args!(
             "tile_populate heartbeat: fires={fires} drawn={} not_weapon={} no_row={} unbound={}",
             BADGE_DRAWN.load(Ordering::SeqCst),
@@ -572,11 +575,11 @@ unsafe fn dump_scaleform_vtables(base: usize, tile: usize) {
         if let Some(cssv_vt) = unsafe { safe_read_usize(p + PROXY_SCALEFORM_VALUE_OFFSET) } {
             dump("cssv", cssv_vt, 0x22);
         }
-        if let Some(oi) = unsafe { safe_read_usize(p + 0x40) } {
-            if let Some(oi_vt) = unsafe { safe_read_usize(oi) } {
-                log_message(format_args!("VTDUMP oi-instance=0x{oi:x}"));
-                dump("oi", oi_vt, 0x30);
-            }
+        if let Some(oi) = unsafe { safe_read_usize(p + 0x40) }
+            && let Some(oi_vt) = unsafe { safe_read_usize(oi) }
+        {
+            log_message(format_args!("VTDUMP oi-instance=0x{oi:x}"));
+            dump("oi", oi_vt, 0x30);
         }
     }
     unsafe { dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
@@ -701,7 +704,6 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // act, then run the CSScaleformValue dtor (the proxy holds a ref-counted GFx
     // Value; skipping the dtor leaks movie-object references).
     let mut proxy = [0u8; PROXY_SIZE];
-    let mut drawn = false;
 
     // BIND PROBE (run-2/3 diagnostic: every tile UNBOUND): for the first few WEAPON tiles,
     // log which known child names actually bind under this tile proxy. ItemIcon is a
@@ -863,7 +865,6 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
                 fmt_rects(unsafe { probe_child_rects(base, tile, target) }),
             ));
         }
-        drawn = true;
     }
     unsafe { value_dtor(proxy.as_mut_ptr().add(PROXY_SCALEFORM_VALUE_OFFSET)) };
 
