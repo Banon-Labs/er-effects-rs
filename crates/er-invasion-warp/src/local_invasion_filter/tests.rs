@@ -301,7 +301,7 @@ fn the_session_watch_window_covers_every_known_field() {
     let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
     // EVERY build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
-    // v1.9.9's `0x110` but not v2.0.0's `0x150` would trace nothing on half the machines.
+    // a stale build's state offset but not the supported one's would trace nothing at all.
     for abi in ersc::SUPPORTED {
         assert!(
             abi.session_state_offset >= begin && abi.session_state_offset < end,
@@ -460,9 +460,9 @@ struct Measured {
 /// that says where its value came from -- not a silent drift.
 #[test]
 fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
-    // v2.0.0, measured 2026-09-02 -- see this module's `ersc` docs for what identifies each
-    // address; none was taken from a byte match alone. v1.9.9 is no longer here because it is no
-    // longer driven; what remains of it is `ersc::RETIRED`, checked below.
+    // The supported build, measured in place -- see this module's `ersc` docs for what
+    // identifies each address; none was taken from a byte match alone. There is one build here
+    // and there is never more than one: a build that is no longer latest leaves nothing behind.
     let expected = [Measured {
         version: "2.0.1",
         rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d6e0],
@@ -509,82 +509,23 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     }
 }
 
-/// v2.0.0 renumbered the whole session-state enum by `+1`, proven by a scan of every immediate
-/// store to the state field in both builds: seven distinct values, matching site counts, one
-/// uniform shift. That shift is the PROVENANCE of every number in the supported ABI, so it stays
-/// pinned even though v1.9.9 is no longer a build this mod drives -- a future edit to a state
-/// code has to argue with the derivation rather than slip through.
+/// Each pin has to identify a FUNCTION rather than a code shape.
 ///
-/// The v1.9.9 numbers are literals here, deliberately. They are the input to a measurement, not
-/// an ABI anything can be driven with, so a test is where they belong now.
-#[test]
-fn the_supported_state_enum_is_the_retired_one_shifted_by_exactly_one() {
-    /// v1.9.9 idle/searching/cancelling/offer-received, measured 2026-08-05.
-    const RETIRED_STATES: [u32; 4] = [0x00, 0x0d, 0x22, 0x12];
-    /// v1.9.9 session state and guard offsets, from the same measurement.
-    const RETIRED_FIELDS: [usize; 2] = [0x110, 0x10c];
-
-    let new = &ersc::SUPPORTED[0];
-    for (name, before, after) in [
-        ("idle", RETIRED_STATES[0], new.state_idle),
-        ("searching", RETIRED_STATES[1], new.state_searching),
-        ("cancelling", RETIRED_STATES[2], new.state_cancelling),
-        (
-            "offer received",
-            RETIRED_STATES[3],
-            new.state_offer_received,
-        ),
-    ] {
-        assert_eq!(before + 1, after, "{name} did not shift by exactly one");
-    }
-    // And the field group moved as a block, keeping its internal spacing: guard = mutex+0x4c,
-    // state = mutex+0x50, so state - guard is invariant across the move.
-    assert_eq!(new.session_state_offset - RETIRED_FIELDS[0], 0x40);
-    assert_eq!(new.session_guard_offset - RETIRED_FIELDS[1], 0x40);
-    assert_eq!(
-        RETIRED_FIELDS[0] - RETIRED_FIELDS[1],
-        new.session_state_offset - new.session_guard_offset,
-    );
-}
-
-/// The version gate has to be able to TELL THE BUILDS APART, and each pin has to identify a
-/// function rather than a shape.
-///
-/// Measured 2026-09-02 against the two DLLs in place: each invade pin occurs exactly once in
-/// its own build and not at all in the other. That measurement cannot run here (it needs the
-/// files), so what this pins is the property the code depends on and the reason the previous
-/// pins could not do it: the fourteen bytes every option action shares are not a
-/// discriminator, and five different v2.0.0 functions have them.
+/// The cross-build half of this test went with the retired table -- there is no second build to
+/// tell this one apart from any more. What remains is the property the code still depends on, and
+/// the one the original fourteen-byte pins actually failed: five different option actions share
+/// those fourteen bytes, so a pin that stops near them proves only that SOME option action lives
+/// at the address. The measurement that proves each pin unique needs the DLL and so cannot run
+/// here; what runs here is the shape requirement that makes such a pin possible.
 #[test]
 fn the_version_discriminator_actually_discriminates() {
     const SHARED_OPTION_ACTION_OPENING: usize = 14;
-    let old = &ersc::RETIRED[0];
-    let new = &ersc::SUPPORTED[0];
-
-    // Same address would mean the gate cannot even look in two places.
-    assert_ne!(old.invade_action_rva, new.invade_action_rva);
-    // Different bytes, and different WITHIN the shared opening's length is not enough -- they
-    // must differ somewhere a byte comparison of the full pin will reach.
-    assert_ne!(old.invade_prologue, new.invade_prologue);
-    assert_eq!(
-        old.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
-        new.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
-        "the shared opening really is shared -- which is why the pins cannot stop there"
-    );
-    assert!(
-        old.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3
-            && new.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3,
-        "a pin that stops near the shared opening identifies a code shape, not a function"
-    );
-    // Neither pin is a prefix of the other, so neither build's gate can accept the other's
-    // bytes no matter which is longer.
-    let shorter = old.invade_prologue.len().min(new.invade_prologue.len());
-    assert_ne!(
-        old.invade_prologue[..shorter],
-        new.invade_prologue[..shorter]
-    );
-
     for abi in ersc::SUPPORTED {
+        assert!(
+            abi.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3,
+            "{}: a pin that stops near the shared opening identifies a code shape, not a function",
+            abi.version
+        );
         // Within one build the four entry points must be four different addresses.
         let mut rvas = [
             abi.show_rva,
@@ -904,9 +845,8 @@ fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
 
 #[test]
 fn the_ersc_action_prologues_are_the_bytes_read_out_of_the_shipped_dlls() {
-    // Read from the two Seamless builds in place -- v1.9.9 on 2026-08-05, v2.0.0 on
-    // 2026-09-02. If these ever need changing, re-read the DLL; do not adjust them to make a
-    // hook install.
+    // Read from the shipped Seamless DLL in place. If these ever need changing, re-read the
+    // DLL; do not adjust them to make a hook install.
     for abi in ersc::SUPPORTED {
         for (name, pin) in [
             ("invade", abi.invade_prologue),
