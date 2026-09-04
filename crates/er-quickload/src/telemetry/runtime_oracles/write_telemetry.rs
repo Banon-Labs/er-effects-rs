@@ -407,6 +407,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         menu_data_ending_flag_5e == Some(1) && csmenuman_menu_data_flag_5d == Some(0),
         ENDING_REQUEST_SET_COUNT.load(Ordering::SeqCst)
     ));
+    // STALE-SWITCH-LATCH RECOVERY, AS AN ORACLE (2026-09-04). `_resets` is the one that matters: it
+    // stays 0 for the whole life of a healthy session, and a 1 means a switch-load was torn down and
+    // left `SYSTEM_QUIT_QUICKLOAD_PHASE` stuck at TITLE_OWNER_SEEN -- the latch that silently killed
+    // `Load Character from File` for the rest of the process. `_ticks` is the live debounce counter,
+    // so a non-zero value with `_resets` still 0 means the contradiction is being observed right now
+    // and has not yet held long enough to act on.
+    body.push_str(&format!(
+        "  \"oracle_switch_phase_stale_latch_ticks\": {},\n  \"oracle_switch_phase_stale_latch_resets\": {},\n",
+        er_telemetry_core::counters::SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS
+            .load(Ordering::SeqCst),
+        er_telemetry_core::counters::SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS
+            .load(Ordering::SeqCst)
+    ));
     // DID A NETWORK DISCONNECT FORCE THE RETURN TO TITLE? (2026-09-04)
     //
     // `CS::CSLuaEventScriptImitation::RegistReturnTitle` (1.17 `0x14059e700`) sets `CSMenuMan+0x494`
