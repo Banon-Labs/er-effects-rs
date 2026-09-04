@@ -1822,6 +1822,44 @@ pub fn cover_owns_current_loading_screen() -> bool {
     SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
         != BOOT_VIEW_STOP_LOAD_WITNESS.load(Ordering::SeqCst)
 }
+
+/// Should the title's OWN visuals (`TitleBackViewParts` / `05_001_Title_Logo`, `PressStart`, the
+/// title text surfaces) still be forced hidden?
+///
+/// Every one of those force-hide detours exists for ONE reason: while the product cover owns the
+/// screen, the vanilla title underneath must not flash through. None of them has any purpose once
+/// the cover is not drawing -- and left latched they are strictly harmful, because suppressing the
+/// title with nothing composited over it renders a black screen with no affordance to leave it.
+///
+/// THE BUG THIS PREDICATE EXISTS TO CLOSE (2026-09-04, Load Character from File).
+///
+/// The release used to be spelled `BOOT_VIEW_RELEASE_READY_MS != 0` at one of the three sites and
+/// not spelled at all at the other two. But that latch is only set by the cover's confirm-gated
+/// SEMANTIC release. The cover has a second ending -- the composite-time cap
+/// (`BOOT_VIEW_STOP_REASON_FPS_BAIL`) and the absolute backstop -- which latches `BOOT_VIEW_STOPPED`
+/// and stamps `BOOT_VIEW_STOP_MS` while leaving `RELEASE_READY_MS` at 0 forever.
+///
+/// Measured on the black-screen run: `oracle_boot_view_stop_reason=2` at `stop_ms=2042119`,
+/// `release_ready_ms=0`, `release_held_for_confirm=285`, `boot_view_draw_after_stop=0`. The world
+/// was then torn down and the title rebuilt into a process still answering the game's
+/// `SetVisible(logo, 1)` with a 0: `title_logo_gfx_visibility=false`,
+/// `title_press_start_gfx_any_hidden=true`. Nothing drawing, no logo, no PRESS BUTTON.
+///
+/// So the condition is "the cover is still drawing", by EITHER ending. `BOOT_VIEW_STOPPED` is that
+/// latch and `boot_view_reset_cover_window` clears it on every rearm, so a later switch re-arms the
+/// suppression normally -- this widens WHEN the suppression lifts, never whether it can come back.
+pub fn title_visual_suppression_active() -> bool {
+    // The cover reached its semantic release and handed the screen over.
+    if BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
+    // The cover is not compositing at all. Whatever ended it, there is no longer anything in front
+    // of the title for the suppression to protect.
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
+    true
+}
 pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);

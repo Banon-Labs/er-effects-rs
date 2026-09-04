@@ -229,9 +229,16 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
     };
     let force_title_fadein_visible =
         title_fadein_visible_ordinal == TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL;
-    let forced = (single_target != null && single_target != 0 && value == single_target)
-        || in_text_hide_set
-        || force_title_fadein_visible;
+    // ALL THREE FORCE THE SURFACE TO 0, AND ALL THREE ARE COVER-WINDOW BEHAVIOUR (2026-09-04).
+    // `PressStart`, the title text set, and the FadeIn-flash ordinal exist to keep the vanilla title
+    // from showing THROUGH the product cover. With the cover stopped there is nothing in front of
+    // the title, so forcing these to 0 does not hide a seam -- it just deletes the title. Scoping
+    // them to the cover window is what keeps a failed load recoverable instead of a black screen;
+    // `title_visual_suppression_active` carries the measurement and re-arms on the next cover.
+    let forced = er_telemetry_core::counters::title_visual_suppression_active()
+        && ((single_target != null && single_target != 0 && value == single_target)
+            || in_text_hide_set
+            || force_title_fadein_visible);
     let forced_visible = if forced {
         TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.store(value, Ordering::SeqCst);

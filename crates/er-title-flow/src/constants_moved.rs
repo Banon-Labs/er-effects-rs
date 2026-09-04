@@ -841,24 +841,51 @@ pub const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
 // ===== moved verbatim from crates/er-quickload/src/constants/return_title.rs =====
 
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
+///
+/// RE-CONFIRMED ON 1.17 (2026-09-04): the evaluator `FUN_140afb9f0` reads it as
+/// `MOVZX EAX, byte ptr [RAX + 0x5d]` with `RAX = *(CSMenuMan + 8)`, CSMenuMan global `0x143d6f820`.
 pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
 
-/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer FUN_140afa7c0 WRITES each
-/// frame (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`). cVar10 = "an ending/load-completion
-/// condition holds" (return-title 0x5d, warp, session WaitReload, deadReset==2, force-flag 0x3d856a0,
+/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer WRITES each frame
+/// (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`). cVar10 = "an ending/load-completion
+/// condition holds" (return-title 0x5d, warp, session WaitReload, deadReset==2, a force-flag global,
 /// GameMan checks, state==8). STEP_MoveMap only walks the child toward its -1 terminal when this is 1;
 /// if it stays 0 on a re-load, the child parks at resident step 18 and the InGameStep parent
 /// (finished == MoveMapStep+0x48==-1) waits forever = the 2nd (runtime-accumulation) soft-lock. The
 /// linchpin diagnostic: read 0x5e (the output) + 0x5d and the force-flag (inputs) at the lock.
+///
+/// RE-CONFIRMED ON 1.17 (2026-09-04): written by `FUN_140afb9f0` as `MOV byte ptr [RAX + 0x5e], BL`
+/// @ `0x140afbd0c`, unconditional and ahead of the `0x12a` switch. Identity-checked against
+/// `eldenring-deobf-1.17.bin` (shift 0).
+///
+/// THE ADVANCER'S NAME WAS WRONG HERE, ON BOTH BUILDS. This doc used to call it `FUN_140afa7c0`.
+/// That is not a function entry on 1.16.2 (it lands 0xf0 inside `FUN_140afa6d0`, the real 1.16.2
+/// evaluator) and it is not one on 1.17 either. The 1.16.2 -> 1.17 pairing is
+/// `FUN_140afa6d0` -> `FUN_140afb9f0`, established by the unique wide literal
+/// `L"CSEzSelectBot.MoveMapStep"` (1.16.2 `0x142b60758`, 1.17 `0x142b637f8`) referenced at the same
+/// +0xc1 from entry in both, with identical body size 4491. `scripts/map-rvas-1162-to-1170.py`
+/// CANNOT carry this address -- it returns UNRESOLVED -- so use the literal, not the byte mapper.
+///
+/// The force-flag global moved between builds (1.16.2 `0x143d856a0` -> 1.17 `0x143d89720`); it is
+/// deliberately not named as a number above, because only the 1.16.2 value was ever written down.
 pub const CS_MENU_DATA_ENDING_FLAG_5E_OFFSET: usize = 0x5e;
 
 /// The force/ending latch global (BOOL_143d856a0) = one of the `cVar10` ending-request inputs.
 pub const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = TITLE_ACCEPT_LATCH_RVA;
 
 /// The remaining `cVar10` ending-request INPUTS that read GameMan directly (the load-in signals a
-/// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c (FUN_140679520),
-/// GameMan+0xb7d (FUN_140679530), and warpRequested at GameMan+0x10 (GameManIsWarpRequested). On the
-/// stuck re-load one of these is 0 when it should be 1 -- that's the stale runtime flag to reset.
+/// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c, GameMan+0xb7d,
+/// and warpRequested at GameMan+0x10. On the stuck re-load one of these is 0 when it should be 1 --
+/// that's the stale runtime flag to reset.
+///
+/// ALL THREE RE-CONFIRMED ON 1.17 (2026-09-04), each a one-line getter off the same GameMan global
+/// `DAT_143d6d988`:
+///   * `FUN_14067a280` -> `*(GameMan + 0xb7c)`
+///   * `FUN_14067a290` -> `*(GameMan + 0xb7d)`
+///   * `FUN_14067a660` -> `*(GameMan + 0x10)` (warpRequested; identity-checked, shift 0)
+///
+/// The 1.16.2 getters this doc used to name -- `FUN_140679520` / `FUN_140679530` -- were wrong on
+/// 1.16.2 too; the real pair there is `FUN_140679430` / `FUN_140679440`, reading the same two fields.
 pub const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 
 pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
@@ -879,6 +906,13 @@ pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
 /// that sets it (`2003[80] ShowTextOnLoadingScreen`), which agrees on the mechanism.
 pub const GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET: usize = 0xbf5;
 
+/// `CS::GameMan::warpRequested`. The MoveMapStep ending-request evaluator reads it as one of its
+/// inputs, and `case 8` of that evaluator's `0x12a` walk CONSUMES it (writes 0), which is what makes
+/// `menuData+0x5e` go residual afterwards.
+///
+/// RE-CONFIRMED ON 1.17 (2026-09-04): getter `FUN_14067a660` is `return *(GameMan + 0x10)` and the
+/// consumer is `FUN_14067bcf0(0)` = `*(GameMan + 0x10) = 0`, both off the GameMan global
+/// `DAT_143d6d988`. `check-dump-deobf-identity.py 0x14067a660 --port 8767` -> MATCH, shift 0.
 pub const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 
 /// `CSMenuManImp::disableSaveMenu` BOOL at CSMenuMan+0x13c. RE of the 1.16.1 dump (2026-07-16, persistent

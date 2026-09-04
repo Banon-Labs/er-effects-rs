@@ -1814,20 +1814,34 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             }
-            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650). menuData+0x5e is
-            // NOT a pure return-title flag: FUN_140afa7c0 writes it = cVar10 each frame, and cVar10=1 is
-            // exactly what DRIVES the MoveMap finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and
-            // consumes warpRequested). So while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing
-            // it then SABOTAGES the finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive
-            // bursts + timing variance). The revert's ENDCOND was ONLY md5e=1 with warp=0: after case 8
-            // consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL and STEP_EndFlow reads that as
-            // return-to-title -> SetState 6->2. FIX: clear the residual ONLY when warpRequested==0 (warp
-            // consumed / not driving), never during the warp-driven finalize.
+            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650; re-grounded on
+            // 1.17 2026-09-04). menuData+0x5e is NOT a pure return-title flag: the MoveMapStep ending
+            // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what DRIVES the MoveMap
+            // finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and consumes warpRequested). So
+            // while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing it then SABOTAGES the
+            // finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive bursts + timing
+            // variance). After case 8 consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL.
+            // FIX: clear the residual ONLY when warpRequested==0 (warp consumed / not driving), never
+            // during the warp-driven finalize.
+            //
+            // The evaluator is `FUN_140afb9f0` on the INSTALLED 1.17 build (1.16.2: `FUN_140afa6d0`).
+            // The `FUN_140afa7c0` this comment used to name is not a function entry on either build.
+            // See `CS_MENU_DATA_ENDING_FLAG_5E_OFFSET` in `constants_moved.rs` for the pairing proof.
+            //
             // Gate ONLY on warpRequested==0 (warp consumed / not driving the finalize). Do NOT also gate
             // on mms_step/player: the residual persists after the child is torn down (mms==-1) and the
-            // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
-            // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
+            // player is briefly gone, which is exactly the frame the revert is observed on (run 1707:
+            // the clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
+            //
+            // THIS CLEAR DOES NOT PREVENT THE 6->2 REVERT (measured 2026-09-04). The comment used to
+            // say "STEP_EndFlow reads that as return-to-title -> SetState 6->2". No such reader
+            // exists on either build: scanning all 779 CSMenuMan global loads per image, the only
+            // reader of menuData+0x5e is `AddEntry(SummonMsgQueue*, SummonMsgData*)`. The real
+            // decider is `STEP_GameStepWait` (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`), whose
+            // whole condition is `InGameStep+0xd8 == 0 && GameMan+0xb7c == 0 && GameMan+0xb7d == 0`.
+            // Keep this clear for the finalize-hygiene reason above (a stale driver flag), but do
+            // not credit it with stopping the revert.
             let warp_req =
                 unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0
