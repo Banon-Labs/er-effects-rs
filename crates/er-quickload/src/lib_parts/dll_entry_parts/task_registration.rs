@@ -167,14 +167,29 @@ fn poll_cached_mms18_ending_request_advancer() {
     let warp_consumed = warp_requested == 0;
     let legacy_post_finalize =
         mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING;
+    // OBSERVE-ONLY SINCE 2026-09-04 -- THE WRITE IS GONE, DELIBERATELY. Read the next paragraph
+    // before restoring it.
+    //
+    // The comment above concluded this scrub was "harmless" and left it in. Two live runs then
+    // measured it firing 5ms (br-20260904-231726-2f1a, +64388 -> +64393) and 6ms
+    // (br-20260904-181251-0586, +75610 -> +75616) before `MMS-CLEANUP: child leaving STEP_MoveMap ->
+    // Cleanup`, and firing EXACTLY ONCE PER RUN -- only on the load that ends in the black screen,
+    // never on the stable teardown earlier in the same session. "Harmless" is not supported by that.
+    //
+    // Its own trigger is the problem: `warpRequested == 0` becomes true the INSTANT case 8 of the
+    // ending evaluator consumes the warp, which is INSIDE the finalize, not after it. The child
+    // still has to reach its terminal. So the scrub does not clear a settled residual -- it writes
+    // into the middle of a live finalize, on the one code path where the world is being streamed in.
+    //
+    // The counter is kept so the condition stays measurable: `ENDING_REQUEST_SET_COUNT` now means
+    // "times the scrub WOULD have fired". If the black screen still reproduces with this count
+    // non-zero, the byte is exonerated for good and the cause is elsewhere; if it stops, the write
+    // was the cause. That is the whole point of removing it rather than gating it behind a flag.
     if warp_consumed || legacy_post_finalize {
-        unsafe {
-            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
-        }
         let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 8 || n.is_power_of_two() {
             append_autoload_debug(format_args!(
-                "ENDING-FLAG POST-FINALIZE CLEAR #{n}: cleared menuData+0x5e residual (phase={quickload_phase} switch_reload_committed={switch_reload_committed} warpRequested={warp_requested} requestCode={request_code} mms={mms_step}); +0x5d was 0, so this is a residual and not a return-title request"
+                "ENDING-FLAG POST-FINALIZE CLEAR #{n}: WOULD have cleared menuData+0x5e (write REMOVED 2026-09-04) -- phase={quickload_phase} switch_reload_committed={switch_reload_committed} warpRequested={warp_requested} requestCode={request_code} mms={mms_step}; the byte is left exactly as the native evaluator wrote it"
             ));
         }
     }
