@@ -1350,6 +1350,14 @@ pub static BOOT_VIEW_FPS_BAIL_RESUMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_OWN_MENU_LOAD_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `BOOT_VIEW_DRAW_HITS` as it stood when the cover window was last ARMED.
+///
+/// `BOOT_VIEW_DRAW_HITS` is cumulative for the life of the process and `boot_view_reset_cover_window`
+/// deliberately does not clear it, so it cannot answer "has THIS cover epoch drawn anything". That
+/// question is what `title_visual_suppression_active` needs: a rearmed cover that never composites
+/// must not be allowed to force-hide the title. Subtracting this baseline turns the cumulative
+/// counter into the per-epoch answer without disturbing any existing reader of the total.
+pub static BOOT_VIEW_DRAW_HITS_ARM_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DECISION_LOG_MS: AtomicU64 = AtomicU64::new(0);
 pub static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1877,6 +1885,30 @@ pub fn title_visual_suppression_active() -> bool {
     // The cover is not compositing at all. Whatever ended it, there is no longer anything in front
     // of the title for the suppression to protect.
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
+    // AN ARMED COVER THAT NEVER DRAWS MUST NOT SUPPRESS (2026-09-04). The two latches above both
+    // describe a cover that RAN and then ended. Neither describes the third case, which is the one
+    // that hangs the game: a cover that was RE-ARMED and then never composited a single frame.
+    //
+    // `boot_view_reset_cover_window` clears BOOT_VIEW_STOPPED on every rearm -- deliberately, so a
+    // later switch gets its suppression back. But a switch rearms the cover at the title, and if
+    // that new epoch then stalls before drawing, both latches sit at 0 forever and this predicate
+    // answers "suppress" for the rest of the process with NOTHING in front of the title.
+    //
+    // MEASURED, run br-20260904-234301-412b: the cover stopped at stop_ms=31794 (reason 3), was
+    // rearmed by the switch, and stuck at milestone_idx=2 (TITLE READY) with epoch_live=0. The
+    // force-hide detours then fired 8,932 times through +185s -- and
+    // `oracle_title_logo_gfx_hide_last_requested_visible = 1` says the GAME was asking for the title
+    // to be VISIBLE while we answered by hiding it. PRESS BUTTON was among the hidden components, so
+    // the title could not be advanced by ANY accept signal, from the product, the harness, or a
+    // human. That is the stall that blocked every agent-driven route (bd er-effects-rs-tkfb).
+    //
+    // So: suppression requires a cover that has actually PUT PIXELS UP for the current epoch. Zero
+    // draws in this epoch means there is nothing to protect and the title must be left alone.
+    if BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst)
+        <= BOOT_VIEW_DRAW_HITS_ARM_BASELINE.load(Ordering::SeqCst)
+    {
         return false;
     }
     true
