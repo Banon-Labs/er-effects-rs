@@ -1987,6 +1987,44 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                 "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared save_requested; b78 KEPT ARMED as the warp target (native finalize consumes+autoclears it) so the destination reloads instead of reverting"
             ));
         }
+        // BREAK A STALE `TITLE_OWNER_SEEN` LATCH (2026-09-04).
+        //
+        // The post-finish stable-proof reset above is the ONLY path back to `PHASE_IDLE`, and it is
+        // gated on `phase >= AUTOLOAD_HANDOFF`. A switch that reaches `TITLE_OWNER_SEEN` and is then
+        // torn down never advances that far, so it can never reach the reset -- `active_switch` stays
+        // true for the rest of the process and the load-job Run guard never lifts. Measured on run
+        // br-20260904-181251-0586: `Load Character from File` became a permanent silent no-op, the
+        // log reading `forwarding native (load-job Run remains guarded)` with two WHY-NOT lines
+        // spinning on `active_switch=true(phase=3)` while this very oracle reported a healthy world
+        // (`player=true ig_d8=1 pstep=7/7 menu_job=0x0`). Restarting the game was the only cure.
+        //
+        // Phase `TITLE_OWNER_SEEN` asserts the TITLE owner is up and we are handing off to the
+        // product Continue autoload. A live player plus a pending in-world MoveMap request plus no
+        // menu job is the direct contradiction of that: at the title there is no player at all. So
+        // the latch is provably stale, and the recovery is to drop it back to IDLE. Debounced over
+        // consecutive ticks so a single transient frame cannot trip it, and it deliberately does
+        // NOT touch GameMan state -- it only stops our own guard from refusing forever.
+        {
+            let phase_now = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let stale_shape = phase_now == SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+                && player_present
+                && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+                && menu_job == 0;
+            if stale_shape {
+                let held = SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS.fetch_add(1, Ordering::SeqCst)
+                    + 1;
+                if held == SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICK_THRESHOLD {
+                    SYSTEM_QUIT_QUICKLOAD_PHASE
+                        .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                    SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: STALE TITLE_OWNER_SEEN LATCH BROKEN after {held} consecutive ticks -- phase was {phase_now} (title-owner-seen) while the world is up (player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x}), which cannot both be true; phase -> IDLE so the load-job Run guard lifts and Load Character from File stops being a no-op. No GameMan state touched."
+                    ));
+                }
+            } else {
+                SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS.store(0, Ordering::SeqCst);
+            }
+        }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
         let dropped = !stable && peak >= 30;
         // FIX: on the second load (in_world), flip the map-mount guard each tick (cooldown-bounded, self-

@@ -408,6 +408,27 @@ pub static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize:
 pub static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive ticks on which `SYSTEM_QUIT_QUICKLOAD_PHASE` has been stuck at
+/// `TITLE_OWNER_SEEN` while the world is demonstrably up.
+///
+/// THE LATCH THIS EXISTS TO BREAK (measured 2026-09-04, run br-20260904-181251-0586). The only
+/// path back to `PHASE_IDLE` is the post-finish stable-proof block, and it is gated on
+/// `phase >= AUTOLOAD_HANDOFF (4)`. A switch that reaches `TITLE_OWNER_SEEN (3)` and is then torn
+/// down never advances to 4, so it can never reach that reset: `active_switch` stays true for the
+/// rest of the process and the load-job Run guard never lifts. Observed effect -- `Load Character
+/// from File` becomes a silent no-op FOREVER: the row resolves, the picker opens, the ProfileSelect
+/// activation is ALLOWED, and then the log says `forwarding native (load-job Run remains guarded)`
+/// while two WHY-NOT lines spin for the rest of the session naming `active_switch=true(phase=3)`.
+/// Meanwhile SWITCH-ORACLE reported a perfectly healthy world: `player=true ig_d8=1 pstep=7/7`.
+///
+/// Phase 3 means "the title owner appeared, handing off to the product Continue autoload". With the
+/// player present and the InGameStep resting in-world, the title owner is long gone and that handoff
+/// has either completed or died -- either way the latch is stale, so this counts how long that
+/// contradiction has held rather than acting on a single frame.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Number of times the stale `TITLE_OWNER_SEEN` latch above was actually broken. Stays 0 on a
+/// healthy session; a non-zero value means a switch was torn down and the recovery caught it.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

@@ -407,6 +407,31 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         menu_data_ending_flag_5e == Some(1) && csmenuman_menu_data_flag_5d == Some(0),
         ENDING_REQUEST_SET_COUNT.load(Ordering::SeqCst)
     ));
+    // DID A NETWORK DISCONNECT FORCE THE RETURN TO TITLE? (2026-09-04)
+    //
+    // `CS::CSLuaEventScriptImitation::RegistReturnTitle` (1.17 `0x14059e700`) sets `CSMenuMan+0x494`
+    // to 1, and ALL SIX of its callers are disconnect handlers -- `OnDisconnectEOSServer`,
+    // `OnDisconnectGameServer`, `OnFailedGetBlockNum`, `OnLanCutError`, `OnNpServerSignOut`,
+    // `OnSuspendResumeLanDisconnect`. So this one byte discriminates between the two live theories
+    // for the black screen: a 1 means the engine was told to go back to the title because the
+    // session dropped, and nothing in our switch/cover code is on that path at all.
+    //
+    // Measured shape it is meant to explain (run br-20260904-165518-e3be): `InGameStep+0xd8` went
+    // 1 (healthy in-world resting request) -> 2 (return-to-title) at +748450ms, 17.2s after the
+    // world loaded, with no submit of ours behind it; `STEP_GameStepWait` then tore the world down
+    // correctly when it drained to 0. A pure read -- no detour, no patched byte, so it cannot
+    // itself perturb the run it is measuring.
+    let regist_return_title_flag_494 = if csmenuman != TITLE_OWNER_SCAN_START_ADDRESS
+        && csmenuman != 0
+    {
+        unsafe { safe_read_u8(csmenuman + CSMENUMAN_REGIST_RETURN_TITLE_FLAG_494_OFFSET) }
+    } else {
+        None
+    };
+    body.push_str(&format!(
+        "  \"oracle_regist_return_title_disconnect_flag\": {},\n",
+        format_optional_u8(regist_return_title_flag_494)
+    ));
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()

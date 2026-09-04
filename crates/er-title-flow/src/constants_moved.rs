@@ -814,6 +814,11 @@ pub const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
 pub const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
 
 pub const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
+/// Consecutive ticks the `TITLE_OWNER_SEEN` latch must stay contradicted by a live world before the
+/// recovery in `title_tick_cover` drops it to `IDLE`. The oracle ticks once per frame, so this is
+/// about two seconds at 60fps -- long enough that no single-frame transient can trip it, short
+/// enough that the user is not left clicking a dead menu row.
+pub const SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICK_THRESHOLD: usize = 120;
 
 /// Child-done-query override (FUN_140eb5550, deobf 0x140eb5530). STEP_MoveMap_Update tears the
 /// MoveMapStep child down when this returns done; for load2 it returns done PREMATURELY (field25=0),
