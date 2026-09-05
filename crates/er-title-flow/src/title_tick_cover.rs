@@ -473,6 +473,22 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
 }
 
 pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+    // THE SUPPRESSION GATE THESE TWO SITES NEVER HAD (2026-09-04). The shared predicate exists
+    // precisely so the title is force-hidden ONLY while the product cover is in front of it, and
+    // three call sites were converted to it -- but these two were missed, so they hid the title
+    // unconditionally on every tick of the product-core autoload path, cover or no cover.
+    //
+    // MEASURED, run br-20260904-235559-0a2b: the cover armed, drew, and STOPPED normally
+    // (stop_ms=32250, stop_reason=3 WORLD_HANDOFF) -- so the predicate was correctly answering
+    // "released" the whole time -- and these two sites kept hiding anyway:
+    // oracle_title_press_start_gfx_hide_calls climbed 979 -> 4967 in a single minute, with
+    // oracle_title_logo_gfx_hide_last_requested_visible=1 recording that the GAME was asking for the
+    // title to be VISIBLE while we answered by hiding it. With PressStart hidden the title cannot be
+    // advanced by ANY accept signal -- not the product's accept byte, not the harness, not a human --
+    // which is a black screen with no way out (bd er-effects-rs-tkfb).
+    if !er_telemetry_core::counters::title_visual_suppression_active() {
+        return;
+    }
     unsafe {
         hide_title_press_start_proxy(
             base,
@@ -484,6 +500,10 @@ pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutol
 }
 
 pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
+    // Same missed gate as `maybe_hide_title_press_start` above; see the measurement there.
+    if !er_telemetry_core::counters::title_visual_suppression_active() {
+        return;
+    }
     if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
         return;
     }
