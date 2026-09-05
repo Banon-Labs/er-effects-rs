@@ -390,7 +390,7 @@ impl Phase {
                 // but that runs before any menu exists, so its `calls=0` says nothing -- reporting a
                 // reader's call count from before its consumer can run is how a live hook gets read
                 // as dead.
-                if frame % 120 == 0 {
+                if frame.is_multiple_of(120) {
                     crate::pad_inject::sample_menu_pointer();
                     crate::pad_inject::sample_pointer_correction(base);
                     let (px, py) = crate::pad_inject::menu_pointer_observed();
@@ -432,7 +432,7 @@ impl Phase {
                 // CSEzMenuViewerPad button in turn -- `+0x08` for the first half of the burst, `+0x10`
                 // for the second -- because which one the pane treats as confirm is not something to
                 // assume, and a run distinguishes them.
-                let buttons = if (frame / TAP_CYCLE_FRAMES) % 2 == 0 {
+                let buttons = if (frame / TAP_CYCLE_FRAMES).is_multiple_of(2) {
                     1
                 } else {
                     2

@@ -638,8 +638,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
             // separate focus mechanisms were eliminated for a bug that did not exist. The off-tail is
             // still required to not dominate, because that is what distinguishes our input from
             // momentum -- it is part of attribution, unlike a distance bar.
-            let on_rate = if ot > 0 { on_mm / ot } else { 0 };
-            let off_rate = if ft > 0 { off_mm / ft } else { 0 };
+            let on_rate = on_mm.checked_div(ot).unwrap_or(0);
+            let off_rate = off_mm.checked_div(ft).unwrap_or(0);
             let carried = on_mm > 0;
             let stopped_on_release = off_rate * 4 <= on_rate;
             if carried && stopped_on_release {

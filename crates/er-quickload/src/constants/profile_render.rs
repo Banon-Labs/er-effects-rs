@@ -26,9 +26,6 @@ pub(crate) static OWNED_RELEASED: [AtomicUsize; OWNED_CLASS_COUNT] =
 /// Per-class high-water of outstanding (should equal the bound in a healthy run, exceed it on a leak).
 pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
     [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
-/// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
-/// leak of a native-owned object -- the run-stopping oracle for this bug class.
-
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.

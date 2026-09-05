@@ -951,7 +951,10 @@ pub fn on_frame(base: usize) {
     } else {
         POLL_INTERVAL_FRAMES
     };
-    if FRAME.fetch_add(1, Ordering::Relaxed) % interval != 0 {
+    if !FRAME
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(interval)
+    {
         return;
     }
     if advance_pad_sweep() {

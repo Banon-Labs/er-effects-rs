@@ -510,11 +510,6 @@ pub(crate) fn stay_active_enabled() -> bool {
     false
 }
 
-/// True when the autoload/own-stepper probe must run UNCONTAMINATED -- no real keyboard,
-/// mouse (move/click), or gamepad input may reach the game even if the user focuses the
-/// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
-/// probe is a zero-input load), plus an explicit env/file override for standalone use.
-
 /// TRUE only while the harness is ACTIVELY INJECTING input THIS frame -- the can-move probe's ON burst
 /// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
 /// (`sq_repro_actively_driving`). This is the ONLY window in which the product may fabricate a device or
