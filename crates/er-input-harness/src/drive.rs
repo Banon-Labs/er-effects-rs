@@ -1174,6 +1174,28 @@ pub fn on_frame(base: usize) {
     // COMPANION (product run): presence + stay-active only; the PRODUCT owns the drive. No phases, no
     // popup-accept, no pad injection -- so the standalone drive never fights the product's own flow.
     if resolve_mode() == DriveMode::Passive {
+        // ...WITH ONE EXCEPTION: a title parked at PRESS ANY BUTTON (2026-09-04).
+        //
+        // This is the single input a user supplies that nothing else in an agent-driven run does.
+        // After a System->Quit switch the world tears down to a clean title and the product's
+        // autoload waits there for the title to advance; a human presses a button and the load
+        // proceeds. With no human, the title sits parked forever, the picked-slot load never
+        // starts, and every agent-driven validation of the switch feature stalls at exactly that
+        // point (bd er-effects-rs-tkfb -- measured stalls of 154s and 185s with the product
+        // retrying its accept byte the whole time).
+        //
+        // It does not fight the product: `advance_press_any_button` writes the SAME title global
+        // accept byte the product itself writes, so this is idempotent with the product's own
+        // attempt rather than a competing input. It is gated on the title actually being parked, so
+        // it is inert everywhere else, and it lives in the DIAGNOSTIC harness DLL, which is never
+        // part of a product profile -- a user's run is unaffected by its existence.
+        //
+        // ORDER MATTERS AND IS WHY THIS WAS NOT ENOUGH ON ITS OWN EARLIER: while the product was
+        // force-hiding PressStart unconditionally, no accept could land no matter who wrote it.
+        // That gate is fixed separately; this supplies the press once the component is visible.
+        if title_scan::title_pab_parked(base) {
+            advance_press_any_button(base);
+        }
         return;
     }
 
