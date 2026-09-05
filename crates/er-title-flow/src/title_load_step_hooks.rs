@@ -703,7 +703,11 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         // that happened to be set at the revert was md5e, which is how a byte with no role in the
         // decision became the prime suspect. b7c/b7d are logged now so the trace can NAME the branch.
         let gm_rt = game_man_ptr_or_null();
-        let (warp_req, b73_now, bc4_now, b7c_now, b7d_now) = if gm_rt > PAB_MIN_HEAP_PTR {
+        // b7c/b7d are NOT read here. They belong to STEP_GameStepWait's own decision and are
+        // read in their own block below, beside the +0x798 half of that decision -- the shape
+        // `main` settled on. Reading them twice per call is what the rebase of this branch
+        // briefly produced, and clippy caught it as two unused bindings.
+        let (warp_req, b73_now, bc4_now) = if gm_rt > PAB_MIN_HEAP_PTR {
             (
                 unsafe { safe_read_u8(gm_rt + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
                     .map_or(-1, i32::from),
@@ -711,13 +715,9 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
                     .map_or(-1, i32::from),
                 unsafe { safe_read_i32(gm_rt + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
                     .unwrap_or(-1),
-                unsafe { safe_read_u8(gm_rt + GAME_MAN_ENDING_FLAG_B7C_OFFSET) }
-                    .map_or(-1, i32::from),
-                unsafe { safe_read_u8(gm_rt + GAME_MAN_ENDING_FLAG_B7D_OFFSET) }
-                    .map_or(-1, i32::from),
             )
         } else {
-            (-1, -1, -1, -1, -1)
+            (-1, -1, -1)
         };
         let (md5d, md5e) = game_module_base()
             .ok()

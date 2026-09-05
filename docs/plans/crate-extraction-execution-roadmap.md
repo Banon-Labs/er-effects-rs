@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,872 |
+| all `experiments/**` | 77 | 50,895 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -267,7 +267,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `mod.rs` | 106 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 553 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 651 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 674 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 12 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,714 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
