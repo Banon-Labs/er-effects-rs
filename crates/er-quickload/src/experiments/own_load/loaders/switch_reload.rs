@@ -608,6 +608,45 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // session-end arm that produced `WORLD LOST`. See `request_wait_guard` for the decompiled branch.
     crate::experiments::own_load::arm_request_wait_guard_for_switch();
     unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+    // RETIRE THE WARP OUR OWN DESERIALIZE ARMED (2026-09-05).
+    //
+    // `FUN_14067b290` -- the native slot deserialize this switch just drove -- ends with
+    // `SetMoveMapStepBlockId(GameMan+0xc30)`, `initialAreaEntityId = 0` and `warpRequested = true`.
+    // On the native title->Continue path that warp IS the load: the InGameStep consumes it as it
+    // creates the world. On OUR path the world already exists, and `own_load_continue_fire` above has
+    // just performed the transition itself, so the armed warp is a SECOND, surplus map move.
+    //
+    // MEASURED, run br-20260905-212504-9b8d, with the guard removed so nothing masked it:
+    //   +57569ms  own-load-feed drives the deserialize   -> warpRequested false -> TRUE at +57581ms
+    //   +57573ms  requestwait-tick #1 d8=1 (ADVANCE)     -- our load runs and advances correctly
+    //   ~+57.9s   c30 real, world streaming              -- the world is up WITHOUT the warp firing
+    //   +66141ms  warpRequested -> false                 -- the surplus warp finally executes
+    //   +67031ms  requestwait-tick #2 d8=2               -- its completion lands back in RequestWait
+    //                                                       with the NowLoading job gone, and the
+    //                                                       native code ends the session
+    // The BOOT load never arms this: `own-load-feed` appears exactly once per run, at the switch, and
+    // boot's `warp_requested` reads false from +988ms through the whole load. So the flag is ours, we
+    // raised it, our own continue already did what it asked for, and leaving it set is what the user
+    // sees as our cover vanishing and the game's own loading screen appearing a beat later.
+    //
+    // Retiring a request we issued and have already satisfied -- the same act, and the same
+    // justification, as the `menuData+0x5d` retirement a few lines above. It is not steering a
+    // game-owned state machine: the world this warp would move is the one we just finished loading.
+    if c30_real {
+        let gm = crate::constants::game_man_ptr_or_null();
+        if gm > TITLE_OWNER_SCAN_START_ADDRESS {
+            let previous =
+                unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(0);
+            if previous != 0 {
+                unsafe {
+                    *((gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) as *mut u8) = 0;
+                }
+                append_autoload_debug(format_args!(
+                    "own-load-switch-reload: retired the warp our own deserialize armed (GameMan+0x10 {previous}->0) -- continue_confirm has already performed this transition, and leaving it set fires a SECOND map move ~8.5s later whose completion re-enters STEP_RequestWait at d8=2 and ends the session"
+                ));
+            }
+        }
+    }
     true
 }
 

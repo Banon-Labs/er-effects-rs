@@ -893,6 +893,18 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     c: usize,
     d: usize,
 ) -> usize {
+    // REPORT the destination block this init is about to consume; do NOT supply one.
+    //
+    // `STEP_MoveMap_Init` reads `GameMan+0x14` into the MoveMapStep's `mapId` (+0xdc) and then clears
+    // the field. An earlier version of this line WROTE the block here, on the theory that nothing on
+    // the switch path set it. That theory is false and the decompile says so: the slot deserialize
+    // `FUN_14067b290` -- the function our own-load already calls -- ends with
+    // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true`, so the native flow we are
+    // already inside sets it for us. Writing it again was a second, redundant store of a field the
+    // game owns, which is the shape of fix this repo keeps having to undo. Logging the value instead
+    // turns the question into evidence: if it is 0xffffffff at an init that should be loading a
+    // picked slot, the deserialize did not run or something cleared it, and THAT is the defect.
+    crate::experiments::own_load::report_destination_block_at_init();
     let ret = unsafe { mms_call_original(&MMS_STEP_INIT_ORIG, this, b, c, d) };
     let n = SWITCH_ORACLE_MMS_INIT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {

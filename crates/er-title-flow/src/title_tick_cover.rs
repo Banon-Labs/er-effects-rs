@@ -1380,11 +1380,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // the game died before the call returned. ProcessMsbLoadLists runs ResetAreaResLists +
             // PopulateLists, which is only safe at STEP_MoveMap_Init (BEFORE the world starts streaming);
             // resetting the area-res lists mid-stream faults. So the reactive rebuild is DISABLED. The
-            // correct fix must run at STEP_MoveMap_Init (0x140aec210) / _Common_Initialize (0x140aed910)
-            // with the DESTINATION map's loadlist -- i.e. make the fast switch not skip / not run that
-            // native init with a stale loadlist -- not a reactive call at the stall. This block now just
-            // records the confirmed stall for the next (init-point) fix. See bd
-            // step3-reactive-processmsbloadlists-crashes-init-point-fix-needed-2026-07-17.
+            // correct fix must run BEFORE STEP_MoveMap_Init (1.16.2 0x140aec120; _Common_Initialize
+            // is 0x140aed820 -- the 0x140aec210/0x140aed910 pair this comment used to name are
+            // 1.16.1-era addresses and neither is a function entry on 1.16.2, so do not chase them).
+            // FIXED 2026-09-05, and it was not the loadlist: `STEP_MoveMap_Init` takes the
+            // MoveMapStep's `mapId` (+0xdc) from `GameMan::GetMoveMapStepBlockId()` = GameMan+0x14
+            // and then clears that field, and nothing on the switch path was writing it -- read live
+            // out of a stalled process, MoveMapStep+0xdc was 0xffffffff, so WorldResWait was waiting
+            // on block ff/ff/ff/ff. `seed_move_map_step_block_id` in own_load/loaders/switch_reload.rs
+            // now sets it from the mounted c30 before continue_confirm. This block stays as the
+            // detector. See bd step3-reactive-processmsbloadlists-crashes-init-point-fix-needed-2026-07-17.
             if let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) {
                 let _ = addr;
                 let _ = owner;

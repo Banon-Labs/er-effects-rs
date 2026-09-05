@@ -55,34 +55,39 @@ use crate::telemetry::append_autoload_debug;
 
 /// `requestCode` values `STEP_RequestWait` dispatches on. `ADVANCE` is the one whose arm leaves the
 /// step (to step 4); `SESSION_END` is the one whose arm clears `+0xd8`.
-const REQUEST_CODE_ADVANCE: i32 = 1;
 const REQUEST_CODE_SESSION_END: i32 = 2;
 
 /// The title/new-game default map id. `c30` equal to this means no real world is mounted, so a session
 /// end is the game doing its job and the guard must not touch it.
 const C30_M10_DEFAULT: i32 = 0xa01_0000;
 
-/// How many session-ends one switch may convert. Small on purpose: the healthy path needs ONE (the
-/// first RequestWait tick after `continue_confirm`), and a world that is genuinely not arriving must be
-/// allowed to end rather than hang.
-const MAX_CORRECTIONS: usize = 4;
-
 /// Cap on entry logging, so a step that ticks every frame cannot flood the debug log.
 const MAX_ENTRY_LOGS: usize = 24;
 
 static HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static ORIG: AtomicUsize = AtomicUsize::new(0);
-static CORRECTIONS_LEFT: AtomicUsize = AtomicUsize::new(0);
 static ENTRY_LOGS: AtomicUsize = AtomicUsize::new(0);
+static TICK_LOGS: AtomicUsize = AtomicUsize::new(0);
 static CORRECTIONS_MADE: AtomicUsize = AtomicUsize::new(0);
+static MOVEMAP_INIT_REPORTS: AtomicUsize = AtomicUsize::new(0);
 
-/// Arm the guard for ONE switch. Called at the `continue_confirm` commit, the instant after which the
-/// incoming world's `RequestWait` can tick.
+/// `GameMan.moveMapStepBlockId` (Ghidra offset 20). `STEP_MoveMap_Init` copies it into the
+/// MoveMapStep's `mapId` and then writes 0xffffffff back over it.
+const GAME_MAN_MOVEMAP_STEP_BLOCK_ID_14_OFFSET: usize = 0x14;
+
+/// Cap on init reports. A map move happens on every warp, grace rest and death, and this is a
+/// diagnostic, not a per-frame oracle.
+const MAX_INIT_REPORTS: usize = 32;
+
+/// Reset the per-switch log budgets. Called at the `continue_confirm` commit, the instant after which
+/// the incoming world's `RequestWait` can tick, so each switch gets its own window of ticks recorded
+/// rather than being silenced by the previous one.
 pub(crate) fn arm_request_wait_guard_for_switch() {
-    CORRECTIONS_LEFT.store(MAX_CORRECTIONS, Ordering::SeqCst);
     ENTRY_LOGS.store(0, Ordering::SeqCst);
+    TICK_LOGS.store(0, Ordering::SeqCst);
+    CORRECTIONS_MADE.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "requestwait-guard: ARMED for this switch (budget={MAX_CORRECTIONS} session-end conversions); a d8==2 tick with a null NowLoading job while a real map is mounted will be rewritten to d8==1 so the game takes its own advance-to-step-4 branch"
+        "requestwait-observer: armed for this switch -- every STEP_RequestWait tick is logged with its d8, and a session-end is REPORTED, never converted"
     ));
 }
 
@@ -117,6 +122,25 @@ fn mounted_map_id() -> i32 {
 unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
     let d8 =
         unsafe { safe_read_i32(in_game_step + INGAMESTEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
+    // LOG EVERY TICK, not only the session-end arm. The decompile says the `d8 == 1` arm is what
+    // ADVANCES out of this step (`FUN_140aed270(this, 4)`), and a load that keeps its world is
+    // believed to leave through that arm before `STEP_MoveMap_Update` ever raises d8 to 2 -- the
+    // boot-load run br-20260904-165518-e3be sat at `ig_d8=1` for its whole session and lost no world.
+    // If our switch never ticks this step at d8 == 1, that is the divergence, and it is invisible in
+    // a log that only records d8 == 2.
+    let ticks = TICK_LOGS.fetch_add(1, Ordering::SeqCst);
+    if ticks < MAX_ENTRY_LOGS {
+        append_autoload_debug(format_args!(
+            "requestwait-tick #{}: d8={d8} ({}) -- d8==1 advances out of this step, d8==2 ends the session once the NowLoading job is gone",
+            ticks + 1,
+            match d8 {
+                0 => "fade, stay in step",
+                1 => "ADVANCE to step 4",
+                2 => "session-end arm",
+                _ => "other",
+            }
+        ));
+    }
     if d8 == REQUEST_CODE_SESSION_END {
         let nowloading = nowloading_job();
         let c30 = mounted_map_id();
@@ -124,32 +148,29 @@ unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
         let logs = ENTRY_LOGS.fetch_add(1, Ordering::SeqCst);
         if logs < MAX_ENTRY_LOGS {
             append_autoload_debug(format_args!(
-                "requestwait-guard: STEP_RequestWait tick d8=2 (the session-end arm) nowloading798=0x{nowloading:x} c30=0x{c30:x} world_is_real={world_is_real} budget={} -- the native code clears InGameStep+0xd8 here iff nowloading798 == 0",
-                CORRECTIONS_LEFT.load(Ordering::SeqCst)
+                "requestwait-observer: STEP_RequestWait tick d8=2 (the session-end arm) nowloading798=0x{nowloading:x} c30=0x{c30:x} world_is_real={world_is_real} -- the native code clears InGameStep+0xd8 here iff nowloading798 == 0"
             ));
         }
         if nowloading == 0 && world_is_real {
-            // `fetch_update` rather than a load/store pair: RequestWait runs on the game thread, but
-            // the budget is the only thing standing between "converts a race" and "hangs forever", so
-            // it is spent atomically.
-            let spent = CORRECTIONS_LEFT
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                    left.checked_sub(1).filter(|_| left > 0)
-                })
-                .is_ok();
-            if spent {
-                unsafe {
-                    *((in_game_step + INGAMESTEP_REQUEST_CODE_D8_OFFSET) as *mut i32) =
-                        REQUEST_CODE_ADVANCE;
-                }
-                let made = CORRECTIONS_MADE.fetch_add(1, Ordering::SeqCst) + 1;
+            // OBSERVE ONLY. This used to rewrite d8 2 -> 1 so the native code would take its
+            // `d8 == 1` arm instead of ending the session. It did stop the black screen, and it was
+            // still wrong: that arm calls `FUN_140aed270(this, 4)` and ADVANCES the step, which after
+            // the MoveMap has already completed starts a SECOND load. Measured on run
+            // br-20260905-211954-d2a7 -- MoveMap init #2 (the switch's real load) got a correct
+            // destination block 0x1c000000, and a third init nine seconds later, caused by this
+            // conversion, found `GameMan+0x14` already consumed and cleared to 0xffffffff, so
+            // STEP_WorldResWait waited forever on block ff/ff/ff/ff. Trading a black screen for a
+            // permanent stall is not a fix, and a guard that re-drives a load the game had already
+            // finished has no business in the product.
+            //
+            // The defect is upstream of both arms: this step should not be reached with d8 == 2 at
+            // all. A load that keeps its world leaves via the d8 == 1 arm first (br-20260904-165518-e3be
+            // sits at ig_d8 = 1 for its whole session), so the question the tick log above exists to
+            // answer is whether our switch ever ticks this step while d8 is still 1.
+            let n = CORRECTIONS_MADE.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= MAX_ENTRY_LOGS {
                 append_autoload_debug(format_args!(
-                    "requestwait-guard: CONVERTED session-end -> advance #{made}: rewrote InGameStep+0xd8 2->1 on a REAL world (c30=0x{c30:x}) whose NowLoading job is already gone, so STEP_RequestWait takes its own d8==1 branch (FUN_140aed270(this,4)) instead of storing 0 and handing STEP_GameStepWait the SetMapId(0xff,0xff,0xff,0xff) teardown. budget left={}",
-                    CORRECTIONS_LEFT.load(Ordering::SeqCst)
-                ));
-            } else if logs < MAX_ENTRY_LOGS {
-                append_autoload_debug(format_args!(
-                    "requestwait-guard: budget exhausted -- letting the native session-end run (c30=0x{c30:x}); a world that has not arrived after {MAX_CORRECTIONS} conversions must be allowed to return to the title rather than hang"
+                    "requestwait-guard: OBSERVED session-end #{n} -- the native code is about to store 0 into InGameStep+0xd8 on a REAL world (c30=0x{c30:x}) whose NowLoading job is gone, and STEP_GameStepWait will turn that into SetMapId(0xff,0xff,0xff,0xff). NOT intervening: rewriting d8 here re-drives the load"
                 ));
             }
         }
@@ -215,4 +236,35 @@ pub(crate) fn install_request_wait_guard() -> bool {
             false
         }
     }
+}
+
+/// Log `GameMan+0x14` (moveMapStepBlockId) at `STEP_MoveMap_Init` entry -- the value that init is
+/// about to copy into the MoveMapStep's `mapId` (+0xdc) and then clear.
+///
+/// READ-ONLY ON PURPOSE. The slot deserialize `FUN_14067b290` (1.16.2 0x14067b290, the function
+/// `own_load_feed_deserialize` already drives) ends with `SetMoveMapStepBlockId(GameMan+0xc30)` and
+/// `warpRequested = true`: the native flow sets this field itself, from the map id the save's own
+/// bytes just wrote into `+0xc30`. So the correct question is not "who supplies the block" but
+/// "why is it missing at the init that matters", and a second write from us would hide the answer.
+/// Measured live on the stalled run br-20260905-201903-c409: MoveMapStep+0xdc was 0xffffffff, so
+/// `STEP_WorldResWait` waited on block ff/ff/ff/ff forever.
+pub(crate) fn report_destination_block_at_init() {
+    let hits = MOVEMAP_INIT_REPORTS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits > MAX_INIT_REPORTS {
+        return;
+    }
+    let gm = game_man_ptr_or_null();
+    let block = if gm > 0x10000 {
+        unsafe { safe_read_i32(gm + GAME_MAN_MOVEMAP_STEP_BLOCK_ID_14_OFFSET) }.unwrap_or(-1)
+    } else {
+        -1
+    };
+    let saved = if gm > 0x10000 {
+        unsafe { safe_read_i32(gm + er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+    } else {
+        -1
+    };
+    append_autoload_debug(format_args!(
+        "movemap-init-block #{hits}: GameMan+0x14 (moveMapStepBlockId) = 0x{block:x}, GameMan+0xc30 (the save's map) = 0x{saved:x} -- this init copies +0x14 into MoveMapStep+0xdc and then clears it. 0xffffffff here means the load has no destination and STEP_WorldResWait will wait forever"
+    ));
 }

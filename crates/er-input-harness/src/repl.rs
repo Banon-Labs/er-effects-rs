@@ -218,6 +218,15 @@ struct Typing {
 
 static TYPING: std::sync::Mutex<Option<Typing>> = std::sync::Mutex::new(None);
 
+/// Commands read but not yet run. A command file used to be executed line by line the instant it was
+/// read, which quietly made multi-line files useless: two `key` lines both wrote `HOLD`, so only the
+/// last survived and the first press never happened. The consequence was that a whole menu drive had
+/// to be issued one shell round-trip per press -- fourteen of them to reach a save slot, each with its
+/// own multi-second wait, and any one of them able to land while the previous press was still down.
+/// Queuing instead means one file can carry the entire drive and the poll loop paces it: exactly one
+/// command starts per poll, and only once the previous press has been released.
+static QUEUE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
 /// ASCII to DirectInput scancode, plus whether SHIFT is required. Only the characters a Windows save
 /// path can contain are mapped; anything else returns `None` so the caller can refuse the whole
 /// string.
@@ -965,6 +974,11 @@ pub fn on_frame(base: usize) {
         // `point` fight it for the same field and make the resulting map unattributable.
         return;
     }
+    // The queue is drained BEFORE a new file is read, so a drive already in progress finishes its
+    // steps rather than being interrupted by a re-read of the same sequence number.
+    if advance_queue(base) {
+        return;
+    }
     let Ok(text) = std::fs::read_to_string(command_path()) else {
         return;
     };
@@ -975,11 +989,45 @@ pub fn on_frame(base: usize) {
     if sequence == LAST_SEQUENCE.swap(sequence, Ordering::SeqCst) {
         return;
     }
+    let mut guard = match QUEUE.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    // REPLACE, don't append. A new sequence number is a new instruction from the operator; leaving
+    // a half-finished previous drive in front of it would run stale presses against a screen that
+    // has moved on, which is worse than dropping them.
+    guard.clear();
     for line in lines {
         let line = line.trim();
         if !line.is_empty() && !line.starts_with('#') {
-            harness_log!("repl: #{sequence} > {line}");
-            run_command(base, line);
+            guard.push(line.to_string());
         }
     }
+    if guard.len() > 1 {
+        harness_log!(
+            "repl: #{sequence} queued {} command(s); one starts per poll, and only after the previous press releases",
+            guard.len()
+        );
+    }
+}
+
+/// Start the next queued command, if the drive is idle. Returns whether one was started.
+fn advance_queue(base: usize) -> bool {
+    let next = {
+        let mut guard = match QUEUE.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if guard.is_empty() {
+            return false;
+        }
+        guard.remove(0)
+    };
+    let left = match QUEUE.lock() {
+        Ok(g) => g.len(),
+        Err(poisoned) => poisoned.into_inner().len(),
+    };
+    harness_log!("repl: > {next}  ({left} left in queue)");
+    run_command(base, &next);
+    true
 }
