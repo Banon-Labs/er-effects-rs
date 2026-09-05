@@ -1033,6 +1033,9 @@ static PHASE_FRAME: AtomicU64 = AtomicU64::new(0);
 static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
 static POPUP_FRAME: AtomicU64 = AtomicU64::new(0);
 static MODE_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Set once the local player has existed this session. Gates the Passive-mode title advance so it
+/// can never touch the BOOT title -- only a title reached after a world, i.e. the post-switch one.
+static WORLD_HAS_EXISTED: AtomicBool = AtomicBool::new(false);
 static DERAILED: AtomicBool = AtomicBool::new(false);
 static ONFRAME_IM_NULL_DIAG: AtomicBool = AtomicBool::new(false);
 /// currentTopMenuJob (+0xB0) recorded at IngameTop, to detect the submenu-entry replacement.
@@ -1193,7 +1196,20 @@ pub fn on_frame(base: usize) {
         // ORDER MATTERS AND IS WHY THIS WAS NOT ENOUGH ON ITS OWN EARLIER: while the product was
         // force-hiding PressStart unconditionally, no accept could land no matter who wrote it.
         // That gate is fixed separately; this supplies the press once the component is visible.
-        if title_scan::title_pab_parked(base) {
+        // ONLY A TITLE THAT COMES AFTER A WORLD -- NEVER THE BOOT TITLE (corrected 2026-09-04).
+        //
+        // The first version of this pressed any parked title, and it broke the BOOT load: run
+        // br-20260905-000614-2576 never got past milestone_idx=5 with player_present=False, where
+        // the immediately preceding build (same product DLL, no press) reached the world normally
+        // (br-20260905-000200-2791: player_present=True, milestone_idx=11). Pressing the boot title
+        // races the product's own autoload, which owns that transition.
+        //
+        // The post-switch title is the only one that needs a press, and it is distinguishable
+        // without reading product state: a world has already existed this session. Latch that the
+        // first time the player is present, and only press once the latch is set.
+        if crate::game_mem::player_present() {
+            WORLD_HAS_EXISTED.store(true, Ordering::SeqCst);
+        } else if WORLD_HAS_EXISTED.load(Ordering::SeqCst) && title_scan::title_pab_parked(base) {
             advance_press_any_button(base);
         }
         return;
