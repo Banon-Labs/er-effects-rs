@@ -647,6 +647,40 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
             }
         }
     }
+    // HAND THE SWITCH BACK SO IT WORKS A SECOND TIME (2026-09-05).
+    //
+    // The load-3 failure: switch #1 loads its character, switch #2 arms and then nothing happens --
+    // the world you are standing in is never torn down, no loading screen appears, and the quit menu
+    // reopens over a destroyed ProfileSelect with rows that do nothing. Measured end to end on run
+    // br-20260905-212926-4ed9:
+    //   +53662ms  switch #1 arms (slot 1)
+    //   +53980ms  return-title REQUEST fired, bc4 forced READY, final functor submitted
+    //   +57543ms  WORLD LOST #1 -- the old world is gone, which is the teardown working
+    //   +57853ms  slot 1 loads. Onyx Lord, player present, c30 0x1c000000
+    //   +119525ms switch #2 arms (slot 0) -- and that is the LAST thing it does
+    //   +120170ms "requested save-slot load index world_up=true" and then that line, forever
+    // No REQUEST, no bc4 force, no functor, no WORLD LOST #2, no reload SUBMIT. End-of-run telemetry
+    // names the cause exactly: request_count=1, chain_submit_count=1, final_functor_call_count=1 --
+    // all three still spent from switch #1, and all three are the `== 0` / `compare_exchange(0,1)`
+    // gates the teardown runs behind.
+    //
+    // WHY THE EXISTING RE-ARM DID NOT RUN. It lives in `system_quit_continue_confirm_hook`, behind
+    // `switch_active` (phase in CONFIRMED..=AUTOLOAD_HANDOFF). Our own `own_load_feed_deserialize`
+    // above calls the native parser at 0x67b290 -- the SAME address `system_quit_inworld_load_skip_hook`
+    // guards -- and on a proven deserialize that hook stores phase = IDLE. It runs milliseconds BEFORE
+    // `own_load_continue_fire`, so by the time the confirm arrives the phase is already IDLE, the hook
+    // classifies it NON-SWITCH, and the whole commit branch is skipped. Confirmed across all 40 runs
+    // in ~/.cache/er-me3-runs: `continue_confirm_fresh_deser_count` is 0 in every one, and
+    // `non_switch_count` carries every forward. That branch is dead code on this path; this call is
+    // the live edge.
+    //
+    // Placed AFTER `own_load_continue_fire` on purpose, and not at the switch ARM: the 2026-07-02
+    // bisect showed an arm-time reset is re-consumed by the teardown still in flight and bounces even
+    // a single switch. Here the switch is committed and both gates are independently shut (phase IDLE,
+    // bc4 0), so handing the counters back opens nothing until the next arm.
+    unsafe {
+        crate::experiments::system_quit_rearm_switch_for_next_load("own-load-switch-reload-commit")
+    };
     true
 }
 

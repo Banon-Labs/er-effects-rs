@@ -133,6 +133,58 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
     rearm_boot_progress_for_own_menu_load(selected_slot, source);
 }
 
+/// Hand System->Quit->Load Character back so it works a SECOND time, and a third.
+///
+/// Everything this touches is a one-shot the switch just spent. The teardown that clears the old
+/// world runs exactly once per session unless these are handed back: the native return-title
+/// REQUEST fires only while `RETURN_TITLE_REQUEST_COUNT == 0`, the menu-pump submit only while
+/// `DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT == 0`, and the final functor is a
+/// `FINAL_FUNCTOR_CALL_COUNT` compare_exchange 0 -> 1. Spent, the next switch arms, reports
+/// `direct_chain_submitted=true` without submitting anything, and never asks for a teardown: the
+/// character you were playing stays standing, no loading screen appears, and the third character
+/// never loads.
+///
+/// The menu-window trackers are the same failure wearing its UI face. They still point at the
+/// IngameTop/OptionSetting/ProfileSelect windows this switch destroyed, and the quit menu's hide
+/// keys off a tracked window being valid -- so on the next open the vtable read on a torn-down
+/// window fails, the menu does not hide behind ProfileSelect, it draws on top of a dead one, and
+/// its rows do nothing. Resetting them makes the next quit-menu open repopulate through the
+/// MenuWindowJob::Run hook, exactly as it did the first time.
+///
+/// WHEN IT IS SAFE TO CALL. Only once this switch's return-title machinery is fully consumed --
+/// i.e. after the load has been committed. Resetting at ARM time was tried and reverted on
+/// 2026-07-02 (the commented-out pair below): the counters are re-consumed during the teardown
+/// still in flight, the chain double-submits, and even a SINGLE switch bounces back to the title.
+/// At the commit point both remaining gates are independently shut -- `SYSTEM_QUIT_QUICKLOAD_PHASE`
+/// is IDLE (every return-title gate requires >= RETURN_TITLE_REQUESTED) and `GameMan+0xbc4` is 0
+/// (the final functor requires READY) -- so handing the counters back opens nothing until the next
+/// arm deliberately re-opens it.
+pub(crate) unsafe fn system_quit_rearm_switch_for_next_load(source: &str) {
+    let spent = (
+        SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.load(Ordering::SeqCst),
+    );
+    SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+    unsafe { system_quit_reset_profile_select_state(source) };
+    SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
+    // `load=` is not decoration. Every switch hands back the SAME values (1/1/1), so without a
+    // per-call discriminator the second call's line is byte-identical to the first and the debug
+    // log's repeat filter SUPPRESSES it outright -- silently, because two occurrences is below its
+    // first restatement milestone. Measured on run br-20260905-215045-c4c6: the re-arm ran for both
+    // switches (all three counters read 0 afterwards) and the log showed it once, which reads as
+    // "it did not run for switch #2". ALLOW_COUNT is the forwarded-confirm total, so it already
+    // differs per switch and needs no new state.
+    let load = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: System->Quit->Load Character re-armed for the next load (load={load} source={source}) -- handed back the return-title one-shots this switch spent (request={} chain_submit={} final_functor={} -> 0/0/0) and dropped the destroyed IngameTop/OptionSetting/ProfileSelect window trackers; without this the next switch submits nothing, never tears the old world down, and opens its quit menu over a dead ProfileSelect",
+        spent.0, spent.1, spent.2
+    ));
+}
+
 pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     const NO_SLOT: usize = usize::MAX;
     if selected_slot < 0 {
@@ -640,25 +692,14 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // world, so every return-title REQUEST/submit/final-functor gate must exclude
                 // AUTOLOAD_HANDOFF; otherwise the reset counts can be consumed by a spurious second
                 // return-title request that leaves bc4=3 stale and blocks the incoming MoveMap finalize.
-                SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
-                SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
-                SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
-                // Restore the per-switch MENU-WINDOW state to boot-fresh too -- the visual analogue of
-                // the one-shots above (er-effects-rs-qwj). These trackers hold this switch's now-destroyed
-                // IngameTop/OptionSetting/ProfileSelect windows; left stale, the NEXT switch's quit menu
-                // (a) does not hide behind ProfileSelect (the hide keys off a valid tracked window, but
-                // the stale pointer's vtable is zeroed on the torn-down window -> hid_top=false, so the
-                // quit menu renders on top) and (b) its Quit Game / Return-to-Desktop rows act dead
-                // because the menu is layered over a stale ProfileSelect. Resetting here -- the same
-                // trackers the deleted repro autopilot used to clear before each switch -- makes the
-                // next quit-menu open repopulate them fresh via the MenuWindowJob::Run hook, so the hide
-                // + input behave identically to the first switch. (Manual B-to-back had the same effect
-                // by forcing a fresh window; this makes it automatic.)
+                //
+                // THIS BRANCH IS NOT THE ONLY EDGE ANY MORE, and on the product path it is not even the
+                // reached one -- see the same call at the end of `own_load_switch_reload_fire`. It stays
+                // here for the confirm that arrives without our own feed having run first; the shared
+                // function is what stops the two drifting.
                 unsafe {
-                    system_quit_reset_profile_select_state("post-switch-commit-menu-hygiene")
+                    system_quit_rearm_switch_for_next_load("post-switch-commit-menu-hygiene")
                 };
-                SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
-                SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase stays AUTOLOAD_HANDOFF until stable-world proof + keep GameMan+0xb78 armed through native finalize + cleared return-title rebuild flags (menuData+0x5d/0x5e, DAT, save_requested) + native-owned warp_requested finalize/autoclear + RESET return-title one-shots for the NEXT switch only (return-title gates exclude AUTOLOAD_HANDOFF)"
                 ));
