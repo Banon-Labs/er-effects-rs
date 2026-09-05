@@ -27,7 +27,7 @@ the session that made it.
 
 Usage:
     python3 scripts/er-gen-me3-profile.py --closure closure.json --save save.json \\
-        --run-id r-123 --profile out.me3 [--vanilla] [--save-default]
+        --run-id r-123 --profile out.me3 [--vanilla]
     python3 scripts/er-gen-me3-profile.py --selftest
 """
 
@@ -55,10 +55,6 @@ PRODUCT_ARTIFACT = "er_quickload.dll"
 EVIDENCE_EXPLICIT = (
     "explicit-save-source run -- NOT release/autoload product proof "
     "(AGENTS.md 2026-07-08). Use ~/Elden/launch.sh with the default APPDATA save for that."
-)
-EVIDENCE_DEFAULT = (
-    "default-save run -- the DLL resolves the active Steam user's own container, "
-    "the same source the user launcher uses."
 )
 
 
@@ -102,17 +98,18 @@ def autoload_file_slot(game_dir: Path) -> tuple[Path, int, str] | None:
 
 
 def refuse_stale_slot_channel(game_dir: Path) -> None:
-    """A `--save-default` run must not launch while a second slot channel is open.
+    """No run may launch while a second slot channel is open.
 
-    `--save-default` writes `save_file_default = true`, and the sidecar's whole promise is that the
-    DLL resolves the active Steam user's own container with no inherited preference. A `slot=` in
-    the game-directory autoload request file is a preference the sidecar cannot see -- it lives in
-    a different file, read by a different code path -- so the promise was only ever half kept.
+    The per-run sidecar names the decoded save and slot, and that is meant to be the whole request.
+    A `slot=` in the game-directory autoload request file is a second preference the sidecar cannot
+    see -- it lives in a different file, read by a different code path -- so the request was only
+    ever half stated. (This guard was written for the removed `--save-default` mode, whose promise
+    was "no slot preference at all"; the contradiction it detects is not specific to that mode.)
 
     Run br-20260831-014208-b1d6 is what that costs: a nine-day-old `slot=0` from a probe script
     armed `OWN_STEPPER_SLOT`, the load correctly used the container's persisted slot 2, and the
     loading screen showed slot 0's face for the whole window. The DLL now discards this file's slot
-    when `save_file_default` is set, so a launch through it is no longer wrong -- but a launcher
+    when the sidecar names one, so a launch through it is no longer wrong -- but a launcher
     that saw the contradiction and said nothing is how it stayed invisible for nine days. Refuse,
     name the file and the line, and let the user decide which channel they meant.
     """
@@ -121,10 +118,10 @@ def refuse_stale_slot_channel(game_dir: Path) -> None:
         return
     path, line_no, line = found
     raise RuntimeError(
-        f"--save-default promises the active Steam user's own container with no slot preference, "
-        f"but {path}:{line_no} still names one: '{line}'. That file is a SECOND slot channel the "
-        f"sidecar cannot reach. Delete it (rm -f '{path}'), or drop --save-default and pass the "
-        f"save you actually mean."
+        f"this run stages a decoded save and slot in its own sidecar, but {path}:{line_no} still "
+        f"names a slot of its own: '{line}'. That file is a SECOND slot channel the sidecar cannot "
+        f"reach, and which of the two wins is not something this launcher can promise. "
+        f"Delete it (rm -f '{path}')."
     )
 
 
@@ -236,7 +233,7 @@ def render_profile(
     return "\n".join(lines) + "\n"
 
 
-def render_sidecar(save: dict | None, run_id: str, use_default_save: bool) -> str:
+def render_sidecar(save: dict, run_id: str) -> str:
     lines = [
         f"# GENERATED per-run overlay for run {run_id} -- scripts/er-gen-me3-profile.py",
         "#",
@@ -246,13 +243,7 @@ def render_sidecar(save: dict | None, run_id: str, use_default_save: bool) -> st
         "# are untouched -- only the keys below are overridden, and only for this run.",
         "",
     ]
-    if use_default_save:
-        lines += [
-            "# Clear any inherited save_file so the DLL resolves the active Steam user's",
-            "# own default container, exactly as the user launcher does.",
-            "save_file_default = true",
-        ]
-    elif save:
+    if save:
         # State the ACTUAL protection, not the intended one. The DLL stages a private copy and
         # should never write the source -- but 45 of the 89 corpus saves are writable on disk,
         # so a file claiming "read-only" over a writable source would be a comforting lie in
@@ -275,11 +266,14 @@ def render_sidecar(save: dict | None, run_id: str, use_default_save: bool) -> st
 def generate(args) -> dict:
     closure = json.loads(Path(args.closure).read_text(encoding="utf-8"))
     save = json.loads(Path(args.save).read_text(encoding="utf-8")) if args.save else None
-    if args.save_default:
-        save = None
+    refuse_stale_slot_channel(steam_game_dir())
 
-    if args.save_default:
-        refuse_stale_slot_channel(steam_game_dir())
+    if save is None:
+        raise RuntimeError(
+            "--save is required: every run must name a DECODED save. The old --save-default "
+            "launched the active Steam user's container without decoding anything, which is the "
+            "one path that could not satisfy AGENTS.md's Autoload Identity Launch Gate."
+        )
 
     target_dir = Path(args.target_dir).resolve()
     dlls = artifact_paths(closure, target_dir)
@@ -305,11 +299,11 @@ def generate(args) -> dict:
                 "or pass --vanilla (which restricts the save draw to .sl2)."
             )
 
-    evidence = EVIDENCE_DEFAULT if args.save_default else EVIDENCE_EXPLICIT
+    evidence = EVIDENCE_EXPLICIT
     profile_text = render_profile(
         closure, save, dlls, args.run_id, ersc, evidence, sidecar, args.disable_arxan
     )
-    sidecar_text = render_sidecar(save, args.run_id, args.save_default)
+    sidecar_text = render_sidecar(save, args.run_id)
 
     profile_path = Path(args.profile).resolve()
     profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,7 +316,7 @@ def generate(args) -> dict:
         "sidecar": str(sidecar),
         "dlls": [str(dll) for dll in dlls],
         "ersc": str(ersc) if ersc else None,
-        "evidence_class": "default-save" if args.save_default else "explicit-save-source",
+        "evidence_class": "explicit-save-source",
         "remove_paths": [str(profile_path), str(sidecar)],
     }
 
@@ -404,7 +398,7 @@ def selftest() -> int:
                 keys.add(stripped.split("=", 1)[0].strip())
             return keys
 
-        overlay = render_sidecar(save, "r-test", use_default_save=False)
+        overlay = render_sidecar(save, "r-test")
         check("save_file = '/corpus/ER0000.sl2'" in overlay, "the sidecar sets the save path")
         check(
             assigned_keys(overlay) == {"save_file", "slot"},
@@ -412,16 +406,13 @@ def selftest() -> int:
             f"(got {sorted(assigned_keys(overlay))})",
         )
 
-        default = render_sidecar(None, "r-test", use_default_save=True)
-        check(
-            assigned_keys(default) == {"save_file_default"},
-            f"default mode assigns only the explicit unset key "
-            f"(got {sorted(assigned_keys(default))})",
-        )
-
-        # THE SECOND SLOT CHANNEL. `save_file_default` clears the sidecar/TOML slot, and cannot
-        # reach the game-directory autoload request file at all -- so a stale `slot=` there kept
-        # steering "default container" runs (br-20260831-014208-b1d6).
+        # THE SECOND SLOT CHANNEL, still live and now the ONLY reason this guard exists. It was
+        # written for `--save-default`, which is gone (2026-09-04, user directive: "--save default
+        # should be removed as a feature ... I don't care what save slot you load"). The hazard it
+        # names outlived the mode: the game-directory autoload request file is a slot channel the
+        # per-run sidecar cannot see, so a stale `slot=` there can still contradict the decoded
+        # slot this run staged. Run br-20260831-014208-b1d6 is the cost -- a nine-day-old `slot=0`
+        # steered the loading-screen face while the load used the container's own slot 2.
         game = tmp / "Game"
         game.mkdir()
         check(autoload_file_slot(game) is None, "no autoload request file means no slot channel")
@@ -432,7 +423,7 @@ def selftest() -> int:
         check(found is not None and found[1] == 2, "the offending line is located, not just found")
         try:
             refuse_stale_slot_channel(game)
-            check(False, "--save-default must refuse while a stale slot channel is open")
+            check(False, "a stale slot channel must be refused, not silently overridden")
         except RuntimeError as err:
             check(
                 AUTOLOAD_REQUEST_FILE in str(err) and "slot=0" in str(err),
@@ -440,7 +431,7 @@ def selftest() -> int:
             )
 
         # `slot=` with no value is not a preference, and `own_load=1` is not a slot. Neither may
-        # block a default-save run: a refusal that fires on unrelated keys gets routed around.
+        # block a run: a refusal that fires on unrelated keys gets routed around.
         stale.write_text("own_load=1\nslot=\n", encoding="utf-8")
         check(autoload_file_slot(game) is None, "an empty or absent slot is not a slot channel")
         refuse_stale_slot_channel(game)
@@ -453,7 +444,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--closure", help="JSON from er-dll-closure.py --json")
     parser.add_argument("--save", help="JSON from er-pick-save.py --json")
-    parser.add_argument("--save-default", action="store_true", help="use the active Steam default save")
     parser.add_argument("--run-id", default="adhoc")
     parser.add_argument("--profile", help="output .me3 path")
     parser.add_argument(

@@ -187,7 +187,6 @@ const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 470;
 /// Asymptotic creep time-constant: creep = gap * since/(since + K). At `since == K` the bar is halfway to
 /// the next milestone; it keeps approaching but never reaches it, so the bar NEVER fully freezes during a
 /// long phase (user 2026-07-15: STARTING UP ~23s and the title load ~32s made a 70%-capped bar look stuck).
-const BOOT_VIEW_CREEP_K_MS: u64 = 2600;
 /// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
 /// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
 /// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
@@ -1318,11 +1317,21 @@ fn boot_view_progress() -> (usize, usize) {
     let (_, sub_i, sub_max) = boot_view_phase_submilestone(set.phase(idx));
     let done = sub_i.saturating_sub(1).min(sub_max);
     let sub_fill = base + gap * done / sub_max.max(1);
-    // Asymptotic creep toward (never reaching) the next milestone, so a phase with no finer RAM
-    // granularity still inches forward instead of freezing -- the "is it stuck?" fix.
-    let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
-    let creep = (gap as u64 * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
-    let pm = sub_fill.max(base + creep).min(next).min(1000);
+    // NEVER ESTIMATE (user directive 2026-09-04). An asymptotic clock-driven creep used to sit here
+    // -- `gap * since / (since + BOOT_VIEW_CREEP_K_MS)` -- so that "a phase with no finer RAM
+    // granularity still inches forward instead of freezing". It advanced the bar on WALL TIME, with
+    // no relation to work performed, which makes it an estimate presented as a measurement. Its own
+    // stated purpose was to stop a stalled phase LOOKING stalled: that is the one thing a progress
+    // readout must never do, because this project's whole runtime debugging turns on telling a slow
+    // load apart from a frozen one, and a bar that inches forward regardless erases the difference
+    // for the user AND for the agent reading the log afterwards.
+    //
+    // What remains is `sub_fill`, which is measured: the active phase's substeps are RAM semaphores,
+    // so the fill moves when the game does and holds when it does not. A phase with no substep
+    // granularity now HOLDS at its base, and AGENTS.md already says how to render that honestly --
+    // a labelled `<phase-specific label> 1/1` in the parenthesised sub-progression, codifying the
+    // ignorance rather than smoothing over it.
+    let pm = sub_fill.min(next).min(1000);
     // While the startup save picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge
     // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
     // so the bar resumes toward LOADING SAVE / the world phases.

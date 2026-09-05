@@ -97,14 +97,6 @@ SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
 #          er_input_harness.dll, which is a declared conflict with er_quickload (bd
 #          claims76-structurally-unsettleable-2026-08-31). Unreachable is not the same as
 #          deleted, so these need a look at the state machine before WIRE-or-DELETE.
-SQ_REPRO_BOX_NAV_BASELINE
-SQ_REPRO_BOX_NAV_BUTTON
-SQ_REPRO_BOX_NAV_CANDIDATE
-SQ_REPRO_INITIAL_FOREGROUND_LOGGED
-SQ_REPRO_OPEN_KEY_VK
-SQ_REPRO_TAB_RETURN_DWELL_START
-SQ_REPRO_TAB_RETURN_MAX_TAB
-SQ_REPRO_TAB_RETURN_PHASE
 
 # DELETE -- recorded as removed behaviour or a duplicate of a live counter.
 #          RAWINPUT_BLOCKED_UNFOCUSED_EVENTS [R]: input_block.rs:806-816 records that the

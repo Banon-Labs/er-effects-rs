@@ -402,10 +402,32 @@ pub(crate) fn system_quit_repro_enabled() -> bool {
     // switch (er-quickload-switch-slot.txt present). Running both fought over arming AND the menu-nav
     // suppressed the move-probe (load2 can_move never latched). The move-probe (prove_movement_enabled)
     // stays on harness presence. bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
+    // ALSO stand down when the HARNESS is driving the menu itself (its force-drive marker is
+    // present). Two switch drivers in one process do not merely conflict -- they make the run a lie.
+    // Measured on br-20260905-041435-e8d0: the harness had opened the pause menu and was on
+    // `nav_to_optionsetting` when this autopilot hit its 180-frame settle, called
+    // `switch_slot_arm_programmatic` and tore the world down (`world_sim` 1 -> 0), so the phase
+    // logged DERAILED for a nav that never got the chance to fail. The second load the user watched
+    // was this autopilot's every time -- `presses=0` -- which is why a menu bug could never be
+    // reproduced no matter how correct the harness's menu phases became.
     harness_dll_present()
+        && !harness_force_drive_marker_present()
         && er_telemetry_core::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
             .load(std::sync::atomic::Ordering::SeqCst)
             == 0
+}
+
+/// TRUE when `er-input-harness` has been told to drive this run itself (the same marker its
+/// `force_drive_requested()` reads, resolved the same way -- beside the DLL's log, because me3
+/// launches the game with an arbitrary CWD and a bare relative path silently answers false).
+/// Read-only here: the product uses it to KEEP OUT of the harness's way, never to drive anything.
+pub(crate) fn harness_force_drive_marker_present() -> bool {
+    matches!(std::env::var("ER_HARNESS_FORCE_DRIVE").as_deref(), Ok("1"))
+        || er_game_base::log::redirected_artifact_path(
+            "ER_HARNESS_FORCE_DRIVE_PATH",
+            "er-harness-force-drive.txt",
+        )
+        .exists()
 }
 /// COLD CHAR-MOUNT experiment gate (env ER_QUICKLOAD_COLD_CHAR_MOUNT / er-quickload-cold-char-mount.txt,
 /// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-

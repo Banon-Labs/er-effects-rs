@@ -15,6 +15,7 @@ pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetModuleHandleA(name: *const u8) -> *mut c_void;
+    pub fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
     pub fn GetTickCount64() -> u64;
     pub fn ReadProcessMemory(
         process: isize,
@@ -100,6 +101,25 @@ pub unsafe fn read_usize(addr: usize) -> Option<usize> {
     (ok != 0 && read == std::mem::size_of::<usize>()).then_some(value)
 }
 
+/// Read a 32-bit value from this process's own address space (fault-safe, same `ReadProcessMemory`
+/// idiom as [`read_usize`]). Needed wherever a struct field is genuinely a dword: reading one with
+/// `read_usize` pulls in the NEXT field's bytes as the high half, which is harmless when the caller
+/// truncates and wrong when the field is the last one in the entry.
+pub unsafe fn read_u32(addr: usize) -> Option<u32> {
+    let mut value = 0u32;
+    let mut read = 0usize;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&mut value as *mut u32).cast(),
+            std::mem::size_of::<u32>(),
+            &mut read,
+        )
+    };
+    (ok != 0 && read == std::mem::size_of::<u32>()).then_some(value)
+}
+
 /// Write a single byte to this process's own address space via `WriteProcessMemory` (fault-safe: returns
 /// false instead of crashing on a stale/unmapped pointer). Used to stamp the input array without a raw
 /// deref that would fault the game thread if the target was reallocated.
@@ -115,6 +135,23 @@ pub unsafe fn write_u8(addr: usize, value: u8) -> bool {
         )
     };
     ok != 0 && wrote == 1
+}
+
+/// Write a 32-bit value into this process's own address space (fault-safe, `WriteProcessMemory`).
+/// Used to drive the menu pointer, where the field is a dword and a pointer-sized write would
+/// clobber the neighbouring coordinate.
+pub unsafe fn write_i32(addr: usize, value: i32) -> bool {
+    let mut wrote = 0usize;
+    let ok = unsafe {
+        WriteProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            (&value as *const i32).cast(),
+            std::mem::size_of::<i32>(),
+            &mut wrote,
+        )
+    };
+    ok != 0 && wrote == std::mem::size_of::<i32>()
 }
 
 /// Read a single byte from this process's own address space (fault-safe). Used to confirm a keystate

@@ -1,31 +1,16 @@
 // ============================================================================================
 /// XInput poll counter. It was named for the INJECT-NAV drive that once owned it; that drive is
-/// deleted and the sole remaining consumer is the System->Quit repro autopilot, which bumps it on
-/// every fabricated poll to guarantee a fresh `dwPacketNumber`.
+/// deleted and the sole remaining consumer is the XInput poll hook, which bumps it on every
+/// fabricated poll to guarantee a fresh `dwPacketNumber`.
 pub(crate) use er_telemetry_core::counters::INJECT_NAV_FRAME;
-pub(crate) use er_title_flow::XINPUT_GAMEPAD_DPAD_DOWN;
-/// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
-/// (D-pad Up, Start, Left-Shoulder/LB, A). D-pad Down is XINPUT_GAMEPAD_DPAD_DOWN above.
+/// XINPUT_GAMEPAD.wButtons D-pad Up bit.
 pub(crate) const XINPUT_GAMEPAD_DPAD_UP: u16 = 0x0001;
-/// D-pad Left/Right bits. Used only by the Save Game confirm-chain drive, which does not know
-/// (and must not guess) which axis a two-button `CS::MessageBoxDialog` lays its buttons out on:
-/// it pulses candidates and latches whichever one actually moves the dialog cursor.
+/// D-pad Left/Right bits.
 pub(crate) const XINPUT_GAMEPAD_DPAD_LEFT: u16 = 0x0004;
 pub(crate) const XINPUT_GAMEPAD_DPAD_RIGHT: u16 = 0x0008;
-pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
-pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
-pub(crate) const XINPUT_GAMEPAD_RIGHT_SHOULDER: u16 = 0x0200;
-pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
-/// XINPUT_GAMEPAD.wButtons B bit (menu Back/Cancel).
-pub(crate) const XINPUT_GAMEPAD_B: u16 = 0x2000;
-/// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
-/// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
-/// gamepad from). 0 = no button. It is now the ONLY button source the XInput hook fabricates from.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_XINPUT_BUTTONS;
-/// ProfileSelect cursor index captured on entry to TO_SLOT (the current/most-recent save the cursor
-/// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
-/// usize::MAX = not yet captured (reset on entry to TO_SLOT).
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_INITIAL_CURSOR;
+/// Synthesized gamepad wButtons READ by the XInput poll hook (the stage the game reads a gamepad
+/// from). 0 = no button. Its only writer was the deleted System->Quit repro autopilot, so it now
+/// reads 0 on every poll.
 // The whole INJECT-NAV drive is gone (2026-08-26): the branch in
 // product_core_own_stepper/fallback_drives.rs, its counters (INJECT_NAV_LOG_COUNT /
 // INJECT_NAV_LOG_FIRST / INJECT_NAV_CUR_BUTTONS, deleted from er-telemetry-core), its poll-frame
@@ -89,158 +74,19 @@ pub(crate) const MOVE_PROBE_REQUIRED_FRAMES: usize = 60;
 // branch alone, so it went with that branch. DIK_NONE below is still written by the can-move probe.
 /// No key injected (clears the stamp on gap/settle frames).
 pub(crate) const DIK_NONE: u8 = 0;
-/// System->Quit Save Game REPRO AUTOPILOT state machine. Reproduces the controller path to the
-/// in-world System menu and always activates the Save Game row by fabricating the XInput gamepad poll
-/// (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances ONLY on an
-/// observed transition (menu-window semaphore / save-request telemetry / close telemetry) -- never a
-/// timer, tap budget, or retry count:
-///   WAIT_WORLD -> WAIT_RELOAD (menu-free programmatic switch arm) -> DONE.
-/// The intermediate menu-nav states 1..5 (OPEN_MENU / TO_SYSTEM / TO_PROFILE / TO_SLOT / CONFIRM)
-/// are GONE: nothing ever transitioned into them, so the arms that implemented them were shipped but
-/// unreachable machine code. The values are left unused rather than renumbered because DONE=6 and
-/// WAIT_RELOAD=7 are compared against in telemetry consumers.
-pub(crate) const SQ_REPRO_STATE_WAIT_WORLD: usize = 0;
-pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
-/// Between two back-to-back switches: after a switch's OK is confirmed, wait here for THAT switch's
-/// reload to commit (fresh-deser count reached) and the NEW world to be up + settled, then re-arm
-/// the state machine (clear the per-switch window/cursor/confirm signals) and drive the next switch.
-/// Distinct from DONE so `block_input_enabled`/`xinput_get_state_hook` keep the block engaged and the
-/// fabricated pad driving across the reload (they gate on `!= DONE`).
-pub(crate) const SQ_REPRO_STATE_WAIT_RELOAD: usize = 7;
-/// TAB-RETURN repro (gated by `er-quickload-tab-return-repro.txt`): from the open OptionSetting, navigate
-/// RIGHT (RB) to the last tab (the Quit/Exit tab, where our injected rows build), then LEFT (LB) back to
-/// tab 0 (Game Options), then dwell -- reproducing the blank Game Options pane the user reported (a tab
-/// goes blank on RETURN after visiting the custom tab). Uses OPTIONSETTING_CURRENT_TAB feedback.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_TAB_RETURN: usize = 8;
-/// PROFILE-BACK repro: capture per-tab row-table baselines, open the cloned Load Profile row, press
-/// B on ProfileSelect, wait for restore, then revisit tabs and compare exact row-table fingerprints.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
-/// SAVE-GAME SELF-DRIVE (save-game-flow WP2): once the Save Game row has opened the destination list,
-/// walk the confirm boxes the way a user does -- move the dialog cursor onto the affirmative
-/// button, then press confirm -- checkpointed on `oracle_save_flow_stage`, never on timers.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_STATE_SAVE_CONFIRM: usize = 13;
-/// Nav directions the confirm-chain drive tries, in order, until one moves the dialog cursor.
-/// The winning direction is latched in `SQ_REPRO_BOX_NAV_BUTTON` for the rest of the run; a
-/// two-button box wraps, so any working axis converges on the target index.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_BOX_NAV_CANDIDATES: [u16; 4] = [
-    XINPUT_GAMEPAD_DPAD_LEFT,
-    XINPUT_GAMEPAD_DPAD_RIGHT,
-    XINPUT_GAMEPAD_DPAD_UP,
-    XINPUT_GAMEPAD_DPAD_DOWN,
-];
-/// Latched working nav button for the confirm boxes (0 = not discovered yet).
-#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
-pub(crate) static SQ_REPRO_BOX_NAV_BUTTON: AtomicUsize = AtomicUsize::new(0);
-/// Dialog cursor observed when the current nav candidate began its pulse (usize::MAX = none).
-#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
-pub(crate) static SQ_REPRO_BOX_NAV_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Candidate index currently being pulsed while the nav direction is still unknown.
-#[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
-pub(crate) static SQ_REPRO_BOX_NAV_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
-/// Frames with no tab change before we treat the strip end as reached (phase 0 -> 1).
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_TAB_RETURN_STALL_TICKS: usize = 40;
-/// Dwell on Game Options this many ticks so the pane-visibility oracle samples the (blank) tab 0.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
-pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
-/// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
-/// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_SWITCH_INDEX;
-/// How many back-to-back harness-driven switches to drive. Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
-///
-/// The Save Game row repro is always-on when the repro harness itself is enabled; it no longer needs
-/// an env selector. The legacy switch-count constants below are retained for older ProfileSelect
-/// harness code paths, but the active Save Game validation path stops once save-request + menu-close
-/// telemetry fires.
-// 2 back-to-back switches = load1 -> load2 -> load3 (the goal's "no less than two successive loads"
-// after the first automatic load). The harness ships inert (harness_dll_present), so this only affects
-// agent-owned runs. Overridable per-run via er-quickload-sq-target-switches.txt.
-pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
-/// Exact ProfileSelect Back repro latches. `DONE` means the self-drive opened System->Quit's cloned
-/// Load Profile row, observed ProfileSelect, sent B/Back, observed restore, returned to Game Options,
-/// and did not arm a profile load.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_OPENED;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_DONE;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_RESTORE_COUNT;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_FINAL_TAB;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_BASELINE_MASK;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_VERIFY_MASK;
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_PROFILE_BACK_MISMATCH_MASK;
-pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_HASHES: [AtomicUsize; 10] =
-    [const { AtomicUsize::new(0) }; 10];
-pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS: [AtomicUsize; 10] =
-    [const { AtomicUsize::new(usize::MAX) }; 10];
-pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_HASHES: [AtomicUsize; 10] =
-    [const { AtomicUsize::new(0) }; 10];
-pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS: [AtomicUsize; 10] =
-    [const { AtomicUsize::new(usize::MAX) }; 10];
-/// The explicit ProfileSelect slot each switch loads. Slots 4/5 are the two REAL, distinct
-/// characters in the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 =
-/// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot
-/// drives the ProfileSelect cursor to the exact target (not "one off current"), so each switch lands
-/// on a real character regardless of which slot the reload made current. The third entry returns to
-/// slot 4, matching the 3rd in-session ProfileSelect open that crashed the native thumbnail builder
-/// on the empty renderer table (er-effects-rs-j3r), the deterministic repro/validation for the
-/// table-repair hook.
-// SAME-CHARACTER repeat load (the goal: two+ successive loads of angrE, slot 0). Every switch loads
-// slot 0, not a different slot per switch -- the old [0,1,2,..] loaded a DIFFERENT character on switch #2
-// (user 2026-07-21: "the stats on screen don't match the player loaded"). Override per-run via
-// er-quickload-sq-target-slots.txt if a multi-character sweep is ever wanted.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0; 10];
-/// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
-/// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
-/// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_CONFIRM_BASELINE;
-/// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
-/// injected edge hold/gap timing is RE-grounded, not invented: edge-triggered menu nav needs a
-/// multi-frame hold to register one step; a 1-frame tap is missed -- bd
-/// keyboard-dik-down-injection-works-cursor-moves-2026.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TICK;
-/// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
-/// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_STATE_TAPS;
-/// Frames spent in WAIT_RELOAD with a failing gate (reset per switch via `sq_repro_begin_switch`).
-/// The observed er-effects-rs-qwj stall sat here with switch #1 stable and fresh-deser == expected,
-/// so one of the gates was lying; the periodic gate dump (every `SQ_REPRO_WAIT_RELOAD_LOG_EVERY`
-/// frames) names the culprit with data instead of a single opaque waiting line.
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_WAIT_RELOAD_FRAMES;
-/// WAIT_RELOAD gate-dump period in frames (~8.5s at 60fps): frequent enough to bound a stall fast,
-/// sparse enough to never spam the debug log across a full reload (~10-15s).
-pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
-/// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
-/// world-readiness settle; the run that first opened IngameTop used it.
-pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
-/// Frames the switch-arm gate will wait, AFTER the settle, for the current load to PROVE genuine
-/// movement (HARNESS_MOVE_VERDICT==1: the can-move probe confirmed >=60 frames of injected-stick
-/// movement with a clean OFF-tail). Once the probe is gated on the rendered state (2026-07-21) the
-/// verdict fires reliably (load3 latched it), so waiting for it makes EACH load prove movement before
-/// the next switch, not just the last. Reaching this timeout emits a failed-epoch verdict and leaves the
-/// harness parked; it never advances past an unproven load.
-pub(crate) const SQ_REPRO_MOVE_PROOF_TIMEOUT_TICKS: usize = 900;
-/// FREEZE VERDICT DEADLINE. Frames the WAIT_RELOAD gate allows a reload to prove genuine movement
-/// before emitting a one-shot frozen-epoch verdict. The harness does NOT advance to another switch on
-/// this deadline: doing so overwrote the still-open portrait target and made the failed epoch disappear
-/// under a recovery load. The bounded run's global cap owns teardown if movement never proves.
-pub(crate) const SQ_REPRO_FREEZE_RECOVERY_DEADLINE: usize = 900;
-/// WAIT_WORLD movement-proof deadline (2026-07-18): before driving switch #1, wait for load1 to PROVE
-/// movement (CAN_MOVE_CONFIRMED) so the reload is triggered from a genuinely playable state, not a
-/// half-streamed one -- prior runs drove OPEN_MENU while load1 was still at mms 13-16. Fallback ticks
-/// so a load that never proves movement still advances (per the strict parity, driving one more load
-/// recovers a frozen one) instead of hard-stalling. ~1500f (~47s at 32fps) is generous for a real load.
-#[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
-pub(crate) const SQ_REPRO_WAIT_WORLD_MOVE_DEADLINE: usize = 1500;
+/// DirectInput scancode for the 'W' key -- the forward-movement binding the can-move probe stamps
+/// into the game's own `GetDeviceState` keyboard buffer. Not the Win32 VK (0x57): this is the DIK the
+/// DInput8 keyboard device reports, which is the only keyboard stage `eldenring.exe` reads (1.17
+/// imports DINPUT8 + USER32 `GetKeyState`/`GetKeyboardState` and no RawInput API at all).
+pub(crate) const DIK_W: u8 = 0x11;
+/// Win32 virtual-key code for 'W' -- the same forward-movement key as [`DIK_W`], expressed for the
+/// USER32 `GetKeyState`/`GetKeyboardState` stage rather than the DirectInput one.
+pub(crate) const VK_W: u8 = 0x57;
+// DELETED 2026-09-05 with the System->Quit repro autopilot: SQ_REPRO_STATE and its DONE/WAIT_RELOAD
+// values, SQ_REPRO_SWITCH_INDEX, and the `sq_repro_state` / `sq_repro_switch_index` telemetry fields
+// they fed. Once the autopilot's tick was gone nothing advanced either, so both would have published
+// a constant 0 forever -- a watcher reading "state 0, switch 0" cannot tell a pinned dead counter
+// from a run that genuinely never switched, which is worse than the field being absent.
 // INJECT_NAV_NO_BUTTONS went with the INJECT-NAV branch: it existed only to compare against that
 // schedule's per-frame wButtons.
 pub(crate) use er_title_flow::MSGBOX_CLOSING_LATCH_3B0_OFFSET;

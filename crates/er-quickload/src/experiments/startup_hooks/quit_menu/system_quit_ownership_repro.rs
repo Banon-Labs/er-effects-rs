@@ -57,29 +57,6 @@ pub(crate) fn ownership_outstanding(class: OwnedClass) -> usize {
         .saturating_sub(OWNED_RELEASED[i].load(Ordering::SeqCst))
 }
 
-/// OWNERSHIP LEDGER -- assert every class stays within its bound; on breach, latch the violation
-/// oracle and log loudly. Called at each switch boundary (cheap enough to call per-frame). Returns
-/// true iff all classes are within bound. A breach means a native-owned object was taken without a
-/// paired release (the spared-renderer leak class) -- caught at the FIRST offending switch, not at a
-/// downstream crash.
-pub(crate) fn ownership_ledger_check(context: &str) -> bool {
-    let mut ok = true;
-    for i in 0..OWNED_CLASS_COUNT {
-        let taken = OWNED_TAKEN[i].load(Ordering::SeqCst);
-        let released = OWNED_RELEASED[i].load(Ordering::SeqCst);
-        let outstanding = taken.saturating_sub(released);
-        if outstanding > OWNED_CLASS_BOUND[i] {
-            ok = false;
-            OWNED_LEDGER_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "OWNERSHIP-LEDGER VIOLATION ({context}): class '{}' outstanding={outstanding} > bound={} (taken={taken} released={released}) -- a native-owned object was taken without a paired release (the spared-renderer leak class)",
-                OWNED_CLASS_NAMES[i], OWNED_CLASS_BOUND[i]
-            ));
-        }
-    }
-    ok
-}
-
 /// Destroy a previously-spared portrait renderer via CSDelayDeleteMan -- the exact native path the
 /// profile-renderer teardown (`FUN_1409b2f00`) uses for the other 9 renderers each teardown (marks
 /// the object's +0x756 byte, enqueues it, freed on the delete pump when the GPU is done). Vtable-
@@ -122,15 +99,6 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
     unsafe { f(man, renderer) };
     PROFILE_SPARE_ORPHANS_DELETED.fetch_add(1, Ordering::SeqCst);
     true
-}
-
-/// Format an `AtomicUsize` low-water value: `usize::MAX` is the never-sampled sentinel.
-pub(crate) fn fmt_lowwater(v: usize) -> String {
-    if v == usize::MAX {
-        "unsampled".to_string()
-    } else {
-        v.to_string()
-    }
 }
 
 /// Bump the GX command-queue producer histogram for `key` (lock-free open addressing; a full table
@@ -1436,13 +1404,13 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // load this profile) with ZERO MessageBox and zero extra input. Repeatable: the continue_confirm
     // hook returns the phase to IDLE after each reload, so the next pick re-arms cleanly.
     //
-    // The repro autopilot takes this SAME direct-arm path as a human pick. Its old scripted
-    // double-A confirm chain (A pick -> confirm MessageBox -> A OK -> load-job Run -> arm) is
+    // The now-deleted repro autopilot took this SAME direct-arm path as a human pick. Its old scripted
+    // double-A confirm chain (A pick -> confirm MessageBox -> A OK -> load-job Run -> arm) was already
     // unreachable after the FIRST completed switch: that switch's arm latches PRODUCT_AUTOLOAD_ARMED,
     // whose msgbox suppression then eats the confirm box the second A needs, so every later pick
     // stalled (observed autostep10b 2026-07-03: switch #1 confirmed via the OK chain, switch #2
-    // suppressed msgbox-skip #2/#3 and held 20 min). It also no longer matched the human flow this
-    // autopilot exists to reproduce. Remaining gates: skip when a switch is already in flight
+    // suppressed msgbox-skip #2/#3 and held 20 min). It also no longer matched the human flow that
+    // autopilot existed to reproduce. Remaining gates: skip when a switch is already in flight
     // (phase != IDLE), for an out-of-range cursor, or for an EMPTY slot (arming an empty slot would
     // tear down to a clean title then fail the deserialize).
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
@@ -1491,12 +1459,4 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} row->slot={row_slot:?} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
     ));
     unsafe { original(dialog, b, c, d) }
-}
-
-/// Advance the System->Quit repro autopilot to `next`, resetting the phase-local tick and the
-/// waiting-log latch.
-pub(crate) fn sq_repro_transition(next: usize) {
-    SQ_REPRO_STATE.store(next, Ordering::SeqCst);
-    SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-    SQ_REPRO_STATE_TAPS.store(0, Ordering::SeqCst);
 }

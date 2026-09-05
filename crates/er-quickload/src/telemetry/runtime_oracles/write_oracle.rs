@@ -456,6 +456,32 @@ fn write_player_presence_oracle(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_harness_move_verdict\": {harness_move_verdict},\n"
     ));
+    // THE KEYBOARD STAGES ER ACTUALLY READS (2026-09-05). These five answer the question the RawInput
+    // counters below CANNOT. `eldenring.exe` 1.17 imports DINPUT8's DirectInput8Create and USER32's
+    // GetKeyState/GetKeyboardState/ToAscii, and imports NO RawInput API at all -- GetRawInputData,
+    // GetRawInputBuffer and RegisterRawInputDevices are absent from the image -- so every RawInput
+    // number below is the overlay's traffic, never the game's. That is what made run
+    // br-20260905-031610-5406 unreadable: 150 supplied SendInput frames against 0 RawInput key events,
+    // with no way to tell "the key never arrived" from "the key arrived and did nothing".
+    // `*_fires` = the game asked this stage for the keyboard. `*_stamps` = we answered "held" into the
+    // buffer/return value it was about to read. Stamping happens AFTER the original call, which is what
+    // makes it focus-independent: both stages otherwise report only for the thread that owns focus.
+    body.push_str(&format!(
+        "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
+        crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::Relaxed),
+        crate::input_blocker::DINPUT_INJECTED_KEY_STAMPS.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_KEYBOARD_STATE_FIRES.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_KEY_STATE_FIRES.load(Ordering::Relaxed),
+        crate::experiments::USER32_INJECTED_VK_STAMPS.load(Ordering::Relaxed),
+        crate::experiments::USER32_GET_CURSOR_POS_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::ON_DISP_MILLI.load(Ordering::Relaxed),
+        er_telemetry_core::counters::OFF_TAIL_DISP_MILLI.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_MGR_2F8.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_MGR_2F9.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_DEBUG_BYTE.load(Ordering::Relaxed),
+        er_telemetry_core::counters::PAD_GATE_SHUT_ON_INJECT_FRAMES.load(Ordering::Relaxed),
+    ));
     // RAWINPUT RECEPTION (user 2026-07-20): whether the GAME received USER mouse/keyboard input this
     // run. The input-harness injects via the direct-memory inputmgr (NOT RawInput), so any nonzero count
     // here means the user's input reached the game -> the run is CONTAMINATED. Cumulative event counts.

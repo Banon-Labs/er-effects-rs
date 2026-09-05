@@ -177,11 +177,13 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // (`oracle_profile_summary_orphaned_record_mask`). AFTER the sweep, deliberately: sampling
     // before it would set a bit on every ordinary picker close.
     unsafe { save_picker_scan_orphaned_records() };
-    // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
-    // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
-    // every frame so the injected key is fresh for the game's keyboard poll, and only
-    // while the block above is engaged (which the autopilot itself keeps on in-world).
-    unsafe { system_quit_repro_tick() };
+    // DELETED 2026-09-05 by user directive ("whatever that thing is that you disarmed can be safely
+    // deleted now"): the self-driven System->Quit->Load-Profile repro autopilot ran here every frame.
+    // It loaded a second character by calling switch_slot_arm_programmatic -- logging
+    // `switch-trigger #1: PROGRAMMATIC arm slot 0 ... presses=0` -- which made every menu-bug repro
+    // impossible: on br-20260905-041435-e8d0 it tore the world down while er-input-harness was still
+    // navigating the pause menu, so the second load under test was always this code's, never the
+    // menu's. scripts/check-world-lost.py already scored such runs INCONCLUSIVE.
     // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
     // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.

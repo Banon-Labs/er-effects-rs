@@ -1,0 +1,38 @@
+[package]
+name = "er-focus-input"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_focus_input"
+crate-type = ["cdylib"]
+
+# Standalone ME3 shell that removes ELDEN RING's window-FOCUS requirement for input.
+#
+# It installs NO detour. The whole intervention is one byte store into a game global that
+# `CS::CSPadStep::STEP_Update` re-reads every frame, so there is no prologue to contend with and
+# nothing for a second MinHook instance to overwrite -- see the module docs in `src/lib.rs` for
+# the static RE that identified the predicate, and `scripts/me3-dll-conflicts.toml` for why that
+# makes it co-loadable with the product and with every other shell.
+#
+# Tier A `er-game-base` only (no `game-types`): the store goes through
+# `er_game_base::mem::write_global_u8`, which owns the 1.16.2 -> 1.17 address translation and
+# REFUSES rather than writing a moved slot.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+# The per-frame anchor is the game's own `CSTaskImp` FrameBegin task -- the same registration
+# er-telemetry and er-input-harness use. It is the only game-thread callback available to a shell
+# that hooks nothing, and being on the game thread is what makes an unsynchronised byte store to a
+# game global sound.
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+] }
+
+[lints]
+workspace = true

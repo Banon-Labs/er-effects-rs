@@ -22,6 +22,12 @@ members = [
   "crates/er-crash-logging",
   "crates/er-reload-trace",
   "crates/er-input-harness",
+  # Removes ELDEN RING's requirement that its window be FOCUSED to accept input, so an
+  # agent-driven runtime run does not have to steal the user's focus to be valid. Installs no
+  # detour: the whole intervention is one byte store into the global behind
+  # `Game.Debug.IsEnableControlOnDisactiveWindow`, which `CS::CSPadStep::STEP_Update` re-reads
+  # every frame. Separate `[[natives]]` entry, enabled by presence.
+  "crates/er-focus-input",
   # The agent trace detours the SHIPPING DLL used to install unconditionally: the sole
   # `msbResCap` writer, `STEP_LoadListWait`, and the three DLC virtual-root entry points. All
   # observe-and-forward, none feeding an `oracle_*` field, so every player carried five detours

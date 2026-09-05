@@ -69,7 +69,6 @@ pub(crate) use er_telemetry_core::counters::XINPUT_KEEPALIVE_PACKET;
 pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_CAPS_QUERIES;
 /// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
 /// the game both polled slot 0 AND received a real button edge from us).
-pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_FABRICATED_BUTTONS;
 /// DIAGNOSTIC: total `XInputGetState(user_index==0)` calls the game makes (the poll counter). If this
 /// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is NOT polling slot 0 (cached
 /// "no controller" from a pre-hook enumeration -> our button fabrication can never land, and a device
@@ -417,8 +416,6 @@ pub(crate) fn game_main_window() -> HWND {
     HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
 }
 
-pub(crate) use er_telemetry_core::counters::SQ_REPRO_IS_FOREGROUND;
-
 /// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
 /// game) process? Computed FRESH each call (independent of the sq-repro forcing, which stands down in
 /// deterministic mode). Under Proton/Wine this reflects Wine's foreground window; we emit it as
@@ -437,23 +434,16 @@ pub(crate) fn game_window_is_foreground() -> bool {
     }
 }
 
-/// Record whether the ER window is currently the OS foreground window (FOCUS SEMAPHORE) WITHOUT ever
-/// forcing focus. The force-focus path (SetForegroundWindow / BringWindowToTop / SetFocus /
-/// AttachThreadInput) was REMOVED (user 2026-07-23, bd harness-drive-contract-...-no-force-focus): the
-/// user's window focus must never be seized. This is now OBSERVE-ONLY -- it updates SQ_REPRO_IS_FOREGROUND
-/// so diagnostics can report whether ER happened to be focused, but it never brings ER to the front. The
-/// legacy sq-repro SendInput menu-nav that relied on forced focus has been DELETED (nothing ever
-/// transitioned into its states; the live sq-repro flow uses the menu-free programmatic switch arm),
-/// and the can-move probe now delivers movement foreground-only, so no live path forces focus.
-fn sq_repro_ensure_foreground(hwnd: HWND) {
-    let already = unsafe { GetForegroundWindow() } == hwnd;
-    SQ_REPRO_IS_FOREGROUND.store(already as usize, Ordering::SeqCst);
-}
-
-/// SendInput one VK keyboard event (down or up) at the OS level -> delivered as RawInput to the
-/// foreground window. Native ER reads keyboard via RawInput (proven: not DInput, ignores posted
-/// WM_KEYDOWN), so this is the real menu-input channel; it requires the ER window to be foreground
-/// (forced by `sq_repro_ensure_foreground`).
+/// SendInput one VK keyboard event (down or up) at the OS level, to whatever window has focus.
+///
+/// The doc here used to call this "the real menu-input channel" on the grounds that native ER reads
+/// keyboard via RawInput. That is FALSE on 1.17: `eldenring.exe` imports no RawInput API at all --
+/// `GetRawInputData`, `GetRawInputBuffer` and `RegisterRawInputDevices` are absent from the image,
+/// while USER32's `GetKeyState`/`GetKeyboardState` and DINPUT8's `DirectInput8Create` are present.
+/// Measured consequence, run br-20260905-031610-5406: 150 SendInput frames against 0 RawInput key
+/// events reaching the game. This is retained only as a belt-and-braces OS-level press beside the
+/// DInput stamp that actually lands; it cannot by itself drive the game, and nothing forces focus for
+/// it any more (the forcer it used to name was deleted with the sq-repro autopilot).
 fn sq_repro_send_vk(vk: u32, keyup: bool) {
     let ki = KEYBDINPUT {
         wVk: VIRTUAL_KEY(vk as u16),
@@ -472,34 +462,6 @@ fn sq_repro_send_vk(vk: u32, keyup: bool) {
     };
     unsafe {
         SendInput(&[input], core::mem::size_of::<INPUT>() as i32);
-    }
-}
-
-/// Drive a keyboard key (Win32 VK code; 0 = release the held key) to the ER window for the
-/// self-driving System->Quit repro. Native ER does NOT read keyboard via DInput and ignores posted
-/// WM_KEYDOWN, so this forces the window foreground and uses OS-level `SendInput` (delivered as
-/// RawInput). Posts a clean key-down on press and key-up on release when the VK transitions. Gated by
-/// the caller (only the sq-repro autopilot calls it) so it never touches the product path.
-pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
-    let hwnd = game_main_window();
-    if hwnd.0.is_null() {
-        return;
-    }
-    let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
-    // Only force ER foreground when we actually have a key to deliver (pressing, holding, or
-    // releasing). Doing it every idle frame (e.g. all of WAIT_WORLD during the ~60s boot) churns the
-    // window focus for no reason and can disturb the boot; skip it when idle (vk==0 and none held).
-    if vk != 0 || prev != 0 {
-        sq_repro_ensure_foreground(hwnd);
-    }
-    if prev == vk {
-        return;
-    }
-    if prev != 0 {
-        sq_repro_send_vk(prev, true);
-    }
-    if vk != 0 {
-        sq_repro_send_vk(vk, false);
     }
 }
 
@@ -552,22 +514,6 @@ pub(crate) fn stay_active_enabled() -> bool {
 /// mouse (move/click), or gamepad input may reach the game even if the user focuses the
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
 /// probe is a zero-input load), plus an explicit env/file override for standalone use.
-/// The System->Quit repro autopilot is ACTIVELY DRIVING MENUS (issuing button edges): every state
-/// except the waits and DONE. During the between-switch reload (WAIT_RELOAD) the autopilot injects
-/// nothing (set_pad 0) and must NOT fabricate a live pad or hold the block past in-world, because a
-/// fabricated connected pad fed through the title->world advance bounces the reload back to the
-/// front-end/title (observed: switch #1's SetState5 loaded the char then the game jumped to 01_000_FE +
-/// SetState 2/3/10 = press-any-button softlock). Treating WAIT_RELOAD like DONE makes the reload
-/// byte-identical to the proven single-switch case (block falls through to the autoload_armed
-/// path, which blocks until in-world with no pad fabrication); the block re-engages at the next
-/// switch's OPEN_MENU. WAIT_WORLD (boot) keeps blocking so the first switch behaves as before.
-pub(crate) fn sq_repro_actively_driving() -> bool {
-    if !system_quit_repro_enabled() {
-        return false;
-    }
-    let state = SQ_REPRO_STATE.load(Ordering::SeqCst);
-    state != SQ_REPRO_STATE_DONE && state != SQ_REPRO_STATE_WAIT_RELOAD
-}
 
 /// TRUE only while the harness is ACTIVELY INJECTING input THIS frame -- the can-move probe's ON burst
 /// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
@@ -579,7 +525,9 @@ pub(crate) fn sq_repro_actively_driving() -> bool {
 /// stops (MOVE_PROBE_ACTIVE latches false the moment the move-probe verdict is reached), so the dwell has
 /// full control.
 pub(crate) fn harness_injection_active() -> bool {
-    MOVE_PROBE_ACTIVE.load(Ordering::SeqCst) || sq_repro_actively_driving()
+    // The sq-repro autopilot was the second injector and it is deleted, so the can-move probe's ON
+    // burst is now the only window in which this crate injects anything.
+    MOVE_PROBE_ACTIVE.load(Ordering::SeqCst)
 }
 
 fn native_loading_screen_started_recently() -> bool {
@@ -621,15 +569,10 @@ fn autoload_load_started() -> bool {
 
 // ENV-GATE RATIONALE: ER_QUICKLOAD_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
-    // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
-    // release) while the self-driven repro is ACTIVELY driving menus, so the real
-    // keyboard/mouse/gamepad are zeroed and the ONLY input is the fabricated XInput pad
-    // (`xinput_get_state_hook` writes the autopilot's `SQ_REPRO_XINPUT_BUTTONS` each poll) -- no human
-    // press can contaminate the reproduction. Releases at DONE and during the between-switch reload
-    // (WAIT_RELOAD, see sq_repro_actively_driving) so the reload completes exactly like a single switch.
-    if sq_repro_actively_driving() {
-        return true;
-    }
+    // The sq-repro autopilot used to hold the input block engaged in-world here while it drove menus,
+    // so its fabricated pad was the only input. Deleted 2026-09-05 with the autopilot: keeping the
+    // clause would have held the block on for the whole run, because nothing advances SQ_REPRO_STATE
+    // out of WAIT_WORLD any more, and a permanently engaged block eats the user's keyboard.
     // (DE-GATED 2026-07-19: the env/marker FORCE-BLOCK override -- block unconditionally past
     // menu-open -- was a falsification diagnostic; env/marker feature gates are forbidden, removed.)
     // NATIVE-WINDOWS PRODUCT is USER-INTERACTIVE (user drives the startup save picker, then plays). The
@@ -813,42 +756,13 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         hr = XINPUT_SUCCESS;
     }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        // ONE driver fabricates the pad at the poll source: the System->Quit repro autopilot (the
-        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame). It
-        // replaces the (blocked) real pad so the game reads our synthesized buttons.
-        // Only fabricate the pad while ACTIVELY driving menus; during WAIT_RELOAD/DONE the reload
-        // must not see a synthesized live pad (it bounces the title->world advance back to the FE).
-        //
-        // A second driver -- own_stepper title nav, gated on `inject_nav_enabled()` -- used to share
-        // this path, supplying INJECT_NAV_CUR_BUTTONS and its own packet counter. Its branch, its
-        // counters and finally the gate itself are all deleted; only INJECT_NAV_FRAME survives,
-        // because sq-repro reuses it below as the shared fresh-packet counter.
-        if sq_repro_actively_driving() {
-            // Force SUCCESS + a fresh packet number so a live pad is simulated; write the buttons
-            // the autopilot scheduled this frame. Harmless if the game ignores XInput.
-            let buttons = SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16;
-            // sq-repro has no separate poll-frame schedule, so bump the shared packet counter here
-            // to guarantee a fresh dwPacketNumber each poll.
-            let pkt = INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32;
-            unsafe {
-                std::ptr::write_bytes(
-                    state.add(XINPUT_GAMEPAD_OFFSET),
-                    ZERO_FILL_BYTE,
-                    XINPUT_GAMEPAD_SIZE,
-                );
-                *(state.add(XINPUT_PACKET_OFFSET) as *mut u32) = pkt;
-                *(state.add(XINPUT_GAMEPAD_OFFSET + WBUTTONS_OFFSET_IN_GAMEPAD) as *mut u16) =
-                    buttons;
-            }
-            // DIAGNOSTIC: record that the game polled slot 0 AND received a real fabricated button
-            // edge from us this poll (so the log distinguishes "polled + got a button" from "polled
-            // idle"). Only meaningful when the game actually calls this hook for slot 0.
-            if buttons != 0 && user_index == XINPUT_PRIMARY_USER_INDEX {
-                XINPUT_SLOT0_FABRICATED_BUTTONS.fetch_add(1, Ordering::Relaxed);
-            }
-            let _ = user_index;
-            return XINPUT_SUCCESS;
-        }
+        // THE PHANTOM-PAD FABRICATION IS GONE (2026-09-05, with the sq-repro autopilot it served).
+        // It replaced the blocked real pad with buttons the autopilot scheduled, gated on
+        // `sq_repro_actively_driving()`. Once the autopilot's tick was deleted nothing advanced
+        // SQ_REPRO_STATE, so that predicate was pinned true for the whole run and this branch would
+        // have presented a live synthesized pad forever -- which the comment it replaced warned is
+        // exactly what bounces a title->world advance back to the front end. A gate whose state
+        // machine no longer runs does not fail closed; it fails STUCK.
         if hr == XINPUT_SUCCESS {
             unsafe {
                 std::ptr::write_bytes(
@@ -1046,6 +960,9 @@ pub(crate) fn ensure_rawinput_counter_installed() {
     if GET_RAW_INPUT_DATA_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { install_rawinput_counter() };
     }
+    // Ride the same unconditional every-frame call site: the USER32 keyboard getters are the stage
+    // ER actually imports, so their detours must be live before any injection window opens.
+    ensure_user32_keyboard_injection_installed();
 }
 
 /// LEGACY telemetry field, retained for the emitted oracle schema (write_oracle reads it). It is NO
@@ -1143,6 +1060,185 @@ unsafe extern "system" fn get_raw_input_data_hook(
     ret
 }
 
+use er_telemetry_core::counters::INJECTED_CURSOR_POS;
+/// USER32 KEYBOARD INJECTION (2026-09-05) -- the second focus-independent stage, beside the DInput
+/// `GetDeviceState` stamp. `eldenring.exe` 1.17 imports `GetKeyState`, `GetKeyboardState` and
+/// `ToAscii` from USER32 and imports NO RawInput API at all (`GetRawInputData`,
+/// `GetRawInputBuffer` and `RegisterRawInputDevices` are absent from the image entirely), so these
+/// two getters are a keyboard stage the game genuinely reads. Both return the CALLING THREAD's key
+/// table, which Windows populates only while that thread owns the keyboard focus -- so authoring the
+/// result after the original call is exactly what makes injection focus-independent. Nothing is
+/// stamped while `INJECTED_VK` is 0, so these detours are inert outside a harness injection window.
+pub use er_telemetry_core::counters::INJECTED_VK;
+pub use er_telemetry_core::counters::USER32_GET_CURSOR_POS_FIRES;
+pub use er_telemetry_core::counters::USER32_GET_KEY_STATE_FIRES;
+pub use er_telemetry_core::counters::USER32_GET_KEYBOARD_STATE_FIRES;
+pub use er_telemetry_core::counters::USER32_INJECTED_CURSOR_STAMPS;
+pub use er_telemetry_core::counters::USER32_INJECTED_VK_STAMPS;
+static GET_KEYBOARD_STATE_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static GET_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static GET_CURSOR_POS_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+/// Set (or clear, with 0) the Win32 virtual key the harness holds down at the USER32 layer.
+/// Crate-visible wrapper so `mh.rs`'s C export can reach the setter without widening the module's
+/// own API surface any further than the export needs.
+pub(crate) fn set_injected_vk_public(vk: u8) {
+    set_injected_vk(vk);
+}
+
+pub(crate) fn set_injected_vk(vk: u8) {
+    INJECTED_VK.store(vk, Ordering::Relaxed);
+}
+
+/// `GetKeyboardState(lpKeyState)` detour: run the original, then mark `INJECTED_VK` held in the
+/// 256-byte table the game is about to read. High bit set = key down, per the Win32 contract.
+unsafe extern "system" fn get_keyboard_state_hook(key_state: *mut u8) -> BOOL {
+    USER32_GET_KEYBOARD_STATE_FIRES.fetch_add(1, Ordering::Relaxed);
+    let orig_addr = GET_KEYBOARD_STATE_ORIG.load(Ordering::SeqCst);
+    let orig: unsafe extern "system" fn(*mut u8) -> BOOL =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(key_state) };
+    let vk = INJECTED_VK.load(Ordering::Relaxed);
+    if vk != 0 && !key_state.is_null() {
+        unsafe { *key_state.add(vk as usize) |= 0x80 };
+        USER32_INJECTED_VK_STAMPS.fetch_add(1, Ordering::Relaxed);
+    }
+    ret
+}
+
+/// `GetKeyState(nVirtKey)` detour: run the original, then force the down bit (0x8000) when the query
+/// is for the key the harness is holding. Every other key answers exactly as the OS said.
+unsafe extern "system" fn get_key_state_hook(virt_key: i32) -> i16 {
+    USER32_GET_KEY_STATE_FIRES.fetch_add(1, Ordering::Relaxed);
+    let orig_addr = GET_KEY_STATE_ORIG.load(Ordering::SeqCst);
+    let orig: unsafe extern "system" fn(i32) -> i16 = unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(virt_key) };
+    let vk = INJECTED_VK.load(Ordering::Relaxed);
+    if vk != 0 && virt_key == vk as i32 {
+        USER32_INJECTED_VK_STAMPS.fetch_add(1, Ordering::Relaxed);
+        return ret | (0x8000u16 as i16);
+    }
+    ret
+}
+
+/// `GetCursorPos(lpPoint)` counting detour. MEASUREMENT ONLY -- it never moves the pointer. It
+/// answers the one question that decides how the OptionSetting Game/Quit-Game tab-switch can be
+/// driven: that switch has no keyboard bind, so a real menu path needs the MOUSE, and the mouse is
+/// only stampable here if the menu's pointer position actually comes through this USER32 import.
+/// Zero fires means the menu reads the pointer somewhere else (DirectInput mouse device) and the
+/// injection has to go there instead.
+unsafe extern "system" fn get_cursor_pos_hook(point: *mut c_void) -> BOOL {
+    USER32_GET_CURSOR_POS_FIRES.fetch_add(1, Ordering::Relaxed);
+    let orig_addr = GET_CURSOR_POS_ORIG.load(Ordering::SeqCst);
+    let orig: unsafe extern "system" fn(*mut c_void) -> BOOL =
+        unsafe { std::mem::transmute(orig_addr) };
+    let ret = unsafe { orig(point) };
+    // AUTHOR THE ANSWER, DO NOT MOVE THE REAL CURSOR. `SetCursorPos` would yank the user's pointer
+    // across their desktop and would still lose a race with whatever they do with the mouse; this
+    // replaces only what the GAME is told, so the injection is invisible outside the process and
+    // cannot be fought by the OS.
+    //
+    // WHY THIS LAYER, measured on br-20260905-175511-72a6: writing the menu's own pointer pair
+    // (`*(FD4PadDevice+0x78)+0x20/+0x24`) reported `wrote=true` at five different Y coordinates and
+    // the hovered cell never left 0 -- the game refreshes that pair from the cursor every frame, so
+    // the write was overwritten before the hit-test ever read it. A real mouse DID move that cell
+    // (the user nudged it through 5,6,1,2,4,3,2,17), and the game asks USER32 for the cursor
+    // thousands of times a session, so this getter is where the mouse actually enters the process.
+    let packed = INJECTED_CURSOR_POS.load(Ordering::Relaxed);
+    if packed != CURSOR_POS_NONE && !point.is_null() {
+        let coords = point.cast::<i32>();
+        unsafe {
+            *coords = (packed >> 32) as i32;
+            *coords.add(1) = (packed & 0xffff_ffff) as i32;
+        }
+        USER32_INJECTED_CURSOR_STAMPS.fetch_add(1, Ordering::Relaxed);
+    }
+    ret
+}
+
+/// Resting value of [`INJECTED_CURSOR_POS`]. A sentinel is needed rather than 0 because (0, 0) is a
+/// legitimate screen coordinate -- the top-left corner -- and using it as "no injection" would make
+/// that one position unaddressable.
+pub(crate) const CURSOR_POS_NONE: u64 = u64::MAX;
+
+/// Set (or clear, with `CURSOR_POS_NONE`) the cursor position the game is told it has. Packed as
+/// `(x << 32) | y` so one atomic carries both and the pair can never be read half-updated -- a
+/// torn read here would hit-test a coordinate that never existed.
+pub(crate) fn set_injected_cursor_pos(packed: u64) {
+    INJECTED_CURSOR_POS.store(packed, Ordering::Relaxed);
+}
+
+/// Install both USER32 keyboard-getter detours ONCE (idempotent). Called every frame from the same
+/// place as the RawInput counter, so it is live long before any injection window opens.
+pub(crate) fn ensure_user32_keyboard_injection_installed() {
+    if GET_KEYBOARD_STATE_ORIG.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "input-inject: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let hmod = match unsafe { GetModuleHandleA(s!("user32.dll")) } {
+        Ok(h) if !h.is_invalid() => h,
+        _ => return,
+    };
+    let pairs: [(PCSTR, &AtomicUsize, *mut c_void); 3] = [
+        (
+            s!("GetKeyboardState"),
+            &GET_KEYBOARD_STATE_ORIG,
+            get_keyboard_state_hook as *mut c_void,
+        ),
+        (
+            s!("GetKeyState"),
+            &GET_KEY_STATE_ORIG,
+            get_key_state_hook as *mut c_void,
+        ),
+        (
+            s!("GetCursorPos"),
+            &GET_CURSOR_POS_ORIG,
+            get_cursor_pos_hook as *mut c_void,
+        ),
+    ];
+    let mut queued = 0usize;
+    for (name, slot, detour) in pairs {
+        let Some(addr) = (unsafe { GetProcAddress(hmod, name) }) else {
+            continue;
+        };
+        let addr = addr as usize;
+        match unsafe { MhHook::new(addr as *mut c_void, detour) } {
+            Ok(hook) => {
+                // Store the trampoline BEFORE enabling so the detour never transmutes the sentinel.
+                slot.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if unsafe { hook.queue_enable() }.is_ok() {
+                    crate::mh::leak_installed_hook(hook);
+                    queued += 1;
+                } else {
+                    slot.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "input-inject: MhHook::new user32 keyboard getter failed: {status:?}"
+            )),
+        }
+    }
+    if queued == 0 {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "input-inject: hooked USER32 GetKeyboardState+GetKeyState+GetCursorPos ({queued} of 3) -- focus-independent keyboard injection (the cursor hook counts only); ER 1.17 imports these and no RawInput API at all"
+        )),
+        status => append_autoload_debug(format_args!(
+            "input-inject: MH_ApplyQueued user32 keyboard getters failed: {status:?}"
+        )),
+    }
+}
+
 /// Install the GetRawInputData reception counter (user32.dll). minhook, mirroring install_xinput_block.
 /// Recording only -- never blocks. Retried each frame until user32 GetRawInputData resolves.
 unsafe fn install_rawinput_counter() {
@@ -1193,6 +1289,34 @@ unsafe fn install_rawinput_counter() {
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
 pub(crate) use er_telemetry_core::counters::DINPUT_BLOCK_INSTALLED;
+
+/// Install the DInput8 keyboard `GetDeviceState` detour WITHOUT engaging any input block, and without
+/// touching XInput. The detour is the harness's FOCUS-INDEPENDENT keyboard-injection stage (see
+/// `stamp_injected_dinput_key`): it authors the buffer after DInput has filled it, so the key lands
+/// whether or not ER holds the keyboard focus. `enforce_input_block_now` installs the same hook, but
+/// only while the block is engaged -- and the can-move probe runs in-world with the block released,
+/// which is exactly when the hook has to already be there. Idempotent; safe to call every frame.
+pub(crate) fn ensure_dinput_keyboard_hook_installed() {
+    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let blocker = InputBlocker::get_instance();
+    let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+    match res {
+        Ok(Ok(())) => {
+            DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "input-inject: DInput8 GetDeviceState hooks INSTALLED passively (no block engaged) -- focus-independent keyboard injection stage is live"
+            ));
+        }
+        Ok(Err(status)) => append_autoload_debug(format_args!(
+            "input-inject: passive DInput8 hook install failed: {status:?}"
+        )),
+        Err(_) => append_autoload_debug(format_args!(
+            "input-inject: passive DInput8 hook install PANICKED (contained)"
+        )),
+    }
+}
 pub(crate) use er_telemetry_core::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can

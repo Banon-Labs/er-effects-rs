@@ -717,8 +717,32 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
                 )
             })
             .unwrap_or((-1, -1));
+        // STEP_GameStepWait's OWN inputs, at the frame it decides (bd
+        // setstate-beginlogo-is-gamestepwait-b7c-b7d-not-menudata-5e-2026-09-04). Its whole decision is
+        // `if (InGameStep+0xd8 == 0) { if (GameMan+0xb7c == 0) { if (GameMan+0xb7d == 0) -> state 2 } }`,
+        // and `req_code` above is that d8 -- but b7c/b7d were never logged, so every teardown frame so
+        // far had to be inferred from a 20ms gm-snap sampler whose values are IDENTICAL in runs that do
+        // NOT tear down (measured: br-20260904-165518-e3be shows `ig_d8=2 menu_job=0x0` and never loses
+        // the world). +0x798 rides along because `STEP_RequestWait` -- the only writer that can clear d8
+        // -- returns early while it is non-null, so it is the upstream half of the same decision.
+        let (b7c_now, b7d_now) = if gm_rt > PAB_MIN_HEAP_PTR {
+            (
+                unsafe { safe_read_u8(gm_rt + GAME_MAN_ENDING_FLAG_B7C_OFFSET) }
+                    .map_or(-1, i32::from),
+                unsafe { safe_read_u8(gm_rt + GAME_MAN_ENDING_FLAG_B7D_OFFSET) }
+                    .map_or(-1, i32::from),
+            )
+        } else {
+            (-1, -1)
+        };
+        let nowloading_798 = game_module_base()
+            .ok()
+            .and_then(|base| unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) })
+            .filter(|&m| m > PAB_MIN_HEAP_PTR)
+            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
+            .unwrap_or(0);
         append_autoload_debug(format_args!(
-            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}({})) committed_was={committed}({}) req_code={ig_request_code}({}) quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} ENDCOND[warp={warp_req} b73={b73_now} bc4={bc4_now} md5d={md5d} md5e={md5e}] owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}",
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}({})) committed_was={committed}({}) req_code={ig_request_code}({}) quickload_phase={quickload_phase} rt_submit={rt_submit} own_phase={own_phase} ENDCOND[warp={warp_req} b73={b73_now} bc4={bc4_now} md5d={md5d} md5e={md5e}] GAMESTEPWAIT[d8={ig_request_code} b7c={b7c_now} b7d={b7d_now} nowloading798=0x{nowloading_798:x}] owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}",
             title_step_state_name(state),
             title_step_state_name(committed),
             ingamestep_request_code_name(ig_request_code)

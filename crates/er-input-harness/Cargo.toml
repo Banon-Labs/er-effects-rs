@@ -16,6 +16,11 @@ crate-type = ["cdylib"]
 er-hook = { path = "../er-hook" }
 # Tier A only (default features = zero external deps): shared singleton RVA table.
 er-game-base = { path = "../er-game-base" }
+# Row identity for the OptionSetting Quit tab. The drive has to know WHICH row is highlighted before
+# it presses Confirm -- one row down is "Return to Desktop". `system_quit_row_label_at` classifies by
+# ASCII prefix as well as by label pointer, so it answers correctly from this DLL even though the
+# label arrays live in er_quickload.dll's image.
+er-quit-menu-core = { path = "../er-quit-menu-core" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

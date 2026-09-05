@@ -409,6 +409,52 @@ dependency-closure walk. Load it only when death-persistence IS the experiment, 
 invade during that run: `--with er-death-persist`."""
 
 [compatible]
+"er-focus-input" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
+structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its entire \
+effect is one byte store, from the game thread, into the `.data` global behind \
+`Game.Debug.IsEnableControlOnDisactiveWindow` -- 1.16.2 RVA `0x4588af1`, read by the single \
+instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. There is no prologue to contend \
+with, so the two failure modes this table exists to catch cannot arise: no second MinHook instance \
+can overwrite a trampoline it never installed, and no D3D12 Present/compositor is touched.
+
+WHAT IT WRITES, AND WHO ELSE COULD WANT IT. Ghidra reports exactly ONE reader of that byte (the \
+getter above) and exactly TWO callers of the getter: `CS::CSPadStep::STEP_Update` (`0x140e33aa0`, \
+at `+0xa3c`) and `CS::CSPadStep::CSPadStep` (`0x140e328d0`, at `+0x7e`). No other crate in this \
+workspace declares the address -- and `check-shared-hook-rvas.py` keys on resolved VALUES, so that \
+claim is checkable rather than name-keyed. The byte ships `0x00` in both `eldenring-deobf.bin` and \
+`eldenring-deobf-1.17.bin`, and the store is idempotent, so a second writer would be a duplicate \
+rather than a conflict.
+
+RELATIONSHIP TO er-input-harness, which is the shell a reader will suspect. The harness re-asserts \
+`DLUID+0x88d` every frame for the same stated purpose ("so a virtual gamepad keeps driving while ER \
+is UNFOCUSED"). The two do not overlap: `+0x88d` is only consulted inside \
+`if (Ext_UserInput_CooperativeLevel_SetForeGround_Pad != false)` in `FUN_141f6bad0`, and that field \
+comes from `GetPropertyBoolean(props, "Ext.UserInput.CooperativeLevel.SetForeGround.Pad", false)` -- \
+a debug system property that a retail build does not set. Different byte, different consumer, no \
+contention. Load both, or either alone.
+
+WHAT IT CHANGES FOR A USER, stated plainly so nobody is surprised: with this DLL loaded the game \
+keeps reading pad and mouse input while its window is in the background. That is the point, and it \
+is also why it does not belong in a production profile. It does NOT confine the OS cursor to an \
+unfocused window -- the `ClipCursor` / `SetCursorPos` / `ShowCursor` calls in `CSMouseMan::Update` \
+sit behind `FUN_140e1e620`, which calls `CS::CSWindowImp::IsGameInForeground` directly and is \
+therefore untouched by this byte. That distinction is the whole reason the shell forces the debug \
+flag instead of patching `IsGameInForeground`, which a user directive forbids for exactly the \
+cursor-grab regression it caused on 2026-07-16.
+
+INTERACTION WITH THE PRODUCT'S OWN OVERRIDE, which is the one place the two could have collided. \
+`crates/er-quickload/src/experiments/can_move_probe.rs` MinHooks the same accessor (thunk RVA \
+`0xe53220`) and returns 1 only while its harness is injecting, "real value otherwise". Those \
+compose rather than contend: this shell changes what "the real value" IS, and the detour keeps \
+returning it. Whichever installs first is irrelevant, because nothing here is a detour. Note the \
+detour and this shell resolve DIFFERENT things -- the product resolves a `.text` thunk through the \
+function map, this resolves a `.data` byte through the data map -- so one can be refused on a build \
+where the other is not, and each says so in its own log.
+
+NOT YET RUNTIME-PROVEN. The chain is decoded and byte-checked in both images and the DLL builds \
+clean, but no live run has yet shown a character moving under an unfocused window. Until one has, \
+treat this entry as a static-evidence classification."""
+
 "er-invasion-warp" = """PROMOTED OUT OF [[conflict]] 2026-09-04, after the mechanism behind \
 `0x140010043` was identified and REMOVED rather than merely failing to reappear. This entry keeps \
 the old row's evidence because the demotion has to be auditable, and because the row was demoted \

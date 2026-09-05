@@ -16,14 +16,15 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::constants::{
-    CAN_MOVE_CONFIRMED, DID_MOVE_FRAMES, HARNESS_MOVE_VERDICT, IN_GAME_STEP_REQUEST_CODE_D8_OFFSET,
-    INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET, INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING,
-    INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD, MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH,
-    MOVE_PROBE_MOVED_FRAMES, MOVE_PROBE_PER_FRAME_THRESHOLD, MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET,
-    MOVEMAPSTEP_COUNTDOWN_100_OFFSET, MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET,
-    MOVEMAPSTEP_RESIDENT_UPDATE_STATE, MOVEMAPSTEP_STATE_48_RE_OFFSET,
-    MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET, ORACLE_RELIABLE_INGAME_PTR,
-    SUPPLIED_MOVEMENT_INPUT_FRAMES, SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
+    CAN_MOVE_CONFIRMED, DID_MOVE_FRAMES, DIK_NONE, DIK_W, HARNESS_MOVE_VERDICT,
+    IN_GAME_STEP_REQUEST_CODE_D8_OFFSET, INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET,
+    INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING, INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD,
+    MOVE_PROBE_ACTIVE, MOVE_PROBE_EPOCH, MOVE_PROBE_MOVED_FRAMES, MOVE_PROBE_PER_FRAME_THRESHOLD,
+    MOVEMAPSTEP_CONTROL_ENABLE_4BA_OFFSET, MOVEMAPSTEP_COUNTDOWN_100_OFFSET,
+    MOVEMAPSTEP_FINALIZE_SUBSTATE_12A_OFFSET, MOVEMAPSTEP_RESIDENT_UPDATE_STATE,
+    MOVEMAPSTEP_STATE_48_RE_OFFSET, MOVEMAPSTEP_TASK_REGISTRATION_4B8_OFFSET,
+    ORACLE_RELIABLE_INGAME_PTR, SUPPLIED_MOVEMENT_INPUT_FRAMES,
+    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT, VK_W,
 };
 
 /// DLUID (input-device manager) singleton RVA + its input-accept-while-unfocused flag offset. Holding
@@ -84,6 +85,8 @@ fn hold_input_active() {
 }
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use crate::telemetry::append_autoload_debug;
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use windows::core::s;
 
 /// FD4PadDevice poll (deobf `0x141f6bad0`, RE `er-movement-input-stick-boundary-2026-07-18`): the
 /// per-device, per-frame function where XInput / DirectInput / ScePad all deposit the device's
@@ -202,6 +205,45 @@ const FD4PADDEVICE_DEVICES_CAPACITY: usize = 4;
 /// exact fields on. Anything that does not match is skipped, so a write can never land in a device
 /// class these offsets do not belong to. Every deref is low-pointer guarded. Called only while
 /// injecting.
+/// `FD4PadManager` inactive-window REQUEST byte, raised by `CS::CSPadStep::STEP_Update` on an
+/// unfocused frame.
+const PAD_MGR_INACTIVE_REQUEST_2F8_OFFSET: usize = 0x2f8;
+/// `FD4PadManager` inactive-window LATCH, written forward from `+0x2f8` by `FD4PadManager::Update`
+/// (`0x142667c70`). Every `CSInGamePad` query short-circuits while this is set, so an injected stick
+/// or DIK is read by nothing at all on a frame where it is true.
+const PAD_MGR_INACTIVE_LATCH_2F9_OFFSET: usize = 0x2f9;
+/// 1.16.2 RVA of the `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single
+/// instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. Same constant as
+/// `er-focus-input`'s `GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA`; read here, never written,
+/// so the two DLLs keep exactly one writer.
+const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_RVA: u32 = 0x4588af1;
+
+/// Sample the three bytes that decide whether the game reads ANY input this frame, on the frames we
+/// are actually injecting. Read-only. This exists because a stamp landing in a device buffer proves
+/// nothing on its own: `br-20260905-034630-8c7f` put DIK_W in front of the game on 30 of 30 inject-on
+/// frames and moved the character 0.343 units, the same 343 to the thousandth as the run before it,
+/// which is the signature of a gate that is shut rather than of input that failed to arrive.
+unsafe fn sample_pad_gate() {
+    use er_telemetry_core::counters::{
+        PAD_GATE_DEBUG_BYTE, PAD_GATE_MGR_2F8, PAD_GATE_MGR_2F9, PAD_GATE_SHUT_ON_INJECT_FRAMES,
+    };
+    if let Ok(mgr_ptr) = crate::game_rva(FD4_PAD_MANAGER_RVA) {
+        let mgr = unsafe { *(mgr_ptr as *const usize) };
+        if mgr >= 0x10000 {
+            let req = unsafe { *((mgr + PAD_MGR_INACTIVE_REQUEST_2F8_OFFSET) as *const u8) };
+            let latch = unsafe { *((mgr + PAD_MGR_INACTIVE_LATCH_2F9_OFFSET) as *const u8) };
+            PAD_GATE_MGR_2F8.store(req as usize, Ordering::Relaxed);
+            PAD_GATE_MGR_2F9.store(latch as usize, Ordering::Relaxed);
+            if latch != 0 {
+                PAD_GATE_SHUT_ON_INJECT_FRAMES.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    if let Ok(addr) = crate::game_rva(GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_RVA) {
+        PAD_GATE_DEBUG_BYTE.store(unsafe { *(addr as *const u8) } as usize, Ordering::Relaxed);
+    }
+}
+
 unsafe fn inject_all_pad_devices() {
     // No engine-polled device seen yet -> nothing to compare a class against, so write nothing.
     // A sweep with no class evidence is exactly what put 172 bytes past the end of a 0x7f8 object.
@@ -292,6 +334,23 @@ unsafe extern "system" fn is_enable_control_on_disactive_hook(
 fn install_focus_override_hook() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
+        // ONE OWNER FOR THE GATE (2026-09-05). `er-focus-input` holds
+        // `Game.Debug.IsEnableControlOnDisactiveWindow` at 1 EVERY frame by writing the `.data` byte
+        // (1.17 0x14458cb71). ER reads that byte only through this accessor, so a detour here does not
+        // merely coexist with that write -- it REPLACES it, and this detour answers with the game's
+        // real value (0) on every frame the harness is not injecting. The result is a gate that
+        // flickers instead of holding, and the game's consumers do not read the byte directly: it
+        // travels CSPadStep::STEP_Update -> +0xba -> FD4PadManager+0x2f8 -> +0x2f9, and every
+        // CSInGamePad query returns early while that latch is false. A pipeline that deep cannot settle
+        // on a value that changes underneath it, which is what produced br-20260905-034225-3115:
+        // DIK_W stamped on 30 of 30 inject-on frames, yet the character was carried 0.343 units on
+        // only 5 of 29 frames. So when the DLL is loaded, stand down and let it own the byte.
+        if unsafe { GetModuleHandleA(s!("er_focus_input.dll")) }.is_ok_and(|h| !h.is_invalid()) {
+            append_autoload_debug(format_args!(
+                "can-move: focus-override NOT installed -- er_focus_input.dll owns IsEnableControlOnDisactiveWindow and holds it every frame; a detour here would override that write with the game's real value on every non-injecting frame"
+            ));
+            return;
+        }
         match unsafe { MH_Initialize() } {
             MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
             status => {
@@ -398,8 +457,10 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // PROOF-ONLY: runs only when the input-harness DLL is present (prove_movement_enabled =
     // GetModuleHandle check, not a marker/env gate); never fires in a normal user session.
     static PROOF_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+    pub(crate) use er_telemetry_core::counters::OFF_TAIL_DISP_MILLI;
     pub(crate) use er_telemetry_core::counters::OFF_TAIL_MOVED;
     pub(crate) use er_telemetry_core::counters::OFF_TAIL_TOTAL;
+    pub(crate) use er_telemetry_core::counters::ON_DISP_MILLI;
     pub(crate) use er_telemetry_core::counters::ON_MOVED;
     pub(crate) use er_telemetry_core::counters::ON_TOTAL;
     pub(crate) use er_telemetry_core::counters::PHASE_FRAME;
@@ -417,6 +478,11 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     }
     install_pad_poll_hook();
     install_focus_override_hook();
+    // The DInput8 keyboard detour is the only keyboard stage ER actually reads (1.17 imports
+    // DINPUT8's DirectInput8Create and USER32's GetKeyState/GetKeyboardState, and NO RawInput API
+    // whatsoever). Install it passively here: the probe runs in-world with the input block released,
+    // which is precisely when `enforce_input_block_now` is not installing it.
+    crate::experiments::input_block::ensure_dinput_keyboard_hook_installed();
 
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
     // New load epoch -> reset the probe (each load must re-prove HARNESS movement on its own).
@@ -431,6 +497,9 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         ON_MOVED.store(0, Ordering::Relaxed);
         OFF_TAIL_TOTAL.store(0, Ordering::Relaxed);
         OFF_TAIL_MOVED.store(0, Ordering::Relaxed);
+        er_telemetry_core::counters::ON_DISP_MILLI.store(0, Ordering::Relaxed);
+        er_telemetry_core::counters::OFF_TAIL_DISP_MILLI.store(0, Ordering::Relaxed);
+        er_telemetry_core::counters::PAD_GATE_SHUT_ON_INJECT_FRAMES.store(0, Ordering::Relaxed);
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         *lock_prev() = None;
     }
@@ -440,6 +509,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     if !movement_input_ready() {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         crate::experiments::move_probe_drive_key_foreground_only(0);
+        crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
+        crate::experiments::input_block::set_injected_vk(0);
         *lock_prev() = None;
         return;
     }
@@ -449,6 +520,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
         // Release any held W the moment the verdict latches, so the proof can't walk the char to death.
         crate::experiments::move_probe_drive_key_foreground_only(0);
+        crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
+        crate::experiments::input_block::set_injected_vk(0);
         return;
     }
 
@@ -475,6 +548,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // is always a `DLUID::PadDevice` at its allocation base and never an `FD4::FD4PadDevice`.)
     if is_on {
         unsafe { inject_all_pad_devices() };
+        unsafe { sample_pad_gate() };
     }
     // KEYBOARD-W movement injection -- THE PROVEN path (bd SWITCH-movement-proof-to-keyboard-W-sendinput):
     // pad-stick / synthetic-xinput never walk the char, but SendInput 'W' via RawInput does, and ER reads
@@ -483,13 +557,36 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
     // the moment it loses focus, and releases on OFF/verdict so it cannot drive the char to death. Faithful
     // real-input path (not a RAM move-vector cheat). VK 'W' = 0x57.
     crate::experiments::move_probe_drive_key_foreground_only(if is_on { 0x57 } else { 0 });
+    // FOCUS-INDEPENDENT 'W' (2026-09-05). The SendInput line above is retained only as a
+    // belt-and-braces OS-level press; it cannot by itself move the char, because ER reads no RawInput
+    // at all -- measured on run br-20260905-031610-5406, which logged 150 supplied SendInput frames
+    // against 0 RawInput key events and a DISPROVEN verdict at on_moved=5/29. The stamp below is the
+    // path the game reads: `stamp_injected_dinput_key` writes DIK_W straight into the DirectInput
+    // keyboard buffer on the game's own `GetDeviceState`, after DInput has filled it, so it applies
+    // with the window unfocused and without ever forcing ER foreground.
+    crate::input_blocker::InputBlocker::get_instance().set_injected_key(if is_on {
+        DIK_W
+    } else {
+        DIK_NONE
+    });
+    // Second focus-independent stage, stamped in parallel: ER 1.17 imports USER32's GetKeyState /
+    // GetKeyboardState / ToAscii, so those getters are also a keyboard path the game reads. Each
+    // stage has its own counter, so the run says WHICH one the game actually consulted rather than
+    // leaving "the key did not arrive" and "the key arrived and did nothing" indistinguishable.
+    crate::experiments::input_block::set_injected_vk(if is_on { VK_W } else { 0 });
 
     let mut prev = lock_prev();
     if let Some((px, _py, pz)) = *prev {
         let dx = pos.0 - px;
         let dz = pos.2 - pz;
-        let moved = (dx * dx + dz * dz).sqrt() >= MOVE_PROBE_PER_FRAME_THRESHOLD;
+        let step = (dx * dx + dz * dz).sqrt();
+        let moved = step >= MOVE_PROBE_PER_FRAME_THRESHOLD;
+        // Accumulate the DISTANCE, not just the frame count. A character walking into geometry and a
+        // character never given the key both score a low moved-frame ratio; only the distance
+        // separates them, and only the distance says how far one inject-on burst actually carried.
+        let step_milli = (step * 1000.0).clamp(0.0, 1_000_000.0) as usize;
         if is_on {
+            ON_DISP_MILLI.fetch_add(step_milli, Ordering::Relaxed);
             ON_TOTAL.fetch_add(1, Ordering::Relaxed);
             if moved {
                 ON_MOVED.fetch_add(1, Ordering::Relaxed);
@@ -497,6 +594,7 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
                 MOVE_PROBE_MOVED_FRAMES.fetch_add(1, Ordering::SeqCst);
             }
         } else if pf >= CYCLE - OFF_TAIL {
+            OFF_TAIL_DISP_MILLI.fetch_add(step_milli, Ordering::Relaxed);
             OFF_TAIL_TOTAL.fetch_add(1, Ordering::Relaxed);
             if moved {
                 OFF_TAIL_MOVED.fetch_add(1, Ordering::Relaxed);
@@ -516,6 +614,8 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
         let om = ON_MOVED.load(Ordering::Relaxed);
         let ft = OFF_TAIL_TOTAL.load(Ordering::Relaxed);
         let fm = OFF_TAIL_MOVED.load(Ordering::Relaxed);
+        let on_mm = ON_DISP_MILLI.load(Ordering::Relaxed);
+        let off_mm = OFF_TAIL_DISP_MILLI.load(Ordering::Relaxed);
         // The single interval is complete once one full ON+OFF cycle has elapsed (this is its last frame).
         let interval_done = pf + 1 >= CYCLE;
         let verdict = if interval_done {
@@ -523,7 +623,26 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
             // after releasing a proven-forward burst (the resident-gate proof moved on 27/30 ON frames,
             // then continued falling); it cannot identify foreign input. The replay gate separately
             // requires a live device-boundary suppression oracle with zero unsuppressed events.
-            if ot > 0 && om * 100 >= 70 * ot {
+            // DISTANCE, not frame ratio (2026-09-05). The 70%-of-frames rule cannot distinguish a key
+            // that never reached the game from a character standing against geometry -- both score a
+            // low ratio -- and on br-20260905-033648-7f4c it called DISPROVEN on a burst where the
+            // DInput stamp demonstrably landed on 30 of 30 inject-on frames. What the proof actually
+            // has to establish is that OUR input carried the character somewhere and that releasing it
+            // stopped them: a real inject-on displacement, and an off-tail rate well under the on rate.
+            // Both halves are required, so a character drifting on momentum still cannot score PROVEN.
+            // NONZERO IS THE PROOF (user 2026-09-05: "Barely is enough. If the number is non zero,
+            // it was you moveing"). This gate's question is ATTRIBUTION -- did the harness move the
+            // character -- not how far it walked, and attribution is binary. A magnitude floor here
+            // answers a question nobody asked: it was set to 500 from an armchair guess, measured 343,
+            // and turned four consecutive runs of a working injection path into DISPROVEN while three
+            // separate focus mechanisms were eliminated for a bug that did not exist. The off-tail is
+            // still required to not dominate, because that is what distinguishes our input from
+            // momentum -- it is part of attribution, unlike a distance bar.
+            let on_rate = if ot > 0 { on_mm / ot } else { 0 };
+            let off_rate = if ft > 0 { off_mm / ft } else { 0 };
+            let carried = on_mm > 0;
+            let stopped_on_release = off_rate * 4 <= on_rate;
+            if carried && stopped_on_release {
                 1 // PROVEN
             } else {
                 2 // DISPROVEN (injection ineffective / char did not clearly move this interval)
@@ -537,13 +656,20 @@ pub(crate) fn tick(pos: (f32, f32, f32)) {
                 CAN_MOVE_CONFIRMED.store(true, Ordering::SeqCst);
             }
             MOVE_PROBE_ACTIVE.store(false, Ordering::SeqCst);
+            crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
+            crate::experiments::input_block::set_injected_vk(0);
+            crate::experiments::input_block::set_injected_vk(0);
             let label = match verdict {
                 1 => "PROVEN(harness moved char)",
                 2 => "DISPROVEN(injection ineffective)",
                 _ => "CONTAMINATED(external input)",
             };
             append_autoload_debug(format_args!(
-                "can-move: HARNESS_MOVE_VERDICT={verdict} {label} epoch={epoch} on_moved={om}/{ot} off_tail_moved={fm}/{ft}"
+                "can-move: HARNESS_MOVE_VERDICT={verdict} {label} epoch={epoch} on_moved={om}/{ot} off_tail_moved={fm}/{ft} on_disp={on_mm}milli off_tail_disp={off_mm}milli (any nonzero on_disp attributes the move to us) padgate 2f8={} 2f9={} debug_byte={} shut_on_inject={}/{ot}",
+                er_telemetry_core::counters::PAD_GATE_MGR_2F8.load(Ordering::Relaxed),
+                er_telemetry_core::counters::PAD_GATE_MGR_2F9.load(Ordering::Relaxed),
+                er_telemetry_core::counters::PAD_GATE_DEBUG_BYTE.load(Ordering::Relaxed),
+                er_telemetry_core::counters::PAD_GATE_SHUT_ON_INJECT_FRAMES.load(Ordering::Relaxed)
             ));
         }
     }

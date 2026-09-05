@@ -2902,6 +2902,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-focus-input"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-game-base"
 version = "0.1.0"
 dependencies = [
@@ -2950,6 +2960,7 @@ dependencies = [
  "eldenring",
  "er-game-base",
  "er-hook",
+ "er-quit-menu-core",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]

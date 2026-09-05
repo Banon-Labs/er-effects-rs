@@ -19,11 +19,6 @@ pub(crate) enum OwnedClass {
     SparedRenderer = 0,
 }
 pub(crate) const OWNED_CLASS_COUNT: usize = 1;
-pub(crate) const OWNED_CLASS_NAMES: [&str; OWNED_CLASS_COUNT] = ["spared_renderer"];
-/// Max simultaneously outstanding (taken-but-not-released) per class. The spare holds exactly one
-/// renderer per load window; the game-thread drain releases the prior before taking the next, so
-/// outstanding never legitimately exceeds 1.
-pub(crate) const OWNED_CLASS_BOUND: [usize; OWNED_CLASS_COUNT] = [1];
 pub(crate) static OWNED_TAKEN: [AtomicUsize; OWNED_CLASS_COUNT] =
     [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
 pub(crate) static OWNED_RELEASED: [AtomicUsize; OWNED_CLASS_COUNT] =
@@ -33,7 +28,6 @@ pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
     [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
 /// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
 /// leak of a native-owned object -- the run-stopping oracle for this bug class.
-pub(crate) use er_telemetry_core::counters::OWNED_LEDGER_VIOLATIONS;
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.

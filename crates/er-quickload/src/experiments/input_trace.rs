@@ -319,7 +319,6 @@ struct TraceSem {
     native_loadscreen: bool,
     quickload_phase: usize,
     profile_load_activate: usize,
-    sq_repro_state: usize,
     fresh_deser: usize,
     can_move: bool,
     move_epoch: usize,
@@ -614,7 +613,6 @@ fn input_trace_semaphores() -> TraceSem {
         native_loadscreen: native_loading_screen_active(),
         quickload_phase: SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst),
         profile_load_activate: SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
-        sq_repro_state: SQ_REPRO_STATE.load(Ordering::SeqCst),
         fresh_deser: SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         can_move: crate::constants::CAN_MOVE_CONFIRMED.load(Ordering::SeqCst),
         move_epoch: crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst),
@@ -693,7 +691,6 @@ impl TraceSem {
         mix(self.native_loadscreen as u64);
         mix(self.quickload_phase as u64);
         mix(self.profile_load_activate as u64);
-        mix(self.sq_repro_state as u64);
         mix(self.fresh_deser as u64);
         mix(self.can_move as u64);
         mix(self.move_epoch as u64);
@@ -731,7 +728,7 @@ impl TraceSem {
              \"save_slot\":{},\"req_slot\":{},\"save_state\":{},\"save_requested\":{},\
              \"menu_job\":\"0x{:x}\",\"loading_mode\":{},\"loading_field10\":{},\"loading_field11\":{},\
              \"load_done\":{},\"fake_cover\":{},\"native_loadscreen\":{},\
-             \"quickload_phase\":{},\"profile_load_activate\":{},\"sq_repro_state\":{},\"fresh_deser\":{},\
+             \"quickload_phase\":{},\"profile_load_activate\":{},\"fresh_deser\":{},\
              \"can_move\":{},\"move_epoch\":{},\"bar_frame\":{},\"bar_max_frame\":{},\"bar_progress_permille\":{},\
              \"mms_step\":{},\"mms_name\":\"{}\",\"mms_next\":{},\"mms_done50\":{},\
              \"mms_gate_lo\":{},\"mms_gate_hi\":{},\"mms_hold270\":{},\"mms_cd100\":{},\"mms_req248\":{},\
@@ -773,7 +770,6 @@ impl TraceSem {
             self.native_loadscreen,
             self.quickload_phase,
             self.profile_load_activate,
-            self.sq_repro_state,
             self.fresh_deser,
             self.can_move,
             self.move_epoch,

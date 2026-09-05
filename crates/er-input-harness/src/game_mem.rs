@@ -247,6 +247,46 @@ fn input_mgr() -> usize {
         .unwrap_or(0)
 }
 
+/// THE GATE EVERY MENU PAD READ PASSES THROUGH (`FUN_140758050`, 1.16.2).
+///
+/// `CS::GridControl`'s pager (vtable slot 2, `FUN_1407392f0`) does not read a pad device directly.
+/// Each direction it tests goes through `FUN_14075d970`, whose FIRST act is to call this predicate
+/// with no arguments of its own; when it answers false the lambda holding the menu code is never
+/// invoked and the read returns "not pressed". So a shut gate makes the pause menu ignore EVERY
+/// input, whatever is written into the pad device -- which is the exact shape of every derailed
+/// `nav_to_optionsetting` phase this drive has produced.
+///
+/// The predicate is a conjunction:
+///
+/// ```text
+///   *caller_flag != 0
+///   && CSMenuManImp + 0x798 == 0
+///   && CSMenuManImp + 0x19  != 0
+///   && (disableMouseCursor == false || CSFadeImp::FadePlateTimerHasEnded(fade, 2))
+/// ```
+///
+/// `disableMouseCursor` is the named field at `+0x1a`; the other two are unnamed in the dump, so
+/// they are read here by offset and reported raw rather than interpreted. Reading them is the
+/// difference between "the key never arrived" and "the key arrived at a menu that was refusing
+/// input", which no amount of pressing harder can distinguish.
+const CS_MENU_MAN_INPUT_GATE_19_OFFSET: usize = 0x19;
+const CS_MENU_MAN_DISABLE_MOUSE_CURSOR_1A_OFFSET: usize = 0x1a;
+const CS_MENU_MAN_INPUT_GATE_798_OFFSET: usize = 0x798;
+
+/// `(gate_19, disable_mouse_cursor, gate_798)` straight out of `CSMenuManImp`, or `None` when the
+/// singleton is not up.
+pub fn menu_input_gate() -> Option<(u8, u8, usize)> {
+    let im = input_mgr();
+    if im == 0 {
+        return None;
+    }
+    let gate_19 = unsafe { crate::win32::read_u8(im + CS_MENU_MAN_INPUT_GATE_19_OFFSET) }?;
+    let disable_cursor =
+        unsafe { crate::win32::read_u8(im + CS_MENU_MAN_DISABLE_MOUSE_CURSOR_1A_OFFSET) }?;
+    let gate_798 = unsafe { read_usize(im + CS_MENU_MAN_INPUT_GATE_798_OFFSET) }?;
+    Some((gate_19, disable_cursor, gate_798))
+}
+
 /// `popupMenu->currentTopMenuJob` (inputmgr+0x80 -> +0xB0), or 0. Non-zero ONLY when a popup/pause menu
 /// is actually up -- the correct "pause menu open" signal (unlike menuData+0x8). It is a
 /// FixOrderJobSequence (NOT a MenuWindowJob), and it is REPLACED when a submenu opens (old pushed to
@@ -294,6 +334,171 @@ pub fn top_menu_id() -> i32 {
     unsafe { read_usize(w + TOP_WINDOW_MENU_ID_180_OFFSET) }.map_or(-1, |v| (v & 0xffff) as i32)
 }
 
+/// `GLOBAL_CSPcKeyConfig` (1.16.2 RVA; `er_game_base::mem::game_data_addr` maps it to 0x3d61f08 on
+/// 1.17, agreed by 82 references). Resolved from `mov rcx, [rip+0x3607e98]` at 0x140756009, inside
+/// the function that turns a menu code into a device binding.
+const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = 0x3d5dea8;
+/// The binding table inside CSPcKeyConfig: `config + 0x440 + code * 0x14`, valid for `code < 0x36`.
+/// Each 0x14-byte entry is five dwords and `FUN_140242b00` picks by mode -- mode 2, which the menu
+/// path uses, reads the PAD pair at `+0x0c` and `+0x10`.
+const KEY_CONFIG_BINDING_TABLE_OFFSET: usize = 0x440;
+const KEY_CONFIG_BINDING_STRIDE: usize = 0x14;
+const KEY_CONFIG_BINDING_PAD_PRIMARY_OFFSET: usize = 0x0c;
+const KEY_CONFIG_BINDING_PAD_SECONDARY_OFFSET: usize = 0x10;
+/// Highest valid menu code -- `FUN_140242ab0` returns an empty binding for anything `>= 0x36`.
+pub const KEY_CONFIG_MAX_MENU_CODE: u32 = 0x36;
+
+/// Every device binding a menu code carries: the five dwords of its `0x14`-byte entry, in order.
+///
+/// `FUN_140242b00` selects a PAIR out of this row by mode -- mode 0 takes `[0]`, mode 1 takes
+/// `[1]`/`[2]`, mode 2 takes `[3]`/`[4]` (the pad pair the menu path asks for). Reading the WHOLE row
+/// is what turns the table from "the pad id for a code I already identified" into "which code is
+/// menu-down": the keyboard half is dword `[0]`, and a DIK scancode is recognisable on sight
+/// (`0xd0` down-arrow, `0x1f` S, `0xc8` up-arrow, `0x11` W), so dumping all `0x36` rows names the
+/// codes instead of sweeping them.
+///
+/// The dwords are read as four separate byte-quads rather than through `read_usize`, which would
+/// pack two dwords into one value and silently truncate -- how the existing pad reader gets `[3]`
+/// right and would get `[4]` wrong if it ever read at `+0x10` with a `usize` that ran off the entry.
+pub fn menu_code_binding_row(code: u32) -> Option<[u32; 5]> {
+    if code >= KEY_CONFIG_MAX_MENU_CODE {
+        return None;
+    }
+    let base = game_base()?;
+    let config = deref_singleton(
+        base,
+        CS_PC_KEY_CONFIG_GLOBAL_RVA,
+        "CS_PC_KEY_CONFIG_GLOBAL_RVA",
+    )?;
+    let entry =
+        config + KEY_CONFIG_BINDING_TABLE_OFFSET + KEY_CONFIG_BINDING_STRIDE * code as usize;
+    let mut row = [0u32; 5];
+    for (index, slot) in row.iter_mut().enumerate() {
+        *slot = unsafe { crate::win32::read_u32(entry + index * 4) }?;
+    }
+    Some(row)
+}
+
+/// The pad binding a menu code resolves to: `(primary, secondary)` from the mode-2 pair, or `None`
+/// when the config is not up or the code is out of range.
+///
+/// WHY READ IT INSTEAD OF GUESSING: menu navigation reads the FD4 pad device through
+/// `CS::CSEzMenuViewerPad`, and a menu code is an INDEX into this table, not a device id. Sweeping
+/// pad ids to find the one that moves a cursor is how the previous drive ended up injecting into
+/// `inputmgr+0x90`, which is a shown-menu-window bitmap and not input at all. This table says which
+/// pad input the game itself has bound to each menu action.
+pub fn menu_code_pad_binding(code: u32) -> Option<(u32, u32)> {
+    if code >= KEY_CONFIG_MAX_MENU_CODE {
+        return None;
+    }
+    let base = game_base()?;
+    let config = deref_singleton(
+        base,
+        CS_PC_KEY_CONFIG_GLOBAL_RVA,
+        "CS_PC_KEY_CONFIG_GLOBAL_RVA",
+    )?;
+    let entry =
+        config + KEY_CONFIG_BINDING_TABLE_OFFSET + KEY_CONFIG_BINDING_STRIDE * code as usize;
+    let primary = unsafe { read_usize(entry + KEY_CONFIG_BINDING_PAD_PRIMARY_OFFSET) }? as u32;
+    let secondary = unsafe { read_usize(entry + KEY_CONFIG_BINDING_PAD_SECONDARY_OFFSET) }? as u32;
+    Some((primary, secondary))
+}
+
+/// OptionSetting composite (`window+0x1768`) and, within it, the CURRENT pane dialog (`+0xb8`) -- the
+/// pane the game's own tab-select writes, so it follows a TabLeft the drive injected rather than a
+/// cached guess. Same offsets the product walks in `profile_rows_system_quit_menu.rs`.
+const OPTIONSETTING_COMPOSITE_1768_OFFSET: usize = 0x1768;
+const OPTIONSETTING_COMPOSITE_CURRENT_PANE_B8_OFFSET: usize = 0xb8;
+
+/// The Quit tab's currently displayed pane dialog, or 0.
+pub fn optionsetting_current_pane() -> usize {
+    let w = top_window();
+    if w == 0 {
+        return 0;
+    }
+    unsafe {
+        read_usize(
+            w + OPTIONSETTING_COMPOSITE_1768_OFFSET
+                + OPTIONSETTING_COMPOSITE_CURRENT_PANE_B8_OFFSET,
+        )
+    }
+    .filter(|p| *p >= HEAP_LO)
+    .unwrap_or(0)
+}
+
+/// `CS::GridControl` selected-cell index. Read off the pager FUN_1407392f0, which compares
+/// `*(int*)(this+0xd4)` against the extents at `+0xd0`/`+0xd8`/`+0xdc`. It is the same field
+/// `optionsetting_tab_index` already reads through the tab strip -- because the tab strip IS a
+/// GridControl, and so is the pause-menu grid.
+const GRID_CONTROL_SELECTED_D4_OFFSET: usize = 0xd4;
+/// How far into a menu window to look for an embedded GridControl pointer. The OptionSetting one
+/// sits at +0x1870; this covers that and the pause menu's own, without running off the object.
+const MENU_WINDOW_SCAN_QWORDS: usize = 0x400;
+
+/// `CS::GridControl`'s vtable ON THE INSTALLED 1.17 BUILD, measured rather than translated.
+///
+/// Recovered by `scripts/er-rtti-map.py`, which walks MSVC RTTI in `eldenring-deobf-1.17.bin`:
+/// TypeDescriptor (`.?AVGridControl@CS@@`, name at `+0x10`) -> CompleteObjectLocator (validated by
+/// its own self-RVA and signature 1) -> the qword pointing at that COL, whose `+8` is the vtable.
+/// The 1.16.2 value was `0x142a913b8`; nothing translates between them and nothing needs to.
+///
+/// THIS REPLACES A CIRCULAR RUNTIME DERIVATION. The previous version read GridControl's vtable off
+/// the OptionSetting tab strip (`window+0x1870 -> +0x10`) because `map-data-rvas` rated the 1.16.2
+/// vtable WEAK on 1.17 -- one reference, one vote. But the tab strip only exists once OptionSetting
+/// is OPEN, and opening OptionSetting is what this scan exists to enable: during the pause menu the
+/// top window is IngameTop, the `+0x1870` read yields nothing usable, and the function returned
+/// `None` before scanning a single slot. Measured on br-20260905-170715-2300, which logged
+/// "no GridControl found in the top menu window" at nav frames 0, 120 and 240.
+const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
+
+/// Find a `CS::GridControl` inside the top menu window and report `(offset_in_window, selected_cell)`.
+pub fn pause_menu_grid() -> Option<(usize, i32)> {
+    let window = top_window();
+    if window == 0 {
+        return None;
+    }
+    let grid_vtable = game_base()? + GRID_CONTROL_VTABLE_RVA_1170;
+    for slot in 0..MENU_WINDOW_SCAN_QWORDS {
+        let offset = slot * 8;
+        let Some(candidate) = (unsafe { read_usize(window + offset) }).filter(|c| *c >= HEAP_LO)
+        else {
+            continue;
+        };
+        if unsafe { read_usize(candidate) } != Some(grid_vtable) {
+            continue;
+        }
+        let selected = unsafe { read_usize(candidate + GRID_CONTROL_SELECTED_D4_OFFSET) }
+            .map_or(-1, |v| (v & 0xffff_ffff) as i32);
+        return Some((offset, selected));
+    }
+    None
+}
+
+/// Row index of **Load Character from File** on the currently displayed Quit-tab pane, or -1.
+///
+/// The drive needs this BEFORE it presses Confirm, because the Quit tab also carries *Return to
+/// Desktop* -- pressing blind and counting on a row order is how a repro quits the game instead of
+/// loading a character. `system_quit_row_label_at` classifies each row by its label, matching the
+/// pointer when it can and falling back to an ASCII prefix compare (longest-first, so
+/// "Load Character from File" is never mistaken for "Load Character"), which is what makes it usable
+/// from THIS DLL even though the label arrays live in `er_quickload.dll`'s image.
+pub fn optionsetting_load_from_file_row() -> i32 {
+    use er_quit_menu_core::row_identity::system_quit_row_label_at;
+    use er_quit_menu_core::rows::{QuitRow, QuitRowLabel};
+    let dialog = optionsetting_current_pane();
+    if dialog == 0 {
+        return -1;
+    }
+    for index in 0..16i32 {
+        if let Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles)) =
+            unsafe { system_quit_row_label_at(dialog, index) }
+        {
+            return index;
+        }
+    }
+    -1
+}
+
 /// OptionSetting selected tab index (window+0x1870+0x10[deref]+0xd4, i32), or -1. Quit tab = 8.
 pub fn optionsetting_tab_index() -> i32 {
     let w = top_window();
@@ -338,12 +543,24 @@ pub fn return_title_requested() -> bool {
     unsafe { read_usize(md + MENU_DATA_RETURN_TITLE_5D_OFFSET) }.is_some_and(|v| (v & 0xff) == 1)
 }
 
-/// Read the optional drive-mode flag file (CWD-relative, same dir as the log): one of `boot`,
-/// `reload`, `full` (default `full`). Lets a run switch the drive PATTERN without a rebuild.
+/// Read the optional drive-mode flag file: one of `boot`, `reload`, `reload2`, `full`. An absent
+/// or unreadable file yields `""`, which `DriveMode::from_flag` maps to `passive`.
+///
+/// RESOLVED THE SAME WAY AS THE LOG, which it was documented to sit beside but did not (fixed
+/// 2026-09-04). It used to be a bare CWD-relative `read_to_string`, and the harness's log had since
+/// moved onto `redirected_artifact_path`, so a per-run artifact directory took the log with it and
+/// left this file behind. The cost is silent and total: the flag simply reads absent, the harness
+/// logs `drive: mode='passive'`, and a run staged to drive itself sits there driving nothing --
+/// observed on run br-20260905-023540-8b07, where the flag had been written into the game
+/// directory and the process CWD was elsewhere. There is no "flag not found" error to notice,
+/// because an absent flag is a legitimate state.
 pub fn read_drive_mode_flag() -> String {
-    std::fs::read_to_string("er-harness-drive-mode.txt")
-        .map(|s| s.trim().to_ascii_lowercase())
-        .unwrap_or_default()
+    std::fs::read_to_string(er_game_base::log::redirected_artifact_path(
+        "ER_HARNESS_DRIVE_MODE_PATH",
+        "er-harness-drive-mode.txt",
+    ))
+    .map(|s| s.trim().to_ascii_lowercase())
+    .unwrap_or_default()
 }
 
 /// PROBE HOLD-ID (CWD file `er-harness-probe-hold-id.txt` containing a decimal vk-id 1000..1080): in
@@ -382,10 +599,13 @@ pub fn request_return_to_title() -> bool {
 }
 
 pub fn probe_hold_id() -> u32 {
-    std::fs::read_to_string("er-harness-probe-hold-id.txt")
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(0)
+    std::fs::read_to_string(er_game_base::log::redirected_artifact_path(
+        "ER_HARNESS_PROBE_HOLD_ID_PATH",
+        "er-harness-probe-hold-id.txt",
+    ))
+    .ok()
+    .and_then(|s| s.trim().parse::<u32>().ok())
+    .unwrap_or(0)
 }
 
 /// FORCE-DRIVE override (env `ER_HARNESS_FORCE_DRIVE=1` OR CWD file `er-harness-force-drive.txt`):
@@ -394,8 +614,16 @@ pub fn probe_hold_id() -> u32 {
 /// The VANILLA agent-driven baseline needs this: it loads the product for its telemetry (autoload
 /// disarmed via telemetry-only) but the HARNESS must drive the native Continue -> Quit -> Continue.
 pub fn force_drive_requested() -> bool {
+    // The marker resolves beside the LOG, not against the CWD -- same fix, same reason, as
+    // `read_drive_mode_flag` (2026-09-04). me3 launches the game with an arbitrary CWD, so a bare
+    // relative `exists()` silently answered false for a file sitting in the game directory, and the
+    // harness stood down Passive on a run staged to drive itself.
     matches!(std::env::var("ER_HARNESS_FORCE_DRIVE").as_deref(), Ok("1"))
-        || std::path::Path::new("er-harness-force-drive.txt").exists()
+        || er_game_base::log::redirected_artifact_path(
+            "ER_HARNESS_FORCE_DRIVE_PATH",
+            "er-harness-force-drive.txt",
+        )
+        .exists()
 }
 
 /// COMPANION-AUTOLOAD (bd STEP4-FIX-DIRECTION-PROVEN): when the product DLL is loaded, drive the boot

@@ -1019,7 +1019,6 @@ pub static GX_CMD_ARENA_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX
 pub static GX_CMD_ARENA_SWITCH_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PROFILE_SPARE_ORPHAN: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_SPARE_ORPHANS_DELETED: AtomicUsize = AtomicUsize::new(0);
-pub static OWNED_LEDGER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_INGAME_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
@@ -1130,8 +1129,6 @@ pub static CHILD_DONE_HELD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static CHILD_DONE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_XINPUT_BUTTONS: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_INITIAL_CURSOR: AtomicUsize = AtomicUsize::new(usize::MAX);
 // INJECT_NAV_LOG_COUNT (per-tap log throttle) and INJECT_NAV_CUR_BUTTONS (the schedule's per-frame
 // synthesized wButtons) were the INJECT-NAV drive's own counters. Writer and reader both sat behind
 // `inject_nav_enabled()`, which could only return `false`; they were left with no writer AND no
@@ -1142,23 +1139,6 @@ pub static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static DID_MOVE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static MOVE_PROBE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static SQ_REPRO_TAB_RETURN_PHASE: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_TAB_RETURN_MAX_TAB: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_TAB_RETURN_DWELL_START: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_OPEN_KEY_VK: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_OPENED: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_DONE: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_RESTORE_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_FINAL_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static SQ_REPRO_PROFILE_BACK_BASELINE_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_VERIFY_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PROFILE_BACK_MISMATCH_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_CONFIRM_BASELINE: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_STATE_TICK: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_STATE_TAPS: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_WAIT_RELOAD_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
 pub static GET_ASYNC_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -1951,7 +1931,6 @@ pub static SQ_REPRO_HELD_VK: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_BEST_HWND: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_BEST_AREA: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_IS_FOREGROUND: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_INITIAL_FOREGROUND_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static RAWINPUT_MOUSE_MOVE_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub static RAWINPUT_MOUSE_BUTTON_EVENTS: AtomicUsize = AtomicUsize::new(0);
 pub static RAWINPUT_KEY_EVENTS: AtomicUsize = AtomicUsize::new(0);
@@ -2547,11 +2526,6 @@ pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
 pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static SQ_REPRO_ROWNAV_BASE: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static SQ_REPRO_ROUTE_FIRED: AtomicUsize = AtomicUsize::new(0);
-pub static SQ_REPRO_PANE_BUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_LAST_MMS: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static TESTNET_FF_FIRED_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -2591,9 +2565,66 @@ pub static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 pub static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
 pub static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 pub static INJECTED_KEY: AtomicU8 = AtomicU8::new(0);
+
+/// The cursor position the game is told it has, packed `(x << 32) | y`, or `u64::MAX` for "no
+/// injection". One atomic rather than two so the pair cannot be read half-updated.
+pub static INJECTED_CURSOR_POS: AtomicU64 = AtomicU64::new(u64::MAX);
+/// How many `GetCursorPos` calls were answered with the injected position.
+pub static USER32_INJECTED_CURSOR_STAMPS: AtomicUsize = AtomicUsize::new(0);
 pub static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
 pub static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 pub static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+/// How many times the DInput keyboard `GetDeviceState` detour STAMPED the harness's injected DIK
+/// into the buffer the game is about to read. This is the FOCUS-INDEPENDENT injection stage: the
+/// stamp happens AFTER DInput has filled (or zeroed) the buffer, so it lands whether or not ER owns
+/// the keyboard focus. Non-zero here with `DINPUT_KB_HOOK_FIRES` non-zero means the game read a
+/// buffer we authored; a zero here while the harness is injecting means the stamp never ran.
+pub static DINPUT_INJECTED_KEY_STAMPS: AtomicUsize = AtomicUsize::new(0);
+/// Win32 virtual-key code the harness is holding down at the USER32 layer (0 = nothing held). ER
+/// 1.17 imports `GetKeyState`/`GetKeyboardState`/`ToAscii` from USER32 and NO RawInput API at all,
+/// so this is a keyboard stage the game genuinely reads. Stamped into the results of the two USER32
+/// getters below, which makes it FOCUS-INDEPENDENT: those getters return the calling thread's key
+/// table, which Windows only populates for the focused thread -- we author the answer afterwards.
+pub static INJECTED_VK: AtomicU8 = AtomicU8::new(0);
+/// How many times the game called USER32 `GetKeyboardState` through our detour. Zero means the game
+/// does not read the keyboard that way and the stamp below is meaningless.
+pub static USER32_GET_KEYBOARD_STATE_FIRES: AtomicUsize = AtomicUsize::new(0);
+/// How many times the game called USER32 `GetKeyState` through our detour.
+pub static USER32_GET_KEY_STATE_FIRES: AtomicUsize = AtomicUsize::new(0);
+/// How many times a USER32 detour actually reported `INJECTED_VK` as held to the game.
+pub static USER32_INJECTED_VK_STAMPS: AtomicUsize = AtomicUsize::new(0);
+/// How many times the game called USER32 `GetCursorPos` through our detour. The OptionSetting
+/// tab-switch (Game / Quit Game) has no keyboard bind -- it is MOUSE-ONLY -- so driving a real menu
+/// path to the cloned load rows needs a focus-independent MOUSE stage the same way movement needed a
+/// keyboard one. `eldenring.exe` 1.17 imports `GetCursorPos`, `SetCursorPos`, `ClientToScreen`,
+/// `ScreenToClient` and `ClipCursor` from USER32; this counter says whether the pointer position the
+/// menu uses comes through that import (and is therefore stampable) or from DirectInput's mouse
+/// device instead. Measurement only -- nothing is injected on the mouse path yet.
+pub static USER32_GET_CURSOR_POS_FIRES: AtomicUsize = AtomicUsize::new(0);
+/// THE PAD GATE, sampled on the can-move probe's own inject-on frames. These decide whether ANY
+/// injected input is read, and they are the difference between "the key never arrived" and "the key
+/// arrived at a device the game had already decided to skip". `FD4PadManager+0x2f8` is the
+/// inactive-window REQUEST `CS::CSPadStep::STEP_Update` raises on an unfocused frame;
+/// `FD4PadManager::Update` latches it forward into `+0x2f9`; and every `CSInGamePad` query
+/// (`FUN_142664380`/`142664280`/`1426640f0`, all from `PollInput@0x142665060`) opens with
+/// `if (field625_0x2f9 == false)`. `GAME_DEBUG_BYTE` is the `.data` byte
+/// `Game.Debug.IsEnableControlOnDisactiveWindow` reads (1.16.2 0x144588af1), which `er-focus-input`
+/// holds at 1 -- sampling it says whether that hold is actually in effect at the instant we inject,
+/// rather than assuming it from the DLL being loaded. 0xff = could not read.
+pub static PAD_GATE_MGR_2F8: AtomicUsize = AtomicUsize::new(0xff);
+pub static PAD_GATE_MGR_2F9: AtomicUsize = AtomicUsize::new(0xff);
+pub static PAD_GATE_DEBUG_BYTE: AtomicUsize = AtomicUsize::new(0xff);
+/// Inject-on frames on which `FD4PadManager+0x2f9` was LATCHED SHUT -- i.e. frames where the game
+/// short-circuited every pad read no matter what we had stamped into the device.
+pub static PAD_GATE_SHUT_ON_INJECT_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Total horizontal displacement, in THOUSANDTHS of a world unit, accumulated across the can-move
+/// probe's INJECT-ON frames, and across its INJECT-OFF tail. These exist because the frame-COUNT
+/// verdict cannot tell "the key never reached the game" from "the key reached the game and the
+/// character is standing against a wall": both report a low moved-frame ratio. Run
+/// br-20260905-033648-7f4c is the case in point -- 30 of 30 inject-on frames stamped DIK_W into the
+/// buffer the game read, and only 5 of 29 frames cleared the per-frame threshold.
+pub static ON_DISP_MILLI: AtomicUsize = AtomicUsize::new(0);
+pub static OFF_TAIL_DISP_MILLI: AtomicUsize = AtomicUsize::new(0);
 pub static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 pub static DINPUT_KB_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -2997,3 +3028,18 @@ pub static PICKED_SUMMARY_WATCH_ARMED_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_TIME_DESER_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// Slot (+1, so 0 means "never") passed to the most recent title-time deserialize.
 pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+/// Times the switch retired its OWN `menuData+0x5d` return-title request before creating the
+/// incoming world. Non-zero on a switch means the request was served and cleared; a switch that
+/// completes with this at 0 left the request set, which is the black-screen precondition (the
+/// incoming child inherits it, walks 18->20, and `STEP_GameStepWait` tears the world down).
+pub static SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Times a GENUINELY LOADED world reverted to the title/new-game map default -- the black screen,
+/// counted as a transition (real map id -> `FULLREAD_C30_M10_DEFAULT`) rather than as a level, so
+/// the long stretch of every boot that legitimately sits at the default cannot trip it.
+///
+/// This is the run-stopping oracle for the second-load teardown. It is deliberately blind to HOW
+/// the switch was driven, so a run driven through the real ProfileSelect rows and a run driven by
+/// the diagnostic control file are scored by the same measurement.
+pub static WORLD_LOST_TO_TITLE_COUNT: AtomicUsize = AtomicUsize::new(0);

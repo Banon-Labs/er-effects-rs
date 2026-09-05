@@ -442,3 +442,24 @@ pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
 /// would break every file read in the process, so that census reading `null` was a
 /// deref-depth/timing artifact and the conclusion drawn from it does not follow.
 pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
+
+/// `GLOBAL_CSSessionManager` singleton global -- 1.16.2 runtime VA `0x143d7a4d0`.
+///
+/// SOLE DECLARATION of this address; `er-invasion-warp-core`'s `SESSION_MANAGER_GLOBAL_RVA` is an
+/// alias derived from it. Byte-proven out of `1405f2935: mov 0x3787b94(%rip),%rcx`, and read a
+/// second, independent way by `MoveMapStep`'s ending-request evaluator at `0x140afa86b`
+/// (`MOV RAX,qword ptr [0x143d7a4d0]` immediately before `CMP dword ptr [RAX + 0x10],0x4`).
+///
+/// It is here rather than in the warp crate because that second reader is the product's, not the
+/// sidecar's: the ending evaluator's `protocolState == WaitReload` term is one of the nine inputs
+/// that decide whether the MoveMap child tears the world down (see
+/// `er_title_flow::SESSION_PROTOCOL_STATE_WAIT_RELOAD`).
+pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
+
+/// `GLOBAL_CSEventMan` singleton global -- 1.16.2 runtime VA `0x143d686f8`.
+///
+/// Byte-proven out of the same ending-request evaluator: `0x140afa8bd`
+/// `MOV RCX,qword ptr [0x143d686f8]`, then `MOV RCX,qword ptr [RCX + 0x10]` (the `deadReset`
+/// member, `CSEventManImp` field ordinal 2 in the named 1.16.2 dump) and `CALL 0x1405fef50`,
+/// which is the one-line getter `return param_1->field1_0x8;`, compared against `2`.
+pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
