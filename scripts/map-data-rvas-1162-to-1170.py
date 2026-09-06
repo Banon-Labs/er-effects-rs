@@ -740,7 +740,7 @@ SHAPE_RESCUED = {
     #   python3 scripts/map-data-rvas-1162-to-1170.py 0x4588af1 --confirm 0x458cb71
     0x4588AF1: (
         0x458CB71,
-        "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA",
+        "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
         "bracket+shape",
     ),
 }
