@@ -154,7 +154,7 @@ def main() -> int:
     write(
         "src/data_file.rs",
         "fn wanted_slot() -> Option<u32> {\n"
-        '    let raw = std::fs::read_to_string(game_dir().join("er-quickload-switch-slot.txt")).ok()?;\n'
+        '    let raw = std::fs::read_to_string(game_dir().join("er-quickload-example-data.txt")).ok()?;\n'
         "    raw.trim().parse().ok()\n"
         "}\n",
     )

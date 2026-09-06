@@ -75,7 +75,7 @@ rm -f "$GAME_DIR/er-quickload.toml" 2>/dev/null
 rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
 	"$GAME_DIR"/er-quickload-sq-target-switches.txt "$GAME_DIR"/er-quickload-sq-target-slots.txt \
 	"$GAME_DIR"/er-quickload-prove-movement.txt "$GAME_DIR"/er-quickload-stay-active.txt \
-	"$GAME_DIR"/er-quickload-probe-foreground.txt "$GAME_DIR"/er-quickload-switch-slot.txt 2>/dev/null
+	"$GAME_DIR"/er-quickload-probe-foreground.txt 2>/dev/null
 # Clean slate for logs/telemetry so this run is not polluted by a prior one.
 # THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to read
 #   rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log \

@@ -65,12 +65,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     unsafe { original(action_obj) }
 }
 
-/// PORTRAIT RETARGET + boot-view cover rearm for an own-menu character switch -- SHARED between the
-/// USER ProfileSelect arm (`system_quit_arm_quickload_autoload`) and the deterministic control-file
-/// arm (`switch_slot_arm_programmatic`), the same no-drift rule as `reset_switch_reload_latches`
-/// (bd er-effects-rs-dpf6: the programmatic arm previously skipped the whole portrait/cover
-/// lifecycle, so agent probes could not exercise the user path's window reset / FPS bail / publish
-/// race at all). Game thread only.
+/// PORTRAIT RETARGET + boot-view cover rearm for an own-menu character switch. It used to be SHARED
+/// between the USER ProfileSelect arm (`system_quit_arm_quickload_autoload`) and a menu-free
+/// control-file arm; that second arm was deleted on 2026-09-05, so ProfileSelect is now the sole
+/// caller and the no-drift argument this doc used to make has nothing left to drift against.
+/// Game thread only.
 ///
 /// PORTRAIT RETARGET (user 2026-07-03): the user just confirmed a NEW character for load, so the
 /// loading-screen portrait should render THAT character, not the one still resident (ac0). Make it
@@ -233,13 +232,13 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
     // Reset the switch-reload FD4-IO phase + Phase-3 outgoing-teardown latches. The USER ProfileSelect arm
-    // was MISSING these (only switch_slot_arm_programmatic had them), so a user-driven CONSECUTIVE load
+    // was MISSING these (only the since-deleted menu-free arm had them), so a user-driven CONSECUTIVE load
     // inherited SWITCH_RELOAD_FD4IO_COMMITTED=1 stale from the prior load -> own_load_switch_reload_fire
     // short-circuited at the already-committed guard -> no SUBMIT -> FRESH_DESER_DONE stuck 0 -> the b78
     // guard wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down
     // at ENTERING WORLD = the load3 softlock (bd compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
-    // These are the FD4IO/OUTGOING latches that switch_slot_arm_programmatic already resets safely -- NOT
-    // the RETURN_TITLE/FINAL_FUNCTOR counters that the 2026-07-02 bisect below found regressive.
+    // These are the FD4IO/OUTGOING latches the deleted menu-free arm already reset safely -- NOT the
+    // RETURN_TITLE/FINAL_FUNCTOR counters that the 2026-07-02 bisect below found regressive.
     crate::experiments::own_load::reset_switch_reload_latches();
     // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same

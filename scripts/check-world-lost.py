@@ -14,15 +14,20 @@ Two ways a run can read "clean" while proving nothing, both of which happened on
    trivially-true answer. The user hitting the bug through the menu while an agent run showed
    `oracle_world_lost_to_title == 0` is that failure exactly. A run with no switch is INCONCLUSIVE.
 
-2. THE SWITCH BYPASSED THE MENU. `er-quickload-switch-slot.txt` drives
-   `switch_slot_arm_programmatic`, which sets the switch state directly and never touches
+2. THE SWITCH BYPASSED THE MENU. `er-quickload-switch-slot.txt` drove
+   `switch_slot_arm_programmatic`, which set the switch state directly and never touched
    ProfileSelect. AGENTS.md forbids that as validation -- it "skips the exact user path being
-   validated" -- so a programmatic-only run is INCONCLUSIVE for a product claim no matter how
-   clean it is. It stays useful as a diagnostic vehicle, which is why this is a distinct verdict
-   from FAIL rather than being lumped in with it.
+   validated" -- and on 2026-09-05 the user ordered the whole mechanism DELETED for that reason:
+   every second and third load this project measured had skipped the menu, so no amount of clean
+   telemetry said anything about the flow a player uses.
 
-Verdicts: PASS (a MENU switch happened and no world was lost), FAIL (a world was lost),
-INCONCLUSIVE (nothing to score). Exit 0 only for PASS.
+   The detector for it stays, and its verdict is now FAIL rather than INCONCLUSIVE. Nothing in the
+   product can emit that line any more, so counting one means the deleted driver came back --
+   which is the failure this file is now the executable guard against. A note in AGENTS.md would
+   not have been.
+
+Verdicts: PASS (a MENU switch happened and no world was lost), FAIL (a world was lost, or a
+menu-free switch armed at all), INCONCLUSIVE (nothing to score). Exit 0 only for PASS.
 """
 import argparse
 import json
@@ -34,7 +39,8 @@ TELEMETRY = "er-quickload-telemetry.json"
 DEBUG_LOG = "er-quickload-autoload-debug.log"
 # The product logs this the moment a ProfileSelect row is activated -- the real user path.
 MENU_SWITCH = re.compile(r"ProfileSelect slot activation ARMED")
-# ...and this when the diagnostic control file arms one instead.
+# ...and this when a MENU-FREE switch armed instead. The driver that logged it was deleted on
+# 2026-09-05, so this pattern must never match again; if it does, the bypass is back.
 PROGRAMMATIC_SWITCH = re.compile(r"switch-trigger #\d+: PROGRAMMATIC arm")
 
 EXIT_OK = 0
@@ -95,11 +101,18 @@ def main() -> int:
         )
         return EXIT_INCONCLUSIVE
 
+    if programmatic:
+        print(
+            f"FAIL -- {programmatic} MENU-FREE switch(es) armed. The control-file driver that "
+            "could do that was deleted on 2026-09-05 because it skipped ProfileSelect entirely, "
+            "so this line existing at all means the bypass is back in the product."
+        )
+        return EXIT_FAIL
+
     if menu == 0:
         print(
-            f"INCONCLUSIVE -- {programmatic} switch(es), ALL programmatic. "
-            "`switch_slot_arm_programmatic` bypasses ProfileSelect, which is the path the defect "
-            "was reported on, so a clean result here is not evidence about the menu path."
+            "INCONCLUSIVE -- no menu switch in this run, so zero worlds lost says nothing about "
+            "the ProfileSelect path the defect was reported on."
         )
         return EXIT_INCONCLUSIVE
 

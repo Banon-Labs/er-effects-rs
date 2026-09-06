@@ -41,7 +41,16 @@ def audit(texts: dict[str, str]) -> list[str]:
     failures: list[str] = []
     try:
         resolver = rust_fn_body(texts["drive"], "own_load_read_sl2_bytes")
-        if not before(resolver, "own_load_save_rejection_terminal()", "switch_save_file_override()"):
+        # The anchor is the FIRST source-resolution step in the resolver. It was
+        # `switch_save_file_override()` until 2026-09-05, when the menu-free control-file switch
+        # driver that fed it was deleted; the first step is now the committed-foreign path. Naming a
+        # call that no longer exists does not fail loudly here -- `before()` would just compare
+        # against -1 and report the guard as broken, which is how this line was found.
+        if not before(
+            resolver,
+            "own_load_save_rejection_terminal()",
+            "system_quit_committed_foreign_save_path()",
+        ):
             failures.append("resolver does not reject terminal re-entry before source/disk resolution")
         if "record_own_load_save_rejection(fingerprint)" not in resolver:
             failures.append("unresolvable active-mode save does not publish a terminal rejection")

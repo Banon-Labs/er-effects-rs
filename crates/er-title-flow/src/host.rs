@@ -34,8 +34,6 @@ pub struct TitleFlowHost {
     pub append_crash_log: fn(std::fmt::Arguments<'_>),
     /// Structured timeline event sink (the product's `timeline_event`).
     pub timeline_event: fn(&str, u64, std::fmt::Arguments<'_>),
-    /// Directory of the game executable (log/artifact root); `None` when unresolvable.
-    pub game_directory_path: fn() -> Option<PathBuf>,
     /// The `CS::GameDataMan` singleton pointer, or 0.
     pub game_data_man_ptr_or_null: fn() -> usize,
     /// The `CS::GameMan` singleton pointer, or 0.
@@ -98,7 +96,6 @@ pub struct TitleFlowHost {
     pub own_stepper_enter_s2_phase: fn(usize),
     pub own_stepper_stage2: unsafe fn(usize, usize, usize, i32, u64, usize),
     pub own_load_switch_reload_fire: unsafe fn(usize, usize, usize, i32, u64) -> bool,
-    pub reset_switch_reload_latches: fn(),
     // --- map-mount / blockres trace helpers ------------------------------------------
     pub blockres_stalecap_fix_enabled: fn() -> bool,
     pub map_mount_guard_flip_tick: fn(bool, i32, i64),
@@ -108,7 +105,6 @@ pub struct TitleFlowHost {
     pub now_loading_active: unsafe fn(usize) -> bool,
     pub force_profile_render_tick: unsafe fn(usize, i32),
     pub system_quit_save_swap_recommit_after_return_title_save: fn(),
-    pub portrait_retarget_and_rearm_for_switch: unsafe fn(i32, &str),
     // --- detours whose ADDRESSES the moved hook installers take ----------------------
     pub title_update_detour: unsafe extern "system" fn(usize, f32, usize),
     pub pab_node_update_detour: unsafe extern "system" fn(usize, usize, usize, usize) -> usize,
@@ -116,9 +112,6 @@ pub struct TitleFlowHost {
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
 fn default_timeline_event(_name: &str, _frame: u64, _fields: std::fmt::Arguments<'_>) {}
-fn default_game_directory_path() -> Option<PathBuf> {
-    None
-}
 fn default_ptr_or_null() -> usize {
     0
 }
@@ -205,7 +198,6 @@ unsafe fn default_base_bool(_base: usize) -> bool {
     false
 }
 unsafe fn default_force_profile_render_tick(_base: usize, _slot: i32) {}
-unsafe fn default_portrait_retarget_and_rearm_for_switch(_selected_slot: i32, _source: &str) {}
 unsafe extern "system" fn default_title_update_detour(_dialog: usize, _delta: f32, _input: usize) {}
 unsafe extern "system" fn default_pab_node_update_detour(
     _step: usize,
@@ -223,7 +215,6 @@ impl TitleFlowHost {
             append_autoload_debug: default_log,
             append_crash_log: default_log,
             timeline_event: default_timeline_event,
-            game_directory_path: default_game_directory_path,
             game_data_man_ptr_or_null: default_ptr_or_null,
             game_man_ptr_or_null: default_ptr_or_null,
             runtime_heap_allocator_ptr_or_null: default_ptr_or_null,
@@ -264,7 +255,6 @@ impl TitleFlowHost {
             own_stepper_enter_s2_phase: default_own_stepper_enter_s2_phase,
             own_stepper_stage2: default_own_stepper_stage2,
             own_load_switch_reload_fire: default_own_load_switch_reload_fire,
-            reset_switch_reload_latches: default_unit,
             blockres_stalecap_fix_enabled: default_gate_off,
             map_mount_guard_flip_tick: default_map_mount_guard_flip_tick,
             run_ebl_mount_census: default_unit_str,
@@ -272,7 +262,6 @@ impl TitleFlowHost {
             now_loading_active: default_base_bool,
             force_profile_render_tick: default_force_profile_render_tick,
             system_quit_save_swap_recommit_after_return_title_save: default_unit,
-            portrait_retarget_and_rearm_for_switch: default_portrait_retarget_and_rearm_for_switch,
             title_update_detour: default_title_update_detour,
             pab_node_update_detour: default_pab_node_update_detour,
         }
@@ -308,9 +297,6 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
 }
 pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments<'_>) {
     (host().timeline_event)(name, frame, fields)
-}
-pub(crate) fn game_directory_path() -> Option<PathBuf> {
-    (host().game_directory_path)()
 }
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
@@ -382,9 +368,6 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     n: u64,
 ) -> bool {
     unsafe { (host().own_load_switch_reload_fire)(base, gm, owner, picked, n) }
-}
-pub(crate) fn reset_switch_reload_latches() {
-    (host().reset_switch_reload_latches)()
 }
 pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
     (host().blockres_stalecap_fix_enabled)()
@@ -496,9 +479,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 }
 pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     (host().system_quit_save_swap_recommit_after_return_title_save)()
-}
-pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, source: &str) {
-    unsafe { (host().portrait_retarget_and_rearm_for_switch)(selected_slot, source) }
 }
 /// Address-taken detour shim: forwards to the product detour installed via the host.
 pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f32, input: usize) {

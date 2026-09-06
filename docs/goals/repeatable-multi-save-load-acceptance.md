@@ -181,8 +181,17 @@ needs no live user input and ends in finite time with a short human-readable pas
 `.../experiments/startup_hooks/quit_menu/system_quit_repro_guards.rs`, `.../experiments/title/title_tick_cover.rs`,
 `.../experiments/save_picker*`, `.../experiments/present_overlay.rs`.
 
-**Harness / analysis:** `scripts/run-samechar-3x-threedll.sh`, `scripts/capture-samechar-3x.py`,
+**Harness / analysis:** `scripts/er-run-branch.py` (boot autoload only),
 `scripts/analyze-reload-fps-oracle-diff.py`.
+
+> **The multi-load harness this section used to name is GONE (2026-09-05, user directive).**
+> `run-samechar-3x-threedll.sh`, `capture-samechar-3x.py`, `run-multi-save-load-proof.sh` and the
+> rest drove loads 2..N through `er-quickload-switch-slot.txt` -> `switch_slot_arm_programmatic`,
+> which armed the switch state directly and never touched ProfileSelect. Section 10 below requires
+> the loads to happen "through the game's native UI", so every run those tools produced was
+> evidence about a path this goal explicitly does not accept. Nothing has replaced them yet: a new
+> harness must drive the Quit menu itself, and until one exists loads 2..N have no automated
+> driver. `scripts/check-world-lost.py` FAILS if a menu-free arm ever appears in a run again.
 
 ## 10. One-line definition of done
 

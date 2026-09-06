@@ -140,18 +140,6 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
     assert "0x240e70/0x241130/0x26634a0" in manifest
 
 
-def test_samechar_runner_arms_product_movement_for_deterministic_reload_driver() -> None:
-    runner = (REPO_ROOT / "scripts/run-samechar-3x-threedll.sh").read_text()
-    assert 'DRIVE_RELOAD_SLOTS="${DRIVE_RELOAD_SLOTS-0,0}"' in runner
-    assert 'WORLD_STABLE_TIMEOUT_S="${WORLD_STABLE_TIMEOUT_S:-90}"' in runner
-    assert 'export WORLD_STABLE_TIMEOUT_S' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-prove-movement.txt"' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-stay-active.txt"' in runner
-    assert 'printf \'1\\n\' >"$GAME_DIR/er-quickload-input-trace.txt"' in runner
-    assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" && ( -z "$DRIVE_RELOAD_SLOTS" || "${FORCE_HARNESS_DRIVE:-0}" == "1" ) ]]; then' in runner
-    assert 'if [[ "${OBSERVE_ONLY:-0}" != "1" ]]; then\n\tprintf \'%s\\n\' "${HARNESS_DRIVE_MODE:-full}"' not in runner
-
-
 def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
     hooks = (REPO_ROOT / "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
     assert "let boot_epoch = epoch == 0;" in hooks
@@ -271,7 +259,6 @@ def main() -> int:
         test_pad_inject_direct_stamp_writes_are_enabled,
         test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids,
         test_input_harness_manifest_names_actual_hook_layer,
-        test_samechar_runner_arms_product_movement_for_deterministic_reload_driver,
         test_boot_autoload_mms18_can_force_stuck_testnet_step,
         test_continue_and_boot_view_timing_oracles_exist,
     ]

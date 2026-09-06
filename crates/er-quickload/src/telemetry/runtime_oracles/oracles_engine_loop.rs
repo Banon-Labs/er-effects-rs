@@ -69,28 +69,21 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
         "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
     ));
     write_title_load_route_oracles(body);
-    // SWITCH-TRIGGER pipeline oracle (goal 2026-07-21, bd er-effects-rs-tx9n +
+    // SWITCH pipeline oracle (goal 2026-07-21, bd er-effects-rs-tx9n +
     // USER-oracle-must-emit-teardown-and-noload-cause): make a NO-LOAD explain itself instead of
-    // degrading to CAP_REACHED. These already-tracked counters expose the arm-eligibility inputs and
-    // the FD4-IO reload phase the switch load walks, so the capture script can say WHY a load did or
-    // did not fire. arm_count rises when switch_slot_arm_programmatic actually arms; teardown/deferred
-    // count the return-title write and the "seen a request but world not eligible" defers;
+    // degrading to CAP_REACHED. These already-tracked counters expose the FD4-IO reload phase the
+    // switch load walks, so the capture script can say WHY a load did or did not fire.
     // reload_phase = 0 IDLE / 1 DRAIN / 2 COMMIT (+ committed one-shot); player_present +
     // menu_job_present (CSMenuMan+0x798 live in-world menu job) + stable_frames are the arm gate.
+    //
+    // The arm/teardown/deferred/last-slot/control-file fields that used to open this block went with
+    // the control-file switch driver on 2026-09-05: they counted arms of a MENU-FREE switch, so a
+    // healthy reading there was compatible with the Quit menu being completely broken.
     {
         use er_telemetry_core::counters as swctr;
         use std::sync::atomic::Ordering as SwOrd;
-        let sw_last_slot = swctr::SWITCH_TRIGGER_LAST_SLOT.load(SwOrd::SeqCst);
-        let sw_last_slot_i: i64 = if sw_last_slot == usize::MAX {
-            -1
-        } else {
-            sw_last_slot as i64
-        };
         body.push_str(&format!(
-            "  \"oracle_switch_arm_count\": {},\n  \"oracle_switch_teardown_count\": {},\n  \"oracle_switch_deferred_count\": {},\n  \"oracle_switch_last_slot\": {sw_last_slot_i},\n  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_b78_guard_standdowns\": {},\n  \"oracle_switch_slot_control_mtime\": {},\n  \"oracle_switch_slot_control_primed\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_menu_window_finalize_guards\": {},\n  \"oracle_menu_window_finalize_last_window\": \"0x{:x}\",\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
-            swctr::SWITCH_TRIGGER_ARM_COUNT.load(SwOrd::SeqCst),
-            swctr::SWITCH_TRIGGER_TEARDOWN_COUNT.load(SwOrd::SeqCst),
-            swctr::SWITCH_TRIGGER_DEFERRED_COUNT.load(SwOrd::SeqCst),
+            "  \"oracle_switch_reload_phase\": {},\n  \"oracle_switch_reload_drain_waits\": {},\n  \"oracle_switch_reload_committed\": {},\n  \"oracle_switch_b78_guard_standdowns\": {},\n  \"oracle_switch_player_present\": {},\n  \"oracle_switch_menu_job_present\": {},\n  \"oracle_switch_stable_frames\": {},\n  \"oracle_common_finalize_count\": {},\n  \"oracle_menu_window_finalize_guards\": {},\n  \"oracle_menu_window_finalize_last_window\": \"0x{:x}\",\n  \"oracle_outgoing_teardown_baseline\": {},\n  \"oracle_outgoing_teardown_done\": {},\n  \"oracle_outgoing_teardown_wait_ticks\": {},\n  \"oracle_outgoing_teardown_failsoft\": {},\n  \"oracle_worldreswait_gate_calls\": {},\n  \"oracle_worldreswait_hold_armed\": {},\n  \"oracle_worldreswait_hold_engaged\": {},\n  \"oracle_worldreswait_held_frames\": {},\n  \"oracle_worldreswait_released_on_settle\": {},\n  \"oracle_worldreswait_released_on_failsoft\": {},\n",
             swctr::SWITCH_RELOAD_FD4IO_PHASE.load(SwOrd::SeqCst),
             swctr::SWITCH_RELOAD_FD4IO_DRAIN_WAITS.load(SwOrd::SeqCst),
             swctr::SWITCH_RELOAD_FD4IO_COMMITTED.load(SwOrd::SeqCst),
@@ -99,8 +92,6 @@ fn write_engine_loop_oracles(body: &mut String, base: usize) {
             // target. 0 on a run means the black-screen race never presented, so that run is
             // non-regression evidence only; > 0 means the stand-down actually fired.
             swctr::SWITCH_RELOAD_B78_GUARD_STANDDOWNS.load(SwOrd::SeqCst),
-            swctr::SWITCH_SLOT_CONTROL_MTIME.load(SwOrd::SeqCst),
-            swctr::SWITCH_SLOT_CONTROL_PRIMED.load(SwOrd::SeqCst),
             swctr::SWITCH_ORACLE_PLAYER_PRESENT.load(SwOrd::SeqCst),
             swctr::SWITCH_ORACLE_MENU_JOB_PRESENT.load(SwOrd::SeqCst),
             swctr::SWITCH_ORACLE_STABLE_FRAMES.load(SwOrd::SeqCst),

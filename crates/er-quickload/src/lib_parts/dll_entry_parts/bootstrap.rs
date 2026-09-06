@@ -121,11 +121,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     er_loading_portrait_core::install_host(er_loading_portrait_core::PortraitHost {
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         note_ls_portrait_capture: crate::telemetry::note_ls_portrait_capture,
-        game_directory_path: crate::telemetry::game_directory_path,
         portrait_overlay_enabled: crate::experiments::portrait_overlay_enabled,
         portrait_render_drive_enabled: crate::experiments::portrait_render_drive_enabled,
         portrait_real_pixels_enabled: crate::experiments::portrait_real_pixels_enabled,
         system_quit_repro_enabled: crate::experiments::system_quit_repro_enabled,
+        game_directory_path: crate::telemetry::game_directory_path,
         renderdoc_active: crate::experiments::renderdoc_active,
         portrait_loaded_slot: crate::experiments::portrait_loaded_slot,
         portrait_loaded_slot_confirmed: crate::experiments::portrait_loaded_slot_confirmed,
@@ -209,7 +209,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_autoload_debug: crate::telemetry::append_autoload_debug,
         append_crash_log: crate::telemetry::append_crash_log,
         timeline_event: crate::telemetry::timeline_event,
-        game_directory_path: crate::telemetry::game_directory_path,
         game_data_man_ptr_or_null: crate::constants::game_data_man_ptr_or_null,
         game_man_ptr_or_null: crate::constants::game_man_ptr_or_null,
         runtime_heap_allocator_ptr_or_null: crate::constants::runtime_heap_allocator_ptr_or_null,
@@ -255,7 +254,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         own_stepper_enter_s2_phase: crate::experiments::own_stepper_enter_s2_phase,
         own_stepper_stage2: crate::experiments::own_stepper_stage2,
         own_load_switch_reload_fire: crate::experiments::own_load_switch_reload_fire,
-        reset_switch_reload_latches: crate::experiments::reset_switch_reload_latches,
         blockres_stalecap_fix_enabled: crate::experiments::blockres_stalecap_fix_enabled,
         map_mount_guard_flip_tick: crate::experiments::map_mount_guard_flip_tick,
         run_ebl_mount_census: crate::experiments::run_ebl_mount_census,
@@ -264,8 +262,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         force_profile_render_tick: crate::experiments::force_profile_render_tick,
         system_quit_save_swap_recommit_after_return_title_save:
             crate::experiments::system_quit_save_swap_recommit_after_return_title_save,
-        portrait_retarget_and_rearm_for_switch:
-            crate::experiments::portrait_retarget_and_rearm_for_switch,
         title_update_detour: crate::experiments::title_update_detour,
         pab_node_update_detour: crate::experiments::pab_node_update_detour,
     });

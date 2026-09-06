@@ -35,7 +35,7 @@ pub mod gating {
     };
 }
 pub mod own_load {
-    pub(crate) use crate::host::{own_load_switch_reload_fire, reset_switch_reload_latches};
+    pub(crate) use crate::host::own_load_switch_reload_fire;
 }
 pub mod trace {
     pub(crate) use crate::host::{
