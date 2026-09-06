@@ -455,6 +455,13 @@ impl InvasionWarpDrive {
             // The pair is the point: a blank banner shipped once with shown=1 and no way to see it
             // in telemetry, so the number that can disagree with success is the one worth printing.
             let (banners_drawn, banners_empty) = crate::announce::measurement_tally();
+            // WHAT THE LOCAL-INVASION FILTER ACTUALLY DID, as opposed to whether it is armed.
+            // `unenforced` is the one that matters: a match this module judged a rejection and then
+            // could not cancel proceeds anyway, which from the player's seat is the mod being off.
+            // It was reported that way on 2026-09-06 ("I didn't only invade locally. It might be
+            // disabled?") after a run whose log carried four such rejections and no counter for
+            // them -- the heartbeat printed a healthy-looking line beside an inert filter.
+            let (keeps, cancels, reinvades, unenforced) = crate::local_invasion_filter::tallies();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} \
                  nearest[{}]_state={:#06x} \
@@ -462,6 +469,8 @@ impl InvasionWarpDrive {
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
+                 local[kept={keeps} cancelled={cancels} rearmed={reinvades} \
+                 UNENFORCED={unenforced}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
                  hotkey_refused={} \
