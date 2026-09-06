@@ -87,6 +87,23 @@ cpu_courtesy() {
 	# reaches every nested cargo invocation, including the ones inside other scripts.
 	export CARGO_BUILD_JOBS="$cap"
 
+	# AND THE PYTHON WORKER POOLS, which is the half `nice` cannot reach and the half that
+	# actually pinned this machine. MEASURED 2026-09-06: with every gate process already
+	# reniced to 19, `scripts/check-moveset-table.py` still held 81.4% of a 16-core box,
+	# because it sizes its pool `int(os.environ.get('SWEEP_JOBS', os.cpu_count() or 8))` --
+	# one worker per core, each at ~90% CPU. Priority decides who WINS a contended core; it
+	# does nothing about how many cores are contended, so the desktop stayed unusable while
+	# formally losing every race. `SWEEP_JOBS` is the knob that gate already reads.
+	export SWEEP_JOBS="${SWEEP_JOBS:-$cap}"
+
+	# `nproc` is what a pool with no env knob calls, and a Python `os.cpu_count()` respects the
+	# affinity mask rather than the core count -- so restricting the mask caps every pool at
+	# once, including ones that were written without a knob. Best-effort: `taskset` may be
+	# absent, and a container may already restrict us, in which case this changes nothing.
+	if command -v taskset >/dev/null 2>&1; then
+		taskset -cp "0-$((cap - 1))" $$ >/dev/null 2>&1 || true
+	fi
+
 	current=$( (nice) 2>/dev/null || echo 0)
 	[[ "$current" =~ ^-?[0-9]+$ ]] || current=0
 	if ((current < floor)); then

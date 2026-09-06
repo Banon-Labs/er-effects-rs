@@ -594,6 +594,10 @@ python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
+# The build gates must yield to the person at the keyboard, and three of the four levers that
+# make that true are invisible from the process that sets them. See the header of
+# scripts/test-cpu-courtesy.sh.
+bash "$repo_root/scripts/test-cpu-courtesy.sh"
 # Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
@@ -1486,6 +1490,8 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
+shellcheck "$repo_root/scripts/lib/cpu-courtesy.sh"
+shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
 shellcheck "$repo_root/scripts/test-check-config-guard.sh"
