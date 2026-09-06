@@ -104,7 +104,11 @@ def audit(texts: dict[str, str]) -> list[str]:
 
 def fixture() -> dict[str, str]:
     return {
-        "drive": """fn own_load_read_sl2_bytes() { if own_load_save_rejection_terminal() {} switch_save_file_override(); missing_save_selection_pending(); direct_save_file_source_active(); record_own_load_save_rejection(fingerprint); }""",
+        # The source-resolution anchor is `system_quit_committed_foreign_save_path()` since
+        # 2026-09-05. It was `switch_save_file_override()`, whose menu-free control-file switch
+        # driver was deleted -- and a fixture naming a call the resolver no longer makes does not
+        # fail loudly here: `before()` compares against -1 and the guard reports itself broken.
+        "drive": """fn own_load_read_sl2_bytes() { if own_load_save_rejection_terminal() {} system_quit_committed_foreign_save_path(); missing_save_selection_pending(); direct_save_file_source_active(); record_own_load_save_rejection(fingerprint); }""",
         "load_drive": """fn own_load_drive() { own_load_save_rejection_terminal(); own_load_read_sl2_bytes(base); }""",
         "switch": """fn own_load_feed_deserialize() { own_load_save_rejection_terminal(); own_load_read_sl2_bytes(base); }""",
         "stats": """fn ensure_profile_slot_stats_cached() { PROFILE_SLOT_STATS_CACHE_STATE.load(x); own_load_save_rejection_terminal(); own_load_read_sl2_bytes(base); }""",

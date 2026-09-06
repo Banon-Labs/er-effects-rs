@@ -216,7 +216,8 @@ const PAD_MGR_INACTIVE_LATCH_2F9_OFFSET: usize = 0x2f9;
 /// instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. Same constant as
 /// `er-focus-input`'s `GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA`; read here, never written,
 /// so the two DLLs keep exactly one writer.
-const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_DATA_RVA: u32 = 0x4588af1;
+const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_DATA_RVA: u32 =
+    er_game_base::rva::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA as u32;
 
 /// Sample the three bytes that decide whether the game reads ANY input this frame, on the frames we
 /// are actually injecting. Read-only. This exists because a stamp landing in a device buffer proves

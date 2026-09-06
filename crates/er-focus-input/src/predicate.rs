@@ -100,7 +100,7 @@
 /// 1.16.2 RVA, read by the single instruction `movzx eax, byte ptr [0x144588af1]` at
 /// `0x1402e6853`. `er_game_base::mem::write_global_u8` translates it for the running build and
 /// refuses when it cannot, so the 1.17 address (`0x458cb71`) is never spelled here.
-pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA: usize = 0x4588af1;
+pub use er_game_base::rva::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA;
 
 /// The value `CS::CSPadStep::STEP_Update` needs to see. It tests `CSPadStep+0xba` against zero
 /// (`cmp byte ptr [rdi + 0xba], 0`), so any nonzero byte works; `1` is what the getter's `bool`
