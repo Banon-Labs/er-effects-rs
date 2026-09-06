@@ -54,7 +54,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use er_build_import_core::equip::{
     CHR_ASM_SLOT_QUICK_BASE, Capacity, EquipLedger, PositionKind, PositionResult, equip_plan,
 };
-use er_build_import_core::{API_HOST, BuildDoc, build_path, model, plan::plan};
+use er_build_import_core::{API_HOST, BuildDoc, build_path, class, model, plan::plan, stats};
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
@@ -343,74 +343,74 @@ fn fetch_inner(share_id: &str) {
         doc.items.tools.slots.len()
     ));
 
-    // THE EIGHT ATTRIBUTES ARE THE BUILD. The payload's `rl` is not: nothing downstream reads it,
-    // every stat this importer applies comes from the attributes themselves, and for every
-    // starting class the eight sum to level + 79 -- so the level is DERIVED here rather than
-    // trusted, and a planner that disagrees with its own numbers is reported, not obeyed.
-    //
-    // This used to be a hard refusal, and it rejected a real build over one point: a payload
-    // carrying `rl: 150` beside attributes summing to 228 (= level 149) failed with "internally
-    // inconsistent" and imported nothing at all. The observation was correct and the response was
-    // not -- the gear, spells, talismans and the attributes were all perfectly well-formed.
-    const ATTRIBUTE_KEYS: [&str; 8] = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"];
-    /// Every starting class satisfies `stat_sum - level == 79`; it is a property of the game, not
-    /// of any one class, so the level follows from the attributes alone.
-    const CLASS_INVARIANT: i64 = 79;
-    /// All eight attributes at 99.
-    const MAX_LEVEL: i64 = 8 * 99 - CLASS_INVARIANT;
+    // THE EIGHT ATTRIBUTES ARE THE BUILD, and the level is derived from them rather than trusted.
+    // The whole derivation -- the class floor under the attributes, the sum, the `- 79`, and the
+    // overwrite of the payload's `rl` -- lives in `er_build_import_core::stats`, which is
+    // host-testable; this crate is not, so nothing provable by `cargo test` belongs in it. Read
+    // that module for WHY each of those steps exists. What is left here is the reporting.
+    let normalised = match stats::normalise(&mut doc) {
+        Ok(normalised) => normalised,
+        Err(err) => return set_error(err.to_string()),
+    };
 
-    // A MISSING attribute is the failure that actually matters, and it used to be invisible:
-    // `filter_map` skipped absent keys, so a payload short one attribute summed low, derived a
-    // lower level, and imported a character quietly missing points nobody would notice.
-    let mut attrs: i64 = 0;
-    for key in ATTRIBUTE_KEYS {
-        match doc.stats.get(key) {
-            Some(value) => attrs += value,
-            None => {
-                return set_error(format!(
-                    "the payload has no `{key}` attribute; refusing to import a build whose \
-                     stats cannot be read in full"
+    // THE FLOOR (user-reported 2026-09-06). A starting class's base attributes are its minimum:
+    // no ordinary play session produces a Vagabond with strength below 14. A payload carrying one
+    // summed two points short, derived level 148 instead of the 150 it claimed, and stamped a
+    // character whose stat block contradicts its own class. `ApplyMainPlayerStats` does no
+    // clamping of its own (see `er_build_import_core::stats` for the decompiled evidence), so
+    // nothing downstream would have caught it. Naming what was raised matters more than most
+    // lines here, because the alternative is a character silently two levels off the build the
+    // player asked for.
+    match &normalised.floor {
+        stats::Floor::Class { name, archetype } if normalised.raised.is_empty() => {
+            log_line(&format!(
+                "[build-import] floor: {name} (archetype {archetype}, CharaInitParam {}) -- every \
+                 attribute is at or above its class base",
+                class::chara_init_param_row(*archetype)
+            ));
+        }
+        stats::Floor::Class { name, archetype } => {
+            log_line(&format!(
+                "[build-import] floor: {name} (archetype {archetype}, CharaInitParam {}) -- {} \
+                 attribute(s) BELOW the class base, raised to it. The build is not legal as \
+                 written and the level it claims already counts these points.",
+                class::chara_init_param_row(*archetype),
+                normalised.raised.len()
+            ));
+            for raised in &normalised.raised {
+                log_line(&format!(
+                    "[build-import]   RAISED {}: {} -> {} (class base)",
+                    raised.key, raised.was, raised.now
                 ));
             }
         }
+        stats::Floor::Unnamed => log_line(
+            "[build-import] floor: the build names no class, so there is no base to raise to. \
+             The attributes stand as the payload gave them -- no default class is invented.",
+        ),
+        stats::Floor::Unrecognised(name) => log_line(&format!(
+            "[build-import] floor: the build names {name:?}, which is not a class this build \
+             knows -- most likely the game grew one. No base to raise to, so the attributes \
+             stand as the payload gave them."
+        )),
     }
-    let level = attrs - CLASS_INVARIANT;
-    if !(1..=MAX_LEVEL).contains(&level) {
-        return set_error(format!(
-            "attributes sum to {attrs}, which is level {level} -- outside 1..={MAX_LEVEL}, so \
-             the stat block is not a real character"
-        ));
-    }
-    match doc.stats.get("rl").copied() {
-        Some(claimed) if claimed != level => log_line(&format!(
-            "[build-import] level: attributes sum to {attrs}, so RL {level}. The payload CLAIMS \
-             RL {claimed}, which disagrees with its own stat block by {}. Importing the \
+
+    match normalised.claimed {
+        Some(claimed) if claimed != normalised.level => log_line(&format!(
+            "[build-import] level: attributes sum to {}, so RL {}. The payload CLAIMS RL \
+             {claimed}, which disagrees with its own stat block by {}. Importing the \
              attributes, which are what actually get applied.",
-            (claimed - level).abs()
+            normalised.total,
+            normalised.level,
+            (claimed - normalised.level).abs()
         )),
         _ => log_line(&format!(
-            "[build-import] level: {attrs} - {CLASS_INVARIANT} = {level}, matches the payload"
+            "[build-import] level: {} - {} = {}, matches the payload",
+            normalised.total,
+            stats::CLASS_INVARIANT,
+            normalised.level
         )),
     }
-    // AND THE CLAIM IS OVERWRITTEN, not merely reported (2026-09-01). The sentence above --
-    // "importing the attributes, which are what actually get applied" -- was not true of the
-    // LEVEL: `character::apply_stats` fills `stats[STAT_LEVEL]` from `want("rl")`, i.e. from
-    // exactly the number this block had just found untrustworthy, and then read-back-checks
-    // `PGD_LEVEL` against it. So a planner link claiming `rl: 150` beside attributes summing to
-    // 226 stamped a character with `level == 150` and a stat block implying 147.
-    //
-    // That is not cosmetic. `er_save_loader::stats` locates a save slot's serialized
-    // `PlayerGameData` by the identity `level == sum(attrs) - 79`, so a character minted with a
-    // contradictory level was one the mod's OWN save reader could no longer find: on the live
-    // default container it decoded 9 of 10 slots, and the Load Character row for the missing one
-    // rendered a name with an empty attribute line and no `WL` (user-reported 2026-09-01). The
-    // reader now has a structural fallback, but the importer must not be the thing producing
-    // such characters in the first place.
-    //
-    // Normalising here rather than in `apply_stats` keeps ONE derivation: everything downstream
-    // -- the applier, the read-back check, the report -- reads a `doc` whose `rl` and attributes
-    // agree, and no second copy of `- 79` can drift from this one.
-    doc.stats.insert("rl".to_owned(), level);
 
     match DOC.lock() {
         Ok(mut slot) => {

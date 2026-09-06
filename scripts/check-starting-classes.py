@@ -64,6 +64,20 @@ FIRST_CLASS_NAME_MESSAGE_ID = 288100
 #: `BaseChrSelectMenuParam` field 0: 1 marks a starting-class row, 0 a keepsake row.
 CLASS_ROW_MARKER = 1
 
+#: `CharaInitParam` row byte holding the class's starting level (`soulLv`).
+SOUL_LEVEL_OFFSET = 192
+
+#: First of the eight base attributes: vigour, mind, endurance, strength, dexterity,
+#: intelligence, faith, arcane. Byte 193, between the two, is zero on every row.
+ATTRIBUTES_OFFSET = 194
+
+#: How many attributes a character has.
+ATTRIBUTE_COUNT = 8
+
+#: `stat_sum - level` for every starting class. Mirrors
+#: `er_build_import_core::stats::CLASS_INVARIANT`; checked here against the game's own rows.
+CLASS_INVARIANT = 79
+
 
 def load_regulation_reader():
     """Import `regulation-params.py` despite the hyphen in its name."""
@@ -154,6 +168,111 @@ def rust_class_list(path: str) -> list[str]:
         raise SystemExit(f"could not find STARTING_CLASSES in {path}")
     body = re.sub(r"//[^\n]*", "", match.group(1))
     return re.findall(r'"([^"]*)"', body)
+
+
+def rust_starting_stats(path: str) -> list[tuple[int, list[int]]] | None:
+    """`STARTING_STATS` as [(starting level, [eight base attributes])], in archetype order.
+
+    Parsed rather than imported, for the same reason `rust_class_list` is. Returns None
+    when the const is not there, which the caller reports as a failure: this table stopped
+    being test-only on 2026-09-06 and is now the per-attribute FLOOR the build importer
+    holds a character to, so "could not look" must not read as "agreed".
+    """
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    match = re.search(r"pub const STARTING_STATS\s*:[^=]*=\s*&?\[(.*?)\n\];", source, re.S)
+    if match is None:
+        return None
+    body = re.sub(r"//[^\n]*", "", match.group(1))
+    rows = []
+    for level, attributes in re.findall(r"\(\s*(\d+)\s*,\s*\[([^\]]*)\]\s*\)", body):
+        rows.append((int(level), [int(value) for value in re.findall(r"\d+", attributes)]))
+    return rows
+
+
+def rust_attribute_keys(path: str) -> list[str] | None:
+    """The planner keys in `ATTRIBUTE_KEYS`, in the order they index `STARTING_STATS`."""
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+    match = re.search(r"pub const ATTRIBUTE_KEYS\s*:[^=]*=\s*\[(.*?)\];", source, re.S)
+    if match is None:
+        return None
+    return re.findall(r'"([^"]*)"', re.sub(r"//[^\n]*", "", match.group(1)))
+
+
+def check_starting_stats(chara_rows, listed, class_rs, failures, quiet):
+    """Re-read every base attribute out of `CharaInitParam` and compare against the Rust table.
+
+    The row layout, byte for byte: 192 is the starting level (`soulLv`), 193 is zero on
+    every row, and 194..=201 are the eight attributes in the game's order -- vigour, mind,
+    endurance, strength, dexterity, intelligence, faith, arcane.
+
+    Why this is a gate and not just a unit test: `STARTING_STATS` is what the build importer
+    raises a sub-base attribute to (`er_build_import_core::stats::normalise`), and the
+    native it then calls, `ApplyMainPlayerStats` @ 0x140788cf0, does no clamping of its own.
+    A number wrong here is a character minted with an illegal stat and no complaint from the
+    engine, so the numbers are re-derived from the installed game rather than trusted.
+    """
+    stats = rust_starting_stats(class_rs)
+    if stats is None:
+        failures.append(
+            f"could not find STARTING_STATS in {os.path.relpath(class_rs, REPO)}; it is the "
+            f"build importer's per-attribute floor and cannot go unchecked"
+        )
+        return
+
+    keys = rust_attribute_keys(class_rs)
+    if keys is None:
+        failures.append(f"could not find ATTRIBUTE_KEYS in {os.path.relpath(class_rs, REPO)}")
+    elif len(keys) != ATTRIBUTE_COUNT:
+        failures.append(
+            f"ATTRIBUTE_KEYS has {len(keys)} entries, not {ATTRIBUTE_COUNT}: it indexes "
+            f"STARTING_STATS, so the two must be the same width"
+        )
+    elif len(set(keys)) != len(keys):
+        failures.append(f"ATTRIBUTE_KEYS repeats a key: {keys}")
+
+    if len(stats) != len(listed):
+        failures.append(
+            f"STARTING_STATS has {len(stats)} rows, STARTING_CLASSES has {len(listed)}. "
+            f"One grew without the other."
+        )
+
+    for archetype, name in enumerate(listed):
+        if archetype >= len(stats):
+            break
+        row_id = FIRST_CHARA_INIT_PARAM_ROW + archetype
+        row = chara_rows.get(row_id)
+        if row is None:
+            continue  # already reported by the caller's row-existence check
+        want_level, want_attributes = stats[archetype]
+        got_level = row[SOUL_LEVEL_OFFSET]
+        got_attributes = list(row[ATTRIBUTES_OFFSET : ATTRIBUTES_OFFSET + ATTRIBUTE_COUNT])
+        if got_level != want_level:
+            failures.append(
+                f"archetype {archetype} ({name}): STARTING_STATS says starting level "
+                f"{want_level}, CharaInitParam {row_id} byte {SOUL_LEVEL_OFFSET} says {got_level}"
+            )
+        if got_attributes != want_attributes:
+            failures.append(
+                f"archetype {archetype} ({name}): STARTING_STATS says base attributes "
+                f"{want_attributes}, CharaInitParam {row_id} bytes "
+                f"{ATTRIBUTES_OFFSET}..={ATTRIBUTES_OFFSET + ATTRIBUTE_COUNT - 1} say "
+                f"{got_attributes}"
+            )
+        # The arithmetic invariant the importer derives every level from. Checked against the
+        # GAME's numbers rather than the table's, so it is evidence and not a tautology.
+        total = sum(got_attributes)
+        if total - CLASS_INVARIANT != got_level:
+            failures.append(
+                f"archetype {archetype} ({name}): CharaInitParam {row_id} has attributes "
+                f"totalling {total} and level {got_level}, but {total} - {CLASS_INVARIANT} = "
+                f"{total - CLASS_INVARIANT}. The identity the build importer derives every "
+                f"character's level from no longer holds."
+            )
+
+    if not quiet and not failures:
+        print(f"STARTING_STATS:                    {len(stats)} rows, every base attribute agrees")
 
 
 def python_archetype_map(path: str) -> list[str] | None:
@@ -279,6 +398,10 @@ def main() -> int:
             f"{len(listed) + 1} starting classes and STARTING_CLASSES is short. "
             f"Its GR_MenuText id is {classes.get(past_the_end, FIRST_CLASS_NAME_MESSAGE_ID + len(listed))}"
         )
+
+    # The base attributes themselves, not just which row belongs to which name. They became
+    # product data on 2026-09-06 (the build importer's per-attribute floor), so they are gated.
+    check_starting_stats(chara_rows, listed, args.class_rs, failures, args.quiet)
 
     for row_id, message_id in sorted(classes.items()):
         archetype = row_id - FIRST_CHARA_INIT_PARAM_ROW
