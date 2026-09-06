@@ -498,16 +498,51 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         return;
     }
 
+    /// A full-read exit that refused to load ANYTHING must hand the user the save picker, not a dead
+    /// title.
+    ///
+    /// Every caller has just decided "this save cannot be loaded" and disarmed the pending native slot
+    /// request, so the boot has no remaining path to a character: no Continue row was fired, no
+    /// `SetState5`, nothing further is queued. Before 2026-09-06 all three such exits simply stored
+    /// `FULLREAD_PHASE_DONE` and returned, and the title then sat forever -- measured on the product
+    /// path with slot 0 = "Hero" RL7, `GUARD FAIL ... -> DONE` at +16243ms and no further progress.
+    ///
+    /// One-shot by construction: `arm_missing_save_picker_after_boot` returns whether THIS call armed
+    /// it, so a phase that is polled every frame cannot re-arm or spam. The refusal itself is logged by
+    /// the caller; this only reports what recourse the user was given.
+    fn fullread_offer_save_picker(reason: &'static str) {
+        let armed = crate::experiments::arm_missing_save_picker_after_boot(reason);
+        append_autoload_debug(format_args!(
+            "native-fullread: armed_by_this_call={armed} -- the full read refused to load a character (reason={reason}), so the missing-save picker is offered instead of leaving the title with no way forward"
+        ));
+    }
+
     if phase == FULLREAD_PHASE_GUARD {
         // Step 6: GUARD. c30 != 0xa010000 (m10 default) AND char fingerprint present (level>=10 +
         // non-empty name). This is the HARD gate for the only save write.
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let (fp_real, level, name_len) = unsafe { char_fingerprint(base) };
         let c30_real = c30 != FULLREAD_C30_M10_DEFAULT && c30 != GAME_MAN_C30_UNSET;
-        // Direct-file source: picker/config selected a concrete save file and the full-read guard has
-        // c30_real + fp_real as the hard new-game/null blockers, so any real level is acceptable. The
-        // >=10 default is only a heuristic for the diagnostic path where nothing preselected a source.
-        let min_level = if direct_save_file_source_active() {
+        // ACCEPTED CONCRETE SOURCE -> any real level. `c30_real` + `fp_real` are the hard
+        // new-game/null blockers; the `>= 10` floor is only a heuristic for the diagnostic path
+        // where NOTHING preselected a source, and it must not outrank a source the boot check
+        // already validated.
+        //
+        // THE DEFAULT USER SAVE IS SUCH A SOURCE, and leaving it out cost a working autoload
+        // (2026-09-06). The product path -- `~/Elden/launch.sh`, no `save_file` configured -- logs
+        // `save-override: DEFAULT-USER-SAVE` after `active_default_save_file()` finds a readable
+        // container of the expected size for the live SteamID64, which is every bit as concrete as
+        // a configured file; it simply needs no staging because the game already reads that path.
+        // But only `direct_save_file_source_active()` counted, so the floor stayed at 10 and slot 0
+        // = "Hero" RL7 was refused: `GUARD c30_real=true fp_real=true level=7 level_real=false ->
+        // guard_pass=false`, `GUARD FAIL -- NO continue_confirm`, character never entered the world.
+        //
+        // THIS IS NOT THE WEAKENING THAT WAS REVERTED BELOW. That one dropped `c30_real && fp_real`
+        // themselves; both stay REQUIRED here and both were TRUE in the measurement above. The
+        // level-9 new-game sentinel the floor was aimed at is refused independently by those two --
+        // the 10:26:57 incident logged `c30_real=false fp_real=false level_real=false`, so the
+        // conjunction already rejected it three times over and the floor added nothing.
+        let min_level = if direct_save_file_source_active() || default_user_save_source_active() {
             1
         } else {
             FULLREAD_MIN_REAL_LEVEL
@@ -548,6 +583,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "guard-fail") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+            // AND GIVE THE USER SOMEWHERE TO GO (user, 2026-09-06: "that guard definitely should
+            // not have soft locked the load, if anything it should have prompted the save picker").
+            //
+            // Refusing the commit is correct -- this guard is the hard gate on the only save write
+            // and does not get weakened. But refusing it and then doing NOTHING leaves the title
+            // sitting there with no Continue, no picker and no explanation, which is the softlock
+            // the user hit: `GUARD FAIL ... -> DONE` at +16243ms and the run never moved again.
+            // "This save cannot be loaded" is exactly the condition the missing-save picker exists
+            // for, and the empty-profile path one screen earlier already answers it that way.
+            fullread_offer_save_picker("fullread-guard-fail");
             return;
         }
         // Step 7 is HARD-gated behind BOTH the guard above AND the commit sub-gate (default off):
@@ -572,6 +617,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+            fullread_offer_save_picker("fullread-commit-abort-owner-null");
             return;
         }
         let new_game_flag =
@@ -583,6 +629,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+            fullread_offer_save_picker("fullread-commit-abort-new-game-flag");
             return;
         }
         let shim = &raw mut OWN_STEPPER_SHIM;

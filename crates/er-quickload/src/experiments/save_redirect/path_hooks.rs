@@ -693,6 +693,23 @@ pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
 pub(crate) fn direct_save_file_source_active() -> bool {
     SAVE_DIRECT_SOURCE_FILE.get().is_some()
 }
+
+/// True once the boot check ACCEPTED the active Steam user's default save as this run's source --
+/// the `save-override: DEFAULT-USER-SAVE` line, i.e. the product path with no `save_file` configured.
+///
+/// This is a CONCRETE, ALREADY-VALIDATED source in exactly the sense
+/// [`direct_save_file_source_active`] is: `active_default_save_file()` found a readable container of
+/// the expected size for the live SteamID64 and the run committed to it. The only difference is that
+/// nothing had to be staged, because the game already reads that path.
+///
+/// It exists because the full-read GUARD's level floor was keyed on the OTHER predicate alone, so a
+/// genuine low-level character on the product path was refused. Measured 2026-09-06 on
+/// `~/Elden/launch.sh` with slot 0 = "Hero" RL7: `GUARD c30_real=true fp_real=true level=7
+/// level_real=false -> guard_pass=false`, `GUARD FAIL -- NO continue_confirm`, and the autoload
+/// parked with the character never entering the world.
+pub(crate) fn default_user_save_source_active() -> bool {
+    SAVE_REDIRECT_MODE.load(Ordering::SeqCst) == SAVE_REDIRECT_MODE_DEFAULT_USER
+}
 pub(crate) use er_telemetry_core::counters::SAVE_QUERY_CONFIGURED_FILE_HITS;
 pub(crate) use er_telemetry_core::counters::SAVE_QUERY_STAGE_SAVE_FILE_HITS;
 pub(crate) use er_telemetry_core::counters::SAVE_QUERY_STAGE_STEAMID_DIR_HITS;
