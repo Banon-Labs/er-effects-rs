@@ -36,6 +36,15 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+# Yield to whoever is using this computer, BEFORE any gate runs. The agent harness runs its
+# shells at nice -4, which is inherited by everything below and puts a 190-step suite at higher
+# priority than the desktop -- measured 2026-09-06, load average 34 on 16 cores and an
+# unresponsive machine. See scripts/lib/cpu-courtesy.sh for why this lives here and not in a
+# wrapper the caller has to remember.
+# shellcheck source=lib/cpu-courtesy.sh
+. "$repo_root/scripts/lib/cpu-courtesy.sh"
+cpu_courtesy check.sh
+
 
 # --- who may run this, and how many at once -------------------------------------------------
 # BOTH REFUSALS BELOW ARE MEASUREMENTS, NOT POLICY PREFERENCES. On 2026-09-02 three subagents
