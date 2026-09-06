@@ -58,6 +58,14 @@ ARTIFACT_ENV: dict[str, str] = {
     # One knob each, because that smoke reads them for different verdicts.
     "ER_QUICKLOAD_LOADING_PORTRAIT_PATH": "er-loading-portrait.log",
     "ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH": "er-loading-portrait-crash-log.txt",
+    # The standalone crash-logging shell's four files. It had NO knob until 2026-09-04, which made
+    # it the one writer no launcher could move -- and the one whose output is least reproducible.
+    # A relaunch that day erased a 26-record log mid-investigation, the only copy of a 22-deep
+    # unwind cascade, and the user had to re-provoke the crash to get it back.
+    "ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH": "er-crash-log.txt",
+    "ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH": "er-crash-latest.txt",
+    "ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH": "er-crash-breadcrumb-latest.txt",
+    "ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH": "er-crash-modules.txt",
     # The save-census shell's run log and its telemetry -- the last two artifacts in the repo with
     # no knob. The telemetry is the worse of the pair and the more valuable: it is the RUN-STOPPING
     # ORACLE for a save-suppression proof (`escaped_write_sites` must be empty), and it publishes

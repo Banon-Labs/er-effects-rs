@@ -107,10 +107,68 @@ pub(crate) fn config() -> CrashLogConfig {
     *CONFIG.get_or_init(CrashLogConfig::default)
 }
 
+/// This crate's four output files, each with its own redirect knob.
+///
+/// WHY THESE EXIST. Every one is SINGLE-SLOT in the game directory: the next launch renames it to
+/// `.prev` and truncates, so two launches destroy the run before last. This crate was the last
+/// writer in the repo with no knob at all, so no launcher could move it -- and it is the writer
+/// whose output is least reproducible, because a crash record cannot be re-run on demand. Not
+/// hypothetical: on 2026-09-04 a relaunch erased a 26-record log mid-investigation, the only copy
+/// of a 22-deep unwind cascade, and the crash had to be re-provoked from the user.
+///
+/// WHY FOUR NEAR-IDENTICAL FUNCTIONS INSTEAD OF A TABLE. `scripts/er-artifact-redirect-audit.py`
+/// parses the knobs out of this source, and it pairs an `env::var("ER_QUICKLOAD_*")` with the
+/// default filename that appears BESIDE it. A table of the same strings reads identically to a
+/// human and is invisible to the audit -- the knob would exist, the audit would report no gap, and
+/// no launcher would ever be told to set it. The duplication is what makes the knob discoverable.
+///
+/// One knob EACH, not one shared directory, because the four files are read for different
+/// verdicts: the log for the record history, `-latest` for the final fault, the breadcrumb for
+/// "did the DLL even attach", the module list for resolving addresses.
+fn game_directory() -> PathBuf {
+    er_game_base::log::game_directory_path().unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn default_log_path() -> PathBuf {
+    match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => game_directory().join(DEFAULT_LOG_FILE),
+    }
+}
+
+fn default_latest_path() -> PathBuf {
+    match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => game_directory().join(DEFAULT_LATEST_FILE),
+    }
+}
+
+fn default_breadcrumb_path() -> PathBuf {
+    match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => game_directory().join(DEFAULT_BREADCRUMB_FILE),
+    }
+}
+
+fn default_modules_path() -> PathBuf {
+    match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH") {
+        Ok(path) if !path.is_empty() => PathBuf::from(path),
+        _ => game_directory().join(DEFAULT_MODULES_FILE),
+    }
+}
+
+/// Matched on the DEFAULT names, not on `config()`'s. A shell that renames these files
+/// (`er-quickload` does) is a different writer with its own knobs already in
+/// `scripts/er_artifact_env.py`; matching the default name is what stops one shell's redirect
+/// from capturing another shell's file.
 pub(crate) fn path_for(name: &str) -> PathBuf {
-    er_game_base::log::game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(name)
+    match name {
+        DEFAULT_LOG_FILE => default_log_path(),
+        DEFAULT_LATEST_FILE => default_latest_path(),
+        DEFAULT_BREADCRUMB_FILE => default_breadcrumb_path(),
+        DEFAULT_MODULES_FILE => default_modules_path(),
+        other => game_directory().join(other),
+    }
 }
 
 pub fn append_log(args: fmt::Arguments<'_>) {
@@ -266,9 +324,29 @@ const CONTEXT_RDX_OFFSET: usize = 0x88;
 #[cfg(any(windows, test))]
 pub(crate) const CONTEXT_RSP_OFFSET: usize = 0x98;
 #[cfg(windows)]
+const CONTEXT_RBX_OFFSET: usize = 0x90;
+#[cfg(windows)]
+const CONTEXT_RBP_OFFSET: usize = 0xa0;
+#[cfg(windows)]
+const CONTEXT_RSI_OFFSET: usize = 0xa8;
+#[cfg(windows)]
+const CONTEXT_RDI_OFFSET: usize = 0xb0;
+#[cfg(windows)]
 const CONTEXT_R8_OFFSET: usize = 0xb8;
 #[cfg(windows)]
 const CONTEXT_R9_OFFSET: usize = 0xc0;
+#[cfg(windows)]
+const CONTEXT_R10_OFFSET: usize = 0xc8;
+#[cfg(windows)]
+const CONTEXT_R11_OFFSET: usize = 0xd0;
+#[cfg(windows)]
+const CONTEXT_R12_OFFSET: usize = 0xd8;
+#[cfg(windows)]
+const CONTEXT_R13_OFFSET: usize = 0xe0;
+#[cfg(windows)]
+const CONTEXT_R14_OFFSET: usize = 0xe8;
+#[cfg(windows)]
+const CONTEXT_R15_OFFSET: usize = 0xf0;
 #[cfg(any(windows, test))]
 pub(crate) const CONTEXT_RIP_OFFSET: usize = 0xf8;
 
@@ -339,6 +417,53 @@ const PE_E_LFANEW_OFFSET: usize = 0x3c;
 const PE_OPTIONAL_HEADER_FROM_NT: usize = 24;
 #[cfg(windows)]
 const PE_SIZE_OF_IMAGE_IN_OPTIONAL: usize = 0x38;
+
+/// Byte offset of `DataDirectory[0]` inside a PE32+ optional header.
+#[cfg(windows)]
+const PE_DATA_DIRECTORY_IN_OPTIONAL: usize = 0x70;
+/// `DataDirectory` index of the Import Address Table, and the size of one entry.
+#[cfg(windows)]
+const PE_IAT_DIRECTORY_INDEX: usize = 12;
+#[cfg(windows)]
+const PE_DATA_DIRECTORY_ENTRY_SIZE: usize = 8;
+/// Most anomalous IAT slots to name individually. A bulk wild write into `.idata` corrupts
+/// hundreds; naming them all would bury the record, and the COUNT is what distinguishes a bulk
+/// write from a single targeted overwrite. The count is always reported, capped or not.
+#[cfg(windows)]
+const MAX_IAT_ANOMALIES_LISTED: usize = 16;
+
+/// Caller frames inside the executable whose call site is dumped, and how many bytes before each.
+#[cfg(windows)]
+const MAX_CALLER_SITES_DUMPED: usize = 4;
+#[cfg(windows)]
+const CALLER_SITE_LOOKBEHIND: usize = 16;
+
+/// In-module stack values dumped by `stack_frame_sites`, with their slot depth and the bytes
+/// that PRECEDE them.
+///
+/// `stack_modules` proves a module's code address sits somewhere on the stack. It cannot tell a
+/// LIVE return address from a STALE one a deeper call left at the same depth, and that is the
+/// whole question when the faulting address is code nothing in the image calls: the frames that
+/// look like the caller chain may be leftovers from a call that already returned. A genuine
+/// return address has a `call` whose next instruction is exactly it, decidable offline from these
+/// bytes; the slot depth then says whether that frame can still be live given the prologue of the
+/// function it would belong to.
+#[cfg(windows)]
+const MAX_STACK_FRAME_SITES: usize = 24;
+
+/// `DataDirectory` index of the import descriptor table.
+#[cfg(windows)]
+const PE_IMPORT_DIRECTORY_INDEX: usize = 1;
+/// Bounds on the import walk, so a corrupt header cannot spin the fault handler.
+#[cfg(windows)]
+const MAX_IMPORT_DESCRIPTORS: usize = 64;
+#[cfg(windows)]
+const MAX_IMPORT_NAME: usize = 128;
+
+/// Bytes dumped either side of the faulting address. 0x40 each way covers the whole enclosing
+/// basic block at the sites seen so far without bloating a record that is read by eye.
+#[cfg(windows)]
+const FAULT_SITE_WINDOW: usize = 0x40;
 #[cfg(windows)]
 const SELF_DLL_SIZE_FALLBACK: usize = 0x0400_0000;
 #[cfg(windows)]
@@ -505,6 +630,7 @@ unsafe extern "system" {
     fn SetUnhandledExceptionFilter(filter: UnhandledExceptionFilter) -> *mut c_void;
     fn GetSystemTime(out: *mut SystemTimeMin);
     fn LoadLibraryA(name: *const u8) -> *mut c_void;
+    fn GetModuleHandleA(name: *const u8) -> *mut c_void;
     fn GetProcAddress(module: *mut c_void, name: *const u8) -> *mut c_void;
     fn GetCurrentProcess() -> isize;
     fn GetCurrentProcessId() -> u32;
@@ -775,10 +901,19 @@ struct ExceptionSnapshot {
     rsp: usize,
     rbp: usize,
     rax: usize,
+    rbx: usize,
     rcx: usize,
     rdx: usize,
+    rsi: usize,
+    rdi: usize,
     r8: usize,
     r9: usize,
+    r10: usize,
+    r11: usize,
+    r12: usize,
+    r13: usize,
+    r14: usize,
+    r15: usize,
     thread_id: usize,
     /// The leading `ExceptionInformation` entries, kept verbatim. For `0xe06d7363` these carry the
     /// C++ EH magic, the thrown object, the `ThrowInfo`, and the module base its RVAs resolve
@@ -807,10 +942,19 @@ impl ExceptionSnapshot {
             rsp: 0,
             rbp: 0,
             rax: 0,
+            rbx: 0,
             rcx: 0,
             rdx: 0,
+            rsi: 0,
+            rdi: 0,
             r8: 0,
             r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
             thread_id: unsafe { GetCurrentThreadId() as usize },
             params: [0; CPP_EH_PARAMS_KEPT],
             param_count: record.number_parameters as usize,
@@ -830,13 +974,25 @@ impl ExceptionSnapshot {
             let base = pointers.context_record as *const u8;
             let read_reg = |off: usize| unsafe { *(base.add(off) as *const u64) as usize };
             out.rax = read_reg(CONTEXT_RAX_OFFSET);
+            out.rbx = read_reg(CONTEXT_RBX_OFFSET);
             out.rcx = read_reg(CONTEXT_RCX_OFFSET);
             out.rdx = read_reg(CONTEXT_RDX_OFFSET);
             out.rsp = read_reg(CONTEXT_RSP_OFFSET);
+            // Read, not zeroed. This line used to assign a literal `0`, so every record written
+            // by this logger reported `context_rbp=0x0` -- indistinguishable from a genuinely
+            // null frame pointer, and useless for identifying a caller.
+            out.rbp = read_reg(CONTEXT_RBP_OFFSET);
+            out.rsi = read_reg(CONTEXT_RSI_OFFSET);
+            out.rdi = read_reg(CONTEXT_RDI_OFFSET);
             out.r8 = read_reg(CONTEXT_R8_OFFSET);
             out.r9 = read_reg(CONTEXT_R9_OFFSET);
+            out.r10 = read_reg(CONTEXT_R10_OFFSET);
+            out.r11 = read_reg(CONTEXT_R11_OFFSET);
+            out.r12 = read_reg(CONTEXT_R12_OFFSET);
+            out.r13 = read_reg(CONTEXT_R13_OFFSET);
+            out.r14 = read_reg(CONTEXT_R14_OFFSET);
+            out.r15 = read_reg(CONTEXT_R15_OFFSET);
             out.rip = read_reg(CONTEXT_RIP_OFFSET);
-            out.rbp = 0;
         }
         Some(out)
     }
@@ -897,8 +1053,17 @@ fn exception_report(snapshot: &ExceptionSnapshot, reason: &str, repeat: usize) -
     let _ = writeln!(out, "context_rax=0x{:x}", snapshot.rax);
     let _ = writeln!(out, "context_rcx=0x{:x}", snapshot.rcx);
     let _ = writeln!(out, "context_rdx=0x{:x}", snapshot.rdx);
+    let _ = writeln!(out, "context_rbx=0x{:x}", snapshot.rbx);
+    let _ = writeln!(out, "context_rsi=0x{:x}", snapshot.rsi);
+    let _ = writeln!(out, "context_rdi=0x{:x}", snapshot.rdi);
     let _ = writeln!(out, "context_r8=0x{:x}", snapshot.r8);
     let _ = writeln!(out, "context_r9=0x{:x}", snapshot.r9);
+    let _ = writeln!(out, "context_r10=0x{:x}", snapshot.r10);
+    let _ = writeln!(out, "context_r11=0x{:x}", snapshot.r11);
+    let _ = writeln!(out, "context_r12=0x{:x}", snapshot.r12);
+    let _ = writeln!(out, "context_r13=0x{:x}", snapshot.r13);
+    let _ = writeln!(out, "context_r14=0x{:x}", snapshot.r14);
+    let _ = writeln!(out, "context_r15=0x{:x}", snapshot.r15);
     let _ = writeln!(out, "thread_id={}", snapshot.thread_id);
     write_common_fields(&mut out);
     if snapshot.code == EXCEPTION_CPP_THROW {
@@ -920,6 +1085,33 @@ fn exception_report(snapshot: &ExceptionSnapshot, reason: &str, repeat: usize) -
         scan_stack_modules(snapshot.rsp, &modules)
     );
     let _ = writeln!(out, "stack_raw={}", scan_stack_raw(snapshot.rsp, &modules));
+    let _ = writeln!(
+        out,
+        "stack_frame_sites={}",
+        stack_frame_sites(snapshot.rsp, &modules)
+    );
+    let _ = writeln!(out, "iat_anomalies={}", iat_anomalies(&modules));
+    let _ = writeln!(
+        out,
+        "iat_slots_holding_rip={}",
+        iat_slots_holding(&modules, snapshot.rip)
+    );
+    let _ = writeln!(
+        out,
+        "register_pointees={}",
+        register_pointees(snapshot, &modules)
+    );
+    let _ = writeln!(out, "caller_site_bytes={}", caller_site_bytes(&modules));
+    let _ = writeln!(
+        out,
+        "iat_export_mismatches={}",
+        iat_export_mismatches(&modules)
+    );
+    let _ = writeln!(
+        out,
+        "fault_site_bytes={}",
+        fault_site_bytes(snapshot.rip, &modules)
+    );
     out
 }
 
@@ -1122,6 +1314,452 @@ fn write_module_inventory(reason: &str) {
         );
     }
     let _ = fs::write(path_for(config().modules_file_name), out);
+}
+
+/// Every import slot of the main executable that does not point into a loaded module.
+///
+/// # Why a crash logger reads the import table
+///
+/// On 2026-09-03 ELDEN RING 1.17 died twice with `STATUS_ILLEGAL_INSTRUCTION` at
+/// `0x140010043` -- an address that is MID-INSTRUCTION inside a CRYPTOGAMS AES-NI blob with zero
+/// code xrefs in the whole image, reached from `call qword ptr [rip+...]` inside
+/// `DLKR::PlainAdaptiveMutexImpl::Unlock`. That indirect call reads the `KERNEL32!
+/// LeaveCriticalSection` import slot, and `.idata` is its own READ|WRITE section, so a stray
+/// store can corrupt a slot with no `VirtualProtect` at all.
+///
+/// The record could not settle it. It named the destination and the caller and said nothing about
+/// the slot in between, and neither dump covers `.idata` -- `MiniDumpNormal` carries thread stacks
+/// only. So the one fact that separates "the import table was corrupted" from "the unwind is
+/// lying" was the one fact nobody could read, and answering it meant another crash.
+///
+/// # What the ANSWER distinguishes, which a single slot would not
+///
+/// This walks the WHOLE table rather than the one slot that faulted, because the count is the
+/// diagnosis. One bad entry is a targeted overwrite and the hunt is for a single bad store; two
+/// hundred is a buffer overrun through `.idata` and the hunt is for whatever runs off the end of
+/// the allocation before it. Those send a reader to different places, and the difference is free
+/// to measure here and expensive to measure any other way.
+///
+/// A slot pointing into a loaded module is not proof it is CORRECT -- a swap between two real
+/// functions would pass -- but every corruption seen here so far parks a value that belongs to no
+/// module at all, which this catches.
+#[cfg(windows)]
+/// Every loaded module's IAT, searched for a slot whose value IS the faulting RIP.
+///
+/// `iat_anomalies` walks only the main executable, and that is where its two tests were aimed:
+/// an import satisfied by an address outside every module, or by an address inside the importing
+/// image. Neither can see a corrupted import in a SYSTEM module -- and the fault this exists for
+/// was entered from `kernelbase!ResetEvent`, whose one indirect call is
+/// `call qword ptr [__imp_NtResetEvent]` through kernelbase's own `.idata`. A pointer swapped
+/// there is invisible to a scan of `eldenring.exe`, so the record kept reporting the table clean
+/// while the process jumped through a rewritten slot every frame.
+///
+/// The question asked here is narrower and answers itself: does ANY module's IAT hold, right now,
+/// the exact address the CPU faulted on? A hit names the corrupted slot outright -- module, slot
+/// address, and the import block it sits in -- and turns "something jumped to dead code" into
+/// "this pointer was overwritten". A miss is also worth having: it rules the import tables out and
+/// says the transfer came from a vtable, a callback field, or a register.
+#[cfg(windows)]
+fn iat_slots_holding(modules: &[(usize, usize, String)], wanted: usize) -> String {
+    use fmt::Write as _;
+
+    if wanted < MIN_VALID_PTR {
+        return String::from("[no fault address to search for]");
+    }
+    let mut out = String::from("[");
+    let mut hits = 0usize;
+    let mut scanned = 0usize;
+    let mut modules_scanned = 0usize;
+    for (base, _, name) in modules {
+        let Some((rva, size)) = (unsafe { pe_iat_directory(*base) }) else {
+            continue;
+        };
+        if size == 0 {
+            continue;
+        }
+        modules_scanned += 1;
+        let mut slot = base + rva;
+        let end = base + rva + size;
+        while slot + 8 <= end {
+            scanned += 1;
+            if unsafe { safe_read_usize(slot) } == Some(wanted) {
+                if hits < MAX_IAT_ANOMALIES_LISTED {
+                    if hits != 0 {
+                        out.push(',');
+                    }
+                    let _ = write!(out, "{name}+0x{:x}@0x{slot:x}", slot - base);
+                }
+                hits += 1;
+            }
+            slot += 8;
+        }
+    }
+    let _ = write!(
+        out,
+        "] hits={hits} slots={scanned} modules={modules_scanned} wanted=0x{wanted:x}"
+    );
+    out
+}
+
+#[cfg(windows)]
+fn iat_anomalies(modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    let Some(base) = main_module_base(modules) else {
+        return String::from("[main module not in the loader list]");
+    };
+    let Some((rva, size)) = (unsafe { pe_iat_directory(base) }) else {
+        return String::from("[no IAT data directory]");
+    };
+    // The executable's own extent, for the inside-the-image test below. Falling back to the
+    // loader's reported size keeps the test live even if the PE header is unreadable.
+    let image_size = unsafe { pe_size_of_image(base) }.unwrap_or_else(|| {
+        modules
+            .iter()
+            .find(|(module_base, _, _)| *module_base == base)
+            .map(|(_, size, _)| *size)
+            .unwrap_or(0)
+    });
+    if size == 0 {
+        return String::from("[IAT directory empty]");
+    }
+    let mut listed = 0usize;
+    let mut anomalies = 0usize;
+    let mut unreadable = 0usize;
+    let mut out = String::from("[");
+    let mut slot = base + rva;
+    let end = base + rva + size;
+    while slot + 8 <= end {
+        match unsafe { safe_read_usize(slot) } {
+            // A zero slot is the terminator between one DLL's thunk block and the next, not a
+            // corruption.
+            Some(0) => {}
+            // TWO tests, and the second is the one this exists for.
+            //
+            // OUTSIDE ANY MODULE catches a slot holding a value that is not code at all. That was
+            // the whole check on the first cut, and it is BLIND to the fault it was written to
+            // diagnose: the value seen at `0x140010043` is inside `eldenring.exe`, which IS a
+            // loaded module, so an overwritten `LeaveCriticalSection` sailed straight through and
+            // the first instrumented run reported the table clean at the one slot that mattered.
+            //
+            // INSIDE THE MAIN EXECUTABLE closes it. An import is by definition satisfied by
+            // another module -- the loader writes the exporter's address, never an address in the
+            // importing image -- so a slot pointing into the .exe is corrupt however plausible the
+            // address looks. This is the precise shape of the crash under investigation.
+            Some(value)
+                if module_for_addr(value, modules).is_none()
+                    || (value >= base && value < base + image_size) =>
+            {
+                anomalies += 1;
+                if listed < MAX_IAT_ANOMALIES_LISTED {
+                    if listed != 0 {
+                        out.push(',');
+                    }
+                    let kind = if value >= base && value < base + image_size {
+                        "in-exe"
+                    } else {
+                        "no-module"
+                    };
+                    let _ = write!(out, "0x{slot:x}=0x{value:x}({kind})");
+                    listed += 1;
+                }
+            }
+            Some(_) => {}
+            None => unreadable += 1,
+        }
+        slot += 8;
+    }
+    let _ = write!(
+        out,
+        "] anomalies={anomalies} listed={listed} unreadable={unreadable} \
+         slots={} iat=0x{:x}+0x{size:x}",
+        size / 8,
+        base + rva
+    );
+    out
+}
+
+/// The bytes immediately BEFORE each caller-frame return address inside the main executable.
+///
+/// # Why, after the import table came back clean
+///
+/// A return address is the instruction AFTER a call, so the bytes just before it are the call
+/// itself. Two instrumented crashes proved the IAT intact at fault time while the reconstructed
+/// stack still put the fault under `call qword ptr [rip+...]` inside
+/// `DLKR::PlainAdaptiveMutexImpl::Unlock`. Both cannot be true of an UNMODIFIED image -- so the
+/// remaining candidate is that the image is modified: a detour installed over a hot shared
+/// function, whose trampoline sends control to an address that is not an instruction boundary.
+///
+/// That is checkable and this is the check. Compare these bytes against the same VA in
+/// `eldenring-deobf-1.17.bin` (file offset == RVA, VA = 0x140000000 + offset). Equal means the
+/// call site is pristine and the transfer came from somewhere else entirely; different means
+/// somebody patched it, and the difference names who.
+///
+/// Only frames inside the main executable are dumped -- a return address in `ntdll` is the
+/// exception machinery, not the game, and its bytes say nothing about this fault.
+#[cfg(windows)]
+fn caller_site_bytes(modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    let Some(base) = main_module_base(modules) else {
+        return String::from("[main module not in the loader list]");
+    };
+    let image_size = unsafe { pe_size_of_image(base) }.unwrap_or(0);
+    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
+    let captured = unsafe {
+        RtlCaptureStackBackTrace(
+            STACK_TRACE_FRAMES_TO_SKIP,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    } as usize;
+    let mut out = String::from("[");
+    let mut dumped = 0usize;
+    for frame in frames.iter().take(captured) {
+        if dumped >= MAX_CALLER_SITES_DUMPED {
+            break;
+        }
+        let addr = *frame as usize;
+        if image_size == 0 || addr < base || addr >= base + image_size {
+            continue;
+        }
+        // A call is at most 16 bytes; taking that much before the return address captures it
+        // whatever its encoding, and the reader can align from the right-hand end.
+        let start = addr.saturating_sub(CALLER_SITE_LOOKBEHIND);
+        if dumped != 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "0x{addr:x}-0x{CALLER_SITE_LOOKBEHIND:x}=");
+        for offset in 0..CALLER_SITE_LOOKBEHIND {
+            match unsafe { safe_read_u8(start + offset) } {
+                Some(byte) => {
+                    let _ = write!(out, "{byte:02x}");
+                }
+                None => out.push_str("??"),
+            }
+        }
+        dumped += 1;
+    }
+    out.push(']');
+    out
+}
+
+/// Every KERNEL32 import slot whose value disagrees with `GetProcAddress` for the same name.
+///
+/// # Why anomaly-absence was not enough
+///
+/// [`iat_anomalies`] answers "does this slot point somewhere plausible", and three instrumented
+/// crashes answered yes for every slot that mattered. That is a weaker claim than it reads as: a
+/// slot holding the address of the WRONG export, or an address inside the right module but not at
+/// a function, passes it. Meanwhile the faults kept arriving through KERNEL32 indirect calls --
+/// `LeaveCriticalSection` (slot `0x144c115c4`) twice, then `CreateEventW` (slot `0x144c11884`) --
+/// each transferring to `0x140010043`, with every call site byte-identical to the shipped image.
+///
+/// Two different imports reaching one impossible destination is not per-slot corruption. So this
+/// stops asking whether a value is plausible and asks whether it is RIGHT: resolve the same name
+/// through `GetProcAddress` now, in this process, and report every slot that differs. A mismatch
+/// names the import and both addresses; no mismatches means the table the loader built is exactly
+/// what the loader would build today, and the transfer happened somewhere below it.
+///
+/// The comparison is deliberately against the LIVE resolver rather than a table of expected
+/// addresses: under Wine an export may forward, and only the running loader knows where it lands.
+#[cfg(windows)]
+fn iat_export_mismatches(modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    let Some(base) = main_module_base(modules) else {
+        return String::from("[main module not in the loader list]");
+    };
+    let kernel32 = unsafe { GetModuleHandleA(c"kernel32.dll".as_ptr().cast()) };
+    if kernel32.is_null() {
+        return String::from("[kernel32 not loaded]");
+    }
+    let Some(imports) = (unsafe { pe_import_descriptors(base) }) else {
+        return String::from("[no import directory]");
+    };
+    let mut out = String::from("[");
+    let mut checked = 0usize;
+    let mut mismatches = 0usize;
+    for (dll_name_rva, ilt_rva, iat_rva) in imports {
+        let name = unsafe { read_c_string(base + dll_name_rva, MAX_IMPORT_NAME) };
+        if !name.eq_ignore_ascii_case("KERNEL32.dll") {
+            continue;
+        }
+        let table = if ilt_rva != 0 { ilt_rva } else { iat_rva };
+        let mut index = 0usize;
+        // A read that FAILS ends the walk the same way a null terminator does: an unreadable page
+        // in the middle of an import table is not a mismatch to report, it is the end of what can
+        // be said about this module -- and this runs inside a fault handler, where guessing past
+        // an unreadable address is how a diagnostic becomes a second crash.
+        while let Some(thunk) = unsafe { safe_read_usize(base + table + index * 8) } {
+            if thunk == 0 {
+                break;
+            }
+            // Ordinal imports carry no name to resolve; skip rather than guess.
+            if thunk & (1 << 63) == 0 {
+                let import_name =
+                    unsafe { read_c_string(base + (thunk & 0x7fff_ffff) + 2, MAX_IMPORT_NAME) };
+                if !import_name.is_empty() {
+                    let slot = base + iat_rva + index * 8;
+                    let held = unsafe { safe_read_usize(slot) }.unwrap_or(0);
+                    let mut c_name = import_name.clone().into_bytes();
+                    c_name.push(0);
+                    let expected =
+                        unsafe { GetProcAddress(kernel32, c_name.as_ptr().cast()) } as usize;
+                    checked += 1;
+                    if expected != 0 && held != expected {
+                        mismatches += 1;
+                        if mismatches <= MAX_IAT_ANOMALIES_LISTED {
+                            if mismatches != 1 {
+                                out.push(',');
+                            }
+                            let _ = write!(
+                                out,
+                                "{import_name}@0x{slot:x} held=0x{held:x} expected=0x{expected:x}"
+                            );
+                        }
+                    }
+                }
+            }
+            index += 1;
+        }
+    }
+    let _ = write!(out, "] mismatches={mismatches} checked={checked}");
+    out
+}
+
+/// `(dll name rva, ILT rva, IAT rva)` for each import descriptor of the image at `base`.
+#[cfg(windows)]
+unsafe fn pe_import_descriptors(base: usize) -> Option<Vec<(usize, usize, usize)>> {
+    if unsafe { safe_read_u16(base) }? != 0x5a4d {
+        return None;
+    }
+    let e_lfanew = unsafe { safe_read_usize(base + PE_E_LFANEW_OFFSET) }? & 0xffff_ffff;
+    if e_lfanew > 0x1000 {
+        return None;
+    }
+    let nt = base + e_lfanew;
+    if unsafe { safe_read_usize(nt) }? & 0xffff_ffff != 0x0000_4550 {
+        return None;
+    }
+    let entry = nt
+        + PE_OPTIONAL_HEADER_FROM_NT
+        + PE_DATA_DIRECTORY_IN_OPTIONAL
+        + PE_IMPORT_DIRECTORY_INDEX * PE_DATA_DIRECTORY_ENTRY_SIZE;
+    let dir = unsafe { safe_read_u32(entry) }? as usize;
+    if dir == 0 {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut offset = base + dir;
+    for _ in 0..MAX_IMPORT_DESCRIPTORS {
+        let ilt = unsafe { safe_read_u32(offset) }? as usize;
+        let name = unsafe { safe_read_u32(offset + 12) }? as usize;
+        let iat = unsafe { safe_read_u32(offset + 16) }? as usize;
+        if ilt == 0 && iat == 0 {
+            break;
+        }
+        out.push((name, ilt, iat));
+        offset += 20;
+    }
+    Some(out)
+}
+
+/// Read a NUL-terminated ASCII string, one guarded byte at a time.
+#[cfg(windows)]
+unsafe fn read_c_string(addr: usize, max: usize) -> String {
+    let mut out = String::new();
+    for offset in 0..max {
+        match unsafe { safe_read_u8(addr + offset) } {
+            Some(0) | None => break,
+            Some(byte) => out.push(byte as char),
+        }
+    }
+    out
+}
+
+/// Live bytes surrounding the faulting address, for diffing against the shipped image.
+///
+/// # The question this answers and the four that came before could not
+///
+/// The import table checks out against `GetProcAddress`, every dumped call site is byte-identical
+/// to `eldenring-deobf-1.17.bin`, and the caller VARIES between crashes -- indirect through
+/// `LeaveCriticalSection`, indirect through `CreateEventW`, then three DIRECT `rel32` calls in an
+/// unrelated range -- while the destination `0x140010043` never moves. Nothing about the callers
+/// explains a constant destination, so the remaining place to look is the destination itself.
+///
+/// `0x140010043` sits mid-instruction inside a CRYPTOGAMS AES-NI blob at the head of `.text` that
+/// has ZERO code xrefs across all 366,673 functions of the de-Arxan'd image. An address nothing
+/// references, reached constantly at runtime, is what an anti-tamper trap looks like from the
+/// outside -- and it would look exactly like this in a de-Arxan'd image, because the tool strips
+/// the code that would reference it.
+///
+/// So: dump what is REALLY there, at fault time, in the retail image. Diff it against the flat
+/// image (file offset == RVA, VA = 0x140000000 + offset). Different means the live image carries
+/// code the de-Arxan'd one does not, and the investigation moves to which patch trips it.
+/// Identical means the destination is untouched game bytes and the transfer is still unexplained
+/// -- a real answer either way, which none of the previous four instruments could give.
+#[cfg(windows)]
+fn fault_site_bytes(rip: usize, modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    if rip < MIN_VALID_PTR {
+        return String::from("[rip not a readable pointer]");
+    }
+    let start = rip.saturating_sub(FAULT_SITE_WINDOW);
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "0x{start:x}+0x{:x}{} =",
+        FAULT_SITE_WINDOW * 2,
+        module_tag(rip, modules)
+    );
+    for offset in 0..FAULT_SITE_WINDOW * 2 {
+        match unsafe { safe_read_u8(start + offset) } {
+            Some(byte) => {
+                let _ = write!(out, "{byte:02x}");
+            }
+            None => out.push_str("??"),
+        }
+    }
+    out
+}
+
+/// `(rva, size)` of the image's Import Address Table directory.
+#[cfg(windows)]
+unsafe fn pe_iat_directory(base: usize) -> Option<(usize, usize)> {
+    if unsafe { safe_read_u16(base) }? != 0x5a4d {
+        return None;
+    }
+    let e_lfanew = unsafe { safe_read_usize(base + PE_E_LFANEW_OFFSET) }? & 0xffff_ffff;
+    if e_lfanew > 0x1000 {
+        return None;
+    }
+    let nt = base + e_lfanew;
+    if unsafe { safe_read_usize(nt) }? & 0xffff_ffff != 0x0000_4550 {
+        return None;
+    }
+    let entry = nt
+        + PE_OPTIONAL_HEADER_FROM_NT
+        + PE_DATA_DIRECTORY_IN_OPTIONAL
+        + PE_IAT_DIRECTORY_INDEX * PE_DATA_DIRECTORY_ENTRY_SIZE;
+    let rva = unsafe { safe_read_u32(entry) }? as usize;
+    let size = unsafe { safe_read_u32(entry + 4) }? as usize;
+    if rva == 0 {
+        return None;
+    }
+    Some((rva, size))
+}
+
+/// The base of the process's own executable, taken from the loader list rather than
+/// `GetModuleHandleA(NULL)`: this runs inside a fault handler, and the list is already in hand.
+#[cfg(windows)]
+fn main_module_base(modules: &[(usize, usize, String)]) -> Option<usize> {
+    modules
+        .iter()
+        .find(|(_, _, name)| name.to_ascii_lowercase().ends_with(".exe"))
+        .map(|(base, _, _)| *base)
 }
 
 #[cfg(windows)]
@@ -1355,6 +1993,128 @@ fn scan_stack_modules(rsp: usize, modules: &[(usize, usize, String)]) -> String 
                 last = frame;
             }
         }
+    }
+    out.push(']');
+    out
+}
+
+/// Qwords dumped from whatever each general-purpose register points at, and how many.
+///
+/// THE QUESTION THIS ANSWERS. `context_rcx == context_rip` says the fault was a call THROUGH A
+/// POINTER, and `iat_slots_holding_rip` has already proved the pointer is in no module's import
+/// table (13,373 slots across 93 modules, zero hits). What is left is an object: a vtable, a
+/// callback slot, a function-pointer field. The innermost real call site on the stack of the
+/// `0x140010043` crash is `call qword ptr [rax+0xb8]` inside `lsteamclient.dll` -- so the corrupt
+/// slot is 0xb8 bytes into whatever `rax` held, and nothing in the record named that object.
+///
+/// Dumping a window from EVERY register rather than just `rax` is deliberate: which register holds
+/// the object depends on the call site, and the call site is exactly what is in doubt. A slot whose
+/// value equals the faulting RIP is marked, because that mark IS the answer -- it names the
+/// register, the byte offset, and therefore the object whose field was overwritten.
+#[cfg(windows)]
+const REGISTER_POINTEE_QWORDS: usize = 32;
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn register_pointees(snapshot: &ExceptionSnapshot, modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    let registers: [(&str, usize); 15] = [
+        ("rax", snapshot.rax),
+        ("rbx", snapshot.rbx),
+        ("rcx", snapshot.rcx),
+        ("rdx", snapshot.rdx),
+        ("rsi", snapshot.rsi),
+        ("rdi", snapshot.rdi),
+        ("rbp", snapshot.rbp),
+        ("r8", snapshot.r8),
+        ("r9", snapshot.r9),
+        ("r10", snapshot.r10),
+        ("r11", snapshot.r11),
+        ("r12", snapshot.r12),
+        ("r13", snapshot.r13),
+        ("r14", snapshot.r14),
+        ("r15", snapshot.r15),
+    ];
+    let mut out = String::from("[");
+    let mut emitted = 0usize;
+    let mut hits = 0usize;
+    for (name, value) in registers {
+        if value < MIN_VALID_PTR {
+            continue;
+        }
+        // Only the slots that MATTER are printed. A full 32-qword dump per register is 15 KB of
+        // record nobody reads; the marked slots are the finding, and the register's module tag is
+        // enough context to say what kind of object it is.
+        let mut marks = String::new();
+        for slot in 0..REGISTER_POINTEE_QWORDS {
+            let offset = slot * std::mem::size_of::<usize>();
+            if unsafe { safe_read_usize(value + offset) } == Some(snapshot.rip) {
+                if !marks.is_empty() {
+                    marks.push('/');
+                }
+                let _ = write!(marks, "+0x{offset:x}");
+                hits += 1;
+            }
+        }
+        if marks.is_empty() {
+            continue;
+        }
+        if emitted != 0 {
+            out.push(',');
+        }
+        let _ = write!(
+            out,
+            "{name}=0x{value:x}{}:RIP@{marks}",
+            module_tag(value, modules)
+        );
+        emitted += 1;
+    }
+    let _ = write!(
+        out,
+        "] hits={hits} window={REGISTER_POINTEE_QWORDS}q rip=0x{:x}",
+        snapshot.rip
+    );
+    out
+}
+
+#[cfg(windows)]
+fn stack_frame_sites(rsp: usize, modules: &[(usize, usize, String)]) -> String {
+    use fmt::Write as _;
+
+    let mut out = String::from("[");
+    if rsp < MIN_VALID_PTR {
+        out.push_str("rsp below the lowest mappable address]");
+        return out;
+    }
+    let mut emitted = 0usize;
+    for slot in 0..STACK_SCAN_SLOTS {
+        if emitted >= MAX_STACK_FRAME_SITES {
+            break;
+        }
+        let depth = slot * std::mem::size_of::<usize>();
+        let Some(value) = (unsafe { safe_read_usize(rsp + depth) }) else {
+            continue;
+        };
+        let Some((name, offset)) = module_for_addr(value, modules) else {
+            continue;
+        };
+        if emitted != 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "+0x{depth:x}={{{name}+0x{offset:x}}}:");
+        // A call is at most 16 bytes, so this window holds one whatever its encoding; align from
+        // the right-hand end, where the byte immediately before `value` sits.
+        let start = value.saturating_sub(CALLER_SITE_LOOKBEHIND);
+        for byte_offset in 0..CALLER_SITE_LOOKBEHIND {
+            match unsafe { safe_read_u8(start + byte_offset) } {
+                Some(byte) => {
+                    let _ = write!(out, "{byte:02x}");
+                }
+                None => out.push_str("??"),
+            }
+        }
+        emitted += 1;
     }
     out.push(']');
     out

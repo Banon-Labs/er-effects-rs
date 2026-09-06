@@ -108,6 +108,57 @@ class DirectoryWatch:
         self.close()
 
 
+class WatchSet:
+    """Watch several directories at once, so a caller can tail logs that do not share a parent.
+
+    Lives here rather than in one launcher because more than one tool needs it: a run's crash
+    records and the DLL's own logs land in different trees, and a waiter that watches only one of
+    them goes deaf to the other.
+    """
+
+    def __init__(self, directories) -> None:
+        seen: list[Path] = []
+        for directory in directories:
+            directory = Path(directory)
+            if directory not in seen:
+                seen.append(directory)
+        self.watches = [DirectoryWatch(directory) for directory in seen]
+
+    @property
+    def available(self) -> bool:
+        return any(watch.available for watch in self.watches)
+
+    def wait(self, timeout: float) -> bool:
+        """Return on the FIRST event from any watched directory, or on the timeout.
+
+        One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
+        turn would spend the whole budget on the first quiet directory and never look at the second.
+        """
+        fds = [watch.fd for watch in self.watches if watch.fd >= 0]
+        if not fds:
+            return False
+        try:
+            ready, _, _ = select.select(fds, [], [], max(0.0, timeout))
+        except OSError:
+            return False
+        for fd in ready:
+            try:
+                os.read(fd, 65536)
+            except OSError:
+                pass
+        return bool(ready)
+
+    def close(self) -> None:
+        for watch in self.watches:
+            watch.close()
+
+    def __enter__(self) -> "WatchSet":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
 def game_dir() -> Path:
     """The `ELDEN RING/Game` directory: where the game lives and where every loaded DLL logs.
 

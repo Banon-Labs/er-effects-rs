@@ -1391,6 +1391,20 @@ python3 "$repo_root/scripts/check-game-version-supported.py"
 # module and asks the only useful question, which is whether they are the same build.
 python3 "$repo_root/scripts/check-ersc-version-supported.py" --selftest
 python3 "$repo_root/scripts/check-ersc-version-supported.py"
+# Every ME3-loadable shell must install the panic reporter.
+#
+# A Rust panic in a cdylib crosses an `extern "system"` boundary and becomes an ABORT, and an abort
+# does NOT dispatch to a vectored handler -- so `er_crash_logging` writes no record, no `-latest`,
+# no module list, and the process just vanishes. Measured 2026-09-04: `er_invasion_warp` killed the
+# game repeatedly on the F9 cross-area warp with every run's crash log holding only its build
+# header, while the SAME DLL's illegal-instruction fault produced full records every time. The
+# difference was not severity; one raised an exception and the other aborted, and hours went into
+# the fault that had evidence. The hook is per-DLL because every cdylib links its own
+# er-game-base, so this cannot be satisfied once for everyone -- which is exactly why it is a gate
+# and not a convention: the omission compiles, links, loads and runs, and only shows up as silence
+# during an incident. The audit was red for 12 of 27 shells when it was first written.
+python3 "$repo_root/scripts/check-panic-reporter-installed.py" --selftest
+python3 "$repo_root/scripts/check-panic-reporter-installed.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/.githooks/pre-push"

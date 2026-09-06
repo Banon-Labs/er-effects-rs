@@ -272,6 +272,12 @@ enum Phase {
     /// IN-WORLD keystate MoveDown,Confirm (activate "Quit to main menu"; popup-accept confirms the
     /// dialog). EFFECT: return-title requested (menuData+0x5d==1) or the world already stopped.
     Quit,
+    /// NO INPUT: read and log the CSPcKeyConfig pad binding behind each menu code.
+    DumpMenuBindings,
+    /// IN-WORLD keystate: MoveDown to the **Load Character from File** row, then Confirm. Injected
+    /// events only -- the game decides what the press does. EFFECT: the game opens ProfileSelect,
+    /// i.e. the top pane's menu id stops being OptionSetting.
+    ActivateLoadFromFile,
     /// NO input: the native teardown to title. EFFECT: world stopped simulating AND load FSM idle.
     QuitTeardown,
     /// DIRECT NATIVE System->Quit (acceptance §3a, bd BREAKTHROUGH-native-return-to-title): native input
@@ -305,7 +311,9 @@ impl Phase {
             Phase::OpenPauseMenu => "open_pause_menu",
             Phase::NavToOptionSetting => "nav_to_optionsetting",
             Phase::TabToQuit => "tab_to_quit",
+            Phase::DumpMenuBindings => "dump_menu_bindings",
             Phase::Quit => "quit",
+            Phase::ActivateLoadFromFile => "activate_load_from_file",
             Phase::QuitTeardown => "quit_teardown",
             Phase::NativeQuit => "native_quit",
             Phase::ProbeMenu => "probe_menu",
@@ -324,6 +332,11 @@ impl Phase {
             Phase::OpenPauseMenu
             | Phase::NavToOptionSetting
             | Phase::TabToQuit
+            // Wider than the other nav phases on purpose: this one HOLDS (issues nothing) until the
+            // pane reports the Load Character from File row, and the cloned rows are built by the
+            // product when the Quit pane is first shown, not when the tab index flips.
+            | Phase::DumpMenuBindings
+            | Phase::ActivateLoadFromFile
             | Phase::OpenEquipMenu
             | Phase::OpenInventoryMenu => NAV_BUDGET,
             Phase::Quit | Phase::QuitTeardown | Phase::NativeQuit => QUIT_BUDGET,
@@ -349,7 +362,13 @@ impl Phase {
                 if !pause_menu_open() {
                     request_open_ingame_menu(im);
                 }
-                pause_menu_open()
+                // Record the root pane's job pointer while it IS the root, so the next phase can tell
+                // "entered a submenu" from "still on the root" by the pointer the game itself swaps.
+                let open = pause_menu_open();
+                if open {
+                    SUBMENU_BASELINE_JOB.store(top_menu_job_ptr(), Ordering::Relaxed);
+                }
+                open
             }
             Phase::NavToOptionSetting => {
                 // Native-binding menu-event nav (inputmgr+0x90 keystate): MoveUp (0x45) then Confirm
@@ -359,8 +378,81 @@ impl Phase {
                 // consumes these ids; the prior "+0x90 is OUTPUT, drive the raw pad" theory was refuted
                 // (that raw-pad path was BISECT-disabled and never actually injected). EFFECT: the top
                 // pane is OptionSetting (menu_id == 0x25).
-                issue_menu_taps_once(im, &[MenuEvent::MoveUp, MenuEvent::Confirm], frame);
-                top_menu_id() == OPTIONSETTING_MENU_ID
+                // SCROLL THE LIST THE WAY THE GAME READS IT. `issue_menu_taps_once` writes
+                // inputmgr+0x90, which is a SHOWN-MENU-WINDOW bitmap indexed by menu-window id -- the
+                // writer is CS::MenuWindowJob::Run doing `field99_0x90[owningMenuWindow+0x180] |= 1`.
+                // Writing "menu 0x2d is shown" was never a keypress. The menu's real state lives at
+                // *(FD4PadDevice+0x78), and list scrolling is the ANALOG axis at +0x28 divided by
+                // 0x78, with the CSPcKeyConfig binding (9 down / 10 up, both read live) supplying the
+                // sign -- so one signed write per frame is the press.
+                unsafe { crate::pad_inject::stamp_menu_scroll_direct(base, 1) };
+                // Sample the reader HERE, while the pause menu is up. The dump phase samples it too,
+                // but that runs before any menu exists, so its `calls=0` says nothing -- reporting a
+                // reader's call count from before its consumer can run is how a live hook gets read
+                // as dead.
+                if frame.is_multiple_of(120) {
+                    crate::pad_inject::sample_menu_pointer();
+                    crate::pad_inject::sample_pointer_correction(base);
+                    let (px, py) = crate::pad_inject::menu_pointer_observed();
+                    let (cx, cy) = crate::pad_inject::menu_pointer_correction();
+                    harness_log!(
+                        "menu-pointer(nav f{frame}): raw x={px} y={py} correction x={} y={} (bits 0x{cx:x}/0x{cy:x})",
+                        f32::from_bits(cx),
+                        f32::from_bits(cy)
+                    );
+                    // THE GATE FIRST, because it decides whether anything below is even readable
+                    // as evidence. `FUN_140758050` shuts every menu pad read when
+                    // CSMenuMan+0x19 == 0, or +0x798 != 0, or (disableMouseCursor && the fade plate
+                    // timer 2 is still running). A derail with the gate SHUT is not a failed press,
+                    // it is a menu that refused input -- and the fix for those two is nothing alike.
+                    match crate::game_mem::menu_input_gate() {
+                        Some((gate19, disable_cursor, gate798)) => harness_log!(
+                            "menu-gate(nav f{frame}): +0x19={gate19} disableMouseCursor={disable_cursor} +0x798=0x{gate798:x} open={}",
+                            gate19 != 0 && gate798 == 0
+                        ),
+                        None => harness_log!("menu-gate(nav f{frame}): CSMenuMan not up"),
+                    }
+                    match crate::game_mem::pause_menu_grid() {
+                        Some((offset, selected)) => harness_log!(
+                            "menu-grid(nav f{frame}): GridControl at window+0x{offset:x} selected_cell={selected}"
+                        ),
+                        None => harness_log!(
+                            "menu-grid(nav f{frame}): no GridControl found in the top menu window"
+                        ),
+                    }
+                    let (device, raw, calls) = crate::pad_inject::menu_scroll_reader_state();
+                    harness_log!(
+                        "menu-axis(nav f{frame}): axis calls={calls} menu_device=0x{device:x} raw_axis={raw} button calls={}",
+                        crate::pad_inject::menu_button_reader_calls()
+                    );
+                }
+                // CONFIRM, at the boundary the menu reads. The old channel was
+                // `MenuEvent::Confirm` -> inputmgr+0x90[0x3d], and 0x3d cannot even be a menu binding
+                // (the CSPcKeyConfig table bounds at 0x36), so that press never existed. Hold each
+                // CSEzMenuViewerPad button in turn -- `+0x08` for the first half of the burst, `+0x10`
+                // for the second -- because which one the pane treats as confirm is not something to
+                // assume, and a run distinguishes them.
+                let buttons = if (frame / TAP_CYCLE_FRAMES).is_multiple_of(2) {
+                    1
+                } else {
+                    2
+                };
+                crate::pad_inject::set_menu_buttons(if frame % TAP_CYCLE_FRAMES < TAP_SET_FRAMES {
+                    buttons
+                } else {
+                    0
+                });
+                // EFFECT read as a POINTER CHANGE, not as a menu id. `top_menu_id()` reads
+                // top_window+0x180, and on the installed 1.17 build that read returns -1 or garbage
+                // (measured across br-20260905-041435-e8d0 and -041731-2bc4: 53724, 25445, -1, while
+                // `pause_menu_open()` was correctly true) -- the offset is 1.16.2 and has drifted, so
+                // waiting for it to equal 0x25 waits forever and the phase DERAILs on a nav that may
+                // well have worked. `currentTopMenuJob` (popupMenu+0xB0) is the semaphore this module
+                // already documents as the passive "entered a submenu" signal: the game REPLACES that
+                // pointer when a submenu opens, pushing the old one to popupMenu+0xD0. A change in it
+                // is the game telling us our Confirm entered a pane.
+                let entered = top_menu_job_ptr();
+                entered != 0 && entered != SUBMENU_BASELINE_JOB.load(Ordering::Relaxed)
             }
             Phase::TabToQuit => {
                 // THE TAB-SWITCH (the D_van blocker): one TabLeft = native-binding menu-event 0x30. From
@@ -373,6 +465,90 @@ impl Phase {
                 // read at option_window+0x1870+0x10[deref]+0xd4.
                 issue_menu_taps_once(im, &[MenuEvent::TabLeft], frame);
                 optionsetting_tab_index() == OPTIONSETTING_QUIT_TAB_INDEX
+            }
+            Phase::DumpMenuBindings => {
+                // ONE-SHOT EVIDENCE, no input. Menu navigation reads the FD4 pad device through
+                // CS::CSEzMenuViewerPad, and a "menu code" is an index into the CSPcKeyConfig binding
+                // table -- not a device id. This prints the pad binding the GAME has for each code we
+                // care about, so the next drive can inject the input the game is actually looking for
+                // instead of sweeping ids. It replaces nothing and blocks nothing: it advances the
+                // moment the config is readable.
+                crate::pad_inject::install_menu_scroll_hook(base);
+                let (device, raw, calls) = crate::pad_inject::menu_scroll_reader_state();
+                harness_log!(
+                    "menu-axis: reader calls={calls} menu_device=0x{device:x} raw_axis={raw} (padDevices walk gave a float, so this reports the object the READER dereferenced)"
+                );
+                let mut any = false;
+                for (name, code) in MENU_CODES_OF_INTEREST {
+                    if let Some((primary, secondary)) =
+                        crate::game_mem::menu_code_pad_binding(*code)
+                    {
+                        any = true;
+                        harness_log!(
+                            "menu-binding: {name} code=0x{code:x} pad_primary=0x{primary:x} pad_secondary=0x{secondary:x}"
+                        );
+                    }
+                }
+                // THE WHOLE TABLE, ONCE, INCLUDING THE KEYBOARD HALF. The named codes above are the
+                // ones a previous pass GUESSED at, and two of them turned out to belong to
+                // `CS::SpinCtrl` rather than to list navigation -- an error a dump would have caught
+                // for free. Dword [0] is the mode-0 (keyboard) binding, so a row whose [0] reads a
+                // recognisable DIK scancode names its own action: 0xd0 down-arrow, 0xc8 up-arrow,
+                // 0x1f S, 0x11 W, 0x1c Return, 0x01 Escape. Rows that are entirely zero are unbound
+                // and are skipped, which keeps the dump to the codes that exist.
+                for code in 0..crate::game_mem::KEY_CONFIG_MAX_MENU_CODE {
+                    let Some(row) = crate::game_mem::menu_code_binding_row(code) else {
+                        continue;
+                    };
+                    if row.iter().all(|dword| *dword == 0) {
+                        continue;
+                    }
+                    any = true;
+                    harness_log!(
+                        "menu-row: code=0x{code:02x} kb=0x{:x} m1=0x{:x} m2=0x{:x} pad1=0x{:x} pad2=0x{:x}",
+                        row[0],
+                        row[1],
+                        row[2],
+                        row[3],
+                        row[4]
+                    );
+                }
+                // Say whether the press channel is even reachable BEFORE the nav phase depends on it,
+                // so "the product export was missing" cannot be mistaken later for "the menu ignored
+                // the key". A release is the probe: holding 0 is the resting state anyway.
+                harness_log!(
+                    "menu-key-channel: er_quickload_hold_dinput_key reachable={}",
+                    crate::key_inject::hold(0)
+                );
+                any
+            }
+            Phase::ActivateLoadFromFile => {
+                // THE ROW ACTIVATION, DRIVEN AS INPUT. Every earlier route committed the second load by
+                // WRITING the byte the row's handler writes (`request_return_to_title` ->
+                // menuData+0x5d=1, or the product's `switch_slot_arm_programmatic`). That reproduces
+                // nothing: the reported black screen appears on a menu-driven second load, and a direct
+                // write skips the pane build, the cloned row's action object, ProfileSelect's list
+                // build and the native return-chain -- every candidate cause. So this phase presses
+                // keys and lets the game decide what they do.
+                //
+                // THE ROW INDEX IS READ, NOT ASSUMED. One row past ours on this tab is *Return to
+                // Desktop*; a guessed row order quits the game instead of loading a character.
+                // `optionsetting_load_from_file_row()` walks the pane the tab-select actually
+                // displayed and classifies each label, so the count of MoveDown taps below is the
+                // measured distance from row 0 (where the cursor sits when a pane opens) to our row.
+                // The pane may not have finished building the cloned rows yet; hold rather than
+                // press, so a tap can never land on whatever row happens to be under the cursor.
+                let row = crate::game_mem::optionsetting_load_from_file_row();
+                if row < 0 {
+                    false
+                } else {
+                    let mut events = [MenuEvent::MoveDown; MAX_QUIT_ROWS + 1];
+                    let taps = (row as usize).min(MAX_QUIT_ROWS);
+                    events[taps] = MenuEvent::Confirm;
+                    issue_menu_taps_once(im, &events[..=taps], frame);
+                    // EFFECT: the game left OptionSetting because it opened ProfileSelect for a file.
+                    top_menu_id() != OPTIONSETTING_MENU_ID && pause_menu_open()
+                }
             }
             Phase::Quit => {
                 // On the Quit tab (tab-switch proven): COMMIT the return-to-title by satisfying its native
@@ -450,13 +626,33 @@ impl Phase {
 /// BISECT-disabled and never drove the menu (removed 2026-08-21; the negative sweep evidence is recorded
 /// on `crate::pad_inject::set_vk_id`). The phase's ADVANCE is its own RAM semaphore, so an event that
 /// lands is confirmed by a specific state change and one that does nothing derails on budget.
+/// Upper bound on rows the Quit tab can hold -- the same 16 the product's own row walk caps at.
+const MAX_QUIT_ROWS: usize = 16;
+
+/// OR this frame's `getShownMenuFlags` word into the phase accumulator. Called from the tap helper so
+/// it samples on exactly the frames the harness is injecting.
+fn accumulate_shown_flags() {
+    let flags = crate::game_mem::menu_flags();
+    if flags != 0 {
+        PHASE_SHOWN_FLAGS.fetch_or(flags, Ordering::Relaxed);
+    }
+}
+
 fn issue_menu_taps_once(im: usize, events: &[MenuEvent], frame: u64) {
+    accumulate_shown_flags();
     let idx = (frame / TAP_CYCLE_FRAMES) as usize;
     let held = (frame % TAP_CYCLE_FRAMES) < TAP_SET_FRAMES;
-    if idx < events.len() && held {
-        tap_menu_event(im, events[idx]);
+    if idx < events.len() {
+        if held {
+            tap_menu_event(im, events[idx]);
+        } else {
+            // RELEASE EXPLICITLY. This used to be a comment asserting "the native input producer
+            // writes 0 -> clean edge release", which was never verified on 1.17. A bit left set is a
+            // button reported HELD, and an edge-driven menu sees no press -- the shape of a Confirm
+            // that getShownMenuFlags reports as consumed while nothing transitions.
+            crate::input_inject::release_menu_event(im, events[idx]);
+        }
     }
-    // Gap frames: do not OR; the native input producer writes 0 -> clean edge release (no auto-repeat).
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -468,6 +664,9 @@ enum DriveMode {
     /// after the autoload's epoch1 residual is flushed by the first reload (bd
     /// STEP4-RELOAD-REACHES-PARITY / autoload-residual).
     NativeReloadTwice,
+    /// Product autoloads; the harness drives ONLY the menu for the second load. No title phases, so
+    /// it cannot race the product's autoload the way `full` does.
+    MenuReload,
     FullBootReload,
     Probe,
     /// COMPANION mode for the product run (samechar-3x): the harness does NOT drive boot/menu/continue
@@ -500,6 +699,7 @@ impl DriveMode {
             "boot" => DriveMode::BootContinueOnly,
             "reload" => DriveMode::NativeReloadOnly,
             "reload2" => DriveMode::NativeReloadTwice,
+            "menureload" => DriveMode::MenuReload,
             "probe" => DriveMode::Probe,
             "passive" => DriveMode::Passive,
             "equip" => DriveMode::EquipMenu,
@@ -512,6 +712,7 @@ impl DriveMode {
             DriveMode::BootContinueOnly => "boot",
             DriveMode::NativeReloadOnly => "reload",
             DriveMode::NativeReloadTwice => "reload2",
+            DriveMode::MenuReload => "menureload",
             DriveMode::FullBootReload => "full",
             DriveMode::Probe => "probe",
             DriveMode::Passive => "passive",
@@ -597,6 +798,26 @@ impl DriveMode {
             Phase::Continue,
             Phase::WaitLoadIn,
         ];
+        // menureload: the product autoloads, the HARNESS drives the menu. Every other menu-capable mode
+        // (`full`) opens with Startup/PressAnyButton/Continue and therefore drives the TITLE itself,
+        // which races the product's own autoload for the same Continue -- observed 2026-09-05 on
+        // br-20260905-040525-9e27, wedged at the title with 126 threads and 6 CPU ticks per 3s, and
+        // reported by the user as "wedged on the last step of the first autoload". This table simply
+        // has no title phases: it OBSERVES the product's load in (no input), then runs the real menu
+        // nav -- pause menu, OptionSetting, TabToQuit(0x30) -- for the SECOND load, which is the only
+        // load the reported black-screen bug is about. `presses=0` cannot happen here.
+        const MENU_RELOAD: &[Phase] = &[
+            Phase::WaitLoadIn,
+            Phase::DumpMenuBindings,
+            MENU_QUIT_FLOW[0],
+            MENU_QUIT_FLOW[1],
+            MENU_QUIT_FLOW[2],
+            // NOT MENU_QUIT_FLOW[3] (Phase::Quit): that phase WRITES menuData+0x5d instead of pressing
+            // the row, which is the exact shortcut that made every previous run unable to reproduce a
+            // menu bug. This drives the row as input and lets the game open ProfileSelect itself.
+            Phase::ActivateLoadFromFile,
+            Phase::WaitLoadIn,
+        ];
         // probe: reach in-world, then the diagnostic input sweep (mode `probe`).
         const PROBE: &[Phase] = &[
             Phase::Startup,
@@ -630,6 +851,7 @@ impl DriveMode {
             DriveMode::BootContinueOnly => BOOT,
             DriveMode::NativeReloadOnly => RELOAD,
             DriveMode::NativeReloadTwice => RELOAD2,
+            DriveMode::MenuReload => MENU_RELOAD,
             // Menu-driven by default (drives the tab-switch); NativeQuit only when the fallback flag is set.
             DriveMode::FullBootReload => {
                 if full_quit_native() {
@@ -646,6 +868,26 @@ impl DriveMode {
     }
 }
 
+/// `currentTopMenuJob` as it stood on the ROOT pause-menu pane. The nav phase advances when the game
+/// replaces it, which is how this module already defines "entered a submenu".
+/// The menu codes whose pad bindings decide whether a drive can navigate: the list cursor pair the
+/// scroller FUN_14074f3c0 reads (0x2c down / 0x2d up) and the tab pair the OptionSetting pager reads
+/// (0x30 left / 0x31 right). Confirm is deliberately absent: 0x3d is >= the table's 0x36 bound, so it
+/// cannot be a binding index and its identity has to be re-derived rather than assumed.
+const MENU_CODES_OF_INTEREST: &[(&str, u32)] = &[
+    ("list_down", 0x2c),
+    ("list_up", 0x2d),
+    ("tab_left", 0x30),
+    ("tab_right", 0x31),
+];
+static SUBMENU_BASELINE_JOB: AtomicUsize = AtomicUsize::new(0);
+/// Every bit `getShownMenuFlags` raised at any point during the current phase (CSMenuManImp+0x1c,
+/// OR-accumulated). THE POINT: a phase that derails tells you the effect was not seen, but not
+/// whether the INPUT was consumed -- and those are different defects with different fixes. This word
+/// is the game's own answer to "which menu input fired", so a Confirm we injected shows up as 0x100
+/// here whether or not the pane then changed. Accumulated rather than sampled because the flags are
+/// per-frame and the telemetry line is written once, at the end.
+static PHASE_SHOWN_FLAGS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static PHASE_IDX: AtomicUsize = AtomicUsize::new(0);
 static PHASE_FRAME: AtomicU64 = AtomicU64::new(0);
 static PHASE_START_TICK: AtomicU64 = AtomicU64::new(0);
@@ -687,7 +929,7 @@ fn resolve_mode() -> DriveMode {
     // MUST stay index-aligned with the `idx` match below (bd reload2-crash-MODES-oob): every DriveMode
     // needs a slot here or MODES[cached] panics. NativeReloadTwice=5 was added to the match but not here,
     // so the 2nd per-frame resolve_mode() indexed MODES[5] out-of-bounds -> crash ~after boot (run64/65/67).
-    const MODES: [DriveMode; 8] = [
+    const MODES: [DriveMode; 9] = [
         DriveMode::BootContinueOnly,  // 0
         DriveMode::NativeReloadOnly,  // 1
         DriveMode::FullBootReload,    // 2
@@ -696,6 +938,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::NativeReloadTwice, // 5
         DriveMode::EquipMenu,         // 6
         DriveMode::InventoryMenu,     // 7
+        DriveMode::MenuReload,        // 8
     ];
     let cached = MODE_IDX.load(Ordering::SeqCst);
     if cached != usize::MAX {
@@ -731,6 +974,7 @@ fn resolve_mode() -> DriveMode {
         DriveMode::NativeReloadTwice => 5,
         DriveMode::EquipMenu => 6,
         DriveMode::InventoryMenu => 7,
+        DriveMode::MenuReload => 8,
     };
     MODE_IDX.store(idx, Ordering::SeqCst);
     harness_log!(
@@ -758,12 +1002,13 @@ fn emit_phase_telemetry(
     let a40 = title_scan::title_dialog_a40(base);
     let menu_id = top_menu_id();
     let tab = optionsetting_tab_index();
+    let shown_flags = PHASE_SHOWN_FLAGS.swap(0, Ordering::Relaxed);
     // The DECISIVE fps signal (bd MECHANISM-20fps-cap-fixedspf-0.05): 0.05 = the loading 20fps cap,
     // 0.0167 = 60fps. The differential loop diffs THIS per phase, not raw fps.
     let fixed_spf = flip_fixed_spf();
     let flip_mode = flip_mode_current();
     let line = format!(
-        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"save_state\":{}}}",
+        "{{\"phase\":\"{name}\",\"idx\":{idx},\"outcome\":\"{outcome}\",\"start_tick_ms\":{start_tick},\"end_tick_ms\":{end_tick},\"duration_ms\":{duration_ms},\"start_frame\":0,\"end_frame\":{frame},\"duration_frames\":{frame},\"title_state\":{title_state},\"a40\":{a40},\"pause_menu_open\":{},\"menu_id\":{menu_id},\"tab_index\":{tab},\"return_title\":{},\"fixed_spf\":{fixed_spf:.4},\"flip_mode\":{flip_mode},\"menu\":\"0x{:x}\",\"world_sim\":{},\"now_loading\":{},\"save_state\":{},\"shown_menu_flags\":\"0x{shown_flags:x}\"}}",
         pause_menu_open() as u8,
         return_title_requested() as u8,
         sem.menu,
@@ -777,6 +1022,12 @@ fn emit_phase_telemetry(
 /// Run one frame of the drive. Called on the game thread from the CSTaskImp FrameBegin task.
 pub fn on_frame(base: usize) {
     keep_input_active(base);
+
+    // THE LIVE COMMAND LOOP, ABOVE EVERY EARLY RETURN BELOW -- deliberately. Its whole value is
+    // asking questions of a session that has ALREADY stopped driving: a derailed phase leaves the
+    // game up and in exactly the state worth interrogating, and a `return` before this point would
+    // make that the one moment the harness cannot answer.
+    crate::repl::on_frame(base);
 
     // COMPANION (product run): presence + stay-active only; the PRODUCT owns the drive. No phases, no
     // popup-accept, no pad injection -- so the standalone drive never fights the product's own flow.

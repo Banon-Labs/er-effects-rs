@@ -126,6 +126,10 @@ pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot
     let leaked: &'static [u8] = Box::leak(body.to_vec().into_boxed_slice());
     OWN_LOAD_BODY_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
     OWN_LOAD_BODY_LEN.store(leaked.len(), Ordering::SeqCst);
+    // Install the STEP_RequestWait guard alongside the feed hook: it is pass-through until this
+    // switch arms it, and installing here means the detour is already live by the time
+    // `continue_confirm` lets the incoming world's RequestWait tick.
+    crate::experiments::own_load::install_request_wait_guard();
     if !install_own_load_hook() {
         append_autoload_debug(format_args!(
             "own-load-feed: hook install failed -- ABORT (no-write)"
@@ -558,8 +562,140 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
     // -> STEP_WorldResWait. No-op unless the default-OFF opt-in marker is present AND this is a genuine
     // in-world switch (switch_reload_active && player was present at arm), so load1/boot are never touched.
     arm_worldreswait_hold();
+    // RETIRE OUR OWN RETURN-TITLE REQUEST BEFORE THE INCOMING WORLD INHERITS IT (2026-09-04).
+    //
+    // `menuData+0x5d` is the return-title REQUEST byte, and it is OURS: the switch arm wrote it 1
+    // (`switch_slot_arm_programmatic`, and the user's ProfileSelect path through
+    // `system_quit_arm_quickload_autoload`) so the OUTGOING world's MoveMapStep child would walk
+    // 18 -> Cleanup -> Finish and tear that world down. It is a request, it has now been served, and
+    // nothing was clearing it.
+    //
+    // It is process-global -- `GLOBAL_CSMenuMan->menuData`, not a per-child field -- so leaving it set
+    // hands the request straight to the INCOMING child. Measured on run br-20260905-024539-2daf: the
+    // incoming world's `SetState(5 PlayGame)` frame reads `ENDCOND[... md5d=1 md5e=1]`, its child then
+    // walks to `state=20 field25=9` (child-done DIAG #5, +369671ms) instead of parking at the resident
+    // step 18, `STEP_MoveMap_Update` sees the child done and drains `InGameStep+0xd8` 1 -> 2 -> 0, and
+    // `STEP_GameStepWait` -- whose 1.16.2 decompile has NO stay-in-6 branch when d8 == 0 with
+    // `GameMan+0xb7c`/`+0xb7d` clear -- does `SetMapId(0xff,0xff,0xff,0xff)` and `SetState(2 BeginLogo)`.
+    // That is the black screen, 7s after a load that SUCCEEDED.
+    //
+    // The cold boot is immune for exactly this reason and no other: nobody ever set 0x5d, so its child
+    // parks at 18 forever, d8 holds at 1, and the GameStepWait gate is never satisfied.
+    //
+    // Clearing here rather than later because this is the last instant the byte is unambiguously about
+    // the OUTGOING world: `own_load_continue_fire` hands off to SetState5 and the incoming child is
+    // created downstream of it. This retires a request we issued -- it is not steering a game-owned
+    // state machine, and the native teardown it asked for has already completed by this point.
+    if let Some(menu_data) = unsafe { resolve_menu_data(base) } {
+        let previous =
+            unsafe { safe_read_u8(menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) }
+                .unwrap_or(0);
+        if previous != 0 {
+            unsafe {
+                *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+            }
+            let cleared = er_telemetry_core::counters::SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT
+                .fetch_add(1, Ordering::SeqCst)
+                + 1;
+            append_autoload_debug(format_args!(
+                "own-load-switch-reload: retired our own return-title request menuData+0x5d {previous}->0 #{cleared} before the incoming world is created -- it was served by the OUTGOING teardown, and leaving it set makes the incoming child walk 18->20, drain InGameStep+0xd8, and hit the STEP_GameStepWait teardown (the black screen)"
+            ));
+        }
+    }
+    // ARM THE SESSION-END GUARD before the incoming world can tick. `continue_confirm` hands off to
+    // SetState5, after which `STEP_RequestWait` runs against THIS switch's world -- and because we
+    // mounted the map before firing, its first tick can already see `requestCode == 2` and take the
+    // session-end arm that produced `WORLD LOST`. See `request_wait_guard` for the decompiled branch.
+    crate::experiments::own_load::arm_request_wait_guard_for_switch();
     unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+    // RETIRE THE WARP OUR OWN DESERIALIZE ARMED (2026-09-05).
+    //
+    // `FUN_14067b290` -- the native slot deserialize this switch just drove -- ends with
+    // `SetMoveMapStepBlockId(GameMan+0xc30)`, `initialAreaEntityId = 0` and `warpRequested = true`.
+    // On the native title->Continue path that warp IS the load: the InGameStep consumes it as it
+    // creates the world. On OUR path the world already exists, and `own_load_continue_fire` above has
+    // just performed the transition itself, so the armed warp is a SECOND, surplus map move.
+    //
+    // MEASURED, run br-20260905-212504-9b8d, with the guard removed so nothing masked it:
+    //   +57569ms  own-load-feed drives the deserialize   -> warpRequested false -> TRUE at +57581ms
+    //   +57573ms  requestwait-tick #1 d8=1 (ADVANCE)     -- our load runs and advances correctly
+    //   ~+57.9s   c30 real, world streaming              -- the world is up WITHOUT the warp firing
+    //   +66141ms  warpRequested -> false                 -- the surplus warp finally executes
+    //   +67031ms  requestwait-tick #2 d8=2               -- its completion lands back in RequestWait
+    //                                                       with the NowLoading job gone, and the
+    //                                                       native code ends the session
+    // The BOOT load never arms this: `own-load-feed` appears exactly once per run, at the switch, and
+    // boot's `warp_requested` reads false from +988ms through the whole load. So the flag is ours, we
+    // raised it, our own continue already did what it asked for, and leaving it set is what the user
+    // sees as our cover vanishing and the game's own loading screen appearing a beat later.
+    //
+    // Retiring a request we issued and have already satisfied -- the same act, and the same
+    // justification, as the `menuData+0x5d` retirement a few lines above. It is not steering a
+    // game-owned state machine: the world this warp would move is the one we just finished loading.
+    if c30_real {
+        let gm = crate::constants::game_man_ptr_or_null();
+        if gm > TITLE_OWNER_SCAN_START_ADDRESS {
+            let previous =
+                unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(0);
+            if previous != 0 {
+                unsafe {
+                    *((gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) as *mut u8) = 0;
+                }
+                append_autoload_debug(format_args!(
+                    "own-load-switch-reload: retired the warp our own deserialize armed (GameMan+0x10 {previous}->0) -- continue_confirm has already performed this transition, and leaving it set fires a SECOND map move ~8.5s later whose completion re-enters STEP_RequestWait at d8=2 and ends the session"
+                ));
+            }
+        }
+    }
+    // HAND THE SWITCH BACK SO IT WORKS A SECOND TIME (2026-09-05).
+    //
+    // The load-3 failure: switch #1 loads its character, switch #2 arms and then nothing happens --
+    // the world you are standing in is never torn down, no loading screen appears, and the quit menu
+    // reopens over a destroyed ProfileSelect with rows that do nothing. Measured end to end on run
+    // br-20260905-212926-4ed9:
+    //   +53662ms  switch #1 arms (slot 1)
+    //   +53980ms  return-title REQUEST fired, bc4 forced READY, final functor submitted
+    //   +57543ms  WORLD LOST #1 -- the old world is gone, which is the teardown working
+    //   +57853ms  slot 1 loads. Onyx Lord, player present, c30 0x1c000000
+    //   +119525ms switch #2 arms (slot 0) -- and that is the LAST thing it does
+    //   +120170ms "requested save-slot load index world_up=true" and then that line, forever
+    // No REQUEST, no bc4 force, no functor, no WORLD LOST #2, no reload SUBMIT. End-of-run telemetry
+    // names the cause exactly: request_count=1, chain_submit_count=1, final_functor_call_count=1 --
+    // all three still spent from switch #1, and all three are the `== 0` / `compare_exchange(0,1)`
+    // gates the teardown runs behind.
+    //
+    // WHY THE EXISTING RE-ARM DID NOT RUN. It lives in `system_quit_continue_confirm_hook`, behind
+    // `switch_active` (phase in CONFIRMED..=AUTOLOAD_HANDOFF). Our own `own_load_feed_deserialize`
+    // above calls the native parser at 0x67b290 -- the SAME address `system_quit_inworld_load_skip_hook`
+    // guards -- and on a proven deserialize that hook stores phase = IDLE. It runs milliseconds BEFORE
+    // `own_load_continue_fire`, so by the time the confirm arrives the phase is already IDLE, the hook
+    // classifies it NON-SWITCH, and the whole commit branch is skipped. Confirmed across all 40 runs
+    // in ~/.cache/er-me3-runs: `continue_confirm_fresh_deser_count` is 0 in every one, and
+    // `non_switch_count` carries every forward. That branch is dead code on this path; this call is
+    // the live edge.
+    //
+    // Placed AFTER `own_load_continue_fire` on purpose, and not at the switch ARM: the 2026-07-02
+    // bisect showed an arm-time reset is re-consumed by the teardown still in flight and bounces even
+    // a single switch. Here the switch is committed and both gates are independently shut (phase IDLE,
+    // bc4 0), so handing the counters back opens nothing until the next arm.
+    unsafe {
+        crate::experiments::system_quit_rearm_switch_for_next_load("own-load-switch-reload-commit")
+    };
     true
+}
+
+/// `GLOBAL_CSMenuMan->menuData`, or `None` on any fault-tolerant read failure. Pure reads.
+unsafe fn resolve_menu_data(base: usize) -> Option<usize> {
+    unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .filter(|&m| m > 0x10000)
+    .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+    .filter(|&d| d > 0x10000)
 }
 
 /// Resolve `mss = GameDataMan->menuSystemSaveLoad = *(*(base + GAME_DATA_MAN_GLOBAL_RVA) +

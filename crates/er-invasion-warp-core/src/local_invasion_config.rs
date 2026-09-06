@@ -91,6 +91,41 @@ hunt = false
 # within a minute. Silence after the first means "still being sent to the same wrong place".
 reject_notice = false
 
+# Draw invasion pins on the world map.
+#
+# On by default -- the pins are the feature. Turning it off withholds the WorldMapViewModel
+# constructor observer and the world-map GFx hook, and nothing else: the local-invasion filter,
+# the warp keys and the lobby pool all still run. That makes the map path isolable on its own,
+# which is what a crash that follows opening the map needs in order to be attributed.
+map_pins = true
+
+# Install the three Steam-matchmaking detours (location publishing, hunt mode, pool filter).
+#
+# On by default -- those features need them. These are the only detours this DLL installs at
+# addresses it did not derive statically: each comes from a live ISteamMatchmaking vtable slot read
+# at runtime. Turning it off withholds all three and nothing else.
+steam_hooks = true
+
+# Install the two read-only observers on Seamless Co-op's own code (the menu `show` function and
+# the lobby-key builder).
+#
+# On by default -- the `show` observer is how this DLL learns the Seamless menu object's address,
+# and the lobby-key observer reports the one string that decides whether two Seamless players can
+# see each other at all. Turning it off withholds those two and nothing else: the local-invasion
+# filter still judges matches and the warp keys still work.
+#
+# OFF BY DEFAULT since 2026-09-04, because arming them kills the game in about 25 seconds. With
+# them off the same configuration ran 251s and 110s with zero fault records; with them on and
+# nothing else changed it died at 24.9s, with no input given at all. The mechanism is still
+# unidentified, so this is a mitigation and not a fix -- turning it on is opting into a crash.
+ersc_observers = false
+
+# Which half of that pair to install, when ersc_observers is on. Both on by default, so the master
+# switch alone behaves exactly as before. They exist because the master proved the PAIR is what
+# crashes and these name which one: turn the master on and exactly one of these off.
+ersc_show_observer = true
+ersc_lobby_key_observer = true
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -293,6 +328,43 @@ pub fn parse_local_invasion_config_with_fallback(
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("dll_users_only must be true or false, got {value:?}"),
+                }),
+            },
+            "steam_hooks" => match parse_bool(value) {
+                Some(v) => config.steam_hooks = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("steam_hooks must be true or false, got {value:?}"),
+                }),
+            },
+            "map_pins" => match parse_bool(value) {
+                Some(v) => config.map_pins = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("map_pins must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_observers" => match parse_bool(value) {
+                Some(v) => config.ersc_observers = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_observers must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_show_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_show_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_show_observer must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_lobby_key_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_lobby_key_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!(
+                        "ersc_lobby_key_observer must be true or false, got {value:?}"
+                    ),
                 }),
             },
             "reject_notice" => match parse_bool(value) {
@@ -517,6 +589,27 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             // nothing said. Any key the writer does not name is a key the writer destroys.
             "reject_notice" => {
                 out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
+            }
+            "map_pins" => {
+                out.push_str(&format!("map_pins = {}\n", config.map_pins));
+            }
+            "steam_hooks" => {
+                out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
+            }
+            "ersc_observers" => {
+                out.push_str(&format!("ersc_observers = {}\n", config.ersc_observers));
+            }
+            "ersc_show_observer" => {
+                out.push_str(&format!(
+                    "ersc_show_observer = {}\n",
+                    config.ersc_show_observer
+                ));
+            }
+            "ersc_lobby_key_observer" => {
+                out.push_str(&format!(
+                    "ersc_lobby_key_observer = {}\n",
+                    config.ersc_lobby_key_observer
+                ));
             }
             "dll_users_only" => {
                 out.push_str(&format!("dll_users_only = {}\n", config.dll_users_only));

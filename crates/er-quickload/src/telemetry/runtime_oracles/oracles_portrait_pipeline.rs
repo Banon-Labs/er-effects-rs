@@ -337,11 +337,13 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     // Ownership-ledger conservation oracle: violations MUST stay 0 (nonzero == a native-owned
     // object taken without a paired release -- the spared-renderer leak class). spared_outstanding
     // and its high-water should track the bound (1); a climbing value is the early leak signal.
-    push_json_usize(
-        body,
-        "oracle_ownership_ledger_violations",
-        OWNED_LEDGER_VIOLATIONS.load(Ordering::SeqCst),
-    );
+    // `oracle_ownership_ledger_violations` is DELETED, not merely unwired (2026-09-05). Its only
+    // writer was `ownership_ledger_check`, which ran at the sq-repro autopilot's switch boundary and
+    // went with it. Left in place the field would have published a constant 0 -- a spared-renderer
+    // leak detector that reports "no leaks" because it never runs, which is strictly worse than an
+    // absent field. Reinstating the detector means calling the check from the LIVE switch boundary in
+    // `system_quit_arm_quickload_autoload` and validating it there; that is a deliberate change with
+    // its own proof, not something to leave implied by a zero.
     push_json_usize(
         body,
         "oracle_ownership_spared_outstanding",

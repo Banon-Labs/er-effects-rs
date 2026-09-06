@@ -37,11 +37,31 @@ static MODULE: AtomicUsize = AtomicUsize::new(0);
 #[unsafe(no_mangle)]
 pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _reserved: *mut ()) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // FIRST, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // vectored handler -- so no crash record is written at all and the process simply
+        // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-build-import", panic_log_sink);
+
         MODULE.store(module.0 as usize, Ordering::SeqCst);
         std::thread::spawn(start_configured_work);
         std::thread::spawn(register_task);
     }
     TRUE.0
+}
+
+/// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
+///
+/// Small and duplicated per shell on purpose: the hook is installed PER DLL because every cdylib
+/// statically links its own `er-game-base`, so there is no shared place this could live and still
+/// be the thing that runs in this module.
+fn panic_log_sink(args: core::fmt::Arguments<'_>) {
+    er_game_base::log::append_line(
+        &er_game_base::log::game_directory_path()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("er-build-import.log"),
+        args,
+    );
 }
 
 /// This DLL's own path, for finding the sidecar beside it.

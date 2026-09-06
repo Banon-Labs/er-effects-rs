@@ -28,9 +28,12 @@
 mod drive;
 mod game_mem;
 mod input_inject;
+mod key_inject;
 mod log;
+mod menu_query;
 #[cfg(windows)]
 mod pad_inject;
+mod repl;
 #[cfg(windows)]
 mod title_scan;
 mod win32;

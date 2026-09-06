@@ -177,6 +177,9 @@ def resolve_base(base_ref: str, fetch: bool) -> tuple[str, str]:
 
 
 PRODUCT_PACKAGE = "er-quickload"
+# The one conflict kind that is a claim about WHO IS DRIVING, not about corruption. `--agent-driven`
+# may accept it; every other kind stays fatal. See `resolve_conflicts`.
+AGENT_DRIVEN_CONFLICT_KIND = "drives-input"
 
 
 def find_conflicts(packages: set[str], table: dict) -> list[dict]:
@@ -197,7 +200,7 @@ def find_conflicts(packages: set[str], table: dict) -> list[dict]:
 
 
 def resolve_conflicts(
-    selected: set[str], table: dict, pinned: set[str]
+    selected: set[str], table: dict, pinned: set[str], agent_driven: bool = False
 ) -> tuple[set[str], list[dict], list[dict]]:
     """Drop opt-in-only DLLs, then the non-product side of each conflict.
 
@@ -205,10 +208,19 @@ def resolve_conflicts(
     explicitly: excluding one of those would silently override a direct request, so a pinned
     conflict loser is reported as unresolvable instead, and a pinned opt-in-only DLL is simply
     kept -- naming it with `--with` IS the opt-in.
+
+    `agent_driven` accepts the ONE conflict kind that is a statement about who is driving rather
+    than about corruption: `drives-input`. Its whole content is "a run that loads this cannot be
+    described as user-driven", which is not a defect when the run is DECLARED agent-driven --
+    AGENTS.md's 2026-07-22 standing order requires the agent to drive every input, and the
+    input harness is how. It is a narrow admission, not a bypass: no other kind is affected, the
+    loser must still be `--with`-pinned, and the acceptance is recorded in `excluded` (kind
+    `drives-input-accepted`) so the run block STATES that the user was not in control.
     """
     kept = set(selected)
     excluded: list[dict] = []
     unresolvable: list[dict] = []
+    accepted: list[dict] = []
 
     # OPT-IN-ONLY DLLs come out FIRST, before any conflict ranking. They are co-loadable --
     # nothing about them corrupts a run -- but they CHANGE THE GAME the user sees, and a
@@ -235,6 +247,23 @@ def resolve_conflicts(
             continue
         loser = b if a == PRODUCT_PACKAGE else a
         if loser in pinned:
+            if agent_driven and conflict["kind"] == AGENT_DRIVEN_CONFLICT_KIND:
+                # NOT `excluded` -- the package is KEPT. It goes in its own list so the run block
+                # can say "the player was not in control" without listing a loaded DLL under a
+                # heading that means "withheld".
+                accepted.append(
+                    {
+                        "package": loser,
+                        "kind": AGENT_DRIVEN_CONFLICT_KIND,
+                        "because": (
+                            "KEPT, and this run is therefore AGENT-DRIVEN: the harness writes the "
+                            "game's input memory every frame, so the player is NOT in control. "
+                            "Accepted only because --agent-driven declared it. " + conflict["reason"]
+                        ),
+                        "evidence": conflict["evidence"],
+                    }
+                )
+                continue
             unresolvable.append(
                 {**conflict, "why": f"{loser} was requested with --with but conflicts with the product"}
             )
@@ -250,7 +279,7 @@ def resolve_conflicts(
                 }
             )
 
-    return kept, excluded, unresolvable
+    return kept, excluded, unresolvable, accepted
 
 
 def compute(
@@ -258,6 +287,7 @@ def compute(
     fetch: bool,
     pinned: set[str] | None = None,
     dropped: set[str] | None = None,
+    agent_driven: bool = False,
 ) -> dict:
     pinned = pinned or set()
     dropped = dropped or set()
@@ -305,10 +335,30 @@ def compute(
         # and a one-DLL closure has nothing for it to conflict with.
         candidates = {PRODUCT_PACKAGE}
         fallback = "no changed file feeds any cdylib; falling back to the product DLL alone"
+    elif PRODUCT_PACKAGE not in candidates:
+        # THE PRODUCT IS NEVER OPTIONAL (bd er-effects-rs-l9tu, fixed 2026-09-04). `--with X` on a
+        # tree whose changes feed no cdylib used to produce a closure of exactly X: naming any
+        # package made `candidates` non-empty, which skipped the fallback above, and the product
+        # left the profile without a word. That run is not merely surprising, it is unreadable --
+        # the staged sidecar is still `er-quickload.toml` and the launcher's TESTIMONY step still
+        # waits for the PRODUCT's own `runtime-config: loaded` line, so the run either hangs at
+        # testimony or prints a block crediting the product for a load that was not its.
+        #
+        # Unioning it in rather than refusing, because every companion chains onto the product's
+        # hook union and `--without er-quickload` is already refused outright above: a closure
+        # without it was never a thing the caller could legitimately ask for.
+        candidates.add(PRODUCT_PACKAGE)
+        fallback = (
+            f"{PRODUCT_PACKAGE} was not selected by the changed files or by --with, and was "
+            f"added: it owns the hook union the companions chain onto, and it is what the "
+            f"sidecar and the launcher's load testimony both name"
+        )
 
     with CONFLICTS_TOML.open("rb") as handle:
         table = tomllib.load(handle)
-    kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
+    kept, excluded, unresolvable, accepted = resolve_conflicts(
+        candidates, table, pinned, agent_driven
+    )
 
     # `--without` is applied LAST, after conflict ranking, so an exclusion cannot be undone by a
     # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
@@ -349,6 +399,8 @@ def compute(
         "seed_crates": sorted(seeds),
         "affected_crates": sorted(affected),
         "pinned": sorted(pinned),
+        "agent_driven": bool(agent_driven),
+        "accepted_conflicts": accepted,
         "withheld": sorted(dropped),
         "packages": selected,
         "artifacts": [f"{artifact_of[p]}.dll" for p in selected],
@@ -439,7 +491,7 @@ def selftest() -> int:
             }
         ]
     }
-    kept, excluded, unresolvable = resolve_conflicts(
+    kept, excluded, unresolvable, _ = resolve_conflicts(
         {PRODUCT_PACKAGE, "bad", "safe"}, product_table, set()
     )
     check(kept == {PRODUCT_PACKAGE, "safe"}, "a product conflict drops the non-product side")
@@ -448,7 +500,7 @@ def selftest() -> int:
         "the dropped DLL is reported as an exclusion, not lost",
     )
 
-    _, _, pinned_block = resolve_conflicts(
+    _, _, pinned_block, _ = resolve_conflicts(
         {PRODUCT_PACKAGE, "bad"}, product_table, pinned={"bad"}
     )
     check(
@@ -461,7 +513,7 @@ def selftest() -> int:
             {"a": "safe", "b": "bad", "kind": "hook-collision", "reason": "r", "evidence": "e"}
         ]
     }
-    _, _, peer_block = resolve_conflicts({"safe", "bad"}, peer_table, set())
+    _, _, peer_block, _ = resolve_conflicts({"safe", "bad"}, peer_table, set())
     check(
         len(peer_block) == 1 and "nothing ranks them" in peer_block[0]["why"],
         "a conflict between two non-product DLLs refuses",
@@ -475,7 +527,7 @@ def selftest() -> int:
     live_shipped = {package for package, _ in shipped_pairs()}
     for seed in ("er-game-base", "er-hook"):
         closure = affected_packages({seed}, live_rev) & live_shipped
-        kept, excluded, unresolvable = resolve_conflicts(closure, live_table, set())
+        kept, excluded, unresolvable, _ = resolve_conflicts(closure, live_table, set())
         check(
             not unresolvable and PRODUCT_PACKAGE in kept and excluded,
             f"a {seed} change still yields a loadable profile ({len(kept)} kept, {len(excluded)} excluded)",
@@ -531,7 +583,7 @@ def selftest() -> int:
     # And the drop itself: withheld comes out of `kept` and lands in `excluded` with a reason,
     # so an A/B pair is distinguishable in the run block rather than being two identical-looking
     # runs. This mirrors the sequence compute() applies after conflict ranking.
-    kept_ab, excluded_ab, _ = resolve_conflicts({PRODUCT_PACKAGE, a_real_shell}, {}, set())
+    kept_ab, excluded_ab, _, _ = resolve_conflicts({PRODUCT_PACKAGE, a_real_shell}, {}, set())
     for name in sorted({a_real_shell} & kept_ab):
         kept_ab.discard(name)
         excluded_ab.append({"package": name, "kind": "withheld", "because": "x", "evidence": "y"})
@@ -544,7 +596,9 @@ def selftest() -> int:
 
     # --- opt-in-only: co-loadable, but consent is required ------------------------------
     opt_table = {"opt_in_only": {"mush": "wears a costume nobody asked for"}}
-    kept, excluded, unresolvable = resolve_conflicts({PRODUCT_PACKAGE, "mush"}, opt_table, set())
+    kept, excluded, unresolvable, _ = resolve_conflicts(
+        {PRODUCT_PACKAGE, "mush"}, opt_table, set()
+    )
     check(
         "mush" not in kept and not unresolvable,
         "an opt-in-only DLL is dropped from a closure that merely reached it",
@@ -555,7 +609,7 @@ def selftest() -> int:
         and "costume" in excluded[0]["because"],
         "the dropped opt-in-only DLL is REPORTED with its player-facing reason, not silently lost",
     )
-    kept_pinned, excluded_pinned, _ = resolve_conflicts(
+    kept_pinned, excluded_pinned, _, _ = resolve_conflicts(
         {PRODUCT_PACKAGE, "mush"}, opt_table, {"mush"}
     )
     check(
@@ -570,7 +624,7 @@ def selftest() -> int:
         "mushroom-man-runtime is declared opt-in-only in the shipped table",
     )
     every = {package for package, _ in shipped_pairs()}
-    kept_all, _, _ = resolve_conflicts(every, live, set())
+    kept_all, _, _, _ = resolve_conflicts(every, live, set())
     check(
         "mushroom-man-runtime" not in kept_all,
         "even a closure that selects EVERY shell does not load the mushroom mod",
@@ -605,6 +659,13 @@ def main() -> int:
         help="force-EXCLUDE a shell (repeatable); applied after conflict ranking and reported "
         "in the excluded list, so the run block says what was withheld",
     )
+    parser.add_argument(
+        "--agent-driven",
+        action="store_true",
+        help="declare this run AGENT-DRIVEN, accepting a --with-pinned drives-input conflict "
+        "(the input harness). The run is then recorded as one in which the player was NOT in "
+        "control; no other conflict kind is affected.",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -618,6 +679,7 @@ def main() -> int:
             fetch=not args.no_fetch,
             pinned=set(args.pinned),
             dropped=set(args.dropped),
+            agent_driven=args.agent_driven,
         )
     except ClosureError as err:
         print(f"er-dll-closure: {err}", file=sys.stderr)

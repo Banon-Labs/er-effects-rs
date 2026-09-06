@@ -1380,11 +1380,16 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             // the game died before the call returned. ProcessMsbLoadLists runs ResetAreaResLists +
             // PopulateLists, which is only safe at STEP_MoveMap_Init (BEFORE the world starts streaming);
             // resetting the area-res lists mid-stream faults. So the reactive rebuild is DISABLED. The
-            // correct fix must run at STEP_MoveMap_Init (0x140aec210) / _Common_Initialize (0x140aed910)
-            // with the DESTINATION map's loadlist -- i.e. make the fast switch not skip / not run that
-            // native init with a stale loadlist -- not a reactive call at the stall. This block now just
-            // records the confirmed stall for the next (init-point) fix. See bd
-            // step3-reactive-processmsbloadlists-crashes-init-point-fix-needed-2026-07-17.
+            // correct fix must run BEFORE STEP_MoveMap_Init (1.16.2 0x140aec120; _Common_Initialize
+            // is 0x140aed820 -- the 0x140aec210/0x140aed910 pair this comment used to name are
+            // 1.16.1-era addresses and neither is a function entry on 1.16.2, so do not chase them).
+            // FIXED 2026-09-05, and it was not the loadlist: `STEP_MoveMap_Init` takes the
+            // MoveMapStep's `mapId` (+0xdc) from `GameMan::GetMoveMapStepBlockId()` = GameMan+0x14
+            // and then clears that field, and nothing on the switch path was writing it -- read live
+            // out of a stalled process, MoveMapStep+0xdc was 0xffffffff, so WorldResWait was waiting
+            // on block ff/ff/ff/ff. `seed_move_map_step_block_id` in own_load/loaders/switch_reload.rs
+            // now sets it from the mounted c30 before continue_confirm. This block stays as the
+            // detector. See bd step3-reactive-processmsbloadlists-crashes-init-point-fix-needed-2026-07-17.
             if let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) {
                 let _ = addr;
                 let _ = owner;
@@ -1512,6 +1517,59 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         let gwarp = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
+        // CVAR10 RISING EDGE -- the decision instant, which MMS-CLEANUP samples ~2s too late.
+        //
+        // WHY THIS EXISTS. `menuData+0x5e` IS `cVar10`: the ending-request evaluator writes it every
+        // frame (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`) and only a 1 lets the MoveMap
+        // child leave the resident STEP_MoveMap(18). Run br-20260905-022413-272e settled that leaving
+        // 18 IS the teardown -- the healthy Da BEAST boot load never emitted a single MMS-CLEANUP and
+        // its world lived, while both children that DID leave 18 had their world torn down to
+        // BeginLogo ~2s later. But that same run measured every live input as ZERO at the Cleanup
+        // edge (`warp=0 b7c=0 b7d=0 rt5d=0 force=0 session_proto=6 dead_reset=0`), which cannot be
+        // the state the evaluator decided on. The gap is timing: Cleanup entry is downstream of the
+        // decision, so a TRANSIENT input has already been consumed by then. Sampling on the 0->1
+        // edge of the output catches the inputs while they still hold.
+        //
+        // Read-only, and deliberately not gated on a switch phase: the boot load is the negative
+        // control, and it only counts if the same detector was live and silent during it.
+        let session_proto = {
+            let manager = er_game_base::mem::read_global_ptr(
+                module_base,
+                er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA,
+                "CS_SESSION_MANAGER_GLOBAL_RVA",
+            );
+            if manager == null {
+                -1
+            } else {
+                unsafe { safe_read_i32(manager + CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET) }
+                    .unwrap_or(-1)
+            }
+        };
+        let dead_reset = {
+            let event_man = er_game_base::mem::read_global_ptr(
+                module_base,
+                er_game_base::rva::CS_EVENT_MAN_GLOBAL_RVA,
+                "CS_EVENT_MAN_GLOBAL_RVA",
+            );
+            if event_man == null {
+                -1
+            } else {
+                unsafe { safe_read_usize(event_man + CS_EVENT_MAN_DEAD_RESET_10_OFFSET) }
+                    .filter(|&state| state > 0x10000)
+                    .and_then(|state| unsafe {
+                        safe_read_i32(state + CS_EVENT_DEAD_RESET_STATE_8_OFFSET)
+                    })
+                    .unwrap_or(-1)
+            }
+        };
+        let prev_5e = CVAR10_LAST.swap(md_5e, Ordering::SeqCst);
+        if md_5e == 1 && prev_5e == 0 {
+            let n = CVAR10_RISE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            append_autoload_debug(format_args!(
+                "CVAR10 RISE #{n}: menuData+0x5e 0->1 -- the ending request the MoveMap child acts on.                  INPUTS AT THIS INSTANT: rt5d={md_5d} warp={gwarp} b7c={gb7c} b7d={gb7d}                  force={ending_force} session_proto={session_proto}(WaitReload={SESSION_PROTOCOL_STATE_WAIT_RELOAD})                  dead_reset={dead_reset}(ending={DEAD_RESET_STATE_ENDING})                  [unmeasurable from here: CSEzSelectBot::IsBotEnabled].                  STATE: phase={} ig_pstep={ig_pstep} ig_pnext={ig_pnext}",
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
         let csm6b0 = menu_man
             .and_then(|m| unsafe { safe_read_u8(m + CS_MENU_MAN_FIELD_6B0_OFFSET) })
             .map(|b| b as i32)

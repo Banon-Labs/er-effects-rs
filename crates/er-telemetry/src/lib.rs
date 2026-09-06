@@ -34,6 +34,19 @@ use windows::{
 
 const DLL_MAIN_SUCCESS: i32 = 1;
 
+/// `report_panics_to`'s sink. This shell has no logger of its own -- everything reusable lives in
+/// `er-telemetry-core` -- so the panic line goes next to the executable under this DLL's own name,
+/// which is where an investigator already looks for a shell's output.
+#[cfg(windows)]
+fn panic_log_sink(args: core::fmt::Arguments<'_>) {
+    er_game_base::log::append_line(
+        &er_game_base::log::game_directory_path()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("er-telemetry.log"),
+        args,
+    );
+}
+
 #[cfg(windows)]
 static START: Once = Once::new();
 #[cfg(windows)]
@@ -276,6 +289,12 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // FIRST, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // vectored handler -- so no crash record is written at all and the process simply
+        // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-telemetry", panic_log_sink);
+
         WINRECONFIG_START.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-telemetry-winreconfig-hooks".into())

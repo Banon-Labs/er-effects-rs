@@ -63,7 +63,7 @@ pub(crate) use gpu_frame_timing::*;
 pub(crate) use er_loading_portrait_core::{NATIVE_OVERLAY_SHOW, install_native_overlay};
 
 pub(crate) mod can_move_probe;
-mod input_block;
+pub(crate) mod input_block;
 pub(crate) use input_block::*;
 
 mod input_trace;

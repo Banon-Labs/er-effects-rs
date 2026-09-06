@@ -136,6 +136,64 @@ pub fn set_vk_id(id: u32) {
 
 /// After a builder rebuilds `padDevices[dev]+0x88`, stamp the desired key id down. `manager` is the builder's
 /// first arg (GLOBAL_FD4PadManager); `dev` is its device index (edx).
+/// `FD4PadDevice + 0x78` -- the pointer EVERY menu-input read dereferences. It is a different struct
+/// from the `+0x88` per-virtual-key array below, which is why sweeping ids 1000..1080 against the
+/// pause menu drove nothing (bd DECISIVE-source88-does-NOT-drive-pausemenu-fullsweep): that sweep was
+/// the right idea aimed at the wrong field. Every reader on `CS::CSEzMenuViewerPad` goes through it --
+/// `FUN_140e34fb0` reads `+0x08`, `FUN_140e35040` reads `+0x10`, `FUN_140e35080` reads `+0x28`.
+const PAD_MENU_STATE_78_OFFSET: usize = 0x78;
+/// The menu's list-scroll AXIS inside that struct. `FUN_140e35080` returns `*(int*)(state+0x28) /
+/// 0x78`, so scrolling is an analog MAGNITUDE, not a button edge -- one row per `0x78` of value.
+/// `FUN_14075d8f0` turns the result into a repeat count, and `FUN_140756000` picks the SIGN from the
+/// CSPcKeyConfig binding id (9 = list down, 10 = list up, both measured live), so a single signed
+/// write drives either direction.
+const PAD_MENU_SCROLL_AXIS_28_OFFSET: usize = 0x28;
+/// One row of list scroll, in raw axis units, before `FUN_140e35080` divides by it.
+pub const PAD_MENU_SCROLL_UNIT: i32 = 0x78;
+
+/// Raw axis value to stamp into the menu scroll field each frame (0 = neutral).
+static DESIRED_MENU_AXIS: AtomicU32 = AtomicU32::new(0);
+/// Last value observed in the axis field BEFORE we wrote it, so a run reports the game's own resting
+/// value rather than leaving the field's meaning assumed. Local to this DLL (it does not link
+/// er-telemetry-core), read back through `menu_axis_observed()`.
+static PAD_MENU_AXIS_OBSERVED: AtomicU32 = AtomicU32::new(0);
+
+// `menu_axis_observed()` is gone: it reported the value at padDevices[dev]+0x78+0x28, and that walk
+// is the WRONG OBJECT for menu input -- it returned 0x401c0000, an IEEE float, where the reader does
+// an integer divide. `menu_scroll_reader_state()` replaces it by reporting the device the reader
+// itself dereferenced, which needs no reimplementation of FUN_1402414a0's red-black walk.
+
+/// Request a menu list-scroll axis value. `rows` is signed; 0 releases.
+pub fn set_menu_scroll(rows: i32) {
+    DESIRED_MENU_AXIS.store((rows * PAD_MENU_SCROLL_UNIT) as u32, Ordering::SeqCst);
+}
+
+/// Stamp the requested scroll axis into the struct the menu actually reads. Mirrors `inject_vk`'s
+/// device walk and guarding; a null `+0x78` (no menu pad state yet) is a no-op.
+unsafe fn inject_menu_axis(manager: usize, dev: usize) {
+    let axis = DESIRED_MENU_AXIS.load(Ordering::SeqCst) as i32;
+    let dev = dev & 0xffff_ffff;
+    if manager < HEAP_LO {
+        return;
+    }
+    let source = unsafe { *((manager + PAD_MGR_DEVICES_18_OFFSET + dev * 8) as *const usize) };
+    if source < HEAP_LO {
+        return;
+    }
+    let state = unsafe { *((source + PAD_MENU_STATE_78_OFFSET) as *const usize) };
+    if state < HEAP_LO {
+        return;
+    }
+    // SAFETY: `state` is the struct every CSEzMenuViewerPad reader dereferences, resolved the same way
+    // they resolve it; `+0x28` is the int `FUN_140e35080` reads.
+    let slot = (state + PAD_MENU_SCROLL_AXIS_28_OFFSET) as *mut i32;
+    let observed = unsafe { *slot };
+    PAD_MENU_AXIS_OBSERVED.store(observed as u32, Ordering::Relaxed);
+    if axis != 0 {
+        unsafe { *slot = axis };
+    }
+}
+
 unsafe fn inject_vk(manager: usize, dev: usize) {
     let id = DESIRED_VK_ID.load(Ordering::SeqCst);
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) {
@@ -174,6 +232,329 @@ unsafe fn inject_vk(manager: usize, dev: usize) {
 /// wrote PAST THE END of a live game allocation. It never fired in practice (the TypeID needles are
 /// `.data` RVAs with no 1.17 mapping, so `game_data_addr` refused them and the search matched nothing),
 /// which is the only reason the overrun was never observed rather than a reason it was safe.
+/// `CS::CSEzMenuViewerPad` list-scroll axis reader -- 1.16.2 `0x140e35080`, 1.17 `0x140e36e80`
+/// (mapped +0x1e00, unique 40-byte signature, and the 1.17 body was read: same
+/// `*(int*)(*(this+0x10)+0x78)+0x28) / 0x78` shape). Hooking it is INPUT DELIVERY at the boundary the
+/// game reads, the same shape as stamping the DInput keyboard buffer -- not a write of the outcome
+/// the game would have computed.
+const MENU_SCROLL_AXIS_READER_RVA: usize = 0xe35080;
+static ORIG_MENU_SCROLL_READER: AtomicUsize = AtomicUsize::new(0);
+/// The device pointer the reader dereferenced (`*(this+0x10)`), captured so the padMaps object the
+/// menu actually uses can be identified WITHOUT reimplementing FUN_1402414a0's red-black walk.
+static MENU_PAD_DEVICE_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Raw value the reader found in the axis field, before any override.
+static MENU_AXIS_RAW_SEEN: AtomicU32 = AtomicU32::new(0);
+/// How many times the reader ran -- 0 means the menu never asked, so an override proves nothing.
+static MENU_SCROLL_READER_CALLS: AtomicU32 = AtomicU32::new(0);
+
+/// `(device, raw_axis, reader_calls)` observed at the menu's own axis read.
+pub fn menu_scroll_reader_state() -> (usize, i32, u32) {
+    (
+        MENU_PAD_DEVICE_SEEN.load(Ordering::Relaxed),
+        MENU_AXIS_RAW_SEEN.load(Ordering::Relaxed) as i32,
+        MENU_SCROLL_READER_CALLS.load(Ordering::Relaxed),
+    )
+}
+
+/// Detour: record what the game saw, then return our requested scroll when one is armed.
+unsafe extern "system" fn menu_scroll_reader_hook(this: usize) -> i32 {
+    MENU_SCROLL_READER_CALLS.fetch_add(1, Ordering::Relaxed);
+    if this >= HEAP_LO
+        && let Some(device) = unsafe { crate::win32::read_usize(this + 0x10) }
+        && device >= HEAP_LO
+    {
+        MENU_PAD_DEVICE_SEEN.store(device, Ordering::Relaxed);
+        if let Some(state) = unsafe { crate::win32::read_usize(device + PAD_MENU_STATE_78_OFFSET) }
+            && state >= HEAP_LO
+            && let Some(raw) =
+                unsafe { crate::win32::read_usize(state + PAD_MENU_SCROLL_AXIS_28_OFFSET) }
+        {
+            MENU_AXIS_RAW_SEEN.store(raw as u32, Ordering::Relaxed);
+        }
+    }
+    let requested = DESIRED_MENU_AXIS.load(Ordering::SeqCst) as i32;
+    if requested != 0 {
+        return requested / PAD_MENU_SCROLL_UNIT;
+    }
+    let orig = ORIG_MENU_SCROLL_READER.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let f: unsafe extern "system" fn(usize) -> i32 = unsafe { std::mem::transmute(orig) };
+    unsafe { f(this) }
+}
+
+/// POINTER POSITION, the fourth and last thing `CS::CSEzMenuViewerPad` exposes. `FUN_140e34ff0`
+/// (1.17 `0x140e36df0`, body read: identical) returns `*(int*)(*(this+0x10)+0x78)+0x20)` as X and
+/// `+0x24` as Y. It needs NO hook of its own: those two ints live in the SAME struct as the buttons
+/// and the axis, so once the device is known the whole menu input state is writable directly.
+///
+/// This is the field CS::GridControl actually consults. Its input wrappers (`FUN_140758a10`,
+/// `FUN_1407589b0`, `FUN_140758950`) carry no code immediate at all -- unlike the tab pair and the
+/// SpinCtrl pair they pass a bare lambda that interrogates the pad -- and the pause menu's tab
+/// bindings read pad_primary=0 for both directions, so the grid is pointer-driven, not button-driven.
+const PAD_MENU_POINTER_X_20_OFFSET: usize = 0x20;
+const PAD_MENU_POINTER_Y_24_OFFSET: usize = 0x24;
+/// Resting X/Y the game itself had in those fields, sampled before any write.
+static MENU_POINTER_SEEN: AtomicU32 = AtomicU32::new(0);
+static MENU_POINTER_SEEN_Y: AtomicU32 = AtomicU32::new(0);
+
+/// The game's own pointer position as the menu sees it, sampled at the last observation.
+pub fn menu_pointer_observed() -> (i32, i32) {
+    (
+        MENU_POINTER_SEEN.load(Ordering::Relaxed) as i32,
+        MENU_POINTER_SEEN_Y.load(Ordering::Relaxed) as i32,
+    )
+}
+
+/// `g_GxDrawContext` (1.16.2 RVA; maps to 0x47f33e0 on 1.17, agreed by 1178 references). Resolved
+/// from `mov rax, [rip+0x4091bee]` at 0x14075d76b, inside FUN_14075d6e0 -- the same function that
+/// corrects the menu pointer pair.
+const GX_DRAW_CONTEXT_GLOBAL_RVA: usize = 0x47ef360;
+/// The correction FUN_14075d6e0 applies: it subtracts the floats at `g_GxDrawContext+0x128 -> +0x110`
+/// and `+0x114` from the raw pointer pair. Reading them is what turns the raw ints (-3, -29 measured)
+/// into a space a coordinate can be chosen in, instead of writing screen pixels into a field that is
+/// not screen pixels.
+const GX_CONTEXT_INNER_128_OFFSET: usize = 0x128;
+const GX_CORRECTION_X_110_OFFSET: usize = 0x110;
+const GX_CORRECTION_Y_114_OFFSET: usize = 0x114;
+static GX_CORRECTION_X: AtomicU32 = AtomicU32::new(0);
+static GX_CORRECTION_Y: AtomicU32 = AtomicU32::new(0);
+
+/// The two correction floats, as raw bits (reinterpret as f32).
+pub fn menu_pointer_correction() -> (u32, u32) {
+    (
+        GX_CORRECTION_X.load(Ordering::Relaxed),
+        GX_CORRECTION_Y.load(Ordering::Relaxed),
+    )
+}
+
+/// Read the pointer correction the menu applies. Read-only.
+pub fn sample_pointer_correction(base: usize) {
+    if base < HEAP_LO {
+        return;
+    }
+    let Some(ctx) = (unsafe {
+        crate::win32::read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GX_DRAW_CONTEXT_GLOBAL_RVA,
+            "GX_DRAW_CONTEXT_GLOBAL_RVA",
+        ))
+    })
+    .filter(|c| *c >= HEAP_LO) else {
+        return;
+    };
+    let Some(inner) = (unsafe { crate::win32::read_usize(ctx + GX_CONTEXT_INNER_128_OFFSET) })
+        .filter(|i| *i >= HEAP_LO)
+    else {
+        return;
+    };
+    if let Some(x) = unsafe { crate::win32::read_usize(inner + GX_CORRECTION_X_110_OFFSET) } {
+        GX_CORRECTION_X.store(x as u32, Ordering::Relaxed);
+    }
+    if let Some(y) = unsafe { crate::win32::read_usize(inner + GX_CORRECTION_Y_114_OFFSET) } {
+        GX_CORRECTION_Y.store(y as u32, Ordering::Relaxed);
+    }
+}
+
+/// Sample the menu input struct on the device the axis reader captured. READ-ONLY: it reports what
+/// the game has, which is the prerequisite for choosing coordinates instead of guessing them -- the
+/// caller of `FUN_140e34ff0` subtracts `g_GxDrawContext+0x128 +0x110/+0x114` from the pair, so the
+/// space these ints live in has to be observed, not assumed to be screen pixels.
+pub fn sample_menu_pointer() {
+    let device = MENU_PAD_DEVICE_SEEN.load(Ordering::Relaxed);
+    if device < HEAP_LO {
+        return;
+    }
+    let Some(state) = (unsafe { crate::win32::read_usize(device + PAD_MENU_STATE_78_OFFSET) })
+        .filter(|s| *s >= HEAP_LO)
+    else {
+        return;
+    };
+    if let Some(x) = unsafe { crate::win32::read_usize(state + PAD_MENU_POINTER_X_20_OFFSET) } {
+        MENU_POINTER_SEEN.store(x as u32, Ordering::Relaxed);
+    }
+    if let Some(y) = unsafe { crate::win32::read_usize(state + PAD_MENU_POINTER_Y_24_OFFSET) } {
+        MENU_POINTER_SEEN_Y.store(y as u32, Ordering::Relaxed);
+    }
+}
+
+/// Inject a virtual-key id into the MENU's own pad device, not `padDevices`.
+///
+/// WHY A SECOND INJECTOR EXISTS. `set_vk_id` writes `padDevices[dev]+0x88`, which is the right array
+/// and the WRONG device for menus: this repo already measured that the menu's device is not in
+/// `padDevices` (`manager+0x18`) at all -- `FUN_1402414a0` resolves it by a red-black walk over
+/// `padMaps` (`manager+0x48`). Injecting into `padDevices` therefore cannot reach a menu, and a
+/// sweep of all 81 ids through it produced no cursor movement in the save-file picker while proving
+/// nothing about the pad channel. `MENU_PAD_DEVICE_SEEN` is the device the axis reader hook actually
+/// caught the game dereferencing, so it is the device the menu reads by observation rather than by
+/// derivation.
+///
+/// `0` releases. Returns false when no menu device has been observed yet -- "not injected" and
+/// "injected and ignored" must stay distinguishable, which is the whole lesson of the padDevices
+/// sweep above.
+pub fn set_menu_vk_id(id: u32) -> bool {
+    let device = MENU_PAD_DEVICE_SEEN.load(Ordering::Relaxed);
+    if device < HEAP_LO {
+        return false;
+    }
+    // Same layout the game's own writer uses: `mov byte [rcx+rdx*2+0x88],1` after bounding
+    // `id-1000` at 0x50, so the stride is 2 and only the low byte is written.
+    for slot in 0..VK_ID_SPAN {
+        let address = device + VK_ARRAY_88_OFFSET + slot * 2;
+        let want = if id >= VK_ID_BASE && (id - VK_ID_BASE) as usize == slot {
+            1u8
+        } else {
+            0u8
+        };
+        if want != 0 {
+            unsafe { crate::win32::write_u8(address, want) };
+        }
+    }
+    true
+}
+
+/// The id range the game's own writer bounds at (`cmp eax,0x50` on `id-1000`).
+const VK_ID_BASE: u32 = 1000;
+const VK_ID_SPAN: usize = 0x50;
+
+/// Write the menu pointer the pause-menu cursor follows, and report whether the write landed.
+///
+/// PROVEN TO BE THE RIGHT FIELD BY STIMULUS, not by inference (2026-09-05, br-20260905-174357-df99).
+/// While the user nudged a real mouse across the open pause menu, `CS::GridControl` `0x8b370ab8`'s
+/// selected cell at `+0xd4` tracked it through 5, 6, 1, 2, 4, 3, 2, 17 -- and every other live
+/// GridControl in the process held still across all 30 samples. So the pause menu is
+/// POINTER-DRIVEN: the cursor is a hit-test of this coordinate pair, not a list index that a
+/// direction key increments. That is why every axis and button write this module made was ignored.
+///
+/// The coordinates are in the same space `sample_menu_pointer` reads back, which is why the read
+/// side had to exist first: the caller of `FUN_140e34ff0` subtracts the correction at
+/// `g_GxDrawContext+0x128 +0x110/+0x114`, so "screen pixels" was an assumption worth refusing.
+pub fn write_menu_pointer(x: i32, y: i32) -> bool {
+    let device = MENU_PAD_DEVICE_SEEN.load(Ordering::Relaxed);
+    if device < HEAP_LO {
+        return false;
+    }
+    let Some(state) = (unsafe { crate::win32::read_usize(device + PAD_MENU_STATE_78_OFFSET) })
+        .filter(|s| *s >= HEAP_LO)
+    else {
+        return false;
+    };
+    let wrote_x = unsafe { crate::win32::write_i32(state + PAD_MENU_POINTER_X_20_OFFSET, x) };
+    let wrote_y = unsafe { crate::win32::write_i32(state + PAD_MENU_POINTER_Y_24_OFFSET, y) };
+    wrote_x && wrote_y
+}
+
+/// The two `CS::CSEzMenuViewerPad` BUTTON readers, beside the axis one. 1.16.2 -> 1.17 pairs are in
+/// the verified map and both 1.17 bodies were read: identical `*(byte*)(*(this+0x10)+0x78)+off)`
+/// shape, sizes 49/49. `+0x08` is the one `FUN_14075d6e0` folds into bit 1 of its result and `+0x10`
+/// into bit 4 -- which of those the menu treats as confirm is not assumed here; both are drivable and
+/// a run says which one moves the pane.
+const MENU_BUTTON_A_READER_RVA: usize = 0xe34fb0;
+const MENU_BUTTON_B_READER_RVA: usize = 0xe35040;
+static ORIG_MENU_BUTTON_A: AtomicUsize = AtomicUsize::new(0);
+static ORIG_MENU_BUTTON_B: AtomicUsize = AtomicUsize::new(0);
+/// Which menu buttons the harness is holding: bit 0 = the `+0x08` reader, bit 1 = the `+0x10` one.
+static DESIRED_MENU_BUTTONS: AtomicU32 = AtomicU32::new(0);
+static MENU_BUTTON_READER_CALLS: AtomicU32 = AtomicU32::new(0);
+
+/// Hold (or release, with 0) the menu buttons. Bit 0 = `+0x08`, bit 1 = `+0x10`.
+pub fn set_menu_buttons(mask: u32) {
+    DESIRED_MENU_BUTTONS.store(mask, Ordering::SeqCst);
+}
+
+/// How many times either button reader ran -- 0 means the menu never asked.
+pub fn menu_button_reader_calls() -> u32 {
+    MENU_BUTTON_READER_CALLS.load(Ordering::Relaxed)
+}
+
+fn menu_button_hook(this: usize, bit: u32, orig: &AtomicUsize) -> u64 {
+    MENU_BUTTON_READER_CALLS.fetch_add(1, Ordering::Relaxed);
+    if DESIRED_MENU_BUTTONS.load(Ordering::SeqCst) & bit != 0 {
+        return 1;
+    }
+    let o = orig.load(Ordering::SeqCst);
+    if o == 0 {
+        return 0;
+    }
+    let f: unsafe extern "system" fn(usize) -> u64 = unsafe { std::mem::transmute(o) };
+    unsafe { f(this) }
+}
+
+unsafe extern "system" fn menu_button_a_hook(this: usize) -> u64 {
+    menu_button_hook(this, 1, &ORIG_MENU_BUTTON_A)
+}
+
+unsafe extern "system" fn menu_button_b_hook(this: usize) -> u64 {
+    menu_button_hook(this, 2, &ORIG_MENU_BUTTON_B)
+}
+
+/// Install the axis-reader detour once. Idempotent; shares `install_one`'s idiom and guards.
+pub fn install_menu_scroll_hook(base: usize) {
+    if ORIG_MENU_SCROLL_READER.load(Ordering::SeqCst) != 0 || base < HEAP_LO {
+        return;
+    }
+    if unsafe { MH_Initialize() } == MH_STATUS::MH_ERROR_MEMORY_ALLOC {
+        return;
+    }
+    let mut queued = install_one(
+        base,
+        MENU_SCROLL_AXIS_READER_RVA,
+        menu_scroll_reader_hook as *mut c_void,
+        &ORIG_MENU_SCROLL_READER,
+        "CSEzMenuViewerPad axis reader",
+    );
+    queued |= install_one(
+        base,
+        MENU_BUTTON_A_READER_RVA,
+        menu_button_a_hook as *mut c_void,
+        &ORIG_MENU_BUTTON_A,
+        "CSEzMenuViewerPad button +0x08",
+    );
+    queued |= install_one(
+        base,
+        MENU_BUTTON_B_READER_RVA,
+        menu_button_b_hook as *mut c_void,
+        &ORIG_MENU_BUTTON_B,
+        "CSEzMenuViewerPad button +0x10",
+    );
+    if queued {
+        let _ = unsafe { MH_ApplyQueued() };
+    }
+}
+
+/// PER-FRAME direct stamp of the menu scroll axis, resolving the device from the game base the same
+/// way `stamp_vk_direct` does. The builder hooks are too sparse to rely on here: their own doc records
+/// that the builder does NOT run per-frame while a menu is open, and the menu reads its state every
+/// frame, so the drive has to write every frame. `rows` = 0 releases.
+pub unsafe fn stamp_menu_scroll_direct(base: usize, rows: i32) {
+    if base < HEAP_LO {
+        return;
+    }
+    set_menu_scroll(rows);
+    let rd = |p: usize| -> Option<usize> {
+        if p < HEAP_LO {
+            None
+        } else {
+            unsafe { crate::win32::read_usize(p) }
+        }
+    };
+    let Some(manager) = rd(er_game_base::mem::game_data_addr(
+        base,
+        FD4_PAD_MANAGER_RVA,
+        "FD4_PAD_MANAGER_RVA",
+    ))
+    .filter(|m| *m >= HEAP_LO) else {
+        return;
+    };
+    let ndev = rd(manager + PAD_DEVICES_COUNT_40_OFFSET)
+        .unwrap_or(1)
+        .min(PAD_DEVICES_MAX);
+    for dev in 0..ndev {
+        unsafe { inject_menu_axis(manager, dev) };
+    }
+}
+
 pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
         return;
@@ -251,6 +632,7 @@ unsafe extern "system" fn builder_a_hook(manager: usize, dev: usize, c: usize, d
         0
     };
     unsafe { inject_vk(manager, dev) };
+    unsafe { inject_menu_axis(manager, dev) };
     ret
 }
 
@@ -265,6 +647,7 @@ unsafe extern "system" fn builder_b_hook(manager: usize, dev: usize, c: usize, d
         0
     };
     unsafe { inject_vk(manager, dev) };
+    unsafe { inject_menu_axis(manager, dev) };
     ret
 }
 

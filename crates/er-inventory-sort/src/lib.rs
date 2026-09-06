@@ -117,6 +117,14 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // FIRST, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // vectored handler -- so `er_crash_logging` writes no record at all and the process
+        // just vanishes. This hook is what turns that silence into a file:line. The hook is
+        // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
+        // does nothing here. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-inventory-sort", log_message);
+
         // This DLL installs no detours (it registers a FrameBegin tick), so it has no er-hook
         // dependency -- but it still resolves game addresses, and a refusal is silent HERE unless
         // the sink is installed, because every cdylib links its own copy of er-game-base.

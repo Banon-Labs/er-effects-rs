@@ -54,6 +54,8 @@ portable	-	test-no-timeouts.py	source/AST/text analysis only
 portable	-	test-git-pre-push-block-main.sh	source/AST/text analysis only
 portable	-	check-oracle-writers.py --selftest	source/AST/text analysis only
 portable	-	check-oracle-writers.py	source/AST/text analysis only
+portable	-	check-panic-reporter-installed.py --selftest	source/AST/text analysis only
+portable	-	check-panic-reporter-installed.py	source/AST/text analysis only
 portable	-	check-counter-writers.py --selftest	source/AST/text analysis only
 portable	-	check-counter-writers.py	source/AST/text analysis only
 partial	image-1162,image-1170	check-oracle-singleton-globals.py --selftest	source half asserts and says 'selftest: ok'; the IMAGE half prints that it was skipped

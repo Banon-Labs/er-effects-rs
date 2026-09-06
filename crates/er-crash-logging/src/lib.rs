@@ -28,6 +28,15 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // FIRST, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // vectored handler -- so no crash record is written at all and the process simply
+        // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to(
+            "er-crash-logging",
+            er_crash_logging_core::append_log,
+        );
+
         START.call_once(|| {
             er_crash_logging_core::install(
                 er_crash_logging_core::CrashLogConfig {

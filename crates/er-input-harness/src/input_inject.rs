@@ -50,6 +50,14 @@ pub enum MenuEvent {
     /// scaffolding -- dropping it would discard the id.
     #[allow(dead_code)]
     MoveDown,
+    /// RETAINED, NOT DRIVEN. Nothing constructs this any more: `inputmgr+0x90` turned out to be a
+    /// SHOWN-MENU-WINDOW bitmap indexed by menu-window id (its writer is `CS::MenuWindowJob::Run`
+    /// doing `field99_0x90[owningMenuWindow+0x180] |= 1`), so writing an "event id" there asserted a
+    /// false menu stack rather than pressing anything. Menu navigation is driven through the
+    /// `CS::CSEzMenuViewerPad` readers in `pad_inject` instead. The id is kept because it is reversed
+    /// evidence -- the list-cursor pair 0x2c/0x2d and their CSPcKeyConfig pad bindings 9/10 -- not
+    /// because anything sends it.
+    #[allow(dead_code)]
     MoveUp,
     /// OptionSetting tab-switch: LEFT/prev tab (id 0x30) and RIGHT/next tab (id 0x31). RE 2026-07-22
     /// (bd MENU-GAPS-CLOSED): GridControl pager FUN_1407392f0 -> tab handler FUN_14093b760.
@@ -70,8 +78,22 @@ pub enum MenuEvent {
 impl MenuEvent {
     const fn id(self) -> usize {
         match self {
-            MenuEvent::MoveDown => 0x00,
-            MenuEvent::MoveUp => 0x45,
+            // LIST CURSOR, corrected 2026-09-05 by static RE of both images. The previous pair
+            // (MoveDown 0x00 / MoveUp 0x45) does not navigate anything: across the WHOLE 1.16.2 image
+            // those two ids reach the keystate lookup at three call sites, two of them inside one
+            // 125-byte predicate (FUN_140765780) that reads them TOGETHER to answer "is up-or-down
+            // held" -- a guard with 3 xrefs, not a cursor. Injecting them could never move a row,
+            // which is why Phase::NavToOptionSetting derailed after 480 frames with the world up and
+            // the pause menu open.
+            //
+            // The real pair is read by the list scroller FUN_14074f3c0, which steps the cursor at
+            // +0x1b8 between the bounds at +0x1b0/+0x1b4: FUN_140758e70 -> FUN_14075d8f0(pad, 0x2c)
+            // takes the `index + step` branch (DOWN) and FUN_140758e50 -> FUN_14075d8f0(pad, 0x2d)
+            // takes `index - step` (UP). Both ids appear in the +0x90 census, and 0x2c is one of the
+            // ids getShownMenuFlags itself reads, so they live in the same keystate array we already
+            // write -- only the numbers were wrong.
+            MenuEvent::MoveDown => 0x2c,
+            MenuEvent::MoveUp => 0x2d,
             MenuEvent::TabLeft => 0x30,
             MenuEvent::TabRight => 0x31,
             MenuEvent::Confirm => 0x3d,
@@ -236,6 +258,27 @@ pub fn tap_menu_event(input_manager_ptr: usize, event: MenuEvent) {
     // is exactly what the native input producer does at 0x1407ad509.
     unsafe {
         *(addr as *mut u8) |= MENU_EVENT_PRESSED_BIT;
+    }
+}
+
+/// Clear the edge bit for one menu event -- the RELEASE half of [`tap_menu_event`].
+///
+/// The tap helper used to leave this to the game, on the assumption that "the native input producer
+/// writes 0 on gap frames -> clean edge release". That assumption was never verified on 1.17, and the
+/// evidence points the other way: run br-20260905-043950-1005 had the game's own getShownMenuFlags
+/// word report 0x100 (our Confirm, id 0x3d) AND 0x10 (Cancel, id 0x1c) at once, during a phase that
+/// injects neither cancel nor anything else -- 0x1c is only ever READ here, as the menu-open guard.
+/// A bit set in that array and never cleared is a button reported HELD, and a menu that acts on
+/// edges sees no press at all, which is exactly a Confirm that is consumed and transitions nothing.
+/// Releasing explicitly costs one byte write and removes the assumption.
+pub fn release_menu_event(input_manager_ptr: usize, event: MenuEvent) {
+    let addr = input_manager_ptr + INPUTMGR_BITMAP_90_OFFSET + event.id();
+    if unsafe { read_u8(addr) }.is_none() {
+        return;
+    }
+    // SAFETY: same confirmed-readable byte the press writes; clearing only the bit we set.
+    unsafe {
+        *(addr as *mut u8) &= !MENU_EVENT_PRESSED_BIT;
     }
 }
 

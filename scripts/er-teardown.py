@@ -252,6 +252,25 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
     return found
 
 
+def is_zombie(pid: int) -> bool:
+    """Has this pid exited but not been reaped?
+
+    A ZOMBIE LEADER IS DEAD NO MATTER WHAT ELSE IS TRUE, and nothing here used to ask. Measured
+    2026-09-04: `eldenring.exe` pid 3885401 sat in state `Z` with `Threads: 127` still listed and
+    27 CPU ticks in the sample window, so the thread/CPU husk rule below passed it as `running`
+    while `/proc/<pid>/stat` said it had already exited. A driver that trusted that verdict kept
+    driving input into a corpse, and a human reading it was told the game was fine.
+    """
+    stat = _read(f"/proc/{pid}/stat")
+    if stat is None:
+        return False
+    # "pid (comm) state ..." -- comm can contain spaces and parens, so split on the LAST ')'.
+    try:
+        return stat[stat.rindex(")") + 1 :].split()[0] == "Z"
+    except (ValueError, IndexError):
+        return False
+
+
 def cpu_ticks(pid: int) -> int | None:
     """utime + stime for `pid`, or None if it is gone."""
     stat = _read(f"/proc/{pid}/stat")
@@ -305,7 +324,7 @@ def game_status(
                 "cpu_ticks": burned,
                 "verdict": (
                     GAME_HUSK
-                    if threads <= HUSK_THREAD_CEILING or burned == 0
+                    if is_zombie(pid) or threads <= HUSK_THREAD_CEILING or burned == 0
                     else GAME_RUNNING
                 ),
             }

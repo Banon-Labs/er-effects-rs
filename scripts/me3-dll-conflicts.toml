@@ -408,121 +408,94 @@ like "no hosts online" -- the worst possible way for a DLL to arrive uninvited o
 dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
 invade during that run: `--with er-death-persist`."""
 
-[[conflict]]
-a = "er-quickload"
-b = "er-invasion-warp"
-kind = "corrupt-callback-pointer"
-reason = """RUNTIME-MEASURED 2026-09-02, four reproductions and a bisect. Co-loading these two kills \
-the game at ~+29.9s every time, deterministically, on the same character (--seed 2073568449, Prophet \
-RL7): `exception code=0xc000001d (STATUS_ILLEGAL_INSTRUCTION) addr=0x140010043{game+0x10043}`. That \
-RIP is MID-INSTRUCTION -- the boundary is 0x140010041 `sub rdx, 6` (48 83 ea 06) inside the game's \
-SSE memcpy loop at 0x140010000, and decoding from +2 gives `ea ...`, a far JMP that does not exist \
-in long mode. So this is a wild control transfer landing two bytes into a hot leaf, not a Rust \
-panic: a panic=abort ud2 would fault at self+RVA, never at game+RVA.
-
-THE BISECT, so nobody has to redo it. Product alone: clean past 106s (reached ENTERING WORLD 11/11, \
-oracle_player_render_ready = true). Product + the 19 co-loadable shells: crash at +31.7s. First ten \
-of those nineteen: +29.7s. First five (armament-icons, better-refills, build-watermark, \
-crash-logging, death-persist): clean past 127s. Second five (diag-harness, enemynpc-effects, \
-hotkey-conflicts, invasion-path, invasion-warp): +29.7s. invasion-path ALONE with the product: clean \
-past 114s. invasion-warp ALONE with the product: +29.9s. One shell, and it is this one.
-
-WHAT IS ESTABLISHED, AND WHAT IS NOT. The bisect above is airtight; the MECHANISM is still \
-unidentified, and this paragraph has already been wrong once, so read it as a record of what has \
-been ruled OUT rather than as an explanation.
-
-MEASURED 2026-09-02, second pass, with `er_crash_logging.dll` in the profile (its watchdog and \
-register capture are why this is known at all -- the product's inline VEH gave only a bare caller \
-list whose deep frames were stale garbage): **`context_rcx == context_rip == 0x140010043`**. RCX \
-holding exactly the faulting address is the signature of a call THROUGH A POINTER -- something \
-stored 0x140010043 in a callback slot and the game called it. Full context: rax=0, rdx=0xd000004d, \
-r8=0x1000ffb18, r9=0x3d20588, rsp=0x10fbc8, rbp=0, thread 384, and NO `er_*.dll` frame anywhere on \
-the stack (`me3_mod_host.dll+0x3fa508` is on it, ours are not).
-
-RULED OUT, so nobody spends the afternoon again. (1) A shared hooked prologue: \
-`check-shared-hook-rvas.py` reports 36 shared targets across 27 shells, ALL DECLARED, and none \
-pairs the product with invasion-warp. (2) A trampoline collision of the er-armament-icons kind: \
-that corrupts CODE at a hooked prologue, whereas this calls a corrupt DATA pointer, and that \
-failure presented as SILENT INERTNESS rather than a hard fault. (3) A disagreement between the two \
-DLLs about a game address: intersecting their live `ADDRESS TRANSLATED` targets (209 product, 19 \
-warp) leaves exactly two shared values, both data -- `0x142ba7d70` \
-(SCALEFORM_MEMORY_FILE_VTABLE_RVA, same name both sides) and `0x143d6d988`, whose two names are a \
-DELIBERATE ALIAS (`constants_moved.rs:767` defines GAME_SAVE_SLOT_SINGLETON_RVA as \
-er_game_base::rva::GAME_MAN_SINGLETON_RVA), not a misidentification. (4) The Ghidra 1.17 caller \
-frames explain nothing yet: `eldenring+0x1f0d69e` is FUN_141f0d660, a 94-byte SetEvent/ResetEvent \
-helper that cannot plausibly reach memcpy, so the chain past the fault is untrustworthy and only \
-the registers are evidence.
-
-DO NOT DOWNGRADE THIS ROW TO [[shared]] on the strength of "it uses the union". The union is \
-necessary and not sufficient; armament-icons is co-loadable because a runtime measurement showed the \
-chaining works, and the measurement for this pair says the opposite. NEXT DIAGNOSTIC, before writing \
-any fix: the mechanism is still unidentified, so converting the ten sites to \
-`er_hook::register_shared_hook` is a GUESS at this point. Find what actually transfers control to \
-0x140010043 first -- the two runtime-invisible targets above are the places the RVA gate cannot \
-look. The A/B that scores any candidate fix is `scripts/er-run-branch.py --seed 2073568449 --with \
-er-quickload --with er-invasion-warp`, which must survive past 120s.
-
-CORRECTION 2026-09-03 -- THE BISECT PINNED A CO-FACTOR, NOT THE CAUSE. Every crashing run above \
-also carried `slot = 1` in the game-directory `er-quickload.toml`, and slot 1 DOES NOT EXIST in \
-the container the game actually reads: with Seamless loaded that is `ER0000.co2`, whose only \
-character is slot 0. `er-invasion-warp` was the variable the bisect MOVED, so it took the blame; \
-the invalid slot was constant across every arm and was never varied at all. Two runs of the SAME \
-pair, same DLLs, now survive: one with the new container-truth refusal arming the picker instead \
-of loading the impossible slot (clean past +88s), and one with `slot = 0` so no refusal is even \
-needed (clean past +79s, `holds_a_character=true`). Against six crashes at ~30-35s with slot 1, \
-that is a different explanation than this row was written for.
-
-THE ROW IS DELIBERATELY LEFT IN PLACE ANYWAY. Two clean runs do not outweigh six crashes hard \
-enough to start co-loading a pair on a user's machine, and only ONE of the two isolates the slot \
-(the other has the refusal firing, which changes the boot path). Demoting needs the `slot = 0` run \
-repeated -- ideally on the original `--seed 2073568449` character, so the A/B above is comparing \
-like with like -- after which this row should be REPLACED by a `[compatible]` entry rather than \
-softened into a vaguer warning.
-
-AND THE SEED ITSELF WAS INVALID -- found 2026-09-03 while trying to schedule exactly that repeat. \
-`--seed 2073568449` resolves to `save-files/50-Merchant-Unleveled/ER0000.sl2` SLOT 8, and that \
-container's `USER_DATA010.active_slot` bitmap holds exactly ONE character: slot 0, "Invader \
-Merchant" level 50. `scripts/er-pick-save.py` decided occupancy from "the body decodes to a name \
-and a level > 0", and deleting a character clears the bitmap while LEAVING the body, so it offered \
-ten slots where the game has one. So all four bisect runs above were invalid-slot launches too -- \
-the same boot path the six crashes share -- and this row has never once been measured against a \
-valid slot. The picker now reads the bitmap (its selftest pins both the deleted-slot case and the \
-unreadable-bitmap case), and the same seed now yields slot 0 "Invader Merchant".
-
-WHAT THAT DOES AND DOES NOT SETTLE. It removes the last evidence that this pair is dangerous with \
-a VALID slot: every crash on record now has an invalid slot in it. It does not prove the pair is \
-safe -- that still needs the repeat, which is now finally runnable because the seed picks a real \
-character. Until that run exists the row stays, because refusing a pair costs a feature and \
-co-loading a bad one costs a session.
-
-THE REPEAT RAN, AND IT FALSIFIES THE WHOLE CORRECTION ABOVE. 2026-09-03, same pair, VALID slot -- \
-`container truth for the configured slot -- slot=0 holds_a_character=true ... occupied=[0]` -- and \
-the game died at `+30436ms` with `exception code=0xc000001d ... addr=0x140010043{game+0x10043}`, \
-the same fault at the same ~30s. So the slot is EXONERATED and this pair is genuinely bad, exactly \
-as the row said before the correction was written.
-
-WHY THE CORRECTION LOOKED RIGHT, so the reasoning error is not repeated. Two runs survived past \
-+79s and +88s and both were read as "valid slot, no crash". The second is worthless as evidence: \
-it had the refusal firing, which changes the boot path. The first genuinely had a valid slot -- and \
-the crash is not deterministic per-boot in the way six-for-six suggested, so ONE clean run proves \
-nothing. Two data points were treated as a refutation of six because they arrived after a plausible \
-mechanism had already been formed, which is the failure mode, not the sample size.
-
-WHAT SURVIVES FROM THE CORRECTION: the `er-pick-save.py` bitmap bug is real and independently \
-worth having fixed (`--seed 2073568449` was picking slot 8 of a container with one character), but \
-it does NOT explain this crash and must not be cited as a cause. The mechanism for `game+0x10043` \
-remains UNIDENTIFIED, and the row remains `unresolvable` on its original six-crash evidence."""
-evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
-crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
-crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
-`lobby_publish::install_hunt_hook()` / `install_pool_filter_hook()` \
-(lobby_publish.rs:843, :884, :1027); crates/er-invasion-warp/src/announce.rs:380 \
-`er_hook::register_union_hook(address, update_hook, &ORIG_UPDATE)`. Runtime: \
-~/.cache/er-me3-runs/br-20260903-031513-d204/er-quickload-crash-log.txt (invasion-warp alone with \
-the product, +29882ms) vs br-20260903-031301-03a6 (invasion-path alone, clean past 114s) vs \
-br-20260903-030425-8a64 (product alone, clean past 106s)."""
-
 [compatible]
+"er-focus-input" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
+structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its entire \
+effect is one byte store, from the game thread, into the `.data` global behind \
+`Game.Debug.IsEnableControlOnDisactiveWindow` -- 1.16.2 RVA `0x4588af1`, read by the single \
+instruction `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853`. There is no prologue to contend \
+with, so the two failure modes this table exists to catch cannot arise: no second MinHook instance \
+can overwrite a trampoline it never installed, and no D3D12 Present/compositor is touched.
+
+WHAT IT WRITES, AND WHO ELSE COULD WANT IT. Ghidra reports exactly ONE reader of that byte (the \
+getter above) and exactly TWO callers of the getter: `CS::CSPadStep::STEP_Update` (`0x140e33aa0`, \
+at `+0xa3c`) and `CS::CSPadStep::CSPadStep` (`0x140e328d0`, at `+0x7e`). No other crate in this \
+workspace declares the address -- and `check-shared-hook-rvas.py` keys on resolved VALUES, so that \
+claim is checkable rather than name-keyed. The byte ships `0x00` in both `eldenring-deobf.bin` and \
+`eldenring-deobf-1.17.bin`, and the store is idempotent, so a second writer would be a duplicate \
+rather than a conflict.
+
+RELATIONSHIP TO er-input-harness, which is the shell a reader will suspect. The harness re-asserts \
+`DLUID+0x88d` every frame for the same stated purpose ("so a virtual gamepad keeps driving while ER \
+is UNFOCUSED"). The two do not overlap: `+0x88d` is only consulted inside \
+`if (Ext_UserInput_CooperativeLevel_SetForeGround_Pad != false)` in `FUN_141f6bad0`, and that field \
+comes from `GetPropertyBoolean(props, "Ext.UserInput.CooperativeLevel.SetForeGround.Pad", false)` -- \
+a debug system property that a retail build does not set. Different byte, different consumer, no \
+contention. Load both, or either alone.
+
+WHAT IT CHANGES FOR A USER, stated plainly so nobody is surprised: with this DLL loaded the game \
+keeps reading pad and mouse input while its window is in the background. That is the point, and it \
+is also why it does not belong in a production profile. It does NOT confine the OS cursor to an \
+unfocused window -- the `ClipCursor` / `SetCursorPos` / `ShowCursor` calls in `CSMouseMan::Update` \
+sit behind `FUN_140e1e620`, which calls `CS::CSWindowImp::IsGameInForeground` directly and is \
+therefore untouched by this byte. That distinction is the whole reason the shell forces the debug \
+flag instead of patching `IsGameInForeground`, which a user directive forbids for exactly the \
+cursor-grab regression it caused on 2026-07-16.
+
+INTERACTION WITH THE PRODUCT'S OWN OVERRIDE, which is the one place the two could have collided. \
+`crates/er-quickload/src/experiments/can_move_probe.rs` MinHooks the same accessor (thunk RVA \
+`0xe53220`) and returns 1 only while its harness is injecting, "real value otherwise". Those \
+compose rather than contend: this shell changes what "the real value" IS, and the detour keeps \
+returning it. Whichever installs first is irrelevant, because nothing here is a detour. Note the \
+detour and this shell resolve DIFFERENT things -- the product resolves a `.text` thunk through the \
+function map, this resolves a `.data` byte through the data map -- so one can be refused on a build \
+where the other is not, and each says so in its own log.
+
+NOT YET RUNTIME-PROVEN. The chain is decoded and byte-checked in both images and the DLL builds \
+clean, but no live run has yet shown a character moving under an unfocused window. Until one has, \
+treat this entry as a static-evidence classification."""
+
+"er-invasion-warp" = """PROMOTED OUT OF [[conflict]] 2026-09-04, after the mechanism behind \
+`0x140010043` was identified and REMOVED rather than merely failing to reappear. This entry keeps \
+the old row's evidence because the demotion has to be auditable, and because the row was demoted \
+once before on weaker grounds and had to be restored.
+
+WHAT THE ROW SAID. Six crashes, deterministic at ~30s with the product co-loaded: \
+`exception code=0xc000001d (STATUS_ILLEGAL_INSTRUCTION) addr=0x140010043{game+0x10043}`, a \
+MID-INSTRUCTION RIP two bytes into the game's SSE memcpy leaf at `0x140010000`, with \
+`context_rcx == context_rip == 0x140010043` -- the signature of a call THROUGH A POINTER holding \
+the faulting address. A bisect isolated this shell: product alone clean past 106s, \
+`er-invasion-path` alone clean past 114s, this one alone +29.9s. The row correctly refused to \
+demote on two clean runs in 2026-09-03, and correctly restored itself when the repeat crashed at \
+`+30436ms` with a valid slot.
+
+THE MECHANISM, found 2026-09-04. The fault is TIME-triggered, not action-triggered: five records \
+land at 43.8-56.1s regardless of activity and one arrived with nothing pressed at all, so no user \
+action was ever the variable. What WAS the variable is that `local_invasion_filter` reached \
+Seamless's session through two MinHook detours INTO `ersc.dll`. Either detour armed faults; \
+neither armed is clean. MinHook registers no unwind info for its trampolines (nothing in \
+`vendor/minhook/` calls `RtlAddFunctionTable`), and `ersc.dll` is Themida-virtualised, which is \
+enough to make a detour there a wild control transfer rather than a chained call.
+
+THE FIX, and why it removes the cause instead of hiding it. `scan_for_session` \
+(`crates/er-invasion-warp/src/local_invasion_filter.rs`) walks the WRITABLE sections of ersc's own \
+image and identifies the session by its state signature, which is the only thing the detours \
+existed to observe. `ersc_observers` now defaults FALSE. So the filter keeps working with ZERO \
+detours into `ersc.dll` -- measured live: `session resolved WITHOUT hooking Seamless -- found at \
+0x1801b2560 via a pointer in ersc's own writable data at 0x18021a640`.
+
+THE RUN. 2026-09-04, autoload route, `er_quickload.dll` + `er_invasion_warp.dll` + \
+`er_crash_logging.dll` + the game-installed `ersc.dll` (Seamless v2.0.1), \
+`local_invasion.enabled = true`, character LGS: 600 seconds, `fault_records=0 panic_lines=0 \
+hang_report=false process_alive=true`. That is TWENTY TIMES the ~30s window every historical crash \
+landed inside.
+
+WHAT THIS RESTS ON, stated plainly: ONE 600s run, plus an identified and removed cause. The \
+2026-09-03 demotion failed because it had clean runs and no mechanism; this one has the mechanism. \
+If it is still wrong the failure is loud and immediate -- `0x140010043` inside the first minute -- \
+so a single launch re-falsifies it. Restore the `[[conflict]]` row if that happens, and do not \
+re-demote on absence alone."""
+
 "er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
 shell exists to carry five detours the product USED TO install unconditionally, so every one of \
 its addresses is one the product has stopped claiming. `0x21bbf0` (the sole `MsbFileCap::msbResCap` \

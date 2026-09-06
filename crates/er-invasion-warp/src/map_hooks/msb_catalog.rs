@@ -182,6 +182,19 @@ const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
 ///
 /// Bounded: emits only when the non-null-cap population CHANGES, so travelling logs a handful of
 /// lines rather than one per second.
+/// The area byte of a packed `BlockId`: `area.block.region.index`, one byte each, area highest.
+const BLOCK_ID_AREA_SHIFT: u32 = 24;
+
+/// Areas 50..89 are the open world, matching upstream `BlockId::is_overworld`.
+///
+/// Duplicated here as a plain integer test rather than reached through `BlockId` because the
+/// census already holds the raw `u32` and the only thing at stake is which collection a block
+/// would be found in.
+fn is_overworld_block(raw: u32) -> bool {
+    let area = (raw >> BLOCK_ID_AREA_SHIFT) & 0xff;
+    (50..89).contains(&area)
+}
+
 #[cfg(windows)]
 unsafe fn log_msb_cap_census() {
     use er_invasion_warp_core::msb_invasion_points::resident_blocks;
@@ -219,6 +232,25 @@ unsafe fn log_msb_cap_census() {
     });
     let player_desc = match (player_block, player_entry) {
         (None, _) => "player block UNKNOWN".to_owned(),
+        // AN OVERWORLD BLOCK IS NOT SUPPOSED TO BE IN THIS LIST, AND SAYING IT IS MISSING WAS A
+        // FALSE ALARM THAT COST TWO INVESTIGATIONS. `world_block_info()` holds the NON-overworld
+        // blocks only; upstream's own `WorldInfo::world_block_info_by_map` proves it by branching
+        // on `BlockId::is_overworld()` and searching `world_grid_area_info()` instead for anything
+        // in areas 50..89. So every run where the player stood in the open world printed
+        // "player block 0x3c212800 is NOT IN the world block list at all" -- correctly and
+        // meaninglessly -- and bd `warp-hardlock-main-thread-parked-in-me3-mod-host-2026-09-02`
+        // built a hard-lock hypothesis on top of it ("we warp the player into a block the world
+        // block list does not contain"), which was never a symptom of anything.
+        //
+        // The offset is NOT the problem: `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET = 0x48` is witnessed
+        // for 1.17 by `scripts/check-object-field-offsets-1170.py` (WorldBlockInfo constructor,
+        // 55/55 aligned, zero moved offsets), and Ghidra's 1.16.2 type names that member
+        // `msbResCap` at 0x48.
+        (Some(raw), None) if is_overworld_block(raw) => format!(
+            "player block {raw:#010x} is an OVERWORLD tile (area {}), which this list does not \
+             carry by design -- overworld blocks live in world_grid_area_info(). Not a miss.",
+            (raw >> BLOCK_ID_AREA_SHIFT) & 0xff
+        ),
         (Some(raw), None) => {
             format!("player block {raw:#010x} is NOT IN the world block list at all")
         }

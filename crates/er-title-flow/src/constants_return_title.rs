@@ -462,3 +462,79 @@ pub const MSGBOX_ONDECIDE_RVA: usize = MsgBoxRva::OnDecide as usize;
 pub const MSGBOX_FORCE_STOP_RVA: usize = MsgBoxRva::ForceStop as usize;
 // Startup modal handling is lifecycle-driven by `startup_modal_blocking_state`, not by a fixed
 // grace window.
+
+// ===========================================================================================
+// THE ENDING-REQUEST EVALUATOR'S NINE INPUTS, and the two nobody was reading
+// ===========================================================================================
+//
+// `MoveMapStep`'s per-frame advancer (`FUN_140afa6d0` on 1.16.2; the tree's older notes call it
+// `FUN_140afa7c0`, a 1.16.1 address) computes one boolean `cVar10`, writes it to
+// `menuData+0x5e`, and then `case 0: if (cVar10 == 0) return;` -- so `cVar10` alone decides
+// whether the MoveMap child leaves the resident `STEP_MoveMap(18)` and walks to its terminal.
+// The child reaching its terminal is what lets `InGameStep` drain `+0xd8`, and `STEP_GameStepWait`
+// tears the world down to `BeginLogo` on the first frame `+0xd8 == 0` with `b7c`/`b7d` clear.
+// That teardown IS the second-load black screen.
+//
+// Read off the named 1.16.2 dump (2026-09-04), `cVar10 = 1` if ANY of:
+//
+//   1. `FUN_140e2aa70()`                          -- returns a constant 0. Dead.
+//   2. `CSEzSelectBot::IsBotEnabled()`            -- the debug auto-play bot.
+//   3. `CSSessionManager->protocolState == 4`     -- AND `PartyMemberInfo::IsNotHost()`.  <-- (a)
+//   4. `CSEventMan->deadReset->field_0x8 == 2`                                            <-- (b)
+//   5. `BOOL_143d856a0`                           -- the force latch.        logged as `force`
+//   6. `menuData+0x5d`                            -- the return-title byte.  logged as `rt5d`
+//   7. `GameManIsWarpRequested()`                 -- `GameMan+0x10`.         logged as `warp`
+//   8. `FUN_140679430()`                          -- `GameMan+0xb7c`.        logged as `b7c`
+//   9. `FUN_140679440()`                          -- `GameMan+0xb7d`.        logged as `b7d`
+//   ( `FUN_140e62aa0() == 8` is a tenth term in the decompile and also returns a constant 0. )
+//
+// The `MMS-CLEANUP` discriminator logged 5, 6, 7, 8 and 9 only, and every one of them read ZERO
+// at the black-screen advance -- in three separate runs, including the user's own product session
+// of 2026-09-04 08:58. That produced the recorded conclusion "every input to cVar10 is zero, it
+// advanced anyway", which does not follow: the evaluator was never misbehaving, four of its
+// inputs were simply unobserved. Terms 1 and 10 are eliminated statically (both callees are
+// `return 0;`), which leaves (a) and (b) as the only candidates. The constants below exist so the
+// discriminator can name which.
+
+/// Offset of `protocolState` on `CSSessionManagerImp` (field ordinal 3 in the named 1.16.2 dump),
+/// from `0x140afa8a5: CMP dword ptr [RAX + 0x10],0x4`. Same field
+/// `er_invasion_warp_core::warp::SESSION_PROTOCOL_STATE_OFFSET` names.
+pub const CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET: usize = 0x10;
+
+/// The `WaitReload` protocol state -- the literal `4` the evaluator's compare tests, and the same
+/// value `STEP_MoveMap_Update` tests before it reads `GameMan+0xac8` instead of `GameMan+0x14`
+/// for the destination block (see [`GAME_MAN_LOAD_TARGET_MAP_ID_AC8_OFFSET`]).
+///
+/// FALSIFIED AS THE BLACK-SCREEN CAUSE (run br-20260905-022413-272e, 2026-09-04). It was the prime
+/// suspect on the reasoning that a switch-load is exactly what parks a session in "waiting for a
+/// reload" -- but the instrumented run measured `session_proto=6` (InGame) at BOTH the legitimate
+/// teardown and the black-screen one, so this term never fired. Kept because it is a real input to
+/// the ending-request evaluator and the discriminator still has to prove it stayed quiet.
+pub const SESSION_PROTOCOL_STATE_WAIT_RELOAD: i32 = 4;
+
+/// Offset of the `deadReset` member on `CSEventManImp` (field ordinal 2, a
+/// `CSEventDeadResetState *`), from `0x140afa8f7: MOV RCX,qword ptr [RCX + 0x10]`.
+pub const CS_EVENT_MAN_DEAD_RESET_10_OFFSET: usize = 0x10;
+
+/// Offset of the state word on `CSEventDeadResetState`. `FUN_1405fef50` is the whole getter --
+/// `return param_1->field1_0x8;` -- and `0x140afa900: CMP EAX,0x2` is its only consumer here.
+pub const CS_EVENT_DEAD_RESET_STATE_8_OFFSET: usize = 0x8;
+
+/// The dead-reset state the evaluator treats as an ending request.
+pub const DEAD_RESET_STATE_ENDING: i32 = 2;
+
+/// Last sampled `menuData+0x5e` (== the evaluator's `cVar10` output), so the game-task tick can
+/// detect its 0->1 RISING EDGE. `-1` is the unread sentinel and never matches an edge.
+///
+/// The edge is the only useful sample point. `MMS-CLEANUP` fires on the child's Cleanup entry,
+/// which is downstream of the decision, and run br-20260905-022413-272e proved that is too late:
+/// every live input read 0 there (`warp=0 b7c=0 b7d=0 rt5d=0 force=0 session_proto=6
+/// dead_reset=0`) on a teardown that unquestionably happened, so a transient input had already
+/// been consumed by the time Cleanup ran.
+pub static CVAR10_LAST: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(-1);
+
+/// Count of `cVar10` 0->1 edges seen this process. The BOOT load is the negative control: the same
+/// run's healthy Da BEAST autoload emitted no MMS-CLEANUP at all and its world lived, so a boot
+/// that also produces no rise here confirms the detector tracks the teardown and not noise.
+pub static CVAR10_RISE_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);

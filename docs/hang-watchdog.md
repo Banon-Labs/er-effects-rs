@@ -50,7 +50,7 @@ On a stall it writes, in this order:
 
 | File | Contents |
 | --- | --- |
-| `er-crash-hang-latest.txt` | Every thread: tid, `main_thread=true/false`, rip, rsp, and a module-resolved stack scan |
+| `er-crash-hang-latest.txt` | Every thread: tid, `first_thread=true/false`, `cpu_ms` burned in a measured window, rip, rsp, and a module-resolved stack scan, plus `cpu_top` rows for the busiest |
 | `er-crash-hang-minidump.dmp` | Real unwind for every thread, same moment, plus referenced memory |
 | `er-crash-log.txt` | The same text record appended after the arm line |
 
@@ -86,3 +86,21 @@ swallowing it. Loading it first puts our filter underneath ersc's, where it neve
 `~/Elden/seamless-invasion-hangwatch.me3` is a ready profile in that order.
 
 Tuning: `CrashLogConfig::hang_stall_seconds` (default 30). Set it to 0 to disable the watchdog.
+
+## `first_thread` is not "the main thread"
+
+The report used to label the earliest-created thread `main_thread=true`, on the reasoning that the
+process's first thread is the one that stalled. Under me3 that is false by construction: the loader
+hijacks the first thread at attach and parks it inside `me3_mod_host::on_attach`
+(`crates/mod-host/src/executable.rs`) waiting on its host IPC for the life of the process. Its stack
+is identical in a healthy run and a hung one.
+
+Identified 2026-09-04 by resolving the frame at `me3_mod_host+0x33cf8` through that DLL's own
+`.pdata` to the function at `+0x33c50`, whose string references are
+`me3_mod_host::on_attach::{{closure}}`, `failed to receive message` and `failed to fulfill request`.
+Two hang reports (2026-09-02 and 2026-09-03) were read as "the main thread deadlocked inside me3" on
+the strength of the old label alone, and both sent the investigation into me3's asset-mount path,
+which was never involved.
+
+Read `cpu_ms` instead. A thread that burned no CPU across the measured window is parked; one that
+burned a lot while frames stopped arriving is the one worth reading.

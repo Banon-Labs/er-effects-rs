@@ -74,6 +74,35 @@ pub(crate) fn snapshot_game_man_on_change() {
         usize::MAX
     };
     let session = (ig_d8 as u32 as usize) | ((committed as u32 as usize) << 32);
+    // WORLD-LOST SEMAPHORE -- the black screen, as an assertion rather than an opinion.
+    //
+    // The defect has one signature and it does not care how the switch was driven: a world that was
+    // GENUINELY LOADED (real map id, not the m10 default) reverts to the title map. Latching it here,
+    // in the sampler that already reads c30, makes it independent of the menu path, the programmatic
+    // control file and the harness alike -- which matters because a fix validated only through the
+    // menu-free direct arm is not validated at all (AGENTS.md: a direct-arm shortcut "skips the exact
+    // user path being validated"), and a run driven through the real ProfileSelect rows must be able
+    // to FAIL on the same counter a diagnostic run passes.
+    //
+    // `FULLREAD_C30_M10_DEFAULT` (0xa010000) is the title/new-game default, so the transition
+    // "real map -> m10 default" is exactly `SetMapId(0xff,0xff,0xff,0xff)` in STEP_GameStepWait's
+    // teardown arm reaching GameMan. Counting the TRANSITION, not the value: c30 sits at the default
+    // for the whole of every boot before a save mounts, and a level-triggered check would fire there
+    // on every launch and mean nothing.
+    //
+    // A counter nothing reads is decoration, so this one is published and gated (see
+    // `scripts/check-world-lost.py`): non-zero after a switch is a FAILED run.
+    let previous_c30 = GM_SNAP_LAST_C30.load(Ordering::SeqCst) as i32;
+    let was_real_world = previous_c30 != FULLREAD_C30_M10_DEFAULT
+        && previous_c30 != 0
+        && previous_c30 != GAME_MAN_C30_UNSET;
+    if was_real_world && c30 == FULLREAD_C30_M10_DEFAULT {
+        let n = er_telemetry_core::counters::WORLD_LOST_TO_TITLE_COUNT.fetch_add(1, Ordering::SeqCst)
+            + 1;
+        append_autoload_debug(format_args!(
+            "WORLD LOST #{n}: c30 0x{previous_c30:x} -> 0x{c30:x} (the m10/title default) -- a LOADED world reverted to the title map. This is the black screen as a semaphore: STEP_GameStepWait's teardown arm does SetMapId(0xff,0xff,0xff,0xff) when InGameStep+0xd8 drains to 0 with GameMan+0xb7c/+0xb7d clear. committed={committed} ig_d8={ig_d8} b73={b73} bc4={bc4}"
+        ));
+    }
     // Swap every field's stored last-value unconditionally (so none is missed), OR the per-field
     // change flags. `|` (not `||`) so all swaps always run.
     let changed = (GM_SNAP_LAST_SLOT.swap(slot, Ordering::SeqCst) != slot)

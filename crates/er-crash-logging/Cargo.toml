@@ -13,6 +13,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 er-crash-logging-core = { path = "../er-crash-logging-core" }
+# For `panic_report::report_panics_to`. The hook is per-DLL -- every cdylib links its own copy of
+# er-game-base -- so this shell has to install it itself even though its core already depends on it.
+er-game-base = { path = "../er-game-base" }
 
 [lints]
 workspace = true

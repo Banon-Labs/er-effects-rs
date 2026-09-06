@@ -185,13 +185,25 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
-                    unsafe { crate::map_hooks::install_map_observers() };
+                    // `map_pins = false` withholds BOTH map hooks -- see the key's docs on
+                    // `LocalInvasionConfig`. Read per tick rather than latched at attach because
+                    // the config is hot-reloaded; the installers are idempotent, so flipping the
+                    // key on mid-session arms them and flipping it off simply stops re-arming
+                    // (a hook already installed stays installed, which the log makes visible).
+                    let config_snapshot = crate::local_invasion_filter::current_config_snapshot();
+                    let map_pins = config_snapshot
+                        .as_ref()
+                        .map(|config| config.map_pins)
+                        .unwrap_or(true);
+                    if map_pins {
+                        unsafe { crate::map_hooks::install_map_observers() };
+                    }
                     // SAFETY: same game-task context; also idempotent. This one arms as early
                     // as the task runs on purpose: it swaps the world-map movie as Scaleform
                     // parses it, so arming after that parse means the red pin icon simply never
                     // appears. The pins read the outcome rather than assuming it, so a late or
                     // failed arm costs the red icon and never leaves a pin iconless.
-                    if let Ok(base) = er_game_base::mem::game_module_base() {
+                    if map_pins && let Ok(base) = er_game_base::mem::game_module_base() {
                         unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
                     }
                     // The local invasion filter: installs its single game-side detour (idempotent),
@@ -231,9 +243,17 @@ fn spawn_catalog_task() {
                     // Must be installed before publishing can do anything: publish now REFUSES
                     // until this observer has seen the declaration, rather than guessing from a
                     // struct offset that pointed at the wrong lobby in every run.
-                    crate::lobby_publish::install_advertisement_observer();
-                    crate::lobby_publish::install_hunt_hook();
-                    crate::lobby_publish::install_pool_filter_hook();
+                    // `steam_hooks = false` withholds all three -- see the key's docs. Read from
+                    // the same snapshot as `map_pins` so one config read serves both gates.
+                    if config_snapshot
+                        .as_ref()
+                        .map(|config| config.steam_hooks)
+                        .unwrap_or(true)
+                    {
+                        crate::lobby_publish::install_advertisement_observer();
+                        crate::lobby_publish::install_hunt_hook();
+                        crate::lobby_publish::install_pool_filter_hook();
+                    }
                     // Lift both halves of location matchmaking out of the log and into the oracle
                     // document, because their failures are the ones that look like success from
                     // outside: a host that advertised nothing still runs fine, and a hunt hook that
@@ -300,6 +320,28 @@ pub unsafe extern "system" fn DllMain(
             // 1.17, were being written to nowhere while the map surface simply failed to appear.
             // `set_hook_logger` installs the address-resolution sink too.
             er_hook::set_hook_logger(standalone_log);
+            // Beside the hook sink, and for the same reason one level worse. A panic in this
+            // cdylib crosses an `extern "system"` boundary and becomes an ABORT, which does NOT
+            // dispatch to a vectored handler -- so `er_crash_logging` writes no record, no
+            // `-latest`, no module list, and the process simply vanishes. Measured 2026-09-04:
+            // the F9 cross-area warp killed the game repeatedly and every run's crash log held
+            // only its build header, while this same DLL's illegal-instruction fault produced
+            // full records every time. The difference was not severity, it was that one raised an
+            // exception and the other aborted. Enforced by
+            // `scripts/check-panic-reporter-installed.py`.
+            er_game_base::panic_report::report_panics_to("er-invasion-warp", standalone_log);
+            // Say so in the log, because "no PANIC line" has two very different meanings and the
+            // record cannot distinguish them on its own: either nothing panicked, or the hook was
+            // never armed and a panic died silently anyway. Measured 2026-09-04: three runs ended
+            // with the process gone, no exception record, and no panic line, and there was no way
+            // to tell which of those two it was. This line makes the absence of a PANIC line
+            // evidence rather than a gap.
+            standalone_log(format_args!(
+                "panic reporter ARMED for er_invasion_warp -- from here, a Rust panic in this DLL \
+                 writes its message and file:line above before the process aborts. If this DLL \
+                 dies with no PANIC line after this point, it did not panic."
+            ));
+
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),

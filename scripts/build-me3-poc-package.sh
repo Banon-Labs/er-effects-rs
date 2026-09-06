@@ -128,12 +128,20 @@ slot = $Slot
 $env:ER_QUICKLOAD_TELEMETRY_PATH = Join-Path $LogDir "er-quickload-telemetry.json"
 $env:ER_QUICKLOAD_BOOTSTRAP_PATH = Join-Path $LogDir "bootstrap.jsonl"
 $env:ER_QUICKLOAD_BOOTSTRAP_STATE_PATH = Join-Path $LogDir "bootstrap-state.json"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 $env:ER_QUICKLOAD_CRASH_LOG = "1"
 $env:ER_QUICKLOAD_CRASH_LOG_PATH = Join-Path $LogDir "er-quickload-crash-log.txt"
 $env:ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH = Join-Path $LogDir "er-quickload-autoload-debug.log"
 $env:ER_QUICKLOAD_TRACE_CONTINUE_PATH = Join-Path $LogDir "er-quickload-continue-trace.log"
 $env:ER_QUICKLOAD_INPUT_TRACE_PATH = Join-Path $LogDir "er-quickload-input-trace.jsonl"
 $env:ER_QUICKLOAD_PROFILE_PATH = Join-Path $LogDir "er-quickload-profile.jsonl"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 # The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
 # launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
 # loads only the product, so adding a companion native later does not silently start leaking.
@@ -148,6 +156,10 @@ $env:ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH = Join-Path $LogDir "er-save-disable.log
 $env:ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH = Join-Path $LogDir "er-save-disable-telemetry.json"
 $env:ER_QUICKLOAD_LOADING_PORTRAIT_PATH = Join-Path $LogDir "er-loading-portrait.log"
 $env:ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH = Join-Path $LogDir "er-loading-portrait-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 
 $Args = @()
 if ($SteamDir -ne "") { $Args += @("--steam-dir", $SteamDir) }
@@ -227,12 +239,20 @@ PY
 export ER_QUICKLOAD_TELEMETRY_PATH="$LOG_DIR/er-quickload-telemetry.json"
 export ER_QUICKLOAD_BOOTSTRAP_PATH="$LOG_DIR/bootstrap.jsonl"
 export ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$LOG_DIR/bootstrap-state.json"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
 export ER_QUICKLOAD_CRASH_LOG=1
 export ER_QUICKLOAD_CRASH_LOG_PATH="$LOG_DIR/er-quickload-crash-log.txt"
 export ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$LOG_DIR/er-quickload-autoload-debug.log"
 export ER_QUICKLOAD_TRACE_CONTINUE_PATH="$LOG_DIR/er-quickload-continue-trace.log"
 export ER_QUICKLOAD_INPUT_TRACE_PATH="$LOG_DIR/er-quickload-input-trace.jsonl"
 export ER_QUICKLOAD_PROFILE_PATH="$LOG_DIR/er-quickload-profile.jsonl"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
 # The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
 # launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
 # loads only the product, so adding a companion native later does not silently start leaking.
@@ -247,6 +267,10 @@ export ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$LOG_DIR/er-save-disable.log"
 export ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$LOG_DIR/er-save-disable-telemetry.json"
 export ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$LOG_DIR/er-loading-portrait.log"
 export ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$LOG_DIR/er-loading-portrait-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
 
 args=()
 if [[ -n "$STEAM_DIR" ]]; then

@@ -41,7 +41,6 @@ re-checks those later, honestly, once they exist.
 Usage:
     python3 scripts/er-run-branch.py                      # random save, ersc loaded
     python3 scripts/er-run-branch.py --seed 4242          # reproduce a pick
-    python3 scripts/er-run-branch.py --save default       # the active Steam user's own save
     python3 scripts/er-run-branch.py --vanilla            # no ersc; .sl2 saves only
     python3 scripts/er-run-branch.py --monitor DP-1       # move the ER window when it appears
     python3 scripts/er-run-branch.py --dry-run            # stage and report, launch nothing
@@ -111,7 +110,28 @@ EXIT_NO_TESTIMONY = 4
 # where the DLL logged its config 9 seconds in, well inside the window that was supposed to be
 # open.
 TESTIMONY_SLICE_SECONDS = 4.0
-TESTIMONY_BUDGET_SECONDS = 25.0
+# 90s, not 25s -- and the reason is NOT what an earlier version of this comment claimed.
+#
+# That version said "measured: a cold Proton start took 62 seconds from launch.sh to the first DLL
+# log line". No such measurement was ever taken. What existed were two runs that printed
+# `ELDEN RING DID NOT START` after waiting 25s while the game went on to boot normally, and a
+# 25-second timeout bounds the start from BELOW -- it says ">25s" and nothing whatsoever about 62.
+# A number invented to justify a change was written down as evidence, which is worse than leaving
+# the constant unexplained.
+#
+# MEASURED 2026-09-04, properly, over 11 runs: launch -> DLL attach is 3.3-4.1s, median 3.7s (the
+# run id is the launch time and the crash-logging breadcrumb's mtime is the attach). So the boot is
+# an order of magnitude faster than the retracted figure, and 25s was NOT too short for attach.
+# What the two condemned runs actually hit was the witness looking in the wrong place: they loaded
+# only shells that write `.txt`, and the glob was `*.log` (see `testimony_candidates`). The budget
+# stays generous anyway because a slow first-run shader compile is real and a false
+# `DID NOT START` is expensive, but it is a margin, not a measurement of the typical case.
+# This budget is the wait for the FIRST SIGN OF LIFE, not a runtime cap -- the run's own idle/stall
+# backstop is `.auto/runtime_timeout_cap_seconds` (300s) and is untouched by this. It is also not a
+# subprocess timeout, so it is outside `scripts/check-no-timeouts.py`'s 30s ceiling; `SUBPROCESS_TIMEOUT`
+# below is the one that ceiling governs and it stays where it is. A launch waited on for this long
+# must be run in the background by the caller, since an agent shell is capped at 30s.
+TESTIMONY_BUDGET_SECONDS = 90.0
 SUBPROCESS_TIMEOUT = 28
 
 
@@ -213,51 +233,7 @@ class LogTail:
         return data[: end + 1].decode("utf-8", errors="replace")
 
 
-class WatchSet:
-    """Watch several directories at once, so a caller can tail logs that do not share a parent."""
-
-    def __init__(self, directories) -> None:
-        seen: list[Path] = []
-        for directory in directories:
-            if directory not in seen:
-                seen.append(directory)
-        self.watches = [er_run_lib.DirectoryWatch(directory) for directory in seen]
-
-    @property
-    def available(self) -> bool:
-        return any(watch.available for watch in self.watches)
-
-    def wait(self, timeout: float) -> bool:
-        """Return on the FIRST event from any watched directory, or on the timeout.
-
-        One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
-        turn would spend the whole budget on the first quiet directory and never look at the second.
-        """
-        import select
-
-        fds = [watch.fd for watch in self.watches if watch.fd >= 0]
-        if not fds:
-            return False
-        try:
-            ready, _, _ = select.select(fds, [], [], max(0.0, timeout))
-        except OSError:
-            return False
-        for fd in ready:
-            try:
-                os.read(fd, 65536)
-            except OSError:
-                pass
-        return bool(ready)
-
-    def close(self) -> None:
-        for watch in self.watches:
-            watch.close()
-
-    def __enter__(self) -> "WatchSet":
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self.close()
+WatchSet = er_run_lib.WatchSet
 
 
 def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> dict:
@@ -321,7 +297,20 @@ def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> d
                 watch.wait(slice_seconds)
 
 
-def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float) -> dict:
+def testimony_candidates(game_dir_path: Path):
+    """Every file a shell might write to prove it is alive -- `.log` AND `.txt`.
+
+    `.log` alone was a false negative with teeth: `er_crash_logging.dll` writes ONLY `.txt`
+    (`er-crash-log.txt`, `er-crash-latest.txt`, `er-crash-modules.txt`), so a DLL set whose only
+    logging shell was the crash logger could run for minutes, catch a fatal exception, write a full
+    record -- and still be reported as `ELDEN RING DID NOT START`. The suffix a shell picks is not a
+    contract anywhere; it is whatever its author typed.
+    """
+    for suffix in ("*.log", "*.txt"):
+        yield from game_dir_path.glob(suffix)
+
+
+def await_any_dll_log(watch_dirs, launcher_pid: int, started_at: float) -> dict:
     """Weaker witness, for a run whose DLL set does not include the product shell.
 
     WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
@@ -341,11 +330,27 @@ def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float)
     not follow a convention (`er_net_effects.dll` writes `er-net-effects.log`,
     `er_invasion_warp.dll` writes `er-invasion-warp.log`), so a table would be a second
     source of truth that silently rots every time a shell is added.
+
+    SEVERAL DIRECTORIES, NOT ONE, and the reason is this tool's own success. Every artifact knob
+    it sets moves a DLL's log OUT of the game directory and into the run directory -- which is the
+    point -- so watching only the game directory means the better this redirect gets, the blinder
+    this witness becomes. It went fully blind on 2026-09-04, the day `er_crash_logging` gained its
+    knobs: a run whose only shell was the crash logger wrote all four of its files into the run
+    directory, the game directory never changed, and this reported `ELDEN RING DID NOT START` for
+    a game that was up and busy. Watch both, and let whichever one speaks be the witness.
     """
+    if isinstance(watch_dirs, Path):
+        watch_dirs = [watch_dirs]
+    watch_dirs = [directory for directory in watch_dirs if directory is not None]
     deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
-    with er_run_lib.DirectoryWatch(game_dir_path) as watch:
+    with WatchSet(watch_dirs) as watch:
         while True:
-            for log in sorted(game_dir_path.glob("*.log")):
+            candidates = sorted(
+                candidate
+                for directory in watch_dirs
+                for candidate in testimony_candidates(directory)
+            )
+            for log in candidates:
                 try:
                     if log.stat().st_mtime > started_at:
                         return {"status": "confirmed-weak", "log": log.name,
@@ -385,6 +390,15 @@ def running_block(context: dict) -> str:
         lines.append(f"    {'ersc.dll (game install)':34} referenced, not bundled")
     for entry in context.get("excluded", []):
         lines.append(f"    EXCLUDED {entry['artifact']:25} {entry['kind']} -- not tested in this run")
+    # A run that loads the input harness is one the PLAYER is not driving. The closure only lets
+    # that through when --agent-driven declared it (kind `drives-input`), and the declaration is
+    # worthless if the artifact does not carry it: AGENTS.md forbids claiming the user is in
+    # control of a self-driving probe, and this block is what someone reads later to decide what
+    # the run proved.
+    for entry in context.get("accepted_conflicts", []):
+        lines.append(
+            f"    AGENT-DRIVEN {entry['package']:22} {entry['kind']} -- the PLAYER IS NOT IN CONTROL"
+        )
     lines.append("")
     if save:
         lines += [
@@ -401,7 +415,13 @@ def running_block(context: dict) -> str:
             ),
         ]
     else:
-        lines.append("  character     <active Steam user's default save>")
+        # UNREACHABLE by construction: every save path is decoded now (see `--save`). Kept as a
+        # refusal rather than deleted, because the thing this block used to print --
+        # "<active Steam user's default save>" -- was a PLACEHOLDER standing where the Autoload
+        # Identity Launch Gate requires a real name and slot, and it read like a value.
+        raise RuntimeError(
+            "launch block has no decoded character -- refusing to print an identity placeholder"
+        )
     lines += [
         "",
         f"  profile       {context['profile']}",
@@ -470,6 +490,8 @@ def preflight(args) -> tuple[dict, dict | None]:
         closure_args += ["--with", package]
     for package in getattr(args, "dropped", []):
         closure_args += ["--without", package]
+    if getattr(args, "agent_driven", False):
+        closure_args.append("--agent-driven")
     code, out, err = run_script("er-dll-closure.py", *closure_args)
     if code == 2:
         raise RuntimeError(f"the changed DLLs cannot share one profile:\n{out or err}")
@@ -502,7 +524,7 @@ def preflight(args) -> tuple[dict, dict | None]:
         if code != 0:
             raise RuntimeError(f"no save could be picked: {err.strip() or out.strip()}")
         save = json.loads(out)
-    elif args.save != "default":
+    else:
         save = decode_explicit_save(args.save)
 
     return closure, save
@@ -571,12 +593,11 @@ def launch(args) -> int:
     gen_args[1] = str(closure_file)
     if args.vanilla:
         gen_args.append("--vanilla")
-    if args.save == "default":
-        gen_args.append("--save-default")
-    else:
-        save_file = closure_file.with_name("save.json")
-        save_file.write_text(json.dumps(save), encoding="utf-8")
-        gen_args += ["--save", str(save_file)]
+    if args.disable_arxan:
+        gen_args.append("--disable-arxan")
+    save_file = closure_file.with_name("save.json")
+    save_file.write_text(json.dumps(save), encoding="utf-8")
+    gen_args += ["--save", str(save_file)]
 
     code, out, err = run_script("er-gen-me3-profile.py", *gen_args)
     if code != 0:
@@ -602,11 +623,39 @@ def launch(args) -> int:
     # closure.json and me3-launcher.log, now also the destination for every DLL artifact.
     artifact_dir = er_run_lib.RUN_STATE_ROOT / run_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    harness_drive = getattr(args, "harness_drive", None)
+    if harness_drive:
+        # Both markers are required and neither is sufficient. `er-harness-drive-mode.txt` picks the
+        # phase table; `er-harness-force-drive.txt` is what stops `resolve_mode()` from returning
+        # Passive because the product DLL is present. They resolve beside the DLL's log (me3 launches
+        # the game with an arbitrary CWD, so a bare relative path silently answers false), which is
+        # this directory.
+        (artifact_dir / "er-harness-drive-mode.txt").write_text(harness_drive, encoding="utf-8")
+        (artifact_dir / "er-harness-force-drive.txt").write_text("1", encoding="utf-8")
     artifact_env = {env: str(artifact_dir / name) for env, name in ARTIFACT_ENV.items()}
     # Named once, for the watchers. `scripts/er-user-session-watch.py` and the other observers used
     # to look in the game directory unconditionally; with the redirect in place that directory holds
     # nothing for this run, and a watcher that finds nothing reports a healthy session as silent.
     artifact_env["ER_RUN_ARTIFACT_DIR"] = str(artifact_dir)
+
+    # THE MARKERS MUST BE NAMED, NOT JUST WRITTEN. `redirected_artifact_path` falls back to the GAME
+    # DIRECTORY when its env var is unset, so markers dropped in this run's directory are invisible
+    # unless the variable points at them -- measured on br-20260905-040013-1038, where both files were
+    # present in the artifact directory and the harness still logged `drive: mode='passive' phases=0`.
+    # These two are deliberately not in ARTIFACT_ENV: that set is the DLL's OUTPUT redirect and its
+    # selftest asserts an exact match against what the DLLs honour, while these are INPUTS.
+    if harness_drive:
+        artifact_env["ER_HARNESS_DRIVE_MODE_PATH"] = str(
+            artifact_dir / "er-harness-drive-mode.txt"
+        )
+        artifact_env["ER_HARNESS_FORCE_DRIVE_PATH"] = str(
+            artifact_dir / "er-harness-force-drive.txt"
+        )
+        # The LIVE COMMAND FILE (crates/er-input-harness/src/repl.rs). Same reason as the two above,
+        # and it bites harder here: the whole point of the command loop is to interrogate a session
+        # that is already up, so a command written into this run's directory that the harness reads
+        # from the game directory instead is a question that silently never gets asked.
+        artifact_env["ER_HARNESS_CMD_PATH"] = str(artifact_dir / "er-harness-cmd.txt")
 
     # Both candidate homes for the DLL's testimony -- the redirect, and the game directory it falls
     # back to if the environment does not survive the launch chain. See `await_testimony`.
@@ -652,7 +701,9 @@ def launch(args) -> int:
     if loads_product_dll:
         testimony = await_testimony(tails, Path(staged["sidecar"]), process.pid)
     else:
-        testimony = await_any_dll_log(game_dir(), process.pid, launched_at)
+        testimony = await_any_dll_log(
+            [artifact_dir, game_dir()], process.pid, launched_at
+        )
     if testimony["status"] not in ("confirmed", "confirmed-weak"):
         alive = er_run_lib.process_alive(process.pid)
         if testimony["status"] == "wrong-sidecar":
@@ -723,6 +774,7 @@ def launch(args) -> int:
                 ],
                 "ersc": staged["ersc"],
                 "excluded": closure.get("excluded", []),
+                "accepted_conflicts": closure.get("accepted_conflicts", []),
                 "save": save,
                 "profile": staged["profile"],
                 "sidecar": staged["sidecar"],
@@ -1032,7 +1084,15 @@ def selftest() -> int:
                 "run_id": "r-weak", "pid": 1, "started": "now", "branch": "b",
                 "head": "a" * 40, "merge_base": "b" * 40, "base_ref": "origin/main",
                 "dirty": False, "dlls": [("er_invasion_warp.dll", "c" * 64)],
-                "ersc": None, "excluded": [], "save": None, "profile": "/p.me3",
+                "ersc": None, "excluded": [],
+                # A decoded save is now mandatory in every block (`--save default`, the one mode
+                # that had none, was removed 2026-09-04). This case is about the WITNESS being
+                # weak, not the identity being unknown, so it carries a real decoded character.
+                "save": {
+                    "name": "Selftest", "level": 1, "slot": 0, "container": "sl2",
+                    "save_file": "/corpus/ER0000.sl2", "seed": 1, "source_writable": False,
+                },
+                "profile": "/p.me3",
                 "sidecar": "/s.toml", "evidence_class": "x",
                 "testimony": "er-net-effects.log written after launch", "witness": "weak",
             }
@@ -1232,7 +1292,13 @@ def selftest() -> int:
         {
             "run_id": "r3", "pid": 1, "started": "now", "branch": "b", "head": "a" * 40,
             "merge_base": "b" * 40, "base_ref": "origin/main", "dirty": False,
-            "dlls": [("er_quickload.dll", "c" * 64)], "ersc": None, "excluded": [], "save": None,
+            "dlls": [("er_quickload.dll", "c" * 64)], "ersc": None, "excluded": [],
+            # Every block carries a decoded character now; `--save default`, the one mode that
+            # produced a block without one, was removed 2026-09-04.
+            "save": {
+                "name": "Selftest", "level": 1, "slot": 0, "container": "sl2",
+                "save_file": "/corpus/ER0000.sl2", "seed": 1, "source_writable": False,
+            },
             "profile": "/p.me3", "sidecar": "/s.toml", "evidence_class": "x",
             "testimony": "runtime-config: loaded ...",
             "artifact_dir": "/cache/er-me3-runs/r3",
@@ -1259,14 +1325,41 @@ def main() -> int:
     parser.add_argument(
         "--save",
         default="random",
-        metavar="random|default|PATH[:SLOT]",
-        help="random (default), default (the active Steam user's own container), or an explicit "
-        "save path with an optional :SLOT. An explicit save is still DECODED and reported before "
-        "launch -- naming a file is not the same as knowing which character is in it.",
+        metavar="random|PATH[:SLOT]",
+        help="random (default) or an explicit save path with an optional :SLOT. Either way the "
+        "save is DECODED and its character name, level and slot are reported before launch -- "
+        "naming a file is not the same as knowing which character is in it. `default` was REMOVED "
+        "on 2026-09-04 (user directive): it was the one mode that launched without decoding "
+        "anything, so the block printed a placeholder where AGENTS.md's Autoload Identity Launch "
+        "Gate requires a real identity, and nobody knew which character was loading until it "
+        "appeared on screen. Use `random` -- WHICH slot does not matter, but KNOWING it does.",
     )
     parser.add_argument("--seed", type=int, help="reproduce an exact save pick")
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
+    parser.add_argument(
+        "--harness-drive",
+        metavar="MODE",
+        choices=("boot", "reload", "reload2", "full", "menureload", "probe", "equip", "inv"),
+        help=(
+            "arm er-input-harness to drive the MENU with real key events instead of standing down. "
+            "The harness resolves Passive whenever the product DLL is loaded, which is every run here, "
+            "so its whole menu drive -- OpenPauseMenu, NavToOptionSetting, TabToQuit -- has been dead "
+            "code in every launch (`drive: mode='passive' phases=0`). This writes the two markers that "
+            "override that, into the run's artifact directory where the DLL resolves them beside its "
+            "log. Use it whenever a run has to reproduce something through the menu: a switch armed by "
+            "`switch_slot_arm_programmatic` prints `presses=0` and proves nothing about a menu bug."
+        ),
+    )
+    parser.add_argument(
+        "--agent-driven",
+        action="store_true",
+        help="declare that the AGENT drives this run's input, which lets a --with-pinned "
+        "er-input-harness through the drives-input conflict. The run block then says outright "
+        "that the player was not in control, so no such run can be mistaken for a user-driven "
+        "one. Required by AGENTS.md's 2026-07-22 order that the agent drive every input; without "
+        "it the closure refuses the harness, which is the correct default.",
+    )
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
     parser.add_argument(
         "--without",
@@ -1278,6 +1371,14 @@ def main() -> int:
         "lists it under EXCLUDED with reason `withheld`, so an A/B pair cannot be confused "
         "for two identical runs. Needed for the param-patching class: any DLL that mutates a "
         "param row moves the Seamless lobby key and silently drops you out of matchmaking.",
+    )
+    parser.add_argument(
+        "--disable-arxan",
+        action="store_true",
+        help="ask me3 to disable Arxan anti-tamper. DIAGNOSTIC A/B ONLY: me3 logs "
+        "`arxan detected: true` and leaves it ARMED by default, so an ordinary run here carries "
+        "live anti-tamper. Turning it off changes what the game IS, so a run with this flag is "
+        "never product proof -- it answers one question: does the fault survive without Arxan?",
     )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")

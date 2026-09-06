@@ -83,6 +83,11 @@ pub unsafe extern "system" fn DllMain(
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
+    // FIRST, before anything that can panic. A panic in a cdylib crosses an
+    // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+    // vectored handler -- so no crash record is written at all and the process simply
+    // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
+    er_game_base::panic_report::report_panics_to("er-death-persist", panic_log_sink);
 
     if START_PATCH_TASK
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -247,6 +252,15 @@ const RUNTIME_LOG_NAME: &str = "er-death-persist.log";
 /// Line counter for the log. The file describes exactly one process run (see
 /// `er_game_base::log::begin_fresh_run`), so ordering within it is the whole story.
 static LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
+///
+/// Small and duplicated per shell on purpose: the hook is installed PER DLL because every cdylib
+/// statically links its own `er-game-base`, so there is no shared place this could live and still
+/// be the thing that runs in this module.
+fn panic_log_sink(args: core::fmt::Arguments<'_>) {
+    write_runtime_log(&args.to_string());
+}
 
 fn write_runtime_log(message: &str) {
     let Some(directory) = game_directory_path() else {

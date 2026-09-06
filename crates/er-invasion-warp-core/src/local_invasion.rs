@@ -258,6 +258,73 @@ pub struct LocalInvasionConfig {
     /// stay silent, because Seamless retries roughly every 20 seconds and the same wrong place
     /// recurs constantly.
     pub reject_notice: bool,
+    /// Inject invasion pins into the world map.
+    ///
+    /// ON by default -- the pins are the feature. It is configurable because the map path is the
+    /// crate's largest interaction with live engine memory (it appends 467 rows into the
+    /// `WorldMapViewModel`'s row buffer from that object's own constructor), and until this key
+    /// existed there was no way to run the DLL WITHOUT that surgery. That made a whole class of
+    /// question unanswerable: a fault that follows opening the map could not be attributed,
+    /// because the only A/B available was "this DLL or no DLL", which changes nine other things
+    /// at the same time.
+    ///
+    /// Turning it off withholds the `WorldMapViewModel` constructor observer and the world-map
+    /// GFx hook. Everything else -- the local-invasion filter, the warp keys, the lobby pool --
+    /// is untouched, so the two halves of the A/B differ by the map path and nothing else.
+    pub map_pins: bool,
+    /// Install the three Steam-matchmaking detours.
+    ///
+    /// ON by default -- location publishing, hunt mode and the pool filter all need them. It is
+    /// configurable for the same reason as [`Self::map_pins`]: these are the only detours this
+    /// crate installs at addresses it did not derive statically. Each is read out of a LIVE
+    /// `ISteamMatchmaking` vtable slot at runtime and handed straight to MinHook, and the
+    /// installers retry every tick until a read succeeds, so whatever the slot happens to hold at
+    /// that instant becomes a five-byte patch target inside `steamclient64.dll`.
+    ///
+    /// Turning it off withholds `install_advertisement_observer`, `install_hunt_hook` and
+    /// `install_pool_filter_hook` and nothing else, which makes that patching isolable from
+    /// everything else the DLL does.
+    pub steam_hooks: bool,
+    /// Install the two read-only observers on Seamless Co-op's own code.
+    ///
+    /// ON by default -- the `show` observer is the only way this DLL learns the Seamless menu
+    /// object's address, and the lobby-key observer reports the one string that decides whether
+    /// two Seamless players can see each other at all.
+    ///
+    /// It is configurable because these two are the ONLY always-on detours this crate places
+    /// inside `ersc.dll`, and they were the only always-on hooks on the stack of the
+    /// `0x140010043` illegal-instruction crash: the fault's frames read
+    /// `ersc.dll -> er_invasion_warp -> ersc.dll -> lsteamclient.dll`, and it did not reproduce at
+    /// all in a run with this DLL excluded while the player completed a whole invasion. `map_pins`
+    /// and `steam_hooks` have each already been A/B'd off with the crash still present, so this is
+    /// what is left to isolate.
+    ///
+    /// Worth knowing while that A/B is open: both are installed through
+    /// `er_hook::register_union_hook`, the entry point for a 1.16.2 GAME constant, even though
+    /// their addresses are derived from the running `ersc.dll`. That path audits the destination
+    /// by translating it through a table keyed by eldenring.exe RVAs, which has nothing to say
+    /// about a module based at 0x180000000 -- so unlike every runtime-derived hook in this crate,
+    /// these two never face `detour_site::write_site_is_sound`. The only thing standing behind
+    /// them is `prologue_matches` against the pinned build's recorded bytes.
+    ///
+    /// Turning it off withholds `install_show_observer` and `install_lobby_key_observer` and
+    /// nothing else; the local-invasion filter still judges matches, and the warp keys still work.
+    pub ersc_observers: bool,
+    /// Install the `show` observer specifically, when [`Self::ersc_observers`] is on.
+    ///
+    /// The master switch proved the PAIR is what crashes; these two split that pair so the next
+    /// run names which one. Both default ON, so turning the master on restores the previous
+    /// behaviour exactly. Both patch sites were checked statically against
+    /// `vendor-archive/seamless/ersc-2.0.1.dll` and are mechanically sound -- MinHook's five bytes
+    /// land exactly on `push rbp; push r15; push r14`, a clean instruction boundary with nothing
+    /// to relocate -- so whatever goes wrong is in the detour's semantics, not the patch.
+    pub ersc_show_observer: bool,
+    /// Install the lobby-key observer specifically, when [`Self::ersc_observers`] is on.
+    ///
+    /// See [`Self::ersc_show_observer`]. This is the one whose target Seamless documents as
+    /// `SHA256_hex(AES_decrypt(ctx[0xB8]) ++ ...)` -- worth noting only because the crash lands
+    /// inside AES-NI code, which is suggestive and not evidence.
+    pub ersc_lobby_key_observer: bool,
     /// How destinations are judged.
     pub mode: LocalInvasionMode,
     /// Place-name text ids accepted in [`LocalInvasionMode::NamedOnly`], and -- see [`Self::judge`]
@@ -311,6 +378,27 @@ impl Default for LocalInvasionConfig {
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.
             reject_notice: false,
+            // ON: the pins are the point of the world-map half of this DLL.
+            map_pins: true,
+            // ON: location publishing and hunt mode both need these detours.
+            steam_hooks: true,
+            // OFF BY DEFAULT, on measured evidence rather than caution. These two detours are the
+            // ONLY thing this DLL writes into `ersc.dll`, and arming them kills the game in ~25s.
+            // Measured 2026-09-04 on the autoload route with everything else already ON: with them
+            // off the process ran 251s and 110s with zero fault records across two arms; with them
+            // on and NOTHING ELSE CHANGED it died at 24.9s with a fault at 0x140010043, no input
+            // given. Five earlier faults at that address land in a 43.8-56.1s window, so this is
+            // the same bug rather than a new one.
+            //
+            // Turning them off costs the local-invasion filter its session lookup and the lobby-key
+            // line, both of which are inert anyway while `enabled` is false. It does NOT cost the
+            // warp keys, the catalog or the map pins, which is what a user of this DLL is here for.
+            // Set it back to true only once the mechanism is identified -- it is still UNKNOWN, and
+            // a switch is a mitigation, not a fix.
+            ersc_observers: false,
+            // ON: both halves of the pair, so the master switch alone reproduces the old behaviour.
+            ersc_show_observer: true,
+            ersc_lobby_key_observer: true,
             mode: LocalInvasionMode::ExactOnly,
             named_location_text_ids: BTreeSet::new(),
             named_locations: Vec::new(),

@@ -34,6 +34,18 @@ pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
 /// `er-keybinding-table-cspckeyconfig-1162-2026-08-25` for the full layout, the internal-key-id
 /// enum and the scancode lookup table that goes with it.
 pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d5dea8;
+/// The `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single instruction
+/// `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853` (1.16.2 RVA; the DATA map carries it to
+/// 0x458cb71 on 1.17, bracketed by five anchors that all move +0x4080).
+///
+/// DATA, NOT A HOOK TARGET, and the name says so on purpose: nothing detours this address.
+/// `er-focus-input` WRITES the byte so an unfocused window still feeds input;
+/// `er-quickload`'s `can_move_probe` READS it as one of the three bytes that decide whether the
+/// game reads any input this frame. Declared here because two ME3 shells naming one literal is the
+/// drift `scripts/check-rva-alias-drift.py` exists to catch, and because `_DATA_` in the name is
+/// what keeps `scripts/check-shared-hook-rvas.py` from reading the pair as two MinHook instances on
+/// one prologue.
+pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA: usize = 0x4588af1;
 /// `CS::FieldArea**` singleton global -- 1.16.2 runtime VA `0x143d691d8`.
 ///
 /// The 1.16.2 Ghidra dump has 264 reads of this global. `ConvertBlockCoordsToPhysicsCoords`
@@ -442,3 +454,24 @@ pub const DLC_ROOTS_BLANK_RVA: usize = 0x00e0_6490;
 /// would break every file read in the process, so that census reading `null` was a
 /// deref-depth/timing artifact and the conclusion drawn from it does not follow.
 pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
+
+/// `GLOBAL_CSSessionManager` singleton global -- 1.16.2 runtime VA `0x143d7a4d0`.
+///
+/// SOLE DECLARATION of this address; `er-invasion-warp-core`'s `SESSION_MANAGER_GLOBAL_RVA` is an
+/// alias derived from it. Byte-proven out of `1405f2935: mov 0x3787b94(%rip),%rcx`, and read a
+/// second, independent way by `MoveMapStep`'s ending-request evaluator at `0x140afa86b`
+/// (`MOV RAX,qword ptr [0x143d7a4d0]` immediately before `CMP dword ptr [RAX + 0x10],0x4`).
+///
+/// It is here rather than in the warp crate because that second reader is the product's, not the
+/// sidecar's: the ending evaluator's `protocolState == WaitReload` term is one of the nine inputs
+/// that decide whether the MoveMap child tears the world down (see
+/// `er_title_flow::SESSION_PROTOCOL_STATE_WAIT_RELOAD`).
+pub const CS_SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
+
+/// `GLOBAL_CSEventMan` singleton global -- 1.16.2 runtime VA `0x143d686f8`.
+///
+/// Byte-proven out of the same ending-request evaluator: `0x140afa8bd`
+/// `MOV RCX,qword ptr [0x143d686f8]`, then `MOV RCX,qword ptr [RCX + 0x10]` (the `deadReset`
+/// member, `CSEventManImp` field ordinal 2 in the named 1.16.2 dump) and `CALL 0x1405fef50`,
+/// which is the one-line getter `return param_1->field1_0x8;`, compared against `2`.
+pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;

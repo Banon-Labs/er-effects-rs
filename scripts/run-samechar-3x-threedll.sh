@@ -56,6 +56,10 @@ LAUNCH_ENV_VARS=(
 	"ER_QUICKLOAD_BOOTSTRAP_PATH=$ARTIFACT_DIR/er-quickload-bootstrap.jsonl"
 	"ER_QUICKLOAD_BOOTSTRAP_STATE_PATH=$ARTIFACT_DIR/er-quickload-bootstrap-state.json"
 	"ER_QUICKLOAD_PROFILE_PATH=$ARTIFACT_DIR/er-quickload-profile.jsonl"
+	"ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH=$ARTIFACT_DIR/er-crash-log.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH=$ARTIFACT_DIR/er-crash-latest.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH=$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH=$ARTIFACT_DIR/er-crash-modules.txt"
 	# The OTHER three DLLs this probe loads. They had no redirect knob at all until 2026-08-31, so
 	# their logs could only ever land in GAME_DIR -- including the reload trace, the largest producer
 	# in the repo at ~655 MB/hour, which every launch rotated to `.prev` and the launch after that
@@ -72,6 +76,10 @@ LAUNCH_ENV_VARS=(
 	"ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH=$ARTIFACT_DIR/er-save-disable-telemetry.json"
 	"ER_QUICKLOAD_LOADING_PORTRAIT_PATH=$ARTIFACT_DIR/er-loading-portrait.log"
 	"ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH=$ARTIFACT_DIR/er-loading-portrait-crash-log.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH=$ARTIFACT_DIR/er-crash-log.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH=$ARTIFACT_DIR/er-crash-latest.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH=$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt"
+	"ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH=$ARTIFACT_DIR/er-crash-modules.txt"
 )
 # RENDERDOC=1: the Windows RenderDoc DLL, loaded as a me3 native to hook ER's D3D12 device.
 RDOC_DLL="${RENDERDOC_DLL:-/mnt/c/Program Files/RenderDoc/renderdoc.dll}"

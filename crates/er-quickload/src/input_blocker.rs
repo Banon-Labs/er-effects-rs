@@ -8,6 +8,7 @@ use windows::core::{GUID, s};
 use crate::mh::{MH_STATUS, UnionFn, register_union_hook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
+pub use er_telemetry_core::counters::DINPUT_INJECTED_KEY_STAMPS;
 /// DIAGNOSTIC: how many times the game actually CALLS the DInput keyboard `GetDeviceState`
 /// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
 /// while the harness holds, ER does NOT read keyboard via DInput on native -> our `set_injected_key`
@@ -185,13 +186,22 @@ unsafe extern "system" fn dinput_kb_get_state_hook(
     let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
     let raw = unsafe { call(device, size, data, unused) };
     let (hr, size, data) = (raw as i32, size as u32, data as *mut u8);
+    // THE STAMP MUST PRECEDE THE LATCH (2026-09-05). The save-file picker does not read this buffer
+    // when the game does -- it LATCHES a copy here, and the copy used to be taken before
+    // `stamp_injected_dinput_key` wrote anything into it. So the picker was the one consumer in the
+    // process structurally incapable of seeing an injected key: the pause menu, which reads the
+    // buffer later, consumed injected Up and E perfectly (cell 0 -> 6, then the System pane opened),
+    // while an injected Right inside the file browser changed nothing in ANY of the fourteen live
+    // GridControls -- measured by diffing them across the press on br-20260905-181031-f1a0. Both
+    // halves of that comparison came from the same run and the same channel, so the only variable
+    // left was which side of this line the consumer sat on.
+    zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
     if hr == 0 && !data.is_null() {
         crate::experiments::save_picker_latch_dinput_keyboard_state(
             data as *const u8,
             size as usize,
         );
     }
-    zero_blocked_dinput_state(hr, size, data, InputFlags::Keyboard);
     raw
 }
 
@@ -208,18 +218,43 @@ fn zero_blocked_dinput_state(hr: i32, size: u32, data: *mut u8, flags: InputFlag
         zero_dinput_arrow_keys(data);
     }
 
-    if !is_blocked(flags) {
-        return;
+    if is_blocked(flags) {
+        unsafe { std::ptr::write_bytes(data, 0, size) };
     }
 
-    unsafe { std::ptr::write_bytes(data, 0, size) };
-    if flags.contains(InputFlags::Keyboard) && size >= DINPUT_KEYBOARD_BUFFER_LEN {
-        const DIK_PRESSED: u8 = 0x80;
-        let dik = INJECTED_KEY.load(Ordering::Relaxed);
-        if dik != 0 && (dik as usize) < DINPUT_KEYBOARD_BUFFER_LEN {
-            unsafe { *data.add(dik as usize) = DIK_PRESSED };
-        }
+    // FOCUS-INDEPENDENT KEYBOARD INJECTION (2026-09-05). The stamp used to live INSIDE the
+    // `is_blocked` branch, so the harness could only put a key in front of the game while the input
+    // BLOCK was engaged -- and the can-move probe never engages it in-world, so its key never landed.
+    // Worse, the probe's actual delivery path was `SendInput` -> RawInput, which ER cannot read:
+    // `eldenring.exe` (1.17) imports NO RawInput API at all -- not `GetRawInputData`, not
+    // `GetRawInputBuffer`, not `RegisterRawInputDevices` (the string is absent from the image; the
+    // USER32 import block carries `GetKeyState`/`GetKeyboardState`/`ToAscii` and `DINPUT8`'s
+    // `DirectInput8Create`). That is why run br-20260905-031610-5406 reported
+    // `supplied_movement_input_frames=150` beside `rawinput_key_events=0`: 150 SendInputs the game
+    // had no code path to observe. The 4325 `GetRawInputData` calls our counter saw are the overlay's,
+    // not the game's.
+    //
+    // Stamping HERE is focus-independent by construction: it runs after DInput has filled (or, when
+    // the window is not foreground, zeroed) the buffer, so the byte the game reads is ours either way.
+    // No `SetForegroundWindow`, no focus theft -- the point of the change.
+    stamp_injected_dinput_key(size, data, flags);
+}
+
+/// Write the harness's injected DirectInput scancode into the keyboard buffer the game is about to
+/// read. Runs on every keyboard `GetDeviceState` regardless of the input block, so injection does not
+/// depend on either the block being engaged or ER holding the keyboard focus. A zero `INJECTED_KEY`
+/// (the resting value) stamps nothing, so this is inert outside an active injection window.
+fn stamp_injected_dinput_key(size: usize, data: *mut u8, flags: InputFlags) {
+    if !flags.contains(InputFlags::Keyboard) || size < DINPUT_KEYBOARD_BUFFER_LEN {
+        return;
     }
+    const DIK_PRESSED: u8 = 0x80;
+    let dik = INJECTED_KEY.load(Ordering::Relaxed);
+    if dik == 0 || (dik as usize) >= DINPUT_KEYBOARD_BUFFER_LEN {
+        return;
+    }
+    unsafe { *data.add(dik as usize) = DIK_PRESSED };
+    DINPUT_INJECTED_KEY_STAMPS.fetch_add(1, Ordering::Relaxed);
 }
 
 fn zero_dinput_arrow_keys(data: *mut u8) {

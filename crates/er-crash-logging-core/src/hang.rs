@@ -995,31 +995,74 @@ fn report_stall(counter_addr: usize, frame_counter: u32, stalled_seconds: u64) {
             .saturating_sub(1)
     );
 
+    // WHO IS ACTUALLY RUNNING, measured rather than guessed. Two CPU snapshots straddling a short
+    // window, exactly as the framedrop path does: a thread that burned no CPU across it is parked,
+    // and one that burned a lot while frames stopped arriving is the one worth reading. Taken
+    // BEFORE the stacks so the window is not lengthened by 100+ suspend/resume pairs.
+    let cpu_before = thread_cpu_times();
+    unsafe { Sleep(FRAMEDROP_ATTRIBUTION_MS) };
+    let cpu_after = thread_cpu_times();
+    let ranked = rank_cpu_consumers(&cpu_before, &cpu_after);
+    let burned: std::collections::BTreeMap<u32, u64> = ranked.iter().copied().collect();
+
     let threads = enumerate_threads();
     let _ = writeln!(out, "thread_count={}", threads.len());
 
-    // The main thread is the process's first thread, so it is the one with the earliest creation
-    // time. That is what identifies the stalled stack among all the workers.
+    // THE FIRST THREAD IS NOT "THE MAIN THREAD", AND SAYING SO SENT TWO INVESTIGATIONS THE WRONG
+    // WAY. This used to print `main_thread=true` for whichever thread had the earliest creation
+    // time, on the reasoning that the process's first thread is the one that stalled. Under me3
+    // that is false by construction: the loader hijacks the first thread at attach and parks it
+    // inside `me3_mod_host::on_attach` (`crates/mod-host/src/executable.rs`) waiting on its host
+    // IPC for the LIFE OF THE PROCESS -- identified 2026-09-04 by resolving the frame at
+    // `me3_mod_host+0x33cf8` through the DLL's own `.pdata` to the function at `+0x33c50`, whose
+    // string references are `me3_mod_host::on_attach::{{closure}}`, "failed to receive message"
+    // and "failed to fulfill request". That thread is parked correctly and permanently, and it is
+    // the same stack in a healthy run as in a hung one. Two hang reports (2026-09-02, 2026-09-03)
+    // were read as "the main thread deadlocked inside me3" on the strength of this label alone.
+    //
+    // So the label now says only what is measured -- which thread was created first -- and the
+    // CPU delta beside it says which threads were actually doing anything.
     let mut earliest_creation = u64::MAX;
-    let mut main_thread_id = 0u32;
+    let mut first_thread_id = 0u32;
     let mut samples = Vec::with_capacity(threads.len());
     for thread_id in threads {
         if let Some(sample) = sample_thread(thread_id) {
             if sample.creation_time != 0 && sample.creation_time < earliest_creation {
                 earliest_creation = sample.creation_time;
-                main_thread_id = sample.thread_id;
+                first_thread_id = sample.thread_id;
             }
             samples.push(sample);
         }
     }
 
-    for sample in &samples {
-        let is_main = sample.thread_id == main_thread_id;
+    let total_burned: u64 = burned.values().sum();
+    let _ = writeln!(
+        out,
+        "cpu_window_ms={} threads_burning_cpu={} total_cpu_ms={:.1}",
+        FRAMEDROP_ATTRIBUTION_MS,
+        burned.values().filter(|delta| **delta > 0).count(),
+        total_burned as f64 / 10_000.0,
+    );
+    for (thread_id, delta) in ranked.iter().take(FRAMEDROP_TOP_THREADS) {
+        if *delta == 0 {
+            break;
+        }
         let _ = writeln!(
             out,
-            "thread tid={} main_thread={} rip=0x{:x}{} rsp=0x{:x} stack={}",
+            "cpu_top tid={thread_id} cpu_ms={:.1}",
+            *delta as f64 / 10_000.0
+        );
+    }
+
+    for sample in &samples {
+        let is_first = sample.thread_id == first_thread_id;
+        let cpu_ms = burned.get(&sample.thread_id).copied().unwrap_or(0) as f64 / 10_000.0;
+        let _ = writeln!(
+            out,
+            "thread tid={} first_thread={} cpu_ms={:.1} rip=0x{:x}{} rsp=0x{:x} stack={}",
             sample.thread_id,
-            is_main,
+            is_first,
+            cpu_ms,
             sample.rip,
             module_tag(sample.rip, &modules),
             sample.rsp,

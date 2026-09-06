@@ -725,6 +725,24 @@ SHAPE_RESCUED = {
     # instruction at the same byte offset inside a .pdata-paired function.
     #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d69920 --confirm 0x3d6d990
     0x3D69920: (0x3D6D990, "SAVE_SERIALIZE_BYTES_RVA", "anchor+8+shape"),
+    # `Game.Debug.IsEnableControlOnDisactiveWindow`'s backing byte, forced by er-focus-input so
+    # the game keeps reading pad/mouse input while its window is unfocused. Its one READ is the
+    # getter stub's `movzx eax, byte ptr [rip+d]` (1.16.2 0x2e6853, 1.17 0x2e8853) -- the same
+    # 405-address-wide shape the note above warns about, so the shape alone is not what selects
+    # it. What selects it is the pair of CALLERS, both already carried by the FUNCTION map:
+    # CS::CSPadStep::STEP_Update (0xe33aa0 -> 0xe358a0) and CS::CSPadStep::CSPadStep
+    # (0xe328d0 -> 0xe346d0) reach the getter at the IDENTICAL byte offsets +0xa3c and +0x7e in
+    # both builds, and both 1.17 calls land on one stub reading 0x458cb71. Bracketed by five
+    # anchors that all move +0x4080 (0x4588e98, 0x4589390, 0x45896a8, 0x4589ad8, 0x4589bdc), which
+    # is exactly 0x4588af1 -> 0x458cb71.
+    #   uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e33aa0
+    #   uv run --with capstone python3 scripts/find-debug-flag-getter.py 0x140e358a0 --image eldenring-deobf-1.17.bin
+    #   python3 scripts/map-data-rvas-1162-to-1170.py 0x4588af1 --confirm 0x458cb71
+    0x4588AF1: (
+        0x458CB71,
+        "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
+        "bracket+shape",
+    ),
 }
 
 

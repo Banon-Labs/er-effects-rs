@@ -81,7 +81,10 @@ pub const WARP_NEXT_STAGE_KICK_RVA: usize = 0x5f_7b70;
 pub const SETUP_MAP_REENTRY_RVA: usize = 0xca_fc30;
 /// `GLOBAL_CSSessionManager` -- `0x143d7a4d0`, read from
 /// `1405f2935: mov 0x3787b94(%rip),%rcx  # 0x143d7a4d0`.
-pub const SESSION_MANAGER_GLOBAL_RVA: usize = 0x3d7_a4d0;
+///
+/// DERIVED, not re-declared: the product reads the same global from `MoveMapStep`'s
+/// ending-request evaluator, so the literal lives once in `er_game_base::rva`.
+pub const SESSION_MANAGER_GLOBAL_RVA: usize = er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA;
 /// `GetCurrentMapId(BlockId *out)` -- `0x1405eefb0`. Used to report where the warp started.
 pub const GET_CURRENT_MAP_ID_RVA: usize = 0x5e_efb0;
 /// `ConvertBlockCoordsToPhysicsCoords(FloatVector3 *out, FloatVector3 *blockLocal, BlockId *id)`

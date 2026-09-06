@@ -60,6 +60,81 @@ pub unsafe extern "system" fn er_effects_union_register(
     }
 }
 
+/// C-ABI export: hold (or release, with 0) a DirectInput keyboard scancode in front of the game.
+///
+/// THE ONLY KEYBOARD STAGE ER 1.17 READS. `eldenring.exe` imports no RawInput API at all, so a
+/// `SendInput` press has no code path to reach the game; what does reach it is this DLL's detour on
+/// the DInput8 keyboard `GetDeviceState`, which stamps the scancode into the 256-byte buffer AFTER
+/// DInput has filled it. That makes the press focus-independent -- it applies with the window in the
+/// background and without ever forcing ER foreground -- and it is the same channel that carried the
+/// measured in-world displacement on br-20260905-161450-ec54.
+///
+/// It is an EXPORT rather than a second hook because the DInput vtable slot is shared: three DLLs
+/// detour it, and each linking its own MinHook instance overwrites the others' trampolines (the
+/// conflict class in `scripts/me3-dll-conflicts.toml`). `er-input-harness` needs to press keys, not
+/// to own the prologue, so it asks this DLL to stamp for it -- one instance, one owner.
+///
+/// The stamp is inert while the held code is 0, so a companion that never calls this changes nothing.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_quickload_hold_dinput_key(dik: u8) {
+    crate::input_blocker::InputBlocker::get_instance().set_injected_key(dik);
+}
+
+/// C-ABI export: the live `05_010_ProfileSelect` dialog our save-file picker runs on, or 0.
+///
+/// THIS IS THE ONLY WAY TO KNOW WHICH CURSOR IS THE PICKER'S. The picker's cursor is a
+/// `CS::GridControl` at `dialog + 0xa38`, whose selected cell at `+0xd4` is the field
+/// `DIALOG_SLOT_CURSOR_B0C_OFFSET` already names (`0xa38 + 0xd4 == 0xb0c`). A memory scan for the
+/// GridControl vtable finds it -- along with thirteen other live grids, indistinguishable by
+/// address. Watching the wrong one is not a small error: a drive reports "the press did nothing"
+/// while the press worked perfectly, which is exactly what happened on br-20260905-181031-f1a0 when
+/// a Right in the file browser moved a cursor nobody was looking at.
+///
+/// The dialog is whatever `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` currently holds, so this answers 0
+/// until the picker is actually up -- "not open" and "open at row 0" stay distinguishable.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_quickload_save_picker_dialog() -> usize {
+    er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// C-ABI export: hold (or release, with 0) a Win32 virtual key -- including the MOUSE BUTTONS.
+///
+/// `VK_LBUTTON` is 0x01, and a left click is how a pointer-driven menu is confirmed. ELDEN RING 1.17
+/// imports USER32's `GetKeyState`/`GetKeyboardState`, and this DLL detours both, authoring the answer
+/// after the original call: focus-independent, and invisible outside the process.
+///
+/// Separate from `er_quickload_hold_dinput_key` because they are different stages, not different
+/// spellings of one -- that one writes a DirectInput SCANCODE into the keyboard buffer, this one
+/// answers a VIRTUAL-KEY query. A run that confuses them cannot tell "the click never arrived" from
+/// "the click arrived at the wrong layer", which is the distinction every menu-drive attempt here
+/// has turned on.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_quickload_hold_vk(vk: u8) {
+    crate::experiments::input_block::set_injected_vk_public(vk);
+}
+
+/// C-ABI export: tell the game the cursor is at `(x, y)`. Pass `u64::MAX` as `packed` to stop.
+///
+/// `packed` is `(x << 32) | y`, one value so the pair cannot be read half-updated by the game
+/// thread mid-hit-test. This does NOT move the user's real pointer -- it authors the answer the
+/// game gets from USER32's `GetCursorPos`, so nothing is visible outside the process and the OS
+/// cannot fight it.
+///
+/// It exists because the ELDEN RING pause menu is a POINTER HIT-TEST, not a list index: a real
+/// mouse nudge walked one `CS::GridControl`'s hovered cell through 5, 6, 1, 2, 4, 3, 2, 17 while
+/// every other live grid held still, and no pad axis or button write has ever moved it. Writing the
+/// menu's own pointer pair does not work either -- the game refreshes it from the cursor each frame
+/// (five coordinates written, `wrote=true` each time, hovered cell never left 0 on
+/// br-20260905-175511-72a6). USER32 is where the mouse actually enters the process.
+///
+/// An EXPORT rather than a second hook for the reason every other one here is: `er-input-harness`
+/// needs to point, not to own the USER32 prologue.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_quickload_hold_cursor_pos(packed: u64) {
+    crate::experiments::input_block::set_injected_cursor_pos(packed);
+}
+
 /// C-ABI export: the live `CS::LoadingScreenData*`, or 0 when no loading screen is up.
 ///
 /// Published for the standalone `er-crash-logging` hang watchdog, which needs this object to

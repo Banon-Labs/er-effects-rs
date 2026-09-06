@@ -18,13 +18,15 @@ use crate::{
     CAP_APPEND_ONE_ORIG, CAP_BUILDER_ORIG, CAP_CSMENU_CTOR_ORIG, CAP_DIALOG_FACTORY_ORIG,
     CAP_LOAD_ACTIVATE_ORIG, CAP_LOAD_ACTIVATE2_ORIG, CAP_MENU_DESER_ORIG, CAP_REBUILD_ROWS_ORIG,
     CAP_SELECTOR_TICK_ORIG, CAP_SETSTATE_ORIG, COMBINED_LOAD_ORIG, CONTINUE_LOAD_ORIG,
+    CS_EVENT_DEAD_RESET_STATE_8_OFFSET, CS_EVENT_MAN_DEAD_RESET_10_OFFSET,
     CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET, CS_MENU_MAN_GLOBAL_RVA,
-    CS_MENU_MAN_MENU_DATA_OFFSET, CSFILE_ENQUEUE_RVA, CSFILE_HOLDER_8_OFFSET,
-    CSFILE_QUEUE_ARRAY_E0_OFFSET, CSFILE_SINGLETON_RVA, CSMENU_CTOR_RVA, CURRENT_SLOT_LOAD_ORIG,
-    DESERIALIZE_SLOT_RVA, EBL_REGISTRY_GLOBAL_RVA, ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA,
-    FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET, FILECAP_DATA_90_OFFSET, FILECAP_QUEUEFLAGS_89_OFFSET,
-    FILECAP_STATUS_88_OFFSET, FILECAP_STATUS_LOADED, FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET,
-    GAME_MAN_C30_UNSET, GAME_MAN_ENDING_FLAG_B7C_OFFSET, GAME_MAN_ENDING_FLAG_B7D_OFFSET,
+    CS_MENU_MAN_MENU_DATA_OFFSET, CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET, CSFILE_ENQUEUE_RVA,
+    CSFILE_HOLDER_8_OFFSET, CSFILE_QUEUE_ARRAY_E0_OFFSET, CSFILE_SINGLETON_RVA, CSMENU_CTOR_RVA,
+    CURRENT_SLOT_LOAD_ORIG, DEAD_RESET_STATE_ENDING, DESERIALIZE_SLOT_RVA, EBL_REGISTRY_GLOBAL_RVA,
+    ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA, FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET,
+    FILECAP_DATA_90_OFFSET, FILECAP_QUEUEFLAGS_89_OFFSET, FILECAP_STATUS_88_OFFSET,
+    FILECAP_STATUS_LOADED, FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET, GAME_MAN_C30_UNSET,
+    GAME_MAN_ENDING_FLAG_B7C_OFFSET, GAME_MAN_ENDING_FLAG_B7D_OFFSET,
     GAME_MAN_FLAG_B73_PROBE_OFFSET, GAME_MAN_FLAG_B75_PROBE_OFFSET,
     GAME_MAN_REQUESTED_SLOT_B78_OFFSET, GAME_MAN_SAVE_STATE_B80_OFFSET,
     GAME_MAN_SAVED_MAP_C30_OFFSET, GAME_MAN_WARP_REQUESTED_10_OFFSET, HOOK_ORIGINAL_UNSET,
@@ -52,23 +54,23 @@ use crate::{
     RESULT_ACTION_BUILDER_ORIG, RESULT_ACTION_BUILDER_RVA, RESULT_EVENT_HANDLER_ORIG,
     RESULT_EVENT_HANDLER_RVA, RESULT_EVENT_WRAPPER_BUILDER_ORIG, RESULT_EVENT_WRAPPER_BUILDER_RVA,
     SAFE_INPUT_CONFIRM_FRAMES_REMAINING, SAFE_INPUT_CONFIRM_PULSE_SEQ, SAVE_LOAD_STATE_INIT_ORIG,
-    SAVE_REQUEST_PROFILE_ORIG, SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA, SET_SAVE_SLOT_ORIG,
-    SWITCH_ORACLE_MMS_FINISH_HITS, SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG,
-    TITLE_NATIVE_READY_PREDICATE_ORIG, TITLE_NATIVE_READY_PREDICATE_RVA,
-    TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, TRACE_MENU_CONTINUE_WRAPPER_RVA,
-    TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA, TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA,
-    TRACE_UNKNOWN_TABLE_RVA, WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA,
-    WORLDRES_ENTRY_CTOR_RVA, WORLDRES_RESMGR_10_OFFSET, append_autoload_debug,
-    append_continue_trace, cap_append_one_hook, cap_builder_hook, cap_csmenu_ctor_hook,
-    cap_dialog_factory_hook, cap_load_activate_hook, cap_load_activate2_hook, cap_menu_deser_hook,
-    cap_menu_item_update_hook, cap_rebuild_rows_hook, cap_selector_tick_hook,
-    cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook, continue_load_hook,
-    current_slot_load_hook, game_directory_path, game_man_ptr_or_null, game_module_base, game_rva,
-    game_rva_for_hook, map_load_hook, menu_window_job_ctor_hook, menu_window_job_idle_ctor_hook,
-    menu_window_job_native_ctor_b_hook, native_submit_hook, request_save_hook,
-    result_action_builder_hook, result_event_handler_hook, result_event_wrapper_builder_hook,
-    safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize, save_load_state_init_hook,
-    save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
+    SAVE_REQUEST_PROFILE_ORIG, SEQUENCE_ITER_ORIG, SEQUENCE_ITER_RVA,
+    SESSION_PROTOCOL_STATE_WAIT_RELOAD, SET_SAVE_SLOT_ORIG, SWITCH_ORACLE_MMS_FINISH_HITS,
+    SWITCH_ORACLE_MMS_INIT_HITS, TASK_ENQUEUE_ORIG, TITLE_NATIVE_READY_PREDICATE_ORIG,
+    TITLE_NATIVE_READY_PREDICATE_RVA, TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE,
+    TRACE_MENU_CONTINUE_WRAPPER_RVA, TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA,
+    TRACE_MENU_OTHER_LOAD_WRAPPER_RVA, TRACE_TASK_ENQUEUE_RVA, TRACE_UNKNOWN_TABLE_RVA,
+    WORLDRES_BLOCKRES_GETTER_RVA, WORLDRES_BLOCKRES_PHASE2_RVA, WORLDRES_ENTRY_CTOR_RVA,
+    WORLDRES_RESMGR_10_OFFSET, append_autoload_debug, append_continue_trace, cap_append_one_hook,
+    cap_builder_hook, cap_csmenu_ctor_hook, cap_dialog_factory_hook, cap_load_activate_hook,
+    cap_load_activate2_hook, cap_menu_deser_hook, cap_menu_item_update_hook, cap_rebuild_rows_hook,
+    cap_selector_tick_hook, cap_sequence_iter_hook, cap_setstate_hook, combined_load_hook,
+    continue_load_hook, current_slot_load_hook, game_directory_path, game_man_ptr_or_null,
+    game_module_base, game_rva, game_rva_for_hook, map_load_hook, menu_window_job_ctor_hook,
+    menu_window_job_idle_ctor_hook, menu_window_job_native_ctor_b_hook, native_submit_hook,
+    request_save_hook, result_action_builder_hook, result_event_handler_hook,
+    result_event_wrapper_builder_hook, safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize,
+    save_load_state_init_hook, save_request_profile_hook, set_save_slot_hook, task_enqueue_hook,
     title_native_ready_predicate_hook, trace_callers_summary, write_bootstrap_event,
 };
 use eldenring::cs::GameMan;
@@ -808,8 +810,51 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
             .and_then(|p| unsafe { safe_read_u8(p) })
             .map(|v| v as i32)
             .unwrap_or(-1);
+        // THE TWO INPUTS THIS LINE USED TO OMIT. The five above are only five of the nine terms
+        // the ending evaluator ORs into `cVar10` (the table is in `constants_return_title.rs`),
+        // and all five read 0 at the black-screen advance in three separate runs -- which was
+        // read as "the evaluator advanced on nothing" when it actually means we were blind to
+        // the rest of it. Two of the remaining four are statically dead (`FUN_140e2aa70` and
+        // `FUN_140e62aa0` are both `return 0;`), so these are the only candidates left. `-1` is
+        // "could not resolve or read", NOT a zero: a refusal must stay distinguishable from a
+        // measurement, because the whole point of this line is which term was non-zero.
+        let base = game_module_base().unwrap_or(0);
+        let session_proto = if base == 0 {
+            -1
+        } else {
+            let manager = er_game_base::mem::read_global_ptr(
+                base,
+                er_game_base::rva::CS_SESSION_MANAGER_GLOBAL_RVA,
+                "CS_SESSION_MANAGER_GLOBAL_RVA",
+            );
+            if manager == 0 {
+                -1
+            } else {
+                unsafe { safe_read_i32(manager + CS_SESSION_MANAGER_PROTOCOL_STATE_10_OFFSET) }
+                    .unwrap_or(-1)
+            }
+        };
+        let dead_reset = if base == 0 {
+            -1
+        } else {
+            let event_man = er_game_base::mem::read_global_ptr(
+                base,
+                er_game_base::rva::CS_EVENT_MAN_GLOBAL_RVA,
+                "CS_EVENT_MAN_GLOBAL_RVA",
+            );
+            if event_man == 0 {
+                -1
+            } else {
+                unsafe { safe_read_usize(event_man + CS_EVENT_MAN_DEAD_RESET_10_OFFSET) }
+                    .filter(|&s| s > 0x10000)
+                    .and_then(|state| unsafe {
+                        safe_read_i32(state + CS_EVENT_DEAD_RESET_STATE_8_OFFSET)
+                    })
+                    .unwrap_or(-1)
+            }
+        };
         append_autoload_debug(format_args!(
-            "MMS-CLEANUP: child(mms)=0x{this:x} leaving STEP_MoveMap -> Cleanup; warp={} b7c={} b7d={} rt5d={rt5d} force={force} -- what drove the advance (compare to the lock where the incoming child never reaches here)",
+            "MMS-CLEANUP: child(mms)=0x{this:x} leaving STEP_MoveMap -> Cleanup; warp={} b7c={} b7d={} rt5d={rt5d} force={force} session_proto={session_proto}(WaitReload={SESSION_PROTOCOL_STATE_WAIT_RELOAD}) dead_reset={dead_reset}(ending={DEAD_RESET_STATE_ENDING}) -- what drove the advance (compare to the lock where the incoming child never reaches here)",
             rd(GAME_MAN_WARP_REQUESTED_10_OFFSET),
             rd(GAME_MAN_ENDING_FLAG_B7C_OFFSET),
             rd(GAME_MAN_ENDING_FLAG_B7D_OFFSET)
@@ -848,6 +893,18 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     c: usize,
     d: usize,
 ) -> usize {
+    // REPORT the destination block this init is about to consume; do NOT supply one.
+    //
+    // `STEP_MoveMap_Init` reads `GameMan+0x14` into the MoveMapStep's `mapId` (+0xdc) and then clears
+    // the field. An earlier version of this line WROTE the block here, on the theory that nothing on
+    // the switch path set it. That theory is false and the decompile says so: the slot deserialize
+    // `FUN_14067b290` -- the function our own-load already calls -- ends with
+    // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true`, so the native flow we are
+    // already inside sets it for us. Writing it again was a second, redundant store of a field the
+    // game owns, which is the shape of fix this repo keeps having to undo. Logging the value instead
+    // turns the question into evidence: if it is 0xffffffff at an init that should be loading a
+    // picked slot, the deserialize did not run or something cleared it, and THAT is the defect.
+    crate::experiments::own_load::report_destination_block_at_init();
     let ret = unsafe { mms_call_original(&MMS_STEP_INIT_ORIG, this, b, c, d) };
     let n = SWITCH_ORACLE_MMS_INIT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {

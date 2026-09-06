@@ -201,10 +201,18 @@ cmd_start() {
 			ER_QUICKLOAD_TIMESERIES_PATH="$artifact/er-telemetry-timeseries.jsonl" \
 			ER_QUICKLOAD_CPU_PROFILE_PATH="$artifact/er-cpu-profile.txt" \
 			ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$artifact/er-armament-icons.log" \
+			ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$artifact/er-crash-log.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$artifact/er-crash-latest.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$artifact/er-crash-breadcrumb-latest.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$artifact/er-crash-modules.txt" \
 			ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$artifact/$DLL_LOG_NAME" \
 			ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$artifact/$TELEMETRY_NAME" \
 			ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$artifact/er-loading-portrait.log" \
 			ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$artifact/er-loading-portrait-crash-log.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$artifact/er-crash-log.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$artifact/er-crash-latest.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$artifact/er-crash-breadcrumb-latest.txt" \
+			ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$artifact/er-crash-modules.txt" \
 			ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$artifact/$HARNESS_LOG_NAME" \
 			ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$artifact/$HARNESS_PHASES_NAME" \
 			"$ME3_BIN" \

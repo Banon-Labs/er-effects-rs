@@ -611,6 +611,8 @@ mod live {
     /// publish and every query.
     static POOL_ANNOUNCED: AtomicBool = AtomicBool::new(false);
     static SET_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    /// One decline explanation per process; the retry itself is every tick.
+    static MATCHMAKING_DECLINE_LOGGED: AtomicBool = AtomicBool::new(false);
     static SET_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
 
     /// Watch Seamless declare its advertisement lobby. Observation only: every call is passed
@@ -867,6 +869,22 @@ mod live {
             return 0;
         }
         let Some(iface) = matchmaking() else {
+            // SAY SO, ONCE. This path returns silently and retries every tick, which makes the
+            // absence of an install line ambiguous: it reads identically to `steam_hooks = false`.
+            // Measured 2026-09-04, that ambiguity cost a whole A/B arm -- a 110s run with
+            // `steam_hooks = true` produced no install line, and only reading this function showed
+            // the three detours had never armed at all, so the arm re-tested `map_pins` and said
+            // nothing about Steam. A declined install that explains itself is the difference
+            // between a null result and a wasted run.
+            if !MATCHMAKING_DECLINE_LOGGED.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "lobby-publish: the three Steam detours are NOT installed -- \
+                     ISteamMatchmaking is not resolvable yet (steam_api64.dll absent, or its \
+                     accessor has not returned an interface). This is a retry, not a refusal: it \
+                     is attempted again every tick. `steam_hooks` is ON; if it were OFF this line \
+                     would not appear at all, which is how to tell the two apart."
+                ));
+            }
             SET_HOOK_INSTALLED.store(0, Ordering::SeqCst);
             return 0;
         };
