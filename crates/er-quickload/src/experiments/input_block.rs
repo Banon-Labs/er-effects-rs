@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 use eldenring::cs::GameMan;
 use windows::{
     Win32::{
@@ -57,6 +57,7 @@ pub(crate) use er_telemetry_core::counters::XINPUT_BLOCK_INSTALL_RETRIES;
 /// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
 /// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
 pub(crate) use er_telemetry_core::counters::XINPUT_GET_CAPABILITIES_ORIG;
+pub(crate) use er_telemetry_core::counters::XINPUT_GET_STATE_EX_ORIG;
 /// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
 pub(crate) use er_telemetry_core::counters::XINPUT_GET_STATE_ORIG;
 /// Monotonic `dwPacketNumber` for the no-controller "connected idle pad" keepalive the
@@ -650,7 +651,11 @@ pub(crate) fn release_input_block_now() {
 /// so the fabrication frames land. This is gated STRICTLY behind the existing diagnostic
 /// opt-ins (never on the default/product path) and only touches slot 0; other slots and the
 /// non-armed case still read a genuinely absent pad as absent.
-pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, state: *mut u8) -> u32 {
+unsafe fn xinput_get_state_common(
+    user_index: u32,
+    state: *mut u8,
+    orig_slot: &'static AtomicUsize,
+) -> u32 {
     const XINPUT_SUCCESS: u32 = 0;
     const XINPUT_ERROR_DEVICE_NOT_CONNECTED: u32 = 1167;
     // XINPUT_STATE = { DWORD dwPacketNumber; XINPUT_GAMEPAD Gamepad; }; the gamepad sub-struct
@@ -664,11 +669,14 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     if user_index == XINPUT_PRIMARY_USER_INDEX {
         XINPUT_SLOT0_POLLS.fetch_add(1, Ordering::Relaxed);
     }
-    let orig = XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst);
+    let orig = orig_slot.load(Ordering::SeqCst);
     let mut hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
-        let f: unsafe extern "system" fn(u32, *mut u8) -> u32 =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { f(user_index, state) }
+        // THROUGH `UnionFn`, NOT the narrow two-argument shape. Since this detour is registered on
+        // the union, the slot may hold the NEXT HANDLER in the chain rather than the game
+        // trampoline, and `register_shared_hook`'s safety contract requires the four-argument call.
+        // The final element is the real export, which reads only the arguments it declares.
+        let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(orig) };
+        unsafe { f(user_index as usize, state as usize, 0, 0) as u32 }
     } else {
         XINPUT_ERROR_DEVICE_NOT_CONNECTED
     };
@@ -799,9 +807,9 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
     }
     let orig = XINPUT_GET_CAPABILITIES_ORIG.load(Ordering::SeqCst);
     let hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
-        let f: unsafe extern "system" fn(u32, u32, *mut u8) -> u32 =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { f(user_index, flags, caps) }
+        // Four-argument call for the same reason as `xinput_get_state_hook`; see there.
+        let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(orig) };
+        unsafe { f(user_index as usize, flags as usize, caps as usize, 0) as u32 }
     } else {
         XINPUT_ERROR_DEVICE_NOT_CONNECTED
     };
@@ -827,7 +835,7 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
 /// load-bearing and why this lifts `mh_install_hook_once`'s idiom instead of calling it.
 unsafe fn install_xinput_block() {
     if XINPUT_BLOCK_INSTALL_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
-        return; // another thread is installing right now; a second MhHook::new would duplicate it
+        return; // another thread is installing right now; a second registration would duplicate it
     }
     const XINPUT_DLLS: [&[u8]; 5] = [
         b"xinput1_4.dll\0",
@@ -837,16 +845,18 @@ unsafe fn install_xinput_block() {
         b"xinput1_1.dll\0",
     ];
     const XINPUT_GET_STATE_EX_ORDINAL: usize = 100;
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "xinput-block: MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let mut hooked_any = false;
+    // THE MODULE, NOT THE HOOK, IS WHAT THE RETRY IS FOR (bd er-effects-rs-ka44). A pad plugged in
+    // mid-session brings an xinput DLL in late, so retrying until one appears is real work. Retrying
+    // because the REGISTRATION did not land is not: that outcome cannot change between frames, so it
+    // retried forever. MEASURED 2026-09-05 with er-hotkey-conflicts co-loaded -- it claims this same
+    // export through `register_shared_hook_with_budget`, which chains into THIS DLL's MinHook
+    // instance, so the bare `MhHook::new` that used to sit here answered MH_ERROR_ALREADY_CREATED on
+    // every attempt: 22,952 retries at 54.6/s, and 164 KB/s of open/write/close logging on the GAME
+    // THREAD (95% of all file write traffic in the process, by fdinfo attribution). Both halves of
+    // the cause are addressed here: the claim is released ONLY when no module was found, and the
+    // registration goes through the union, so a prologue another shell already owns is a CHAIN
+    // rather than a defeat.
+    let mut module_found = false;
     for name in XINPUT_DLLS {
         let hmod = match unsafe { GetModuleHandleA(PCSTR(name.as_ptr())) } {
             Ok(h) if !h.is_invalid() => h,
@@ -855,40 +865,38 @@ unsafe fn install_xinput_block() {
         let proc = unsafe { GetProcAddress(hmod, s!("XInputGetState")) };
         let Some(addr) = proc else { continue };
         let addr = addr as usize;
-        match unsafe { MhHook::new(addr as *mut c_void, xinput_get_state_hook as *mut c_void) } {
-            Ok(hook) => {
-                XINPUT_GET_STATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-                if let Err(status) = unsafe { hook.queue_enable() } {
-                    append_autoload_debug(format_args!(
-                        "xinput-block: queue_enable XInputGetState failed: {status:?}"
-                    ));
-                } else {
-                    append_autoload_debug(format_args!(
-                        "xinput-block: hooked XInputGetState at 0x{addr:x}"
-                    ));
-                    crate::mh::leak_installed_hook(hook);
-                    hooked_any = true;
-                }
-            }
+        module_found = true;
+        // SAFETY: the shim has the union's four-`usize` shape and the slot is its own static.
+        match unsafe { register_union_hook(addr, xinput_get_state_union, &XINPUT_GET_STATE_ORIG) } {
+            Ok(()) => append_autoload_debug(format_args!(
+                "xinput-block: hooked XInputGetState at 0x{addr:x} (union)"
+            )),
             Err(status) => append_autoload_debug(format_args!(
-                "xinput-block: MhHook::new XInputGetState failed: {status:?}"
+                "xinput-block: register_union_hook XInputGetState failed: {status:?}"
             )),
         }
-        // Steam Input routes the guide button through ordinal-100 XInputGetStateEx; neuter it
-        // too so a focused pad cannot drive menus through that path. Same zeroing detour.
+        // Steam Input routes the guide button through ordinal-100 `XInputGetStateEx`; neuter it too
+        // so a focused pad cannot drive menus through that path. Same handler, but its OWN chain
+        // slot -- see `XINPUT_GET_STATE_EX_ORIG` for why sharing one cell would misroute the chain.
         let ex = unsafe { GetProcAddress(hmod, PCSTR(XINPUT_GET_STATE_EX_ORDINAL as *const u8)) };
         if let Some(ex_addr) = ex {
             let ex_addr = ex_addr as usize;
-            if ex_addr != addr
-                && let Ok(hook) = unsafe {
-                    MhHook::new(ex_addr as *mut c_void, xinput_get_state_hook as *mut c_void)
+            if ex_addr != addr {
+                // SAFETY: as above, with the Ex slot.
+                match unsafe {
+                    register_union_hook(
+                        ex_addr,
+                        xinput_get_state_ex_union,
+                        &XINPUT_GET_STATE_EX_ORIG,
+                    )
+                } {
+                    Ok(()) => append_autoload_debug(format_args!(
+                        "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x} (union)"
+                    )),
+                    Err(status) => append_autoload_debug(format_args!(
+                        "xinput-block: register_union_hook XInputGetStateEx failed: {status:?}"
+                    )),
                 }
-            {
-                let _ = unsafe { hook.queue_enable() };
-                crate::mh::leak_installed_hook(hook);
-                append_autoload_debug(format_args!(
-                    "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x}"
-                ));
             }
         }
         // XInputGetCapabilities is the slot-ENUMERATION call the game uses to decide which pads to
@@ -897,42 +905,66 @@ unsafe fn install_xinput_block() {
         let caps = unsafe { GetProcAddress(hmod, s!("XInputGetCapabilities")) };
         if let Some(caps_addr) = caps {
             let caps_addr = caps_addr as usize;
+            // SAFETY: as above, with the capabilities shim and its own slot.
             match unsafe {
-                MhHook::new(
-                    caps_addr as *mut c_void,
-                    xinput_get_capabilities_hook as *mut c_void,
+                register_union_hook(
+                    caps_addr,
+                    xinput_get_capabilities_union,
+                    &XINPUT_GET_CAPABILITIES_ORIG,
                 )
             } {
-                Ok(hook) => {
-                    XINPUT_GET_CAPABILITIES_ORIG
-                        .store(hook.trampoline() as usize, Ordering::SeqCst);
-                    let _ = unsafe { hook.queue_enable() };
-                    crate::mh::leak_installed_hook(hook);
-                    append_autoload_debug(format_args!(
-                        "xinput-block: hooked XInputGetCapabilities at 0x{caps_addr:x}"
-                    ));
-                }
+                Ok(()) => append_autoload_debug(format_args!(
+                    "xinput-block: hooked XInputGetCapabilities at 0x{caps_addr:x} (union)"
+                )),
                 Err(status) => append_autoload_debug(format_args!(
-                    "xinput-block: MhHook::new XInputGetCapabilities failed: {status:?}"
+                    "xinput-block: register_union_hook XInputGetCapabilities failed: {status:?}"
                 )),
             }
         }
         break;
     }
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => {}
-        status => append_autoload_debug(format_args!(
-            "xinput-block: MH_ApplyQueued failed: {status:?}"
-        )),
-    }
-    if !hooked_any {
-        // Nothing landed, so the claim must not stand: release it for the next frame's retry.
+    if !module_found {
+        // Nothing to hook YET -- no xinput runtime is mapped. This is the ONE outcome a later frame
+        // can change, so the claim must not stand: release it for the next frame's retry.
         XINPUT_BLOCK_INSTALL_CLAIMED.store(0, Ordering::SeqCst);
         let n = XINPUT_BLOCK_INSTALL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
         append_autoload_debug(format_args!(
             "xinput-block: no xinput DLL with XInputGetState found yet (retry #{n}; claim released)"
         ));
     }
+}
+
+/// `UnionFn` shim for `XInputGetState(DWORD, XINPUT_STATE*)`: two arguments, so the trailing pair is
+/// unread by every element of the chain.
+unsafe extern "system" fn xinput_get_state_union(
+    a: usize,
+    b: usize,
+    _c: usize,
+    _d: usize,
+) -> usize {
+    unsafe { xinput_get_state_common(a as u32, b as *mut u8, &XINPUT_GET_STATE_ORIG) as usize }
+}
+
+/// `UnionFn` shim for ordinal-100 `XInputGetStateEx`: same signature and same treatment as
+/// `XInputGetState`, chained through its own slot.
+unsafe extern "system" fn xinput_get_state_ex_union(
+    a: usize,
+    b: usize,
+    _c: usize,
+    _d: usize,
+) -> usize {
+    unsafe { xinput_get_state_common(a as u32, b as *mut u8, &XINPUT_GET_STATE_EX_ORIG) as usize }
+}
+
+/// `UnionFn` shim for `XInputGetCapabilities(DWORD, DWORD, XINPUT_CAPABILITIES*)`: three arguments,
+/// so only the fourth is unread.
+unsafe extern "system" fn xinput_get_capabilities_union(
+    a: usize,
+    b: usize,
+    c: usize,
+    _d: usize,
+) -> usize {
+    unsafe { xinput_get_capabilities_hook(a as u32, b as u32, c as *mut u8) as usize }
 }
 
 /// PASSIVE INPUT-TRACE support: install the XInput hooks WITHOUT engaging any input block. With

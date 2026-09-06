@@ -8,6 +8,37 @@
 /// guarded reads and a hash of at most seventeen UTF-16 units per tick; the correction behind it is
 /// bounded. The decision itself is still the pure
 /// [`crate::autoload_route::title_autoload_route`], which carries the reasoning and the tests.
+/// The DEFAULT boot save has no usable native Continue row on this build, so it must take the same
+/// verified full-read chain a picked save takes.
+///
+/// `product_continue` waits for `MENU_CONTINUE_ITEM`, whose latch requires a MenuWindowJob whose
+/// docall matches `MENU_TITLE_CONTINUE_DOCALL_RVA` AND whose accept predicate is
+/// `MENU_ITEM_ACCEPT_NATIVE_RVA`. The 1.16.2 curated dump names both, and neither is a Continue row:
+/// the docall is an adjustor thunk onto a function that constructs `CS::BackScreen` (the
+/// `L"01_900_Black"` fade window, factory called only from `CSMenuManImp::Update`), and the accept
+/// predicate is `GLOBAL_CSMenuMan != 0 && !busy(GLOBAL_CSMenuMan)`, stored by the GENERIC
+/// MenuWindowJob ctors. Measured 2026-09-05 21:32: 416/416 candidate observations idle,
+/// `native_accept_hits = 0`, and the boot parked at the title until teardown.
+///
+/// `title_menu_action_ready` cannot rescue it either: the title's rows are reference-counted
+/// `CS::MenuMemberFuncJob` nodes CHAINED into a `FixOrderJobSequence` by the registrar
+/// `0x1409b24e0` and owned by the menu manager -- they are not fields of the dialog, so
+/// `scan_dialog_for_loadgame`'s bounded flat scan of the dialog object reports `hits=0` by
+/// construction (measured, 1280 qwords, every tick).
+///
+/// Both guards are required. The summary must be REAL, because the full-read chain loads what the
+/// record describes -- and it now is, from the boot container repair. And the action node must be
+/// absent, so that a build where the native row IS identifiable keeps using it.
+unsafe fn boot_default_needs_full_read(owner: usize, base: usize) -> bool {
+    if direct_save_file_source_active() {
+        return false;
+    }
+    if !boot_slot_summary_real() {
+        return false;
+    }
+    unsafe { title_menu_action_ready(owner, base) }.is_none()
+}
+
 fn direct_source_autoload_route() -> crate::autoload_route::TitleAutoloadRoute {
     refresh_direct_source_profile_summary();
     crate::autoload_route::title_autoload_route(true, direct_source_slot_summary_real())
@@ -1545,28 +1576,42 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     .unwrap_or(-1)
             }
         };
-        let dead_reset = {
+        // KEEP THE INTERMEDIATES. This collapsed `event_man == null`, `deadReset == null` and "the
+        // state read faulted" into a single `-1`, and `-1` then reads as "measured, and not the
+        // ending value 2" -- which is how the last unobserved input to a NINE-term evaluator stayed
+        // unobserved. Measured run 2026-09-06 09:59:14, the rise that killed a fully-loaded world:
+        // `rt5d=0 warp=0 b7c=0 b7d=0 force=0 session_proto=6 dead_reset=-1`. Seven terms are zero,
+        // `CSEzSelectBot::IsBotEnabled` reads the `EnableBot` debug property (default false, no
+        // debug properties on a retail build), so THIS term is the only live candidate left and it
+        // is the one the probe cannot see. Naming which link broke is what makes the next run
+        // decisive instead of another `-1`.
+        let (dead_reset, dead_reset_em, dead_reset_ptr) = {
             let event_man = er_game_base::mem::read_global_ptr(
                 module_base,
                 er_game_base::rva::CS_EVENT_MAN_GLOBAL_RVA,
                 "CS_EVENT_MAN_GLOBAL_RVA",
             );
             if event_man == null {
-                -1
+                (-1, null, null)
             } else {
-                unsafe { safe_read_usize(event_man + CS_EVENT_MAN_DEAD_RESET_10_OFFSET) }
-                    .filter(|&state| state > 0x10000)
-                    .and_then(|state| unsafe {
-                        safe_read_i32(state + CS_EVENT_DEAD_RESET_STATE_8_OFFSET)
-                    })
-                    .unwrap_or(-1)
+                let state = unsafe {
+                    safe_read_usize(event_man + CS_EVENT_MAN_DEAD_RESET_10_OFFSET)
+                }
+                .unwrap_or(null);
+                let value = if state > 0x10000 {
+                    unsafe { safe_read_i32(state + CS_EVENT_DEAD_RESET_STATE_8_OFFSET) }
+                        .unwrap_or(-1)
+                } else {
+                    -1
+                };
+                (value, event_man, state)
             }
         };
         let prev_5e = CVAR10_LAST.swap(md_5e, Ordering::SeqCst);
         if md_5e == 1 && prev_5e == 0 {
             let n = CVAR10_RISE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             append_autoload_debug(format_args!(
-                "CVAR10 RISE #{n}: menuData+0x5e 0->1 -- the ending request the MoveMap child acts on.                  INPUTS AT THIS INSTANT: rt5d={md_5d} warp={gwarp} b7c={gb7c} b7d={gb7d}                  force={ending_force} session_proto={session_proto}(WaitReload={SESSION_PROTOCOL_STATE_WAIT_RELOAD})                  dead_reset={dead_reset}(ending={DEAD_RESET_STATE_ENDING})                  [unmeasurable from here: CSEzSelectBot::IsBotEnabled].                  STATE: phase={} ig_pstep={ig_pstep} ig_pnext={ig_pnext}",
+                "CVAR10 RISE #{n}: menuData+0x5e 0->1 -- the ending request the MoveMap child acts on.                  INPUTS AT THIS INSTANT: rt5d={md_5d} warp={gwarp} b7c={gb7c} b7d={gb7d}                  force={ending_force} session_proto={session_proto}(WaitReload={SESSION_PROTOCOL_STATE_WAIT_RELOAD})                  dead_reset={dead_reset}(ending={DEAD_RESET_STATE_ENDING} eventman=0x{dead_reset_em:x} deadreset=0x{dead_reset_ptr:x})                  [unmeasurable from here: CSEzSelectBot::IsBotEnabled].                  STATE: phase={} ig_pstep={ig_pstep} ig_pnext={ig_pnext}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
         }
@@ -2537,7 +2582,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // WHERE the bytes come from, not whether the native Continue row can be used -- and routing
         // every picked save away from that row is what put the deserialize at the title, outside
         // every precondition its only native caller establishes. Ask the route instead.
-        if direct_save_file_source_active() && direct_source_runs_title_full_read() {
+        if (direct_save_file_source_active() && direct_source_runs_title_full_read())
+            || unsafe { boot_default_needs_full_read(owner, module_base) }
+        {
             unsafe { native_fullread_tick(owner, module_base, tick) };
             return true;
         }
@@ -2909,7 +2956,9 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
         // re-read lands, it goes down the SAME native Continue path the default save uses -- which
         // deserializes IN-WORLD from `CS::MoveMapStep::DoSaveStuff`, the only caller `0x14067b290`
         // has. See `crate::autoload_route`.
-        if direct_save_file_source_active() && direct_source_runs_title_full_read() {
+        if (direct_save_file_source_active() && direct_source_runs_title_full_read())
+            || unsafe { boot_default_needs_full_read(owner, module_base) }
+        {
             unsafe { native_fullread_tick(owner, module_base, tick) };
             return true;
         }

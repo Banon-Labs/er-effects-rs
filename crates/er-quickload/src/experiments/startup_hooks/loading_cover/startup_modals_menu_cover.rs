@@ -769,6 +769,35 @@ pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
     // dropping a request is a deferral rather than a loss.
     let suppressed = TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst);
     let n = TITLE_OPEN_MENU_PASSTHROUGH_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    // OBSERVE THE a40 EDGE AS AN EVENT, NOT BY SAMPLING (bd er-effects-rs-1742).
+    //
+    // `OWN_STEPPER_MENU_OPENED` used to be latched in ONE place: `product_core_autoload_tick`, which
+    // sets it only on a tick that happens to READ `dialog+0xa40 == 1`. But a40 is set inside
+    // `open_menu` and back to 0 by the follow-up `TitleTopDialog::update` -- the comment beside that
+    // latch says so -- so the window can be shorter than one game-task tick at ~28fps. Miss it and
+    // the tick re-arms the accept byte instead, which restarts the menu transition, which closes the
+    // window again: the title loops forever at press-any-button and the semantic Continue row is
+    // never driven. MEASURED 2026-09-05 on the autoload path: core readiness `ready` with
+    // ready_successes climbing past 400, phase pinned at MENU, `title_open_menu_passthrough_count=1`
+    // (open_menu DID run) and `menu_opened_latch=0` -- the edge happened and nobody saw it.
+    //
+    // This detour cannot miss it. It IS the call, so a pass-through is the edge, observed from
+    // inside the native frame with no sampling window at all. Only pass-throughs latch: a SUPPRESSED
+    // call is one we dropped while the missing-save picker is pending, and the menu genuinely has
+    // not opened then, so the picker path is untouched.
+    if OWN_STEPPER_MENU_OPENED
+        .compare_exchange(
+            OWN_STEPPER_MENU_OPENED_NO,
+            OWN_STEPPER_CALL_INC,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        append_autoload_debug(format_args!(
+            "title-open-menu: LATCHED menu-opened from the native open_menu pass-through (dialog=0x{rcx:x}) -- the a40 edge as an event, so a game-task tick that misses the transient a40 window no longer re-arms the accept byte forever"
+        ));
+    }
     let after = if suppressed > 0 {
         Some(TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT.fetch_add(1, Ordering::SeqCst) + 1)
     } else {

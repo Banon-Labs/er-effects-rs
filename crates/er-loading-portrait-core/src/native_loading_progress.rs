@@ -90,6 +90,27 @@ pub fn gauge_terminal(cur_frame: usize, max_frame: usize) -> bool {
     max_frame != 0 && cur_frame >= max_frame
 }
 
+/// COMPLETED native loading-screen plates a switch's cover must see before it may let go.
+///
+/// One: the character load's own plate. See `BOOT_VIEW_SWITCH_COMPLETED_NATIVE_SCREENS` for the
+/// measurement that replaced the old ordinal `2`.
+pub const SWITCH_COMPLETED_PLATES_TO_RELEASE: usize = 1;
+
+/// Fold one native loading-screen finish into this cover window's completed-plate count.
+///
+/// A finish whose gauge is at its terminal frame is a WORLD HAVING LOADED; a finish at frame 1 of
+/// 500 is a screen going away (the switch's return-to-title teardown). `gauge_terminal` rather than
+/// `gauge_done` on purpose: a plate with no gauge at all reports nothing, and counting it would let
+/// the cover release on a screen that never showed the user any progress.
+pub fn count_completed_close(completed_so_far: usize, cur_frame: usize, max_frame: usize) -> usize {
+    completed_so_far + usize::from(gauge_terminal(cur_frame, max_frame))
+}
+
+/// May the switch cover release yet, given the completed plates counted so far this window?
+pub fn switch_cover_may_release(completed_closes: usize) -> bool {
+    completed_closes >= SWITCH_COMPLETED_PLATES_TO_RELEASE
+}
+
 /// Has the game's own loading screen FINISHED -- the release predicate's "native done" half.
 ///
 /// # Why the `gauge_done` conjunct is not optional (bd er-effects-rs-t7q2)
@@ -461,6 +482,53 @@ mod tests {
         assert!(!gauge_terminal(0, 0));
         assert!(gauge_terminal(500, 500));
         assert!(!gauge_terminal(499, 500));
+    }
+
+    // ---- the switch cover's release gate: COMPLETED plates, not an ordinal (2026-09-06) ----
+
+    /// Replays the two-plate switch the gate was originally written from
+    /// (br-20260905-235624-a149): the unload finishes at `frame=1/500`, the character load's plate
+    /// finishes at `frame=500/500`. Counting completed plates must open the gate at the SAME
+    /// moment the old `close_hits >= 2` did -- on the second finish, not the first.
+    #[test]
+    fn a_two_plate_switch_releases_on_the_load_plate_not_the_teardown() {
+        let mut completed = 0;
+        completed = count_completed_close(completed, 1, 500); // the unload
+        assert!(
+            !switch_cover_may_release(completed),
+            "the teardown plate released the cover 12.9 s early"
+        );
+        completed = count_completed_close(completed, 500, 500); // the character load
+        assert!(switch_cover_may_release(completed));
+    }
+
+    /// THE MEASURED DEFECT this replaced the ordinal for. The user's ProfileSelect switch shows ONE
+    /// plate, already the character load's -- `loadscreen_builds` advanced by exactly one per cover
+    /// window across both switches of the 2026-09-06 run, and each window's single
+    /// `finish/result sent` reported `frame=500/500`. Under `close_hits >= 2` that window could
+    /// never open, so the cover rode the 35 s FPS bail: `cover_window_ms=35005` and `=35017`,
+    /// 15.3 s and 18.9 s after the bar filled.
+    #[test]
+    fn a_one_plate_switch_releases_on_its_only_plate() {
+        let completed = count_completed_close(0, 500, 500);
+        assert!(
+            switch_cover_may_release(completed),
+            "the single character-load plate left the gate shut; the cover rides the 35 s FPS bail"
+        );
+    }
+
+    /// And a window that has only ever seen teardown plates stays covered -- the property the
+    /// ordinal was protecting, kept.
+    #[test]
+    fn teardown_plates_alone_never_open_the_gate() {
+        let mut completed = 0;
+        for _ in 0..3 {
+            completed = count_completed_close(completed, 1, 500);
+        }
+        assert_eq!(completed, 0);
+        assert!(!switch_cover_may_release(completed));
+        // A gauge-less plate reports nothing and must not count either.
+        assert!(!switch_cover_may_release(count_completed_close(0, 0, 0)));
     }
 
     /// The two sites that ask "is the gauge done" now share one definition, which is the whole

@@ -38,6 +38,32 @@ fn configured_slot_holds_a_character(slot: i32) -> Option<bool> {
     })
 }
 
+/// The configured slot's fingerprint, having first repaired a `CS::ProfileSummary` the game's own
+/// boot read left empty.
+///
+/// The game deserializes that table exactly ONCE per boot. Measured run 2026-09-05 20:58:51: the
+/// wait step polled four times, got the "completed, result code 0" answer instead of the `3` that
+/// fills, advanced without calling `GetProfileSummary`, and all ten records stayed zeroed for the
+/// rest of the boot -- while the container the runtime had open held all ten characters and our own
+/// decoder read every one of them. Waiting out `EMPTY_PROFILE_ESCALATE_TICKS` cannot recover that:
+/// there is no second native read to wait for.
+///
+/// So when the container on disk says this slot HOLDS a character and the live record still says it
+/// does not, rebuild the records from that container -- the same writer, throttle and drift watch
+/// the picked path already ships. Both guards matter: `profile_real` skips this entirely on a boot
+/// whose native read worked, and `Some(true)` from the container means a genuinely vacant slot still
+/// takes the old escalate-to-picker path rather than being rewritten from nothing.
+unsafe fn fingerprint_slot_repairing_an_empty_summary(slot: i32) -> (bool, i32, u32, usize) {
+    let live = unsafe { profile_slot_fingerprint(slot) };
+    if live.0 || configured_slot_holds_a_character(slot) != Some(true) {
+        return live;
+    }
+    if !refresh_boot_default_profile_summary() {
+        return live;
+    }
+    unsafe { profile_slot_fingerprint(slot) }
+}
+
 pub(crate) unsafe fn product_continue_action_ready(
     ready: &ProductCoreAutoloadReady,
     base: usize,
@@ -337,7 +363,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         let (profile_real, profile_map, profile_level, profile_name_len) =
-            unsafe { profile_slot_fingerprint(slot) };
+            unsafe { fingerprint_slot_repairing_an_empty_summary(slot) };
         // CONSECUTIVE, and reset by a single real read. A boot whose ProfileSummary is still
         // filling can reach this check before the save-data job has parsed it, so the count has to
         // measure an UNBROKEN run of empty-like reads -- not how long the autoload has been alive.
@@ -392,11 +418,51 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         let Some(action) = (unsafe { product_continue_item_action(base) }) else {
-            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
-                append_autoload_debug(format_args!(
-                    "product-core-autoload: waiting for native Continue MenuWindowJob result after open-menu dialog=0x{:x} slot={slot} -- no direct_load/direct_build/input fallback",
-                    ready.title_dialog
-                ));
+            // THE CONTINUE LATCH IS UNSATISFIABLE AT THE TITLE, so this is not a wait -- it is the
+            // path. `MENU_CONTINUE_ITEM` latches only on a MenuWindowJob whose docall matches
+            // `MENU_TITLE_CONTINUE_DOCALL_RVA` AND whose accept predicate is
+            // `MENU_ITEM_ACCEPT_NATIVE_RVA`, and the 1.16.2 curated dump names both:
+            //   * 0x140764b80 is an adjustor thunk (`ADD RCX,8 ; JMP 0x140763fc0`) onto a function
+            //     that allocates 0xaa0 and constructs **CS::BackScreen** (a CS::FullScreenMenu)
+            //     with a "Fade" proxy -- the black fade screen, built by the `L"01_900_Black"`
+            //     factory 0x140764290 whose only code xref is CSMenuManImp::Update;
+            //   * 0x1407ad810 is `GLOBAL_CSMenuMan != 0 && !FUN_140765f20(GLOBAL_CSMenuMan)` -- a
+            //     global "menu manager not busy" check, stored by the GENERIC MenuWindowJob ctors,
+            //     so it says nothing about Continue.
+            // Measured 2026-09-05 21:32: 416/416 candidate observations idle,
+            // `native_accept_hits = 0`, `accept_changes = 0`, and the autoload parked forever.
+            //
+            // `title_menu_action_ready` is the identification that IS grounded: TitleTopDialog
+            // vtable, the [dialog+0xa48] registry, a MenuMemberFuncJob vtable, and a member_fn that
+            // resolves through at most six thunk hops to the live Load-Game dialog factory. Firing
+            // its node through the native run 0x1409aaba0 is the game's own path -- no forged
+            // context, no input, no direct deserialize.
+            let owner = {
+                let latched = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+                if latched != null {
+                    latched
+                } else {
+                    TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst)
+                }
+            };
+            let node = if owner == null {
+                None
+            } else {
+                unsafe { er_title_flow::title_menu_action_ready(owner, base) }
+            };
+            match node {
+                Some(node) => {
+                    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
+                    unsafe { fire_product_title_load_action(node, base, tick, slot) };
+                }
+                None => {
+                    if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                        append_autoload_debug(format_args!(
+                            "product-core-autoload: waiting for the semantic Load-Game MenuMemberFuncJob node (owner=0x{owner:x} dialog=0x{:x} slot={slot}) -- TitleTopDialog/registry/node/member_fn not all validated yet; the Continue MenuWindowJob latch is unsatisfiable and is no longer waited on",
+                            ready.title_dialog
+                        ));
+                    }
+                }
             }
             return;
         };

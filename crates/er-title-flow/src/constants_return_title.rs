@@ -523,6 +523,28 @@ pub const CS_EVENT_DEAD_RESET_STATE_8_OFFSET: usize = 0x8;
 /// The dead-reset state the evaluator treats as an ending request.
 pub const DEAD_RESET_STATE_ENDING: i32 = 2;
 
+/// `CS::MoveMapStep`'s per-frame advancer -- the function that COMPUTES `cVar10` and writes it to
+/// `menuData+0x5e`. 1.16.2 `0x140afa6d0`; 1.17 `0x140afb9f0`.
+///
+/// WHY IT IS HERE. Every reading of the nine inputs so far has been taken from OUTSIDE this
+/// function: `MMS-CLEANUP` on the child's Cleanup entry (measured ~2 s late) and then `CVAR10 RISE`
+/// on the game-task tick that NOTICES the `menuData+0x5e` 0->1 edge. The edge sampler is closer but
+/// still downstream -- it polls a value this function has already written -- so the seven zeros it
+/// reports (`rt5d=0 warp=0 b7c=0 b7d=0 force=0 session_proto=6 dead_reset=-1`, run 2026-09-06
+/// 10:04:07) are consistent with "the terms were transient and had already cleared". Sampling at
+/// this function's ENTRY is the only place the inputs are the ones the decision is actually made
+/// from.
+///
+/// HOW IT WAS IDENTIFIED, because the usual route failed. `scripts/map-rvas-1162-to-1170.py`
+/// REFUSES this address: 111 shape matches, none at the nearest anchor's delta. It was found by
+/// call graph instead -- `L"EnableBot"` occurs twice in the 1.17 image and only `0x142bfdfd0` has
+/// xrefs; of its two referents the 137-byte `0x140e7e580` matches 1.16.2
+/// `CS::CSEzSelectBot::IsBotEnabled` exactly, and the one caller of it in the MoveMap region
+/// decompiles with `L"CSEzSelectBot.MoveMapStep"`. `scripts/verify-rva-map-1170.py` then confirmed
+/// the pair independently: IDENTICAL-WHOLE, ratio 1.00 over 972 instructions, BOTH-ENTRIES,
+/// `PDATA:0x11b0/0x11b0`.
+pub const MOVEMAP_ADVANCER_RVA: usize = 0xafa6d0;
+
 /// Last sampled `menuData+0x5e` (== the evaluator's `cVar10` output), so the game-task tick can
 /// detect its 0->1 RISING EDGE. `-1` is the unread sentinel and never matches an edge.
 ///

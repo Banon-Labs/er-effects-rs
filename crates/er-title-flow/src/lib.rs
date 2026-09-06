@@ -64,6 +64,12 @@ include!("product_autoload_gates.rs");
 include!("title_load_step_hooks.rs");
 #[cfg(windows)]
 include!("title_tick_cover.rs");
+// The read-only ending-request (`cVar10`) entry probe: it hooks `MOVEMAP_ADVANCER_RVA` from
+// `constants_return_title.rs` and reads the same GameMan/menuData fields the cover logic does, so
+// it belongs beside them rather than in the shim (crate-extraction roadmap: a whole new module has
+// no reason to be born in `er-quickload/src/experiments/**`).
+#[cfg(windows)]
+include!("movemap_advancer_probe.rs");
 #[cfg(windows)]
 include!("profile_select_flow.rs");
 #[cfg(windows)]

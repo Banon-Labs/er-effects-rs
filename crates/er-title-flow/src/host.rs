@@ -75,6 +75,8 @@ pub struct TitleFlowHost {
     /// `CS::ProfileSummary` (level >= 1 + non-empty name)? This is `profile_slot_fingerprint`, not
     /// `saveSlotsStates` -- the occupancy flag says nothing about the record's contents.
     pub direct_source_slot_summary_real: fn() -> bool,
+    /// The same fingerprint WITHOUT the direct-source gate, for the default boot save.
+    pub boot_slot_summary_real: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
     pub create_continue_trace_hook:
@@ -241,6 +243,7 @@ impl TitleFlowHost {
             save_override_telemetry_only: default_gate_off,
             refresh_direct_source_profile_summary: default_gate_off,
             direct_source_slot_summary_real: default_gate_off,
+            boot_slot_summary_real: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
             install_auto_accept_hook: default_unit,
             decode_thunk_hop: default_decode_thunk_hop,
@@ -395,6 +398,9 @@ pub(crate) fn refresh_direct_source_profile_summary() -> bool {
 }
 pub(crate) fn direct_source_slot_summary_real() -> bool {
     (host().direct_source_slot_summary_real)()
+}
+pub(crate) fn boot_slot_summary_real() -> bool {
+    (host().boot_slot_summary_real)()
 }
 pub(crate) unsafe fn create_continue_trace_hook(
     _hooks: &mut Vec<MhHook>,

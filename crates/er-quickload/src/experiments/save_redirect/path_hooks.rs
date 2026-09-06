@@ -1195,7 +1195,15 @@ pub(crate) enum SaveOverrideMode {
     Redirect,
     /// No explicit source was supplied; the active Steam user's default save exists and is used in place.
     DefaultUserSave,
+    /// The container this run will use is NOT KNOWABLE YET, so nothing has been accepted and the
+    /// picker has NOT been armed. Resolved on the first game-task tick by
+    /// [`resolve_deferred_save_override`]; see its doc for why that instant is the settle point.
+    Deferred,
 }
+
+/// One-shot latch for the deferred default-save decision: 1 = `enforce_save_override_or_abort`
+/// deferred and [`resolve_deferred_save_override`] still owes an answer.
+static SAVE_OVERRIDE_DECISION_DEFERRED: AtomicUsize = AtomicUsize::new(0);
 
 fn activate_save_redirect_source(
     source: SaveRedirectSource,
@@ -1261,6 +1269,31 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         ));
         return SaveOverrideMode::TelemetryOnly;
     }
+    // THE CONTAINER IS NOT KNOWABLE HERE (bd er-effects-rs-1742). This function runs early in
+    // DllMain, and me3 loads `ersc.dll` AFTER us -- so `seamless_coop_loaded()` answers a false
+    // NEGATIVE at this instant, and `active_default_save_file_name()` turns that into
+    // `ER0000.sl2`. On a Seamless launch that is the container the runtime never opens: measured
+    // 2026-09-05, save-override accepted `.sl2` at +51ms while the game and our own
+    // `own_load_read_sl2_bytes` both used `.co2`, the game's ProfileSummary came up empty, the
+    // native Continue row was built disabled (7267 of 7267 rows carried the constant-false idle
+    // accept predicate) and the boot parked at the title forever. `er_save_redirect`'s
+    // `default_save_container_names_for` already documents the same chain end to end for the
+    // 2026-08-26 case: "everything after that ... was downstream of this one line".
+    //
+    // So do not guess. DEFER: accept nothing, arm nothing, and answer on the first game-task tick,
+    // where the latch is settled BY CONSTRUCTION -- me3 loads every `[[natives]]` entry long before
+    // `CSTaskImp` exists, which is the same guarantee `register_shared_hook_with_budget` relies on
+    // for its one-probe budget. Deferring costs nothing: no save IO happens between DllMain and
+    // that tick that depends on this answer, and the redirect hooks install either way as
+    // pass-throughs until a destination is armed.
+    if configured_save_file().is_none() && !crate::telemetry::seamless_coop_loaded() {
+        SAVE_OVERRIDE_DECISION_DEFERRED.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-override: DEFERRED -- {}, and the ERSC module latch has not settled yet (ersc.dll loads after our DllMain, so a read here answers a false negative and would name ER0000.sl2 on a Seamless run). Accepting no default save and arming no picker; the first game-task tick decides.",
+            configured_save_file_absence_reason()
+        ));
+        return SaveOverrideMode::Deferred;
+    }
     if configured_save_file().is_none()
         && let Some((file, steam_id, reason)) = active_default_save_file()
     {
@@ -1284,6 +1317,40 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     ));
     set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
     SaveOverrideMode::Redirect
+}
+
+/// Answer the decision [`enforce_save_override_or_abort`] deferred. Called from the FIRST game-task
+/// tick and idempotent after it.
+///
+/// Why this instant is the settle point: me3 loads every `[[natives]]` entry, `ersc.dll` included,
+/// before `CSTaskImp` exists, so by the time a game task runs `seamless_coop_loaded()` is telling
+/// the truth in both directions -- true means Seamless, and false now means genuinely vanilla
+/// rather than "too early to say".
+///
+/// The picker is the backstop, not the first answer: if the settled container holds no readable
+/// default save, this arms the missing-save picker exactly as the DllMain path would have. Nothing
+/// here guesses a container, so no run can silently proceed against a file the runtime never opens.
+pub(crate) fn resolve_deferred_save_override() {
+    if SAVE_OVERRIDE_DECISION_DEFERRED.swap(0, Ordering::SeqCst) == 0 {
+        return;
+    }
+    let seamless = crate::telemetry::seamless_coop_loaded();
+    if let Some((file, steam_id, reason)) = active_default_save_file() {
+        OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DEFAULT_USER, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-override: DEFAULT-USER-SAVE (settled on the first game-task tick, seamless={seamless}) -- using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
+            file.display()
+        ));
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "save-override: no usable autoload save once the container settled (seamless={seamless}; searched {:?} at exactly {} bytes). Arming the IN-GAME missing-save picker.",
+        default_save_boot_container_names(),
+        SAVE_OVERRIDE_EXPECTED_BYTES
+    ));
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
+    arm_missing_save_picker_after_boot("deferred-save-override-no-readable-default");
 }
 
 /// Picker-mode helper for user-facing save selection. ERSC can register after our DllMain, so picker

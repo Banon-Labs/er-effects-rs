@@ -169,7 +169,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     // explicit loose save_file) the product tick has already confirmed the live menu is open and the IO
     // pool is up, so skip the scan there: it can be over-strict and would otherwise stall on a menu with
     // no separate Load-Game node / stale profile summary.
-    let direct_file_source = direct_save_file_source_active();
+    // The DEFAULT boot save reaches here for the same reason a picked one does: the native Continue
+    // row cannot be identified on this build, and the node this scan looks for does not live in the
+    // dialog at all -- the title's rows are ref-counted CS::MenuMemberFuncJob nodes chained into a
+    // FixOrderJobSequence by the registrar 0x1409b24e0 and owned by the menu manager, so the bounded
+    // flat scan of the dialog object reports hits=0 every tick by construction (measured 2026-09-06,
+    // 1280 qwords). Gating the chain on it would stall a default boot forever. The summary
+    // fingerprint is the real precondition -- the chain loads what the record describes -- and the
+    // boot container repair now satisfies it.
+    let direct_file_source =
+        direct_save_file_source_active() || er_profile_summary_core::boot_slot_summary_real();
     let action = unsafe { title_menu_action_ready(owner, base) };
     if action.is_none() && !direct_file_source {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
@@ -347,6 +356,27 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             && gm != TITLE_OWNER_SCAN_START_ADDRESS
             && unsafe { PlayerIns::local_player_mut() }.is_err()
             && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0;
+        // The BOOT default save, with a real live summary record for the target slot and no player
+        // in the world yet: the same feed the switch case uses, for the same measured reason.
+        let boot_feed_case = !switch_feed_case
+            && gm != TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { PlayerIns::local_player_mut() }.is_err()
+            && er_profile_summary_core::boot_slot_summary_real();
+        // DO NOT DESERIALIZE AT THE TITLE ON THE BOOT PATH. Measured 2026-09-06 (two runs, 09:59
+        // and 10:04): feeding the slot here makes `c30` real BEFORE `continue_confirm`, the world
+        // then loads and is playable (`LOAD-CORRECTNESS name="Banon" level=150`,
+        // `T_controllable player=1`), and ~2.2 s after world entry the MoveMap child finishes, the
+        // advancer raises `menuData+0x5e`, `InGameStep+0xd8` drains through its session-end arm and
+        // `WORLD LOST: c30 0xe000000 -> 0xa010000` fires -- the user's black screen and the looping
+        // "at the end of the previous session" MessageBox. The same shape the System->Quit switch
+        // hit, and bd `step-requestwait-d8-2-to-1-conversion...` records why the d8 2->1 rewrite is
+        // NOT the answer: it re-drives a load the game had already finished and trades the black
+        // screen for a permanent stall in STEP_WorldResWait.
+        //
+        // The repo's own routing design already says where the deserialize belongs -- IN-WORLD,
+        // from `CS::MoveMapStep::DoSaveStuff`, the only native caller `0x14067b290` has. Doing it
+        // at the title is what `note_title_time_deser` exists to make loud, and a correct product
+        // run reports `oracle_title_time_deser_calls = 0`.
         let dret = if switch_feed_case {
             unsafe { own_load_reset_gaitem_singleton(base) };
             if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
@@ -377,6 +407,30 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 note_title_time_deser(slot, "switch-feed-fallback");
                 unsafe { deser(slot) }
             }
+        } else if boot_feed_case {
+            // THE BOOT PATH HITS THE IDENTICAL FAILURE (b) DESCRIBED ABOVE, so it takes the identical
+            // fix. Measured run 2026-09-06 09:46:35: the drain reached RESIDENT(3) after 17 ticks --
+            // the read itself is fine -- and then the native deser returned 0 with
+            // `c30=0xa010000 level=9`, the m10-null level-9 shell, so GUARD failed and the boot went
+            // to DONE without a character. That is the same "reads the game's RESIDENT IO buffer and
+            // gets a shell" symptom the switch case above already solves by feeding OUR on-disk slot
+            // bytes through the SAME native parser.
+            //
+            // Gated on the slot's live `CS::ProfileSummary` record being real, which the boot
+            // container repair establishes before the title menu is built -- so this feeds a slot we
+            // have already decoded, never a guess.
+            unsafe { own_load_reset_gaitem_singleton(base) };
+            if unsafe { own_load_feed_deserialize(base, gm, slot) } {
+                append_autoload_debug(format_args!(
+                    "native-fullread: DESER-path FEED of BOOT slot {slot} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams the character"
+                ));
+                1
+            } else {
+                append_autoload_debug(format_args!(
+                    "native-fullread: DESER-path FEED of BOOT slot {slot} FAILED -- no fallback to the title-time native deser, which is documented to return an m10-null level-9 shell here; going to GUARD so the run fails visibly instead of loading a stub"
+                ));
+                0
+            }
         } else {
             // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
             let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
@@ -393,6 +447,41 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             note_title_time_deser(slot, "boot-fullread");
             unsafe { deser(slot) }
         };
+        // CLEAR THE WARP REQUEST THE DESERIALIZE JUST RAISED. `0x14067b290` ends with
+        // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true` -- correct for the
+        // NATIVE flow, where this runs IN-WORLD from `CS::MoveMapStep::DoSaveStuff` and the map
+        // move consumes the request on the same pass. We run it at the TITLE, so nothing consumes
+        // it, and it is still set when `CS::MoveMapStep`'s ending-request evaluator makes its FIRST
+        // call after the world arrives.
+        //
+        // MEASURED, run 2026-09-06 10:38:51, sampled at that evaluator's own entry rather than
+        // downstream of it: `rt5d=0 warp=1 b7c=0 b7d=0 force=0 session_proto=6 dead_reset=0`.
+        // `GameManIsWarpRequested()` is term 7 of the nine, one true term is all `cVar10` needs,
+        // and the call it was read on is the one that raised `menuData+0x5e`. Everything after is
+        // the documented chain: the MoveMap child leaves resident step 18, `InGameStep` drains
+        // `+0xd8` through its session-end arm, `STEP_GameStepWait` does
+        // `SetMapId(0xff,0xff,0xff,0xff)` -- `WORLD LOST`, the black screen, and the looping
+        // "at the end of the previous session" MessageBox.
+        //
+        // The destination the world actually needs is NOT this flag: it is
+        // `GameMan+0x14` (moveMapStepBlockId), which the same deserialize sets and which
+        // `movemap-init-block #1` measured as the correct `0xe000000` on these runs.
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            let warp_before = unsafe {
+                er_game_base::mem::safe_read_u8(
+                    gm + er_title_flow::GAME_MAN_WARP_REQUESTED_10_OFFSET,
+                )
+            }
+            .unwrap_or(0);
+            if warp_before != 0 {
+                unsafe {
+                    *((gm + er_title_flow::GAME_MAN_WARP_REQUESTED_10_OFFSET) as *mut u8) = 0;
+                }
+                append_autoload_debug(format_args!(
+                    "native-fullread: cleared GameMan+0x10 warpRequested ({warp_before} -> 0) that the title-time deserialize raised -- unconsumed at the title, it is the ending-request term that tore the loaded world back to the title map"
+                ));
+            }
+        }
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let (_fp, level, _nl) = unsafe { char_fingerprint(base) };
@@ -424,6 +513,20 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             FULLREAD_MIN_REAL_LEVEL
         };
         let level_real = level >= min_level;
+        // REVERTED 2026-09-06, and the reason is written here so nobody re-derives it. This
+        // briefly accepted "the live `CS::ProfileSummary` record for the slot is real" INSTEAD of
+        // `c30_real && fp_real && level_real`, on the reasoning that `c30` is written BY the
+        // deserialize and so cannot be a precondition for the commit that causes it. The reasoning
+        // was sound and the change was still wrong: `continue_confirm` + SetState5 with no loaded
+        // character does not deserialize later, it starts a NEW GAME. Measured, run 2026-09-06
+        // 10:26:57 on the user's own default save: `GUARD ... c30_real=false fp_real=false
+        // level_real=false -> guard_pass=true`, then `LOAD-CORRECTNESS name="_" level=9
+        // c30=0xa010000` and the character-creation intro cutscene on screen, one autosave away
+        // from overwriting slot 0 (Banon, RL150). The run was torn down and the container verified
+        // intact.
+        //
+        // This guard is the HARD gate for the only save write in the chain. It does not get
+        // weakened to make a path pass; a path that cannot satisfy it has not loaded a character.
         let guard_pass = c30_real && fp_real && level_real;
         let commit = native_fullread_commit_enabled();
         let guard_waits = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;

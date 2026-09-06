@@ -525,15 +525,19 @@ pub static LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS: AtomicUsize = AtomicUsize::n
 /// It did not: it released 682 ms after the arm, 350 ms BEFORE screen 1 even opened, and the user
 /// watched 12.9 s of bare native loading screen. Same shape on the third switch (689 ms, 8.2 s bare).
 ///
-/// So the release is gated on the SECOND screen having finished -- `LOADING_SCREEN_CLOSE_SENT_HITS
-/// >= 2`, that counter being per-cover-window. 0 = boot (one screen only, no gate).
+/// So the release is gated on the character load's own screen having finished. That was first
+/// written as `LOADING_SCREEN_CLOSE_SENT_HITS >= 2` -- the ordinal -- which the user's actual
+/// ProfileSelect path (ONE plate, already the load's) could never satisfy; it now reads
+/// `LOADING_SCREEN_COMPLETED_CLOSE_HITS >= 1`, the same instant on the two-plate shape above and a
+/// reachable one on the single-plate shape. 0 = boot (one screen only, no gate).
 pub static BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN: AtomicUsize = AtomicUsize::new(0);
 /// Frames the release was held because the second native loading screen had not finished yet. The
 /// direct measure of the defect above: it was 0 on every switch of br-20260905-234626-ce9a, because
 /// nothing was holding.
 pub static BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN: AtomicUsize = AtomicUsize::new(0);
-/// Native loading-screen SHOWINGS completed in this cover window, latched at each finish. 1 = only
-/// the unload plate has been and gone; 2 = the character load's plate has faded too, which is the
+/// Mirror of `LOADING_SCREEN_COMPLETED_CLOSE_HITS` as the gate last read it: COMPLETED native
+/// loading screens (gauge at 500/500 when they finished) in this cover window. 0 = nothing has
+/// loaded a world yet, only teardown plates; 1 = the character load's plate has faded, which is the
 /// moment the cover is allowed to let go.
 pub static BOOT_VIEW_NATIVE_SCREENS_SEEN: AtomicUsize = AtomicUsize::new(0);
 /// Boot-view-epoch ms of the LAST clean portrait publish, i.e. the last frame on which the head the
@@ -566,6 +570,28 @@ pub static LOADING_SCREEN_BAR_FINAL_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_CLOSE_SENT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_CLOSE_SENT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_CLOSE_SENT_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Native loading screens that finished with the gauge AT ITS TERMINAL FRAME, this cover window.
+///
+/// The discriminator `LOADING_SCREEN_CLOSE_SENT_HITS` is missing. That one counts plates; this one
+/// counts plates THAT FILLED. The distinction is already written down in
+/// `BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN`'s own table -- the unload plate finishes at
+/// `frame 1/500`, the character load's finishes at `frame 500/500` -- but the gate read the count
+/// rather than the frame, so it could only express "the second one" and not "the one that loaded a
+/// world".
+///
+/// WHAT THAT COST, measured on this run (er-quickload-autoload-debug.log, 2026-09-06). The user's
+/// ProfileSelect switch path shows exactly ONE plate, not two: `loadscreen_builds` went 1 -> 2 and
+/// 2 -> 3 across the two switches, and each window's single finish reported `frame=500/500`. So
+/// `screens < 2` held forever, `world_handoff=false` in every DECISION line of both windows, and
+/// the cover came down only on the 35 s FPS bail -- `cover_window_ms=35005` at +82240ms and
+/// `cover_window_ms=35017` at +263339ms, i.e. 15.3 s and 18.9 s after the bar filled, with the
+/// world audible behind it the whole time.
+///
+/// Counting completed plates instead is the same answer where the old gate worked (on the two-plate
+/// run br-20260905-235624-a149 the unload's `frame=1/500` finish does not count and the load's
+/// `frame=500/500` finish does, so the release lands at the identical moment) and a reachable one
+/// where it deadlocked.
+pub static LOADING_SCREEN_COMPLETED_CLOSE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static FAKE_LOADING_SCREEN_VISIBLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1963,6 +1989,13 @@ pub static SAVE_SL2_QUERY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_WATCHDOG_ZERO_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Chain slot for ordinal-100 `XInputGetStateEx`, which is a DIFFERENT export at a DIFFERENT address
+/// and therefore needs its own cell. It shares a handler with `XInputGetState` because the two have
+/// the same signature and the same thing is done to both, but sharing the SLOT would be a bug: the
+/// union stores the next-in-chain pointer per registration, so a second registration into one cell
+/// would send `XInputGetState` callers down `XInputGetStateEx`'s chain. Before 2026-09-05 the Ex
+/// detour stored no original at all and silently reused `XINPUT_GET_STATE_ORIG`'s.
+pub static XINPUT_GET_STATE_EX_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// ONE INSTALLER AT A TIME for the XInput detours (2026-08-31). `XINPUT_GET_STATE_ORIG == 0` was the
 /// only guard, and it is set AFTER `MhHook::new` returns -- so two threads that both read 0 both call
 /// `MhHook::new` on the same export. `install_xinput_block` is reached from the GAME task
