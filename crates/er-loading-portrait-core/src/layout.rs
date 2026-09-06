@@ -78,6 +78,7 @@ pub use er_telemetry_core::counters::SCALEFORM_LABEL_GOTO_HOOK_INSTALLED;
 pub const LOADING_SCREEN_GFX_FADEOUT_RVA: usize = 0x90a0a0;
 pub static LOADING_SCREEN_GFX_FADEOUT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_FIRST_MS;
+pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS;
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HITS;
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
@@ -127,6 +128,30 @@ pub const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
 pub const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
 pub const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
 pub const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
+/// The `CS::LoadingScreen` member CSScaleformValue that its OWN authored fade-out is played on --
+/// the single handle that separates the loading screen's fade from every other menu's.
+///
+/// DERIVED FROM THE IMAGE, not inferred from a name. `LOADING_SCREEN_GFX_FADEOUT_RVA` (0x90a0a0,
+/// 1.17 `0x14090b240`) is a 23-byte thunk and its whole body is the derivation:
+///
+/// ```text
+///   mov  0x8(%rcx),%rcx          ; the captured CS::LoadingScreen
+///   lea  0x218833d(%rip),%rdx    ; -> 0x142a93588, the ASCII literal "FadeOut"
+///   add  $0xad8,%rcx             ; ...its clip handle -- THIS OFFSET
+///   jmp  0x14074a830             ; tail-call the generic Scaleform goto wrapper we also hook
+/// ```
+///
+/// The object it lands on is the same one `sample_loading_screen_bar` publishes as
+/// `LOADING_SCREEN_LAST_THIS`: `CS::LoadingScreen::Update` (1.17 `0x14090b850`) reads `+0xa38`
+/// (data), `+0xa48` (gauge) and `+0xab0` (enabled) off that pointer, which are the three offsets
+/// declared directly above this line. So `LOADING_SCREEN_LAST_THIS + 0xad8` IS the loading
+/// screen's fade-out clip, and any other `this` reaching the goto wrapper belongs to some other
+/// movie.
+///
+/// The tail `jmp` is why this offset has to exist at all: a tail-called thunk leaves no frame, so
+/// the wrapper's detour sees the THUNK'S caller as its return address and cannot tell who called
+/// it. The `this` it is handed can, and this is the value to compare it against.
+pub const LOADING_SCREEN_FADEOUT_CLIP_OFFSET: usize = 0xad8;
 pub const MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET: usize = 0x70;
 pub const MENU_FRAME_COMPONENT_MAX_FRAME_OFFSET: usize = 0x74;
 pub const LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET: usize = 0x14;

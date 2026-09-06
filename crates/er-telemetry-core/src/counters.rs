@@ -490,7 +490,66 @@ pub static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(
 pub static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_UPDATE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Fade-outs played on the LOADING SCREEN'S OWN clip (`LOADING_SCREEN_LAST_THIS +
+/// LOADING_SCREEN_FADEOUT_CLIP_OFFSET`). This is the signal that decides whether the custom cover
+/// may start its release fade, so it has to mean the game's loading screen and nothing else.
+///
+/// It did not, until 2026-09-05. The `Scaleform label goto` detour stamped here for ANY movie
+/// whose timeline hit a label containing "fadeout", and 98 of the 106 vanilla menu `.gfx` files
+/// carry one -- including `02_000_ingametop.gfx`, the pause menu. In run br-20260905-221201-969c
+/// ALL 129 stamps were foreign: not one `this` matched the loading screen's clip, so the cover was
+/// being held open by ordinary menu transitions and stayed up ~15s after the world was playable.
 pub static LOADING_SCREEN_GFX_FADEOUT_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Fade-out labels the same detour saw on SOME OTHER movie and refused to count above.
+///
+/// Two jobs, both of which the narrowed counter alone cannot do. It is the detour's LIVENESS
+/// proof: `LOADING_SCREEN_GFX_FADEOUT_HITS == 0` on its own cannot tell "the loading screen never
+/// faded" from "the hook is dead", and a nonzero value here settles it. And it is the size of the
+/// noise that used to be counted as the loading screen's fade -- the number that was 129 in the
+/// reproducing run.
+pub static LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Armed at every own-menu switch: this cover window must span TWO native loading screens, not one.
+///
+/// THE FLOW THE GAME DOES NOT NATIVELY DO (user report 2026-09-05, measured on
+/// br-20260905-234626-ce9a). A System->Quit->Load Character switch shows the native loading plate
+/// TWICE -- once while the OUTGOING world is torn down, once while the incoming character loads --
+/// and the two are distinguishable in the game's own bar:
+///
+/// ```text
+///   REARM   +164497ms   epoch 1
+///   screen 1 (0xb2710080)  frame 1/500 for its whole life, FINISH at frame 1/500   <- the unload
+///   screen 2 (0xab408c80)  frame 61 -> 421 -> FINISH at frame 500/500              <- the load
+/// ```
+///
+/// The cover is supposed to own the screen from the first plate coming up to the second fading out.
+/// It did not: it released 682 ms after the arm, 350 ms BEFORE screen 1 even opened, and the user
+/// watched 12.9 s of bare native loading screen. Same shape on the third switch (689 ms, 8.2 s bare).
+///
+/// So the release is gated on the SECOND screen having finished -- `LOADING_SCREEN_CLOSE_SENT_HITS
+/// >= 2`, that counter being per-cover-window. 0 = boot (one screen only, no gate).
+pub static BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN: AtomicUsize = AtomicUsize::new(0);
+/// Frames the release was held because the second native loading screen had not finished yet. The
+/// direct measure of the defect above: it was 0 on every switch of br-20260905-234626-ce9a, because
+/// nothing was holding.
+pub static BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN: AtomicUsize = AtomicUsize::new(0);
+/// Native loading-screen SHOWINGS completed in this cover window, latched at each finish. 1 = only
+/// the unload plate has been and gone; 2 = the character load's plate has faded too, which is the
+/// moment the cover is allowed to let go.
+pub static BOOT_VIEW_NATIVE_SCREENS_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the LAST clean portrait publish, i.e. the last frame on which the head the
+/// user is looking at actually changed. 0 = none published in this window.
+///
+/// WHY A TIMESTAMP AND NOT ANOTHER COUNT. The window-reset line already reports how MANY frames were
+/// published; what it cannot say is WHEN the last one landed, and that is the whole question behind
+/// "does the portrait animate for as long as it is on screen". On br-20260906-000112-021a the
+/// portrait-motion oracle samples every ~4.5 s and its last line for the switch window is +114405ms
+/// while the cover did not stop until +118876ms -- so the final 4.5 s, including the entire release
+/// fade, had no evidence either way. Paired with `BOOT_VIEW_STOP_MS` this turns that blind spot into
+/// a subtraction.
+pub static PORTRAIT_LAST_PUBLISH_MS: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view-epoch ms of the last frame the portrait DRAW TICK ran. Distinguishes "the pipeline
+/// stopped being driven" from "it ran and had nothing new to publish", which are different bugs.
+pub static PORTRAIT_LAST_DRAW_TICK_MS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_GFX_FADEOUT_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_GFX_FADEOUT_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 pub static KNOWLEDGE_TIP_REFRESH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -1075,17 +1134,12 @@ pub static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE: AtomicUsize = AtomicUs
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_MENU_FREE_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
-pub static SWITCH_TRIGGER_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SWITCH_TRIGGER_TEARDOWN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SWITCH_TRIGGER_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
-pub static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
-/// Set to 1 by poll_switch_slot_control_file the moment the switch control file
-/// (er-quickload-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
-/// switch. The product's sq-repro menu-nav switch driver stands down when this is set, so the two
-/// drivers never fight (which was arming extra switches AND suppressing the move-probe). 0 = not seen.
-pub static DETERMINISTIC_SWITCH_DRIVER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+// DELETED 2026-09-05 with the control-file switch driver (user directive): SWITCH_TRIGGER_ARM_COUNT,
+// SWITCH_TRIGGER_TEARDOWN_COUNT, SWITCH_TRIGGER_LAST_SLOT, SWITCH_TRIGGER_DEFERRED_COUNT,
+// SWITCH_SLOT_CONTROL_MTIME, SWITCH_SLOT_CONTROL_PRIMED and DETERMINISTIC_SWITCH_DRIVER_ACTIVE, plus
+// the `oracle_switch_arm_count` / `_teardown_count` / `_deferred_count` / `_last_slot` /
+// `_slot_control_mtime` / `_slot_control_primed` fields they fed. They measured a driver that armed a
+// character switch WITHOUT the Quit menu, which is the one thing a second load has to go through.
 pub static SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Forwarded `continue_confirm` calls == world loads this session, BOOT INCLUDED. The authoritative
 /// total-load witness; see [`crate::load_count`] for why the epoch is not.
@@ -1325,10 +1379,10 @@ pub static BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE: AtomicUsize = AtomicUsize::ne
 // screen at full alpha and then let the fade finish, which is exactly the "comes back very briefly
 // and tears down" the user described.
 //
-// The stamp that does it is not the loading screen's. `scaleform_label_goto_hook` stamps
+// The stamp that did it was not the loading screen's. `scaleform_label_goto_hook` stamped
 // `LOADING_SCREEN_GFX_FADEOUT_LAST_MS` on ANY timeline label merely CONTAINING "fadeout", on ANY
-// movie -- an over-match already documented at that hook and at the release predicate -- so opening
-// the in-world menu is enough to refresh it.
+// movie, so opening the in-world menu was enough to refresh it. Narrowed 2026-09-05 to the loading
+// screen's own fade clip; a foreign label now lands in `LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS`.
 /// `LOADING_SCREEN_UPDATE_HITS` snapshotted the frame the release fade started.
 ///
 /// This is what tells a REAL hold from an over-matched one. Only the `CS::LoadingScreen::Update`

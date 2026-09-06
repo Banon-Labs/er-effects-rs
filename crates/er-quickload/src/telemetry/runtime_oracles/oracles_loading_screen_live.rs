@@ -99,6 +99,21 @@ fn write_loading_screen_live_oracles(
     );
     push_json_usize(
         body,
+        "oracle_boot_view_native_screens_seen",
+        er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_boot_view_release_held_for_second_screen",
+        er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_loading_screen_gfx_fadeout_foreign_hits",
+        LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
         "oracle_loading_screen_gfx_fadeout_first_ms",
         LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.load(Ordering::SeqCst),
     );

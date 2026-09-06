@@ -328,6 +328,50 @@ pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, p
     }
 }
 
+/// Is `this` the clip the game's own loading screen plays its authored fade-out on?
+///
+/// THE WHOLE POINT OF THE NARROWING. The hooked Scaleform goto wrapper is generic -- every menu in
+/// the game reaches it -- so the argument is the only thing that says who called. Two conditions,
+/// and both are needed:
+///
+///   * `LOADING_SCREEN_UPDATE_LAST_MS != 0` -- the loading screen has ticked since the current
+///     cover window was armed. `boot_view_reset_native_loading_semaphores` zeroes that on every
+///     rearm, so a stale pointer left over from the PREVIOUS load (whose object is freed, and
+///     whose address some later allocation may reuse) can never match across a switch. Before the
+///     incoming screen's first tick there is no loading screen to fade, which is exactly right:
+///     a fade-out arriving then belongs to the outgoing load.
+///   * `this == LOADING_SCREEN_LAST_THIS + LOADING_SCREEN_FADEOUT_CLIP_OFFSET` -- see that
+///     constant's doc for the byte-level derivation out of the 23-byte fade-out thunk.
+fn loading_screen_owns_fadeout_clip(this: usize) -> bool {
+    if LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    let screen = LOADING_SCREEN_LAST_THIS.load(Ordering::SeqCst);
+    if screen == 0 || screen == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    this == screen + LOADING_SCREEN_FADEOUT_CLIP_OFFSET
+}
+
+/// Count a "fadeout" label that belonged to some other movie, and say so once per power of two.
+///
+/// These are not errors and there is nothing to fix about them -- the pause menu really does fade
+/// out. They are logged because a silently-discarded observation is indistinguishable from a dead
+/// hook, and because their count is the size of the noise that used to hold the cover open.
+fn stamp_foreign_gfx_fadeout(this: usize, label: usize) {
+    let hits = LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits <= 4 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "loading-bar: ignored a Scaleform FadeOut label from another movie (foreign_hits={hits}, this=0x{this:x}, label=0x{label:x}, loading_screen_this=0x{:x}, its_fade_clip=0x{:x}, ls_update_last_ms={}); only the loading screen's own clip may hold the cover open",
+            LOADING_SCREEN_LAST_THIS.load(Ordering::SeqCst),
+            LOADING_SCREEN_LAST_THIS
+                .load(Ordering::SeqCst)
+                .wrapping_add(LOADING_SCREEN_FADEOUT_CLIP_OFFSET),
+            LOADING_SCREEN_UPDATE_LAST_MS.load(Ordering::SeqCst),
+        ));
+    }
+}
+
 /// Stamp one Scaleform fade-out observation. `source` names WHICH hook saw it -- `label-goto` (the
 /// timeline label detour) or `knowledge-method` (the loading screen's own GFx fade-out method) --
 /// and `this` is the movie instance the stamp came from.
@@ -341,13 +385,15 @@ pub unsafe extern "system" fn loading_screen_update_hook(this: usize, dt: f32, p
 /// released, so the game should not be fading anything out -- so logging all of them cannot storm
 /// the IO path, and each one carries the source and movie pointer needed to tell them apart.
 ///
-/// CAVEAT, and it is a real one: `scaleform_label_goto_hook` matches ANY timeline label merely
-/// CONTAINING "fadeout", on any movie. The same over-match is already documented at the release
-/// predicate in `boot_progress.rs` ("a burst of 64 such stamps lands during the return-to-title
-/// transition"), and it is why that predicate refuses to use this signal at all. So a `label-goto`
-/// stamp here is SUGGESTIVE, not proof, that the loading screen itself faded: it may be an
-/// unrelated menu's fadeout label. A `knowledge-method` stamp is the loading screen's own method
-/// and carries no such ambiguity. Read the `source=` field before drawing a conclusion.
+/// EVERY STAMP THAT REACHES HERE IS THE LOADING SCREEN'S OWN (narrowed 2026-09-05). It used to be
+/// the opposite: `scaleform_label_goto_hook` stamped on ANY timeline label merely CONTAINING
+/// "fadeout", on ANY movie, and 98 of the 106 vanilla menu `.gfx` files carry one -- so opening the
+/// pause menu refreshed a signal the cover's release gate reads. Measured on run
+/// br-20260905-221201-969c: all 129 stamps were foreign, not one of them the loading screen, and
+/// the cover stayed up ~15s past a playable world. The caller now compares `this` against
+/// `LOADING_SCREEN_LAST_THIS + LOADING_SCREEN_FADEOUT_CLIP_OFFSET`, which the image says is the one
+/// handle the screen plays its own fade on; everything else goes to
+/// `LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS` and holds nothing.
 fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
     let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
     let hits = LOADING_SCREEN_GFX_FADEOUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -387,7 +433,11 @@ fn stamp_loading_gfx_fadeout(source: &str, this: usize, label: usize) {
 /// non-string second argument is a miss rather than a fault.
 pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usize) {
     if unsafe { bounded_ascii_contains(label, b"fadeout") } {
-        stamp_loading_gfx_fadeout("label-goto", this, label);
+        if loading_screen_owns_fadeout_clip(this) {
+            stamp_loading_gfx_fadeout("label-goto", this, label);
+        } else {
+            stamp_foreign_gfx_fadeout(this, label);
+        }
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = SCALEFORM_LABEL_GOTO_ORIG.load(Ordering::SeqCst);
@@ -408,7 +458,17 @@ pub unsafe extern "system" fn scaleform_label_goto_hook(this: usize, label: usiz
 /// `LOADING_SCREEN_GFX_FADEOUT_ORIG`; that static must hold the trampoline this detour was
 /// installed with, or the call transfers to an arbitrary address.
 pub unsafe extern "system" fn loading_screen_gfx_fadeout_hook(this: usize) {
-    stamp_loading_gfx_fadeout("knowledge-method", this, 0);
+    // `this` IS NOT THE SCREEN AND IS NOT THE CLIP. This thunk's first instruction is
+    // `mov 0x8(%rcx),%rcx`, so what it is handed is the functor that captured the screen; the
+    // screen is at +8 and the clip it fades is `screen + LOADING_SCREEN_FADEOUT_CLIP_OFFSET`.
+    // Resolving it here makes this stamp's `this=` the same value the label-goto stamp prints,
+    // which is the only way to read the two lines side by side -- and the read is fault-guarded,
+    // so a functor shape we have mis-derived degrades to the raw pointer rather than crashing.
+    let clip = unsafe { safe_read_usize(this + 0x8) }
+        .filter(|screen| *screen != 0 && *screen != TITLE_OWNER_SCAN_START_ADDRESS)
+        .map(|screen| screen + LOADING_SCREEN_FADEOUT_CLIP_OFFSET)
+        .unwrap_or(this);
+    stamp_loading_gfx_fadeout("knowledge-method", clip, 0);
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = LOADING_SCREEN_GFX_FADEOUT_ORIG.load(Ordering::SeqCst);
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
