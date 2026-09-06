@@ -49,8 +49,13 @@ if [[ ${#pushed_shas[@]} -gt 0 ]]; then
 	# "provably nothing that reaches cargo changed" -- skips it.
 	scope_argv=()
 	for sha in "${pushed_shas[@]}"; do scope_argv+=(--rev "$sha"); done
-	python3 scripts/er-change-scope.py --rust-touched "${scope_argv[@]}"
-	scope_rc=$?
+	# `|| scope_rc=$?` -- NOT a bare call. This script runs under `set -e`, and exit 3 is this
+	# tool's SUCCESS signal ("provably no cargo work"), so a bare invocation aborts the whole
+	# hook the instant the skip is warranted. Measured 2026-09-06: the push died with one line
+	# ("failed to push some refs"), no hook output at all, and the branch never reached origin
+	# -- a skip path that killed the push it was written to make cheap.
+	scope_rc=0
+	python3 scripts/er-change-scope.py --rust-touched "${scope_argv[@]}" || scope_rc=$?
 	if [[ $scope_rc -eq 3 ]]; then
 		printf 'pre-push: check-committed-compiles.sh NOT SELECTED for this push -- no pushed\n' >&2
 		printf '          commit touches anything cargo compiles. It did NOT run; that is not a\n' >&2
