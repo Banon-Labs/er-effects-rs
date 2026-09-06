@@ -435,16 +435,47 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
     // flaw is only subsequent loads), and load1 in-world was measured clean without this gate (bd
     // FPS-ROOT-...-2026-07-22: portrait scan 8x on load1 vs ~3400x on reloads). Switch epochs
     // (cur != 0) keep the per-epoch stop exactly as merged.
+    //
+    // THE PORTRAIT NOW STOPS WHEN THE COVER STOPS, AND NOT BEFORE (2026-09-05, user goal: "the
+    // animated portrait lives as long as the rest of the loading screen elements, and animates for
+    // as long as it lives"). The portrait, the bar and the background are one surface to the person
+    // watching, so they must share ONE liveness semaphore, and `BOOT_VIEW_STOPPED` is the one the
+    // other two already use: `portrait_loadwin_try_release_window_state` defers its state teardown
+    // on it (measured 12 ms after the cover stop on br-20260906-000112-021a), and the compositor
+    // itself is gated on it.
+    //
+    // The condition this replaces stopped the tick on a DIFFERENT event -- the current fresh-deser
+    // epoch's world clock going live -- which is strictly earlier than the cover release: the world
+    // clock ticks while the load plate is still filling, so the head froze partway through a screen
+    // that stayed up for seconds afterwards. It also could not fire at all on the user-driven
+    // ProfileSelect path, where `fresh_deser` is measured at 0 for an entire session, so the two
+    // paths disagreed about when the portrait should stop.
+    //
+    // THE BACKSTOP IS KEPT, because the FPS reason for the old early-out is real: this is a
+    // loading-screen feature and it must not keep driving a render/readback in gameplay. If the
+    // cover never armed at all -- no draws, so its stop latch will never be set -- fall back to the
+    // old world-live rule, exactly as the portrait window's own release does for the same case.
     {
+        if er_telemetry_core::counters::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
+            PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
+            return;
+        }
+        let cover_never_armed =
+            er_telemetry_core::counters::BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) == 0;
         let cur = er_telemetry_core::counters::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
             .load(Ordering::SeqCst);
-        if cur != 0
+        if cover_never_armed
+            && cur != 0
             && er_telemetry_core::counters::BOOT_VIEW_EPOCH_WORLD_LIVE.load(Ordering::SeqCst) == cur
         {
             PROFILE_LOOKAT_REALTIME.store(false, Ordering::SeqCst);
             return;
         }
     }
+    er_telemetry_core::counters::PORTRAIT_LAST_DRAW_TICK_MS.store(
+        crate::host::boot_view_epoch_ms().max(1) as usize,
+        Ordering::SeqCst,
+    );
     // The 0x1653350 detour stays a passthrough (the per-frame PUSH hook owns the pose write now).
     PROFILE_LOOKAT_REALTIME.store(true, Ordering::SeqCst);
     // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the

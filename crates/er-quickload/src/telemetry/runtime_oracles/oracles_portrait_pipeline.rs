@@ -441,6 +441,16 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     );
     push_json_usize(
         body,
+        "oracle_portrait_last_publish_ms",
+        er_telemetry_core::counters::PORTRAIT_LAST_PUBLISH_MS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_last_draw_tick_ms",
+        er_telemetry_core::counters::PORTRAIT_LAST_DRAW_TICK_MS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
         "oracle_portrait_publish_skipped_torn",
         PROFILE_PUBLISH_SKIPPED_TORN.load(Ordering::SeqCst),
     );

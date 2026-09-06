@@ -68,6 +68,26 @@ pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
     if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
         return true;
     }
+    // NEVER IDLE WHILE OUR OWN COVER IS STILL ON SCREEN (2026-09-05, user goal: the portrait lives
+    // as long as the rest of the loading screen and animates for as long as it lives).
+    //
+    // Every other clause below describes the GAME's loading screen -- its `now_loading` state, its
+    // `CSFakeLoadingScreenImp` plate. Ours outlives all of them by the release fade, and the head is
+    // on OUR surface, so idling on the game's timeline freezes a portrait the user is still looking
+    // at. Measured on br-20260906-001201-c84f with the timestamps added for this goal:
+    // `last_draw_tick_ms=39022 last_publish_ms=39051 cover_stop_ms=42201
+    // frozen_before_cover_stop_ms=3150` -- the pipeline stopped being driven 3.18 s before the cover
+    // came down and the head sat still for that whole stretch.
+    //
+    // `BOOT_VIEW_DRAW_HITS != 0` is what makes this a NARROWING rather than a new way to run
+    // forever: it asks whether the cover ever actually composited anything. A window that never
+    // armed has no stop latch to wait for, so it falls straight through to the gameplay clauses and
+    // this clause cannot pin the pipeline on in gameplay.
+    let cover_live = er_telemetry_core::counters::BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst) != 0
+        && er_telemetry_core::counters::BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0;
+    if cover_live {
+        return false;
+    }
     IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
         && unsafe { now_loading_active(base) }
         && !unsafe { fake_loading_screen_visible(base) }
