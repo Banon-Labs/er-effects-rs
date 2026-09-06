@@ -34,6 +34,18 @@ pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
 /// `er-keybinding-table-cspckeyconfig-1162-2026-08-25` for the full layout, the internal-key-id
 /// enum and the scancode lookup table that goes with it.
 pub const CS_PC_KEY_CONFIG_SINGLETON_RVA: usize = 0x3d5dea8;
+/// The `.data` byte `Game.Debug.IsEnableControlOnDisactiveWindow` reads -- the single instruction
+/// `movzx eax, byte ptr [0x144588af1]` at `0x1402e6853` (1.16.2 RVA; the DATA map carries it to
+/// 0x458cb71 on 1.17, bracketed by five anchors that all move +0x4080).
+///
+/// DATA, NOT A HOOK TARGET, and the name says so on purpose: nothing detours this address.
+/// `er-focus-input` WRITES the byte so an unfocused window still feeds input;
+/// `er-quickload`'s `can_move_probe` READS it as one of the three bytes that decide whether the
+/// game reads any input this frame. Declared here because two ME3 shells naming one literal is the
+/// drift `scripts/check-rva-alias-drift.py` exists to catch, and because `_DATA_` in the name is
+/// what keeps `scripts/check-shared-hook-rvas.py` from reading the pair as two MinHook instances on
+/// one prologue.
+pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA: usize = 0x4588af1;
 /// `CS::FieldArea**` singleton global -- 1.16.2 runtime VA `0x143d691d8`.
 ///
 /// The 1.16.2 Ghidra dump has 264 reads of this global. `ConvertBlockCoordsToPhysicsCoords`

@@ -1134,6 +1134,8 @@ def audit(root=CRATES, repo=ROOT, vocab=None, index=None):
         for rva in sorted(site.rvas):
             if rva in maps["detour"] or foreign.is_foreign(rva):
                 continue
+            if is_data_only_address(rva, scanner.index):
+                continue
             kind = (
                 "REFUTED/QUARANTINED"
                 if rva in maps["held"]
@@ -1186,6 +1188,50 @@ def report(result, out=sys.stdout, show_sites=False):
         for site in result["unresolved"]:
             print(f"  {site.where}  {site.installer}({site.expr})  [{site.note}]", file=out)
     return result
+
+
+# A `.data` SINGLETON POINTER IS NOT A DETOUR TARGET, and this gate's own resolver cannot tell one
+# from a function -- see "ADDRESSES ARE RESOLVED BY VALUE, NOT BY SPELLING" above. Its backward walk
+# is deliberately generous: at a wrapper whose parameter is a bare `rva: usize` it follows callers,
+# and where the callers themselves take the address from a table field it collects every RVA the
+# crate declares. Measured 2026-09-06 on `crates/er-input-harness/src/pad_inject.rs:665`
+# (`install_one`): 48 addresses attributed to a site whose six real callers pass six constants
+# (0x240e70, 0x241130, 0x26634a0, 0xe34fb0, 0xe35040, 0xe35080). One of the 42 spurious ones was
+# `GAME_DATA_MAN_GLOBAL_RVA` = 0x3d5df38, which is CALL-MAPPED but detour-REFUSED, so the gate
+# failed on a hook nobody installs. Both crates that name it only ever pass it to a
+# `deref_singleton` read.
+#
+# The rule is the SIBLING GATE'S, not a new invention: `scripts/check-shared-hook-rvas.py` carries
+# `READ_ONLY = GLOBAL|SINGLETON|VTABLE|_DATA_|REPOSITORY` for exactly this, and documents that
+# without it "the gate reported 14 collisions of which 13 were harmless, and a gate that cries wolf
+# gets muted".
+#
+# It is deliberately ALL-or-nothing across declarations: an address is dropped only when EVERY name
+# declaring it says data. One function-shaped name is enough to keep it, so a real detour target
+# that merely shares a value with a data alias still fails.
+# `STATE_ROOT` is this gate's one addition to the sibling's list, and it is not a guess:
+# `MOUNT_GUARD_STATE_ROOT_RVA` is a role alias for the SAME GameDataMan singleton, and its own
+# declaration says so -- "The 'mount guard state root' IS `GameDataMan` (1.16.2 Ghidra, 734 xrefs)".
+# All three names resolving to 0x3d5df38 (that one, `GAME_DATA_MAN_GLOBAL_RVA` and
+# `CONTINUE_MANAGER_GLOBAL_RVA`) are role aliases of one `.data` pointer.
+DATA_ONLY_NAME = re.compile(r"GLOBAL|SINGLETON|VTABLE|_DATA_|REPOSITORY|STATE_ROOT")
+
+
+def is_data_only_address(rva, index):
+    """True when every symbol declaring `rva` names a data object rather than a function."""
+    # `decl.value` is the number the index already resolved for that declaration, so this reads the
+    # same resolution the findings were built from rather than a second opinion.
+    # `decl.value` is a SET (a name can resolve to more than one number through a band or an enum),
+    # so membership is the test -- `== rva` silently matched nothing and read as "no declaration
+    # names this", which would have turned the exclusion into a no-op that still looked implemented.
+    names = {
+        decl.symbol
+        for decl in getattr(index, "decls", ())
+        if decl.symbol and rva in (getattr(decl, "value", None) or ())
+    }
+    if not names:
+        return False
+    return all(DATA_ONLY_NAME.search(name) for name in names)
 
 
 def verdict(result, out=sys.stdout):

@@ -88,10 +88,19 @@
 
 /// `Game.Debug.IsEnableControlOnDisactiveWindow`'s backing byte.
 ///
+/// `_DATA_` IS LOAD-BEARING IN THE NAME, not decoration. This is a `.data` address, translated by
+/// the DATA map (`docs/recon/rva-map-1162-to-1170.data.tsv`), and NOTHING detours it -- this shell
+/// writes the byte, `er-quickload`'s `can_move_probe` reads it. `scripts/check-shared-hook-rvas.py`
+/// cannot tell an aliased data address from a hook target by text (it says so itself, and a
+/// proximity rule for it was tried and rejected), so it read the two crates naming this one value
+/// as two MinHook instances on one prologue and failed the gate. Its `READ_ONLY` rule is the
+/// designed answer: a name carrying `_DATA_` is excluded. Renaming it here is not a workaround --
+/// the old name claimed a hook target that never existed.
+///
 /// 1.16.2 RVA, read by the single instruction `movzx eax, byte ptr [0x144588af1]` at
 /// `0x1402e6853`. `er_game_base::mem::write_global_u8` translates it for the running build and
 /// refuses when it cannot, so the 1.17 address (`0x458cb71`) is never spelled here.
-pub const GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA: usize = 0x4588af1;
+pub use er_game_base::rva::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA;
 
 /// The value `CS::CSPadStep::STEP_Update` needs to see. It tests `CSPadStep+0xba` against zero
 /// (`cmp byte ptr [rdi + 0xba], 0`), so any nonzero byte works; `1` is what the getter's `bool`
@@ -118,8 +127,8 @@ pub fn force_control_on_disactive_window(base: usize) -> bool {
     unsafe {
         er_game_base::mem::write_global_u8(
             base,
-            GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA,
-            "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA",
+            GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA,
+            "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
             CONTROL_ON_DISACTIVE_WINDOW_ENABLED,
         )
     }
@@ -130,8 +139,8 @@ pub fn force_control_on_disactive_window(base: usize) -> bool {
 pub fn control_on_disactive_window(base: usize) -> u8 {
     er_game_base::mem::read_global_u8(
         base,
-        GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA,
-        "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA",
+        GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA,
+        "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
     )
 }
 

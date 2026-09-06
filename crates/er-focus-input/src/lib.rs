@@ -116,7 +116,7 @@ fn on_frame() {
             focus_log!(
                 "unfocused-input: forced Game.Debug.IsEnableControlOnDisactiveWindow byte \
                  (base=0x{base:x} rva=0x{:x}) -- reads back {} after store (frame {})",
-                predicate::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA,
+                predicate::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA,
                 predicate::control_on_disactive_window(base),
                 forced + 1,
             );
@@ -129,9 +129,9 @@ fn on_frame() {
     if REFUSED_FRAMES.fetch_add(1, Ordering::Relaxed) == 0 {
         focus_log!(
             "unfocused-input: REFUSED -- no verified address for \
-             GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA (0x{:x}) on this build ({}). \
+             GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA (0x{:x}) on this build ({}). \
              The window-focus requirement is UNCHANGED; this shell is inert.",
-            predicate::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_RVA,
+            predicate::GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA,
             er_game_base::game_build::describe_build(),
         );
     }

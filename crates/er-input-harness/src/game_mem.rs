@@ -337,7 +337,7 @@ pub fn top_menu_id() -> i32 {
 /// `GLOBAL_CSPcKeyConfig` (1.16.2 RVA; `er_game_base::mem::game_data_addr` maps it to 0x3d61f08 on
 /// 1.17, agreed by 82 references). Resolved from `mov rcx, [rip+0x3607e98]` at 0x140756009, inside
 /// the function that turns a menu code into a device binding.
-const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = 0x3d5dea8;
+const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 /// The binding table inside CSPcKeyConfig: `config + 0x440 + code * 0x14`, valid for `code < 0x36`.
 /// Each 0x14-byte entry is five dwords and `FUN_140242b00` picks by mode -- mode 2, which the menu
 /// path uses, reads the PAD pair at `+0x0c` and `+0x10`.
@@ -449,7 +449,7 @@ const MENU_WINDOW_SCAN_QWORDS: usize = 0x400;
 /// top window is IngameTop, the `+0x1870` read yields nothing usable, and the function returned
 /// `None` before scanning a single slot. Measured on br-20260905-170715-2300, which logged
 /// "no GridControl found in the top menu window" at nav frames 0, 120 and 240.
-const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
+pub(crate) const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
 
 /// Find a `CS::GridControl` inside the top menu window and report `(offset_in_window, selected_cell)`.
 pub fn pause_menu_grid() -> Option<(usize, i32)> {

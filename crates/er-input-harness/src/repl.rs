@@ -101,9 +101,11 @@ const DEFAULT_MAX_HITS: usize = 64;
 /// Ceiling on the qwords one `read` prints, for the same reason.
 const MAX_READ_QWORDS: usize = 64;
 
-/// `CS::GridControl`'s vtable RVA on 1.17, from `scripts/er-rtti-map.py` (MSVC RTTI walked in
-/// `eldenring-deobf-1.17.bin`: `.?AVGridControl@CS@@` -> 0x142a94438).
-const GRID_CONTROL_VTABLE_RVA_1170: usize = 0x2a94438;
+/// `CS::GridControl`'s vtable RVA on 1.17, declared once in `game_mem` (from `scripts/er-rtti-map.py`,
+/// MSVC RTTI walked in `eldenring-deobf-1.17.bin`: `.?AVGridControl@CS@@` -> 0x142a94438). Restating
+/// the literal here made two declarations of one address, which is the drift this crate's own
+/// scanner would then disagree with itself about.
+use crate::game_mem::GRID_CONTROL_VTABLE_RVA_1170;
 /// Selected cell, off the pager's own comparisons against the extents at `+0xd0`/`+0xd8`/`+0xdc`.
 const GRID_CONTROL_SELECTED_D4_OFFSET: usize = 0xd4;
 /// The save-file picker's own cursor grid, embedded in the `05_010_ProfileSelect` dialog. Its
