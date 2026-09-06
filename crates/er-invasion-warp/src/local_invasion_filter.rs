@@ -2363,8 +2363,17 @@ fn install_join_hook() -> usize {
         )
     } {
         Ok(()) => {
+            // SAY WHICH ADDRESS THIS IS. `address` is the seam's own 1.16.2 address;
+            // `register_union_hook` resolves it for the running build BEFORE installing anything
+            // and logs its own `HOOK TRANSLATED` line naming where the detour actually went. This
+            // line used to print the untranslated value with no qualifier, directly beneath that
+            // translation line -- so on 1.17 the log read `... -> 0x1406fc370` followed by
+            // `judging matches at ... @0x1406fb520`, which is exactly the shape of a hook left
+            // behind on a stale address. It cost the 2026-09-06 investigation its opening
+            // hypothesis: the detour was correct the whole time and had already fired four times.
             crate::standalone_log(format_args!(
-                "local-invasion: judging matches at {} @0x{address:x}",
+                "local-invasion: judging matches at {} @0x{address:x} (the seam's own address; the \
+                 HOOK TRANSLATED line above names where the detour went on this build)",
                 seam.name
             ));
             1
