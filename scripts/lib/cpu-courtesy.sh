@@ -80,8 +80,29 @@ er_job_cap() {
 # the user's comfort and is not worth breaking a gate over.
 cpu_courtesy() {
 	local who="${1:-build}" current floor cap
+
+	# IDEMPOTENT, BECAUSE THE CAP READS A NUMBER IT ITSELF CHANGED. `er_cpu_count` calls `nproc`,
+	# which reports the AFFINITY MASK, not the socket -- so a second call inside a nested script
+	# sees the 8 cores the first call granted and halves them again. check.sh sources this and
+	# then invokes check-rust-build.sh, which sources it too: without this guard that run would
+	# have proceeded on 4 cores, then 2, ratcheting toward serial. MEASURED in this file's own
+	# banner on 2026-09-06, which printed "CARGO_BUILD_JOBS=8 of 8 cores" -- the 8 was already
+	# the masked count, one nesting level away from being wrong rather than merely confusing.
+	#
+	# Re-entry is a no-op rather than an error: nice and the mask are inherited by children, so
+	# the nested caller already has everything this would grant it.
+	if [[ -n "${ER_CPU_COURTESY_APPLIED:-}" ]]; then
+		echo "[$who] cpu courtesy: already applied by $ER_CPU_COURTESY_APPLIED (nice $(nice), jobs ${CARGO_BUILD_JOBS:-?})" >&2
+		return 0
+	fi
+
 	floor="$ER_NICE_FLOOR"
+	# Read the machine BEFORE masking it, and remember it, so the banner below reports the cap
+	# against the real core count instead of against itself.
+	local cores
+	cores=$(er_cpu_count)
 	cap=$(er_job_cap)
+	export ER_CPU_COURTESY_APPLIED="$who"
 
 	# Bound the rustc processes cargo will spawn. Exported rather than passed as `-j` so it
 	# reaches every nested cargo invocation, including the ones inside other scripts.
@@ -115,6 +136,6 @@ cpu_courtesy() {
 	# skipped silently where the scheduler or the container does not allow it.
 	command -v ionice >/dev/null 2>&1 && ionice -c 3 -p $$ >/dev/null 2>&1 || true
 
-	echo "[$who] cpu courtesy: nice $current -> $(nice), CARGO_BUILD_JOBS=$cap of $(er_cpu_count) cores" >&2
+	echo "[$who] cpu courtesy: nice $current -> $(nice), CARGO_BUILD_JOBS=$cap of $cores cores, SWEEP_JOBS=$SWEEP_JOBS" >&2
 	echo "[$who]   override with ER_BUILD_JOBS=<n> ER_NICE_FLOOR=<n>; see scripts/lib/cpu-courtesy.sh" >&2
 }

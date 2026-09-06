@@ -63,6 +63,25 @@ if [[ "$d_nice" -ge 10 ]]; then ok "nice $d_nice >= floor 10"; else bad "nice $d
 read -r h_nice _ _ _ < <(probe ER_NICE_FLOOR=3)
 if [[ "$h_nice" -ge 3 ]]; then ok "respects ER_NICE_FLOOR=3 (got $h_nice)"; else bad "ER_NICE_FLOOR ignored: $h_nice"; fi
 
+echo "nesting does not ratchet the cap:"
+# THE REGRESSION THIS PINS: er_cpu_count calls nproc, which reports the affinity MASK. A second
+# cpu_courtesy inside a nested script therefore sees the cores the first one granted and halves
+# them again -- check.sh sources this library and then invokes check-rust-build.sh, which sources
+# it too, so an unguarded version walks 8 -> 4 -> 2 toward serial. Assert the inner call leaves
+# the outer cap alone.
+read -r _ nest_jobs nest_sweep nest_aff < <(env ER_BUILD_JOBS=4 bash -c '
+	set -euo pipefail
+	. scripts/lib/cpu-courtesy.sh
+	cpu_courtesy outer 2>/dev/null
+	unset ER_BUILD_JOBS          # the nested script has no idea what the outer one chose
+	cpu_courtesy inner 2>/dev/null
+	printf "%s %s %s %s\n" "$(nice)" "$CARGO_BUILD_JOBS" "$SWEEP_JOBS" \
+		"$(python3 -c "import os; print(len(os.sched_getaffinity(0)))")"
+')
+check "CARGO_BUILD_JOBS after nesting" 4 "$nest_jobs"
+check "SWEEP_JOBS after nesting"       4 "$nest_sweep"
+check "affinity after nesting"         4 "$nest_aff"
+
 echo "caller's environment wins:"
 read -r _ _ s_sweep _ < <(probe SWEEP_JOBS=1 ER_BUILD_JOBS=8)
 check "SWEEP_JOBS honoured when preset" 1 "$s_sweep"
