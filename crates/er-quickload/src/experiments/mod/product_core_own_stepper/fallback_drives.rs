@@ -441,7 +441,30 @@ macro_rules! own_stepper_idx10_fallbacks {
                 // `game_data_addr`. It resolves on 1.17 today; the check is what keeps that a fact
                 // rather than an assumption.
                 let open_menu_addr = er_game_base::mem::game_data_addr($base, TITLE_TOP_DIALOG_OPEN_MENU_RVA, "TITLE_TOP_DIALOG_OPEN_MENU_RVA");
-                if in_loop
+                // WHY `in_loop` IS NOT REQUIRED (2026-09-04). `TitleTopDialog::update` calls this
+                // same registrar from TWO sites, and only the first is gated on the "Loop" anim
+                // state. Read on 1.16.2 `FUN_1409aac10` (1.17 `FUN_1409abdb0`):
+                //
+                //   if (anim == "Loop" && dialog->a40 == 0) { ... accept ... OpenMenu(dialog); }
+                //   LAB: if (FUN_140e85f50() && dialog->a40 == 0)   { ... OpenMenu(dialog); }
+                //
+                // The second path needs NO anim state -- only the a40 latch clear. Requiring Loop
+                // here was therefore stricter than the game itself, and it is the reason the
+                // post-switch title can never be opened: the warm-rebuilt TitleTopDialog does not
+                // return to "Loop" (the hazard already noted at title_tick_cover.rs ~2562, where
+                // the press-start SceneObjProxy comes back unbound), so the boot fires this once
+                // and a switch never can. Measured: the accept byte is written correctly and
+                // repeatedly post-switch -- it is translated fine for 1.17
+                // (0x144589bdc -> 0x14458dc5c) -- and the title still sits at PRESS BUTTON for
+                // 185s, because behind that gate NOTHING reads it (bd er-effects-rs-tkfb).
+                //
+                // FadeIn/TextFadeOut stay excluded: firing during the fade corrupts the state
+                // machine (bd titletopdialog-fadein-gate), and those are exactly the two states
+                // the native function bails on before either call site. The a40 latch stays
+                // required, which is the one condition BOTH native paths share, and the one-shot
+                // still holds -- it re-arms per switch at system_quit_repro_guards.rs:684.
+                if !in_fadein
+                    && !in_textfadeout
                     && latch == TITLE_OWNER_SCAN_START_ADDRESS
                     && open_menu_addr != TITLE_OWNER_SCAN_START_ADDRESS
                     && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
@@ -460,7 +483,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                         format_args!("dialog=0x{dialog:x} waits={waits}"),
                     );
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1d self-fire open-menu 0x{open_menu_addr:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input) waits={waits}"
+                        "own_stepper: STAGE1d self-fire open-menu 0x{open_menu_addr:x}(dialog=0x{dialog:x}) -- not-FadeIn/not-TextFadeOut + latch clear (the gate the native second call site uses; loop={in_loop}) waits={waits}"
                     ));
                 }
             }

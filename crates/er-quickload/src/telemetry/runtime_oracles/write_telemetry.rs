@@ -368,6 +368,83 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             (title_owner_state_bits as u32 as i32).to_string()
         }
     ));
+    // ENDING-LATCH RESIDUAL, AS A RAM ORACLE (2026-09-04, re-grounded on 1.17 the same day).
+    //
+    // `menuData+0x5e` is the MoveMapStep ending flag. Confirmed on the INSTALLED build (1.17 dump on
+    // :8767, identity-checked against `eldenring-deobf-1.17.bin`, shift 0): the evaluator
+    // `FUN_140afb9f0` writes it unconditionally on every call as `MOV byte ptr [RAX + 0x5e], BL`
+    // @ `0x140afbd0c`, where `RAX = *(CSMenuMan + 8)`; `+0x5d` (return-title REQUEST) is one of the
+    // inputs to the value written. Once `case 8` of its `0x12a` walk consumes the warp
+    // (`FUN_14067bcf0(0)` = `*(GameMan + 0x10) = 0`), nothing re-evaluates the flag, so a `+0x5e` of
+    // 1 with `+0x5d` of 0 is a RESIDUAL rather than a live request. See the long RE note in
+    // `task_registration.rs` for the pairing evidence and the single-writer scan.
+    //
+    // Until now that condition was visible ONLY as a line in the debug log, so a run could revert
+    // with nothing in telemetry to say why -- and the two clears meant to prevent it could report
+    // zero fires without any oracle noticing. `_residual_live` is the residual shape itself;
+    // `_clears` is whether the guard that removes it ever ran.
+    //
+    // WHAT THIS ORACLE DOES **NOT** MEAN (settled 2026-09-04). It is not a pending-teardown signal.
+    // The revert `SetState(6 -> 2=BeginLogo)` is decided by `STEP_GameStepWait`
+    // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`) from exactly `InGameStep+0xd8 == 0`,
+    // `GameMan+0xb7c == 0` and `GameMan+0xb7d == 0` -- `menuData+0x5e` is not read on that path.
+    // The only reader of the byte anywhere is `AddEntry(SummonMsgQueue*, SummonMsgData*)`, which
+    // gates summon-message enqueue. Read this oracle as "the flag is stale and nothing is
+    // re-evaluating it", never as "a world teardown is scheduled"; for that, read the
+    // `GAMESTEPWAIT[req_d8 b7c b7d]` fields now emitted by `title-setstate-trace`.
+    let menu_data_ending_flag_5e =
+        if csmenuman_menu_data != TITLE_OWNER_SCAN_START_ADDRESS && csmenuman_menu_data != 0 {
+            unsafe { safe_read_u8(csmenuman_menu_data + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) }
+        } else {
+            None
+        };
+    body.push_str(&format!(
+        "  \"oracle_menu_data_ending_flag_5e\": {},\n  \"oracle_menu_data_ending_residual_live\": {},\n  \"oracle_menu_data_ending_residual_clears\": {},\n",
+        format_optional_u8(menu_data_ending_flag_5e),
+        // The residual shape: ending flag set with no return-title request behind it. This is the
+        // state the scrub removes. It CORRELATED with the observed revert but does not cause it
+        // (see the note above), so this stays a staleness indicator, not a teardown predictor.
+        menu_data_ending_flag_5e == Some(1) && csmenuman_menu_data_flag_5d == Some(0),
+        ENDING_REQUEST_SET_COUNT.load(Ordering::SeqCst)
+    ));
+    // STALE-SWITCH-LATCH RECOVERY, AS AN ORACLE (2026-09-04). `_resets` is the one that matters: it
+    // stays 0 for the whole life of a healthy session, and a 1 means a switch-load was torn down and
+    // left `SYSTEM_QUIT_QUICKLOAD_PHASE` stuck at TITLE_OWNER_SEEN -- the latch that silently killed
+    // `Load Character from File` for the rest of the process. `_ticks` is the live debounce counter,
+    // so a non-zero value with `_resets` still 0 means the contradiction is being observed right now
+    // and has not yet held long enough to act on.
+    body.push_str(&format!(
+        "  \"oracle_switch_phase_stale_latch_ticks\": {},\n  \"oracle_switch_phase_stale_latch_resets\": {},\n",
+        er_telemetry_core::counters::SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS
+            .load(Ordering::SeqCst),
+        er_telemetry_core::counters::SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS
+            .load(Ordering::SeqCst)
+    ));
+    // DID A NETWORK DISCONNECT FORCE THE RETURN TO TITLE? (2026-09-04)
+    //
+    // `CS::CSLuaEventScriptImitation::RegistReturnTitle` (1.17 `0x14059e700`) sets `CSMenuMan+0x494`
+    // to 1, and ALL SIX of its callers are disconnect handlers -- `OnDisconnectEOSServer`,
+    // `OnDisconnectGameServer`, `OnFailedGetBlockNum`, `OnLanCutError`, `OnNpServerSignOut`,
+    // `OnSuspendResumeLanDisconnect`. So this one byte discriminates between the two live theories
+    // for the black screen: a 1 means the engine was told to go back to the title because the
+    // session dropped, and nothing in our switch/cover code is on that path at all.
+    //
+    // Measured shape it is meant to explain (run br-20260904-165518-e3be): `InGameStep+0xd8` went
+    // 1 (healthy in-world resting request) -> 2 (return-to-title) at +748450ms, 17.2s after the
+    // world loaded, with no submit of ours behind it; `STEP_GameStepWait` then tore the world down
+    // correctly when it drained to 0. A pure read -- no detour, no patched byte, so it cannot
+    // itself perturb the run it is measuring.
+    let regist_return_title_flag_494 = if csmenuman != TITLE_OWNER_SCAN_START_ADDRESS
+        && csmenuman != 0
+    {
+        unsafe { safe_read_u8(csmenuman + CSMENUMAN_REGIST_RETURN_TITLE_FLAG_494_OFFSET) }
+    } else {
+        None
+    };
+    body.push_str(&format!(
+        "  \"oracle_regist_return_title_disconnect_flag\": {},\n",
+        format_optional_u8(regist_return_title_flag_494)
+    ));
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()

@@ -1177,8 +1177,11 @@ pub(crate) unsafe fn force_hide_title_logo_surface(
     //
     // After release, honour what the game asked for. Before release, keep forcing hidden -- that is
     // the whole point of the cover, and the pre-release behaviour is unchanged.
-    let cover_released =
-        er_telemetry_core::counters::BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst) != 0;
+    // A COVER THAT STOPPED WITHOUT RELEASING MUST STILL LIFT THE SUPPRESSION (2026-09-04). The
+    // condition moved into `title_visual_suppression_active`, which carries the measurement, because
+    // the two PressStart force-hides had no release gate at all and a black title has to lift ALL
+    // of them or it is still a black title.
+    let cover_released = !er_telemetry_core::counters::title_visual_suppression_active();
     let effective_visible = if cover_released {
         u8::try_from(requested_visible).unwrap_or(1)
     } else {

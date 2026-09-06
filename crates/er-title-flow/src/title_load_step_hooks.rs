@@ -685,11 +685,28 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         let rt_submit = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst);
         let own_phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-        // ENDING-CONDITION SNAPSHOT at the exact SetState frame (bd er-effects-rs-9fmm): the MoveMapStep
-        // ending evaluator FUN_140afa7c0 sets its cVar10 from any of {warpRequested GM+0x10, menuData+0x5d,
-        // force-flag 0x143d856a0, GM+0xb7c/0xb7d, deadReset, FUN_140679460=b73&&bc4!=3}. Log ALL of them on
-        // a SetState(...,2) from committed=6 so the run NAMES the revert trigger instead of us guessing.
+        // ENDING-CONDITION SNAPSHOT at the exact SetState frame (bd er-effects-rs-9fmm).
+        //
+        // THIS SNAPSHOT USED TO LOG THE WRONG FUNCTION'S INPUTS, AND THAT IS HOW WE MISDIAGNOSED THE
+        // REVERT (2026-09-04). It sampled the MoveMapStep *ending evaluator*'s cVar10 inputs -- warp,
+        // menuData+0x5d/0x5e, b73, bc4 -- but a `SetState(owner, 2=BeginLogo)` from committed=6 is
+        // not decided by that evaluator at all. It is decided by `STEP_GameStepWait`
+        // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`, both size 437, delta +0x16a0), which reads
+        // EXACTLY three things and nothing else:
+        //
+        //     if (InGameStep->requestCode_0xd8 == 0)      // else: no SetState at all
+        //       if (GameMan+0xb7c == 0)                   // else: state 7
+        //         if (GameMan+0xb7d == 0)  -> state 2 = BeginLogo   // else: state 9
+        //
+        // `menuData+0x5e` is NOT read on that path -- verified on the INSTALLED 1.17 build and
+        // identity-checked (shift 0). Because b7c/b7d were missing from this line, the only field
+        // that happened to be set at the revert was md5e, which is how a byte with no role in the
+        // decision became the prime suspect. b7c/b7d are logged now so the trace can NAME the branch.
         let gm_rt = game_man_ptr_or_null();
+        // b7c/b7d are NOT read here. They belong to STEP_GameStepWait's own decision and are
+        // read in their own block below, beside the +0x798 half of that decision -- the shape
+        // `main` settled on. Reading them twice per call is what the rebase of this branch
+        // briefly produced, and clippy caught it as two unused bindings.
         let (warp_req, b73_now, bc4_now) = if gm_rt > PAB_MIN_HEAP_PTR {
             (
                 unsafe { safe_read_u8(gm_rt + GAME_MAN_WARP_REQUESTED_10_OFFSET) }

@@ -621,10 +621,18 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
         record_title_text_gfx_value(value);
-        if let Some(set_visible_addr) = crate::experiments::gated_game_fn(
-            TITLE_PRESS_START_SET_VISIBLE_RVA,
-            "TITLE_PRESS_START_SET_VISIBLE_RVA",
-        ) {
+        // ONLY WHILE THE COVER IS ACTUALLY DRAWING (2026-09-04). This bind-time hide had no release
+        // gate whatsoever, so once the cover stopped it kept blanking `PressStart` on every title
+        // rebuild for the rest of the process -- the half of the black screen that removes the
+        // user's way OUT of it (`oracle_title_press_start_bind_any_hidden=true` with the cover
+        // stopped and drawing nothing). The value/telemetry stores above stay unconditional; only
+        // the forced hide is scoped. See `title_visual_suppression_active` for the measurement.
+        if er_telemetry_core::counters::title_visual_suppression_active()
+            && let Some(set_visible_addr) = crate::experiments::gated_game_fn(
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA",
+            )
+        {
             let set_visible: unsafe extern "system" fn(usize, u8) =
                 unsafe { std::mem::transmute(set_visible_addr) };
             unsafe { set_visible(out_proxy, 0) };

@@ -6,8 +6,31 @@ fn poll_cached_mms18_ending_request_advancer() {
     // down the loaded world. The only post-finalize cleanup we own is menuData+0x5e: native sets it
     // while walking 12a->case8, but leaves it true after mms leaves 18; if it remains true into the
     // resident world, the player is torn down about a second later.
+    //
+    // THE PHASE GATE IS NOT ENOUGH, AND THE RESIDUAL OUTLIVES IT (2026-09-04, black-screen run).
+    //
+    // `SYSTEM_QUIT_QUICKLOAD_PHASE` is driven to IDLE the instant the native slot deserialize is
+    // proven -- `system-quit-quickload: native slot deserialize proof OK ... -> phase IDLE`, logged
+    // at +2029210ms with `world_up=false`. The world then takes another ~14s to stream in. So on a
+    // Load-Character-from-File switch this poll is already gated shut for the whole window in which
+    // the residual actually bites: measured ZERO `ENDING-FLAG POST-FINALIZE CLEAR` lines in a 5.9 MB
+    // log of a run that reverted at +2043697ms.
+    //
+    // `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE` is the durable "a switch reload committed"
+    // latch (set at the feed/continue_confirm commit, cleared only when a NEW switch arms), so it
+    // survives that phase reset and covers the same window the phase gate was meant to cover.
+    //
+    // The sibling clear in `er_title_flow::product_core_autoload_tick`
+    // (`reload-ending-latch-residual-clear`) has the RE-correct CONDITION but is unreachable here:
+    // that tick early-returns at its `title_owner()` gate, which is None during stable in-world.
+    // Same run: `product_core_autoload_ticks=71` against `product_core_callsite_ticks=36814`, with
+    // `product_core_ready_blocks=69` -- its ending-latch code ran at most twice all session.
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED {
+    let switch_reload_committed =
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+    if quickload_phase < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && !switch_reload_committed
+    {
         return;
     }
     let Ok(base) = game_module_base() else {
@@ -44,14 +67,131 @@ fn poll_cached_mms18_ending_request_advancer() {
         .filter(|mms| *mms != TITLE_OWNER_SCAN_START_ADDRESS && *mms > 0x10000)
         .and_then(|mms| unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) })
         .unwrap_or(-1);
-    if mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING {
-        unsafe {
-            *((md + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) as *mut u8) = 0;
-        }
+    // WHY `warpRequested == 0` IS THE RIGHT SECOND CONDITION, AND WHY THE mms/requestCode SHAPE IS
+    // NOT (RE er-effects-rs-9fmm, re-confirmed by the 2026-09-04 revert).
+    //
+    // RE-GROUNDED ON 1.17 (2026-09-04). The reading below was originally decompiled off the 1.16.2
+    // dump on :8765; the INSTALLED game is 1.17. Every address here is now measured on the 1.17
+    // dump (:8767, `proj1170`) and identity-checked against `eldenring-deobf-1.17.bin`
+    // (`check-dump-deobf-identity.py` -> MATCH, shift 0). The 1.16.2 addresses are kept only as the
+    // pairing evidence, never as current.
+    //
+    // The evaluator is `FUN_140afb9f0` on 1.17 (1.16.2: `FUN_140afa6d0`; the `FUN_140afa7c0` this
+    // comment used to name is not a function entry on EITHER build -- it lands 0xf0 inside the
+    // 1.16.2 one). Paired by the unique wide literal `L"CSEzSelectBot.MoveMapStep"` -- 1.16.2
+    // `0x142b60758`, 1.17 `0x142b637f8` -- which both functions reference at the SAME +0xc1 from
+    // entry, with the SAME body size (4491). The byte mapper cannot carry this address: it reports
+    // UNRESOLVED (111 shape matches, none at the nearest anchor delta), so the literal is the proof.
+    //
+    // Measured on 1.17, at instruction level:
+    //   * `MOV byte ptr [RAX + 0x5e], BL` @ `0x140afbd0c` -- the write, UNCONDITIONAL and ahead of
+    //     the switch, so it happens on every call.
+    //   * `MOVZX EAX, byte ptr [RAX + 0x5d]` -- +0x5d feeds the same disjunction it always did.
+    //   * `RAX` is `*(CSMenuMan + 8)` (menuData); CSMenuMan global = `0x143d6f820` on 1.17.
+    //   * `switch (*(param_1 + 0x12a)) { case 0: if (cVar == 0) return; ... }` -- the finalize
+    //     driver, unchanged. `case 8` calls `FUN_14067bcf0(0)`, which is `*(GameMan + 0x10) = 0`:
+    //     the warp really is consumed there.
+    //   * `warpRequested` is read by `FUN_14067a660` = `return *(GameMan + 0x10)`, so
+    //     `GAME_MAN_WARP_REQUESTED_10_OFFSET = 0x10` holds on 1.17.
+    //
+    // So while warpRequested==1 the flag is the live finalize driver and clearing it SABOTAGES the
+    // finalize. Once case 8 has consumed the warp (warpRequested 1->0) nothing re-evaluates the
+    // flag and it stays 1 RESIDUAL.
+    //
+    // That makes this a residual SCRUB, not a suppression: if any genuine end condition still holds,
+    // the native evaluator re-asserts 0x5e on its very next frame. The residual is only reachable
+    // BECAUSE the evaluator has stopped.
+    //
+    // WHAT THE SCRUB CANNOT RACE (measured on both builds, 2026-09-04). Scanning every RIP-relative
+    // load of the CSMenuMan global (779 sites on each build) and decoding 100 instructions forward,
+    // `menuData+0x5e` is touched by exactly TWO instructions per build -- one write and one read:
+    //   1.16.2  write `0x140afa9ec` (evaluator)      read `0x140844023`
+    //   1.17    write `0x140afbd0c` (evaluator)      read `0x140845013`
+    // The evaluator is the ONLY writer, which is what makes a scrub safe: nothing else can be
+    // mid-write, and the evaluator overwrites us next frame whenever it is still running.
+    //
+    // THE REVERT IS NOT CAUSED BY THIS FLAG. MEASURED, NOT INFERRED (2026-09-04).
+    //
+    // This comment used to claim "STEP_EndFlow reads that as return-to-title -> SetState(6 -> 2)".
+    // That is false on both builds, and the real decider has now been read end to end.
+    //
+    // A `SetState(owner, 2=BeginLogo)` from committed=6 comes from `STEP_GameStepWait`
+    // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`, both size 437, delta +0x16a0; the 1.17 one
+    // identity-checked against the image, shift 0). Its ENTIRE decision is three reads:
+    //
+    //     if (InGameStep->requestCode_0xd8 == 0) {        // else: returns, no SetState at all
+    //       if (GameMan+0xb7c == 0) {                     // else: state 7
+    //         if (GameMan+0xb7d == 0) -> state 2 BeginLogo // else: state 9
+    //
+    // `menuData+0x5e` does not appear. `CS::TitleStep::STEP_EndFlow` (1.16.2 `0x140b0cc00`) never
+    // references the byte either, and the ONLY reader of it anywhere reachable through the CSMenuMan
+    // global is `AddEntry(SummonMsgQueue*, SummonMsgData*)` (1.16.2 `0x140843f70` /
+    // 1.17 `0x140844f60`, both size 398, read at the same +0xa3), which merely refuses to enqueue a
+    // summon message while the flag is set.
+    //
+    // WHY THE WRONG SUSPECT LOOKED GUILTY: the `title-setstate-trace` line that motivated the theory
+    // logged `warp/b73/bc4/md5d/md5e` and NOT `b7c`/`b7d` -- it sampled the MoveMapStep evaluator's
+    // inputs, not GameStepWait's. md5e was simply the only logged field that was set. That line now
+    // also logs `GAMESTEPWAIT[req_d8, b7c, b7d]`, so the next run names the branch instead of us
+    // guessing.
+    //
+    // CONSEQUENCE FOR THIS SCRUB: it is safe (single writer, re-asserted next frame while the
+    // evaluator runs) but it is NOT the fix for the revert. To hold off BeginLogo during the
+    // streaming window the lever is `InGameStep+0xd8 != 0` -- which skips the SetState branch
+    // entirely -- not this byte. Left in place rather than ripped out, because it is harmless and
+    // removing it is a behaviour change that deserves its own runtime run; do not cite it as the
+    // black-screen fix.
+    //
+    // Scan caveat, unchanged: the reader search only sees code that reaches menuData THROUGH the
+    // global, so a callee handed the pointer as an argument would be missed.
+    //
+    // The old `mms_step == -1 && request_code == MOVEMAP_PENDING` shape is exactly the class of
+    // over-gating the sibling clear already had to delete: its own comment records "run 1707: the
+    // clear fired 0 times because the mms>=18/player sub-gate excluded that frame". The 2026-09-04
+    // revert frame reported `req_code=0(NONE)` (gm-snap `ig_d8` 2 -> 0 across +2042168..+2043687),
+    // so that shape would have missed it too. Keep it only as an additional trigger, never as a
+    // requirement.
+    //
+    // `md_5d == 0` stays the SAFETY discriminator and is what makes this poll safe to run always:
+    // a genuine user/return-title request carries BOTH flags (measured: the intended switch teardown
+    // at +2028671ms logged `md5d=1 md5e=1`, the spurious revert at +2043697ms logged `md5d=0
+    // md5e=1`), so a real return-to-title is never scrubbed.
+    let gm = game_man_ptr_or_null();
+    let warp_requested = if gm > PAB_MIN_HEAP_PTR {
+        unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
+            .map(i32::from)
+            .unwrap_or(1)
+    } else {
+        1
+    };
+    let warp_consumed = warp_requested == 0;
+    let legacy_post_finalize =
+        mms_step == -1 && request_code == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING;
+    // OBSERVE-ONLY SINCE 2026-09-04 -- THE WRITE IS GONE, DELIBERATELY. Read the next paragraph
+    // before restoring it.
+    //
+    // The comment above concluded this scrub was "harmless" and left it in. Two live runs then
+    // measured it firing 5ms (br-20260904-231726-2f1a, +64388 -> +64393) and 6ms
+    // (br-20260904-181251-0586, +75610 -> +75616) before `MMS-CLEANUP: child leaving STEP_MoveMap ->
+    // Cleanup`, and firing EXACTLY ONCE PER RUN -- only on the load that ends in the black screen,
+    // never on the stable teardown earlier in the same session. "Harmless" is not supported by that.
+    //
+    // Its own trigger is the problem: `warpRequested == 0` becomes true the INSTANT case 8 of the
+    // ending evaluator consumes the warp, which is INSIDE the finalize, not after it. The child
+    // still has to reach its terminal. So the scrub does not clear a settled residual -- it writes
+    // into the middle of a live finalize, on the one code path where the world is being streamed in.
+    //
+    // The counter is kept so the condition stays measurable: `ENDING_REQUEST_SET_COUNT` now means
+    // "times the scrub WOULD have fired". If the black screen still reproduces with this count
+    // non-zero, the byte is exonerated for good and the cause is elsewhere; if it stops, the write
+    // was the cause. That is the whole point of removing it rather than gating it behind a flag.
+    if warp_consumed || legacy_post_finalize {
         let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        append_autoload_debug(format_args!(
-            "ENDING-FLAG POST-FINALIZE CLEAR #{n}: cleared menuData+0x5e after mms left 18 (phase={quickload_phase} requestCode={request_code} mms={mms_step}); native warp already autocleared"
-        ));
+        if n <= 8 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "ENDING-FLAG POST-FINALIZE CLEAR #{n}: WOULD have cleared menuData+0x5e (write REMOVED 2026-09-04) -- phase={quickload_phase} switch_reload_committed={switch_reload_committed} warpRequested={warp_requested} requestCode={request_code} mms={mms_step}; the byte is left exactly as the native evaluator wrote it"
+            ));
+        }
     }
 }
 

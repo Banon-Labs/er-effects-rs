@@ -473,6 +473,22 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
 }
 
 pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+    // THE SUPPRESSION GATE THESE TWO SITES NEVER HAD (2026-09-04). The shared predicate exists
+    // precisely so the title is force-hidden ONLY while the product cover is in front of it, and
+    // three call sites were converted to it -- but these two were missed, so they hid the title
+    // unconditionally on every tick of the product-core autoload path, cover or no cover.
+    //
+    // MEASURED, run br-20260904-235559-0a2b: the cover armed, drew, and STOPPED normally
+    // (stop_ms=32250, stop_reason=3 WORLD_HANDOFF) -- so the predicate was correctly answering
+    // "released" the whole time -- and these two sites kept hiding anyway:
+    // oracle_title_press_start_gfx_hide_calls climbed 979 -> 4967 in a single minute, with
+    // oracle_title_logo_gfx_hide_last_requested_visible=1 recording that the GAME was asking for the
+    // title to be VISIBLE while we answered by hiding it. With PressStart hidden the title cannot be
+    // advanced by ANY accept signal -- not the product's accept byte, not the harness, not a human --
+    // which is a black screen with no way out (bd er-effects-rs-tkfb).
+    if !er_telemetry_core::counters::title_visual_suppression_active() {
+        return;
+    }
     unsafe {
         hide_title_press_start_proxy(
             base,
@@ -484,6 +500,10 @@ pub unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutol
 }
 
 pub unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
+    // Same missed gate as `maybe_hide_title_press_start` above; see the measurement there.
+    if !er_telemetry_core::counters::title_visual_suppression_active() {
+        return;
+    }
     if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
         return;
     }
@@ -1814,20 +1834,34 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
                     ));
                 }
             }
-            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650). menuData+0x5e is
-            // NOT a pure return-title flag: FUN_140afa7c0 writes it = cVar10 each frame, and cVar10=1 is
-            // exactly what DRIVES the MoveMap finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and
-            // consumes warpRequested). So while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing
-            // it then SABOTAGES the finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive
-            // bursts + timing variance). The revert's ENDCOND was ONLY md5e=1 with warp=0: after case 8
-            // consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL and STEP_EndFlow reads that as
-            // return-to-title -> SetState 6->2. FIX: clear the residual ONLY when warpRequested==0 (warp
-            // consumed / not driving), never during the warp-driven finalize.
+            // ENDING-LATCH RESIDUAL CLEAR (corrected, RE er-effects-rs-9fmm run 1650; re-grounded on
+            // 1.17 2026-09-04). menuData+0x5e is NOT a pure return-title flag: the MoveMapStep ending
+            // evaluator writes it = cVar10 each frame, and cVar10=1 is exactly what DRIVES the MoveMap
+            // finalize (walk field25_0x12a 0..8, case 8 advances 18->19 and consumes warpRequested). So
+            // while warpRequested==1 md5e=1 is the finalize DRIVER -- clearing it then SABOTAGES the
+            // finalize (the earlier every-frame clear caused the MMS-CLEANUP re-drive bursts + timing
+            // variance). After case 8 consumes the warp (warpRequested 1->0), md5e stays 1 RESIDUAL.
+            // FIX: clear the residual ONLY when warpRequested==0 (warp consumed / not driving), never
+            // during the warp-driven finalize.
+            //
+            // The evaluator is `FUN_140afb9f0` on the INSTALLED 1.17 build (1.16.2: `FUN_140afa6d0`).
+            // The `FUN_140afa7c0` this comment used to name is not a function entry on either build.
+            // See `CS_MENU_DATA_ENDING_FLAG_5E_OFFSET` in `constants_moved.rs` for the pairing proof.
+            //
             // Gate ONLY on warpRequested==0 (warp consumed / not driving the finalize). Do NOT also gate
             // on mms_step/player: the residual persists after the child is torn down (mms==-1) and the
-            // player is briefly gone, which is exactly the frame STEP_EndFlow reads it (run 1707: the
-            // clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
+            // player is briefly gone, which is exactly the frame the revert is observed on (run 1707:
+            // the clear fired 0 times because the mms>=18/player sub-gate excluded that frame). While
             // warpRequested==1 md5e is the live finalize driver and is left untouched.
+            //
+            // THIS CLEAR DOES NOT PREVENT THE 6->2 REVERT (measured 2026-09-04). The comment used to
+            // say "STEP_EndFlow reads that as return-to-title -> SetState 6->2". No such reader
+            // exists on either build: scanning all 779 CSMenuMan global loads per image, the only
+            // reader of menuData+0x5e is `AddEntry(SummonMsgQueue*, SummonMsgData*)`. The real
+            // decider is `STEP_GameStepWait` (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`), whose
+            // whole condition is `InGameStep+0xd8 == 0 && GameMan+0xb7c == 0 && GameMan+0xb7d == 0`.
+            // Keep this clear for the finalize-hygiene reason above (a stale driver flag), but do
+            // not credit it with stopping the revert.
             let warp_req =
                 unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }.unwrap_or(1);
             if warp_req == 0
@@ -1972,6 +2006,44 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             append_autoload_debug(format_args!(
                 "system-quit-quickload: post-finish stable proof OK (can_move={can_move_for_reload} sf={sf}) epoch={reload_epoch_now} slot={slot} player_present={player_present} ig_d8={ig_d8} -> phase IDLE, cleared save_requested; b78 KEPT ARMED as the warp target (native finalize consumes+autoclears it) so the destination reloads instead of reverting"
             ));
+        }
+        // BREAK A STALE `TITLE_OWNER_SEEN` LATCH (2026-09-04).
+        //
+        // The post-finish stable-proof reset above is the ONLY path back to `PHASE_IDLE`, and it is
+        // gated on `phase >= AUTOLOAD_HANDOFF`. A switch that reaches `TITLE_OWNER_SEEN` and is then
+        // torn down never advances that far, so it can never reach the reset -- `active_switch` stays
+        // true for the rest of the process and the load-job Run guard never lifts. Measured on run
+        // br-20260904-181251-0586: `Load Character from File` became a permanent silent no-op, the
+        // log reading `forwarding native (load-job Run remains guarded)` with two WHY-NOT lines
+        // spinning on `active_switch=true(phase=3)` while this very oracle reported a healthy world
+        // (`player=true ig_d8=1 pstep=7/7 menu_job=0x0`). Restarting the game was the only cure.
+        //
+        // Phase `TITLE_OWNER_SEEN` asserts the TITLE owner is up and we are handing off to the
+        // product Continue autoload. A live player plus a pending in-world MoveMap request plus no
+        // menu job is the direct contradiction of that: at the title there is no player at all. So
+        // the latch is provably stale, and the recovery is to drop it back to IDLE. Debounced over
+        // consecutive ticks so a single transient frame cannot trip it, and it deliberately does
+        // NOT touch GameMan state -- it only stops our own guard from refusing forever.
+        {
+            let phase_now = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let stale_shape = phase_now == SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+                && player_present
+                && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+                && menu_job == 0;
+            if stale_shape {
+                let held = SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS.fetch_add(1, Ordering::SeqCst)
+                    + 1;
+                if held == SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICK_THRESHOLD {
+                    SYSTEM_QUIT_QUICKLOAD_PHASE
+                        .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                    SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS.fetch_add(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: STALE TITLE_OWNER_SEEN LATCH BROKEN after {held} consecutive ticks -- phase was {phase_now} (title-owner-seen) while the world is up (player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x}), which cannot both be true; phase -> IDLE so the load-job Run guard lifts and Load Character from File stops being a no-op. No GameMan state touched."
+                    ));
+                }
+            } else {
+                SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS.store(0, Ordering::SeqCst);
+            }
         }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
         let dropped = !stable && peak >= 30;
