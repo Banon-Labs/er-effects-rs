@@ -500,6 +500,13 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
             PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
             PROFILE_PUBLISH_CLEAN_WINDOW.fetch_add(1, Ordering::SeqCst);
+            // WHEN, not just how many. This is the last moment the head on screen actually changed,
+            // and it is the only way to say whether the portrait animated for as long as it was
+            // visible or froze partway through the cover. See the counter's own doc.
+            er_telemetry_core::counters::PORTRAIT_LAST_PUBLISH_MS.store(
+                crate::host::boot_view_epoch_ms().max(1) as usize,
+                Ordering::SeqCst,
+            );
             // First-keyed latency (er-effects-rs-hi2): stamp the display-frame
             // index of this window's FIRST published frame -- how long the
             // bridge held the prior head before the new one took over.

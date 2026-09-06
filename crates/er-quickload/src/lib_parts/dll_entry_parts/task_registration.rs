@@ -339,16 +339,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     let p = player.chr_ins.modules.physics.position;
                     crate::experiments::can_move_probe::tick((p.0, p.1, p.2));
                 }
-                // PROGRAMMATIC SWITCH TRIGGER (2026-07-18): poll the harness switch-slot control file and,
-                // when a new (in-world, resident) request appears with no switch in flight, arm a menu-free
-                // switch (menuData+0x5d=1 teardown -> own_load_switch_reload_fire). Replaces the brittle
-                // simulated-input autopilot for repeatable multi-character loading. Self-gates (phase IDLE +
-                // world resident @ step 18 + mtime change), so an every-frame call is cheap and safe.
+                // NO PROGRAMMATIC SWITCH TRIGGER LIVES HERE ANY MORE (deleted 2026-09-05, user
+                // directive). `poll_switch_slot_control_file` used to read a game-directory control
+                // file and arm a MENU-FREE character switch straight into
+                // `own_load_switch_reload_fire`, so every second and third load this project ever
+                // measured skipped the Quit-menu path a real player has to take. That made it the
+                // wrong instrument for the only thing it was used for: proving the menu flow works.
+                // A second load must now come from the menu, or not at all.
                 poll_cached_mms18_ending_request_advancer();
                 if let Ok(base) = game_module_base() {
                     unsafe {
                         profile_editor_necromancy_tick(base);
-                        poll_switch_slot_control_file(base);
                     }
                 }
                 // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix,

@@ -1,5 +1,7 @@
 # Addendum proposals to `repeatable-multi-save-load-acceptance.md`
 
+> **DELETED 2026-09-05 (user directive):** every tool and product path this document names for driving loads 2..N -- `run-samechar-3x-threedll.sh`, `capture-samechar-3x.py`, `run-slot-portrait-proof.py`, `switch_slot_arm_programmatic`, `poll_switch_slot_control_file`, `er-quickload-switch-slot.txt` -- is gone. They armed a character switch WITHOUT the Quit menu, so their evidence never described the path a player takes. Read the steps below as history, not as instructions; a second load now has to come from the menu.
+
 **From:** autonomous session, 2026-07-22 (evening).
 **Framing:** "I think your goal would ACTUALLY be better if…" — these are proposed *sharpenings* of the
 acceptance doc, each grounded in evidence produced THIS session, not hand-waving. Nothing here lowers

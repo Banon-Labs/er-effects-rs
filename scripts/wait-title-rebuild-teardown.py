@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """LEAN, DETERMINISTIC prompt-teardown watcher for the warm-title-rebuild A/B.
 
-Replaces the `capture-samechar-3x.py --observe-only --observe-seconds 300` ride (which tears down 45s
+Replaces the old `capture-samechar-3x.py --observe-only --observe-seconds 300` ride (deleted 2026-09-05; it tore down 45s
 AFTER settled world, so each arm is 4-5 min and lingers -- bd teardown-must-be-prompt-scoped-to-decisive-
 oracle-no-long-waits-2026-07-24). This watcher RETURNS PROMPTLY the instant THIS test's DECISIVE oracle is
 captured, letting run-vanilla-reload-agentdriven.sh's PID-scoped `cleanup()` EXIT trap do the kill. It

@@ -606,8 +606,28 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         // No pipeline tick at all: a build-side gap, not a publish-gate fault.
         "no-render-drive"
     };
+    // DID IT ANIMATE FOR AS LONG AS IT WAS ON SCREEN? The counts above cannot answer that -- they
+    // say how many frames were published, never when the last one was. `frozen_before_cover_stop_ms`
+    // is the answer as a subtraction: the gap between the last frame on which the head actually
+    // changed and the moment the cover let go. 0 means the portrait was still moving when the
+    // loading screen came down; anything large is the head sitting frozen under a cover that was
+    // still up, which is the defect this pair of timestamps exists to make impossible to miss.
+    //
+    // `last_draw_tick_ms` separates the two ways that can happen: a tick that stopped running
+    // (the drive was gated off) and a tick that ran with nothing new to publish (the pipeline
+    // stalled). Those have different fixes, so a single "it froze" number would not be enough.
+    let last_publish = er_telemetry_core::counters::PORTRAIT_LAST_PUBLISH_MS.load(Ordering::SeqCst);
+    let last_tick = er_telemetry_core::counters::PORTRAIT_LAST_DRAW_TICK_MS.load(Ordering::SeqCst);
+    let cover_stop = er_telemetry_core::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst);
+    let frozen_ms = if last_publish == 0 || cover_stop == 0 {
+        // Not measurable rather than 0: one of the two ends does not exist, and reporting a gap of
+        // zero for a window that published nothing would read as a clean result.
+        usize::MAX
+    } else {
+        cover_stop.saturating_sub(last_publish)
+    };
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}{}) -- displayed {display} frames / pose_drive {drive} (blocked={pose_blocked}) / render_drive {render_drive}; anim={anim_verdict} publish={publish_verdict}; publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} copies_total={copies_total} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}]; pins/spare cleared for the next load",
+        "present-overlay: loading-portrait window reset ({reason}{}) -- displayed {display} frames / pose_drive {drive} (blocked={pose_blocked}) / render_drive {render_drive}; anim={anim_verdict} publish={publish_verdict}; live[last_publish_ms={last_publish} last_draw_tick_ms={last_tick} cover_stop_ms={cover_stop} frozen_before_cover_stop_ms={frozen_ms}]; publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} copies_total={copies_total} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}]; pins/spare cleared for the next load",
         if hold_bridge {
             ", same-identity bridge HELD"
         } else {

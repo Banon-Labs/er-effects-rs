@@ -65,8 +65,6 @@ include!("title_load_step_hooks.rs");
 #[cfg(windows)]
 include!("title_tick_cover.rs");
 #[cfg(windows)]
-include!("switch_slot_control.rs");
-#[cfg(windows)]
 include!("profile_select_flow.rs");
 #[cfg(windows)]
 include!("native_title_job.rs");

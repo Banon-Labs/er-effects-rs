@@ -95,7 +95,6 @@ GROUPS = {
     "R2 switch / reload": [
         "system_quit_continue_confirm_fresh_deser_count",
         "system_quit_continue_confirm_fresh_deser_done",
-        "oracle_switch_slot_control_primed", "oracle_switch_slot_control_mtime",
         "oracle_current_load_epoch", "oracle_can_move", "oracle_supplied_movement_input_frames",
         "oracle_harness_move_verdict", "oracle_worldreswait_hold_engaged",
         "oracle_worldreswait_released_on_settle", "oracle_worldreswait_gate_calls",
@@ -160,7 +159,7 @@ if os.path.exists(ts):
 
 rep = p("report.json")
 if os.path.exists(rep):
-    # `capture-samechar-3x.py --report` writes MARKDOWN despite the `.json` name the callers pass.
+    # The deleted `capture-samechar-3x.py --report` wrote MARKDOWN despite the `.json` name callers pass.
     # Print whatever it is rather than crashing on a JSON parse -- the report is the run's verdict
     # and a scorer that dies on it is worse than useless.
     print("\n=== WATCHER REPORT ===")

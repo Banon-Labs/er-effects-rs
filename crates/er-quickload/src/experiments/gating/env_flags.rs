@@ -227,9 +227,10 @@ pub(crate) fn worldreswait_hold_enabled() -> bool {
     }
 }
 
-/// True only while a System->Quit->Load-Profile SWITCH RELOAD is in progress -- i.e. one was armed via
-/// `switch_slot_arm_programmatic`, which advances `SYSTEM_QUIT_QUICKLOAD_PHASE` to at least
-/// RETURN_TITLE_REQUESTED. On the BOOT autoload (LOAD1) the phase is IDLE, so this is false and every
+/// True only while a System->Quit->Load-Profile SWITCH RELOAD is in progress -- i.e. one was armed by
+/// the USER ProfileSelect path (`system_quit_arm_quickload_autoload`), which advances
+/// `SYSTEM_QUIT_QUICKLOAD_PHASE` to at least RETURN_TITLE_REQUESTED. That is now the ONLY arm: the
+/// menu-free `switch_slot_arm_programmatic` was deleted on 2026-09-05. On the BOOT autoload (LOAD1) the phase is IDLE, so this is false and every
 /// Phase-3 behavior is scoped OFF for load1. This is the critical guard: boot's own continue_confirm sets
 /// FRESH_DESER_COUNT != 0, so the holds' OWN conditions DO fire during load1's autoload handoff -- without
 /// this switch gate the Phase-3 hold-suppression would (and did, run angre-phase3fix-1) disable those
@@ -398,23 +399,19 @@ pub(crate) fn renderdoc_active() -> bool {
     present
 }
 pub(crate) fn system_quit_repro_enabled() -> bool {
-    // Stand down the flaky menu-nav switch driver when the DETERMINISTIC control-file driver owns the
-    // switch (er-quickload-switch-slot.txt present). Running both fought over arming AND the menu-nav
-    // suppressed the move-probe (load2 can_move never latched). The move-probe (prove_movement_enabled)
-    // stays on harness presence. bd MILESTONE-detdrive-works-but-sqrepro-menunav-conflict-2026-07-21.
-    // ALSO stand down when the HARNESS is driving the menu itself (its force-drive marker is
-    // present). Two switch drivers in one process do not merely conflict -- they make the run a lie.
-    // Measured on br-20260905-041435-e8d0: the harness had opened the pause menu and was on
-    // `nav_to_optionsetting` when this autopilot hit its 180-frame settle, called
-    // `switch_slot_arm_programmatic` and tore the world down (`world_sim` 1 -> 0), so the phase
-    // logged DERAILED for a nav that never got the chance to fail. The second load the user watched
-    // was this autopilot's every time -- `presses=0` -- which is why a menu bug could never be
-    // reproduced no matter how correct the harness's menu phases became.
-    harness_dll_present()
-        && !harness_force_drive_marker_present()
-        && er_telemetry_core::counters::DETERMINISTIC_SWITCH_DRIVER_ACTIVE
-            .load(std::sync::atomic::Ordering::SeqCst)
-            == 0
+    // Stand down when the HARNESS is driving the menu itself (its force-drive marker is present).
+    // Two switch drivers in one process do not merely conflict -- they make the run a lie. Measured
+    // on br-20260905-041435-e8d0: the harness had opened the pause menu and was on
+    // `nav_to_optionsetting` when the old autopilot hit its 180-frame settle, armed a menu-free
+    // switch and tore the world down (`world_sim` 1 -> 0), so the phase logged DERAILED for a nav
+    // that never got the chance to fail. The second load the user watched was the autopilot's every
+    // time -- `presses=0` -- which is why a menu bug could never be reproduced no matter how correct
+    // the harness's menu phases became.
+    //
+    // The third clause this used to carry stood the driver down whenever the control-file switch
+    // driver was live. That driver was deleted on 2026-09-05 (user directive) precisely because it
+    // loaded characters without the menu, so there is nothing left to defer to.
+    harness_dll_present() && !harness_force_drive_marker_present()
 }
 
 /// TRUE when `er-input-harness` has been told to drive this run itself (the same marker its

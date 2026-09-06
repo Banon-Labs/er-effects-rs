@@ -40,7 +40,7 @@ IS_WSL = shutil.which("tasklist.exe") is not None
 ME3_IMAGES = ("me3.exe", "me3-launcher.exe") if IS_WSL else ("me3",)
 KILL_VERIFY_SECONDS = 2.0
 # Never set: `.wait(n)` paces the poll loop as an interruptible bounded wait (the repo's
-# watcher idiom, e.g. capture-samechar-3x.py), not a raw time.sleep.
+# watcher idiom), not a raw time.sleep.
 _POLL_WAIT = threading.Event()
 
 

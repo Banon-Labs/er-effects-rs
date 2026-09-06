@@ -1340,7 +1340,17 @@ def main() -> int:
     parser.add_argument(
         "--harness-drive",
         metavar="MODE",
-        choices=("boot", "reload", "reload2", "full", "menureload", "probe", "equip", "inv"),
+        choices=(
+            "boot",
+            "reload",
+            "reload2",
+            "full",
+            "menureload",
+            "menuchain",
+            "probe",
+            "equip",
+            "inv",
+        ),
         help=(
             "arm er-input-harness to drive the MENU with real key events instead of standing down. "
             "The harness resolves Passive whenever the product DLL is loaded, which is every run here, "
@@ -1348,7 +1358,9 @@ def main() -> int:
             "code in every launch (`drive: mode='passive' phases=0`). This writes the two markers that "
             "override that, into the run's artifact directory where the DLL resolves them beside its "
             "log. Use it whenever a run has to reproduce something through the menu: a switch armed by "
-            "`switch_slot_arm_programmatic` prints `presses=0` and proves nothing about a menu bug."
+            "a load armed without the menu proves nothing about a menu bug -- and since 2026-09-05 "
+            "there is no such arm left, so loads 2..N happen HERE or not at all. `menureload` "
+            "drives one; `menuchain` drives three, which is what a load-3 defect needs."
         ),
     )
     parser.add_argument(

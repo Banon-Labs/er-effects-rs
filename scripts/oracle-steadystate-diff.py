@@ -65,20 +65,15 @@ DROP_FIELDS = {
     "oracle_rawinput_mouse_button_events",
     "oracle_rawinput_mouse_move_events",
     "oracle_rawinput_blocked_unfocused_events",
-    "oracle_switch_arm_count",
-    "oracle_switch_deferred_count",
-    "oracle_switch_teardown_count",
     "oracle_switch_reload_drain_waits",
     # mod-internal switch FSM bookkeeping -- no vanilla counterpart, describes the mod's own switch
     # state machine, not a GAME-state semaphore. Parity is about game state, so these are scaffolding.
-    "oracle_switch_last_slot",
     "oracle_switch_reload_phase",
     "oracle_switch_reload_committed",
     "oracle_switch_player_present",
     "oracle_switch_menu_job_present",
     "oracle_switch_stable_frames",
-    "oracle_switch_slot_control_primed",
-    "oracle_switch_slot_control_mtime",  # source-file mtime (wall-clock)
+     # source-file mtime (wall-clock)
     "system_quit_continue_confirm_allow_count",
     "system_quit_continue_confirm_fresh_deser_count",
     "system_quit_continue_confirm_fresh_deser_done",

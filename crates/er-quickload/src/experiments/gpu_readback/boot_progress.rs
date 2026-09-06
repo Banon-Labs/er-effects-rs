@@ -513,11 +513,71 @@ fn boot_view_player_loaded() -> bool {
 /// stays as an immediate release: it is the strongest possible proof the world is playable, but it
 /// is written only by the PROOF-ONLY can-move probe (`can_move_probe.rs:277` -- "never fires in a
 /// normal user session"), so it can never be the product path on its own.
+/// Native loading-screen SHOWINGS a System->Quit->Load Character switch produces: the outgoing
+/// world's teardown plate, then the incoming character's load plate. The boot load produces one, so
+/// this threshold is only ever applied to a switch.
+const BOOT_VIEW_SWITCH_NATIVE_SCREENS: usize = 2;
+
 fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     use er_telemetry_core::counters::{
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN, BOOT_VIEW_RELEASE_READY_MS,
         BOOT_VIEW_RELEASE_RENDER_READY_SEEN, BOOT_VIEW_SEMANTIC_RELEASES,
     };
+    // SECOND-SCREEN GATE, AND IT IS DELIBERATELY ABOVE `can_move_handoff` (2026-09-05).
+    //
+    // `can_move_handoff` short-circuiting first is what actually released the cover, and it is a
+    // false positive by construction rather than a rare race. It reads `CAN_MOVE_CONFIRMED &&
+    // MOVE_PROBE_EPOCH == cur_load_epoch`, and at the ARM frame of a switch BOTH still describe the
+    // OUTGOING world: the player is genuinely still standing in it, and neither epoch counter has
+    // moved yet. Measured at the arm frame of two separate switches on
+    // br-20260905-234626-ce9a -- `can_move_handoff=true fresh_deser=0 move_epoch=0` -- so
+    // `world_handoff` was true on the cover window's FIRST frame, the fade started immediately, and
+    // `stop cover ... cover_window_ms=689` landed 350 ms before the incoming loading screen opened.
+    // The character-load gate below was written for exactly this and never got to run.
+    //
+    // The gate here is the one the user described in product terms: cover from the moment the first
+    // plate comes up to the moment the second fades out. `LOADING_SCREEN_CLOSE_SENT_HITS` is reset
+    // per cover window and latched once per native showing, so `>= 2` IS "the character load's own
+    // screen has finished". On the one switch whose cover survived long enough to log the whole
+    // sequence that moment was +178101ms, 12.9 s after the arm -- the correct release, against the
+    // 682 ms the code actually took.
+    if er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.load(Ordering::SeqCst)
+        != 0
+    {
+        let screens = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
+        er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.store(screens, Ordering::SeqCst);
+        if screens < BOOT_VIEW_SWITCH_NATIVE_SCREENS {
+            er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN
+                .fetch_add(1, Ordering::SeqCst);
+            // Same reason the confirm gate clears its latches: both release facts are readily true
+            // during the teardown plate, so one observed then would fire the release the instant
+            // this gate opened -- the identical bug, one screen later.
+            BOOT_VIEW_RELEASE_RENDER_READY_SEEN.store(0, Ordering::SeqCst);
+            BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN.store(0, Ordering::SeqCst);
+            return false;
+        }
+        // AND IT RELEASES. It does not fall through to the gates below, and that is the whole
+        // correction of 2026-09-05's second attempt.
+        //
+        // WHAT FALLING THROUGH COST, measured on br-20260905-235624-a149. The span half worked --
+        // the cover held across both plates, `LS FINISH hits=1 frame=1/500` at +86721ms (the unload)
+        // and `hits=2 frame=500/500` at +103626ms (the load) -- and then the cover NEVER CAME DOWN.
+        // Not late: never. It stayed up 54 s, until the next switch's rearm at +157331ms tore the
+        // window down for its own reasons, and the user heard the character load in behind it.
+        //
+        // The blocker was `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM` immediately below, which holds until
+        // `SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT` advances past its arm-time baseline. On
+        // the USER-driven ProfileSelect path that counter never moves: `fresh_deser=0` in every one
+        // of that run's DECISION lines, from the first to the last, so `0 <= 0` held forever while
+        // the bar sat at `permille=1000` and `render_ready=true`.
+        //
+        // The two gates were asking the same question. The confirm counter is a PROXY for "this
+        // switch's character load has begun"; the second plate FINISHING is that load having
+        // finished, observed directly, on the same path the user is on. A proxy that disagrees with
+        // the thing it stands for is not a second opinion, so the stronger fact answers for both.
+        er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
+        return true;
+    }
     if can_move_handoff {
         return true;
     }
@@ -847,6 +907,7 @@ fn boot_view_reset_native_loading_semaphores() {
     LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_GFX_FADEOUT_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_GFX_FADEOUT_FIRST_MS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_GFX_FADEOUT_LAST_MS.store(0, Ordering::SeqCst);
 }
@@ -858,15 +919,15 @@ fn boot_view_reset_native_loading_semaphores() {
 /// every frame from two RECENCY predicates -- a Scaleform fade-out stamped within
 /// `BOOT_VIEW_NATIVE_GFX_FADEOUT_HOLD_MS`, or a `CS::LoadingScreen::Update` tick within
 /// `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS`. Neither can become true again on its own as time
-/// passes; both need a FRESH stamp. One of the two writers takes any stamp at all:
-/// `scaleform_label_goto_hook` calls `stamp_loading_gfx_fadeout` for ANY timeline label merely
+/// passes; both need a FRESH stamp. One of the two writers used to take any stamp at all:
+/// `scaleform_label_goto_hook` called `stamp_loading_gfx_fadeout` for ANY timeline label merely
 /// CONTAINING "fadeout", on ANY movie, matched case-insensitively (`bounded_ascii_contains`
-/// lowercases). Opening the in-world menu is enough, and that is measured rather than assumed: of
+/// lowercases). Opening the in-world menu was enough, and that is measured rather than assumed: of
 /// the 106 vanilla menu `.gfx` movies in the local extraction, 98 carry a frame label literally
 /// named `FadeOut` -- including `02_000_ingametop.gfx`, the pause menu Escape opens, whose label
 /// table reads `FadeIn` / `Loop` / `FadeOut`, and `01_000_fe.gfx`, the HUD that fades out when it
-/// does. So this stamp is not a loading-screen signal at all; almost any menu transition refreshes
-/// it. The hold then re-asserts mid-fade and the old code fell through to the OPAQUE cover path,
+/// does. So the stamp was not a loading-screen signal at all; almost any menu transition refreshed
+/// it. The hold then re-asserted mid-fade and the old code fell through to the OPAQUE cover path,
 /// which rasterizes with
 /// `draw_portrait: true` where the fade frame is built with `draw_portrait: false` -- so the head
 /// was not riding the fade down, it was being re-drawn at full alpha, and then the fade finished
@@ -879,8 +940,12 @@ fn boot_view_reset_native_loading_semaphores() {
 /// backbuffer is the vanilla flash-through (er-effects-rs-wmw defect #1). So the two halves are
 /// separated by what they can actually prove:
 ///
-///   * the Scaleform half is a start gate ONLY. It cannot tell the loading screen's own fade from
-///     a menu's, and the over-match is documented at both the hook and the release predicate.
+///   * the Scaleform half is a start gate ONLY. NARROWED 2026-09-05: it now stamps only for
+///     `LOADING_SCREEN_LAST_THIS + LOADING_SCREEN_FADEOUT_CLIP_OFFSET`, the one clip the image
+///     shows the screen playing its own fade on, so it CAN tell the loading screen's fade from a
+///     menu's. It stays a start gate anyway -- the fade is one-way because of the fall-through
+///     bug below, not because the signal was noisy -- and every other movie's label now lands in
+///     `LOADING_SCREEN_GFX_FADEOUT_FOREIGN_HITS`, which holds nothing.
 ///   * the `CS::LoadingScreen::Update` half stays live during the fade, but only for ticks past
 ///     `BOOT_VIEW_FADE_START_LS_UPDATE_HITS`. Only the loading-screen detour writes that counter, so
 ///     a tick past the snapshot IS the game's loading screen running again, with no ambiguity.
@@ -1123,6 +1188,8 @@ fn boot_view_reset_cover_window() {
     // for a fresh-deser bump that will never come. `rearm_boot_progress_for_own_menu_load` turns it
     // back on after calling through here, which is the only path that faces two screens.
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.store(0, Ordering::SeqCst);
     // Draw cache: force a re-rasterize on the first frame of the new window.
     BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
@@ -1249,6 +1316,13 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
         Ordering::SeqCst,
     );
     er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM.store(1, Ordering::SeqCst);
+    // SECOND-SCREEN GATE, armed here and only here: the BOOT load shows one native plate, a switch
+    // shows two, so this is the one flow that needs it. `boot_view_reset_epoch_state` ran above and
+    // zeroed `LOADING_SCREEN_CLOSE_SENT_HITS`, so the count this gate reads describes THIS switch.
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.store(1, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN
+        .store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.store(0, Ordering::SeqCst);
     // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
     // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
     // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
@@ -1276,6 +1350,23 @@ fn boot_view_progress() -> (usize, usize) {
     // makes the reported walk hole-free: the old "set bit i iff predicate i" form left gaps whenever a
     // later detector fired first, and the bar reported 7 -> 8 -> 11, never naming STREAMING WORLD or
     // FINALIZING WORLD even though the load plainly went through them (bd er-effects-rs-ok8d).
+    // EPOCH FENCE, opened before the phase predicates are read and checked again before the result is
+    // published. `boot_view_reset_epoch_state` runs on the GAME thread at the switch arm and zeroes
+    // both the reached-mask and every `LOADING_SCREEN_*` counter the world-load predicates key on;
+    // this samples on the RENDER thread. Without the fence a sample that read the OUTGOING load's
+    // finished counters could store its mask AFTER the reset had zeroed it, and because the mask is
+    // monotonic within an epoch that pins the whole switch at a bar it never earned.
+    //
+    // MEASURED, run br-20260905-221201-969c, three loads and three different amounts of phantom fill:
+    //   switch #1 (+55.6s)  every one of the nine milestones fired in the SAME millisecond as the arm,
+    //                       first line already `mask 0x1ff` -- the bar sat full at ENTERING WORLD 8/8
+    //                       for the whole 4s the load actually took
+    //   switch #2 (+71.0s)  seven fired at once, `mask 0x7f`, entering at STREAMING WORLD 6/8
+    //   switch #3 (+387.0s) `mask 0x3`, a real walk: RETURNING TO TITLE -> TITLE READY -> ...
+    // Three different answers for the same code path is the signature of a race, not of a phase
+    // predicate that is merely too loose; the amount of inherited fill is just where the render thread
+    // happened to be standing relative to the game thread's reset.
+    let epoch_at_sample = BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst);
     let mut highest = 0usize;
     for i in 0..set.len() {
         if boot_phase_reached(set.phase(i)) {
@@ -1291,7 +1382,7 @@ fn boot_view_progress() -> (usize, usize) {
     let mask = prev_mask | ((1usize << (highest + 1)) - 1);
     let idx = ((usize::BITS - 1 - mask.max(1).leading_zeros()) as usize).min(set.main_total());
     let now_ms = boot_view_epoch_ms();
-    if mask != prev_mask {
+    if mask != prev_mask && BOOT_VIEW_EPOCH_SEQ.load(Ordering::SeqCst) == epoch_at_sample {
         BOOT_VIEW_REACHED_MASK.store(mask, Ordering::SeqCst);
         // Report EVERY phase that just became reached, in order -- not only the new top one.
         for i in 0..set.len() {
@@ -2350,21 +2441,22 @@ unsafe fn composite_boot_progress_inner(
                 && (now_ms as u64).saturating_sub(loading_update_last as u64)
                     < BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS;
             // ONE-WAY RELEASE FADE (2026-08-22). Ask the hold as the START GATE it was written to
-            // be. Once the fade has begun, the Scaleform half is disqualified -- it stamps on any
-            // movie's "fadeout" label, so an in-world menu opening refreshes it -- and only a
-            // `CS::LoadingScreen::Update` tick PAST the fade-start snapshot can still hold, because
-            // only the loading-screen detour writes that counter. See
-            // [`boot_view_note_fade_hold_reassert`] for the whole argument.
+            // be. Once the fade has begun, only a `CS::LoadingScreen::Update` tick PAST the
+            // fade-start snapshot can still hold. That used to be because the Scaleform half was
+            // untrustworthy mid-fade -- it stamped on any movie's "fadeout" label, so opening the
+            // in-world menu refreshed it. The narrowing on 2026-09-05 removed that reason, and the
+            // rule stays anyway: what put the portrait back on screen was the FALL-THROUGH to the
+            // opaque path, which is a bug about honouring a mid-fade hold at all, not about which
+            // movie raised it. See [`boot_view_note_fade_hold_reassert`] for the whole argument.
             let start_gate_hold = fadeout_pending || update_quiet_pending;
             let fade_started = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) != 0;
             let native_gfx_hold_pending = if backstop {
                 // NO HOLD SURVIVES THE BACKSTOP. Both halves of the hold are recency reads of
                 // counters the CS::LoadingScreen detour writes, and a dead detour is the failure
-                // this arrived to survive -- so an honest hold cannot exist here, while a
-                // DISHONEST one can: `stamp_loading_gfx_fadeout` fires on any movie carrying a
-                // "fadeout" label, including `02_000_ingametop.gfx`, the pause menu a stuck user
-                // presses Escape on. Letting that keep the fade from starting is exactly how the
-                // window stayed up for seven minutes.
+                // this arrived to survive -- so an honest hold cannot exist here. Since 2026-09-05
+                // a dishonest one cannot either: the Scaleform half only stamps for the loading
+                // screen's own clip, which a dead detour never publishes. Kept regardless, because
+                // the whole point of a backstop is not to depend on the thing that failed.
                 false
             } else if fade_started {
                 let ls_ticked_since_fade_start = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst)

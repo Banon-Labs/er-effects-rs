@@ -718,7 +718,6 @@ def selftest() -> int:
     names = {launcher.name for launcher in launchers}
     check(len(launchers) >= 8, f"launchers are discovered by their launch command ({len(launchers)})")
     for expected in (
-        "run-samechar-3x-threedll.sh",
         "run-me3-product-smoke.sh",
         "run-product-continue-direct-probe.sh",
         "er-smoke-driver.sh",

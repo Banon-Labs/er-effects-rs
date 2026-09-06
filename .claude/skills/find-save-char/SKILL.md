@@ -41,7 +41,7 @@ Each match gives everything the harness needs:
 <abspath>	slot=<N>	name='<in-game name>'	level=<L>	runes=<R>	top_weapon=?	(sl2|co2)
 ```
 
-To load that character in the same-char harness: set `BOOT_FILE=<abspath>` and the slot (e.g. `DRIVE_RELOAD_SLOTS` / `BOOT_SLOT=<N>`) for `scripts/run-samechar-3x-threedll.sh`. The harness writes `save_file = '<win path of BOOT_FILE>'` into `er-quickload.toml` as an **in-memory read-only redirect** (it never writes the source save), so this is save-safe even against the live APPDATA save.
+To boot that character: pass it to `scripts/er-run-branch.py --save <abspath>[:SLOT]`, which decodes the save and reports the character name, level and slot before launching. It stages `save_file = '<win path>'` into a sidecar `er-quickload.toml` as an **in-memory read-only redirect** (it never writes the source save), so this is save-safe even against the live APPDATA save. Only the BOOT autoload can be aimed this way: the `scripts/run-samechar-3x-threedll.sh` harness that used to chain further loads was deleted on 2026-09-05, because it armed each one without the Quit menu.
 
 ## How it works / rebuild
 

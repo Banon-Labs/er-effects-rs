@@ -185,8 +185,7 @@ else
 	rm -f "$GAME_DIR/er-quickload.toml"
 fi
 # Sweep stale probe/switch markers so a prior run cannot pollute this vanilla capture.
-rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \
-	"$GAME_DIR"/er-quickload-switch-slot.txt "$GAME_DIR"/er-quickload-switch-save-file.txt \
+rm -f "$GAME_DIR"/er-quickload-system-quit-repro.txt "$GAME_DIR"/er-quickload-system-quit-load-switch.txt \ \
 	"$GAME_DIR"/er-quickload-prove-movement.txt 2>/dev/null
 # THE GAME_DIR LOG SWEEP IS GONE ON PURPOSE. It used to clear er-quickload-*.log, er-reload-trace.log,
 # er-input-harness.log and the telemetry json out of the game directory, which destroyed TWO
