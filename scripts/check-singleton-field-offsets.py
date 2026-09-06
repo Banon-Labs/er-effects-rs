@@ -174,7 +174,7 @@ CHAINS = {
     "CS::GameDataMan": ("GAME_DATA_MAN_GLOBAL_RVA", ()),
     "CS::CSMenuManImp": ("CS_MENU_MAN_GLOBAL_RVA", ()),
     "CS::WorldChrManImp": ("WORLD_CHR_MAN_GLOBAL_RVA", ()),
-    "SessionManager": ("SESSION_MANAGER_GLOBAL_RVA", ()),
+    "SessionManager": ("CS_SESSION_MANAGER_GLOBAL_RVA", ()),
     "CS::CSFlipperImp": ("CS_FLIPPER_SINGLETON_RVA", ()),
     # One hop. `GameDataMan + 0x8` is `main_player_game_data` in the sibling binding and the
     # route 20+ live sites in this workspace already take, spelled

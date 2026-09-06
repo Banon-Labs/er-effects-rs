@@ -7,7 +7,8 @@ use super::*;
 // (`lib_parts/dll_entry_parts/bootstrap.rs`, `er_title_flow`'s seam install) already names, so the
 // move is invisible to every caller.
 pub(crate) use er_profile_summary_core::picked_refresh::{
-    direct_source_slot_summary_real, refresh_direct_source_profile_summary,
+    direct_source_slot_summary_real, refresh_boot_default_profile_summary,
+    refresh_direct_source_profile_summary,
 };
 
 mod product_continue;

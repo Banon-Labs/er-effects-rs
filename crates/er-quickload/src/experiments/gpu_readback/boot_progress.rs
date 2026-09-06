@@ -22,8 +22,12 @@ use er_game_base::fnv1a::fnv1a64;
 //               semaphores only keep the cover drawing; they do not start the bail clock.
 //
 // Reached milestones are latched into a monotonic bitmask (a latch that later reads 0 cannot walk
-// the bar backwards), and the displayed value creeps part-way toward the next milestone over time so
-// the bar visibly moves between semaphores. The draw is a single submit on our OWN queue (transition
+// the bar backwards), and the fill WITHIN a milestone comes from that phase's own substep
+// semaphores -- never from a clock. A clock-driven creep used to sit here and was deleted on
+// 2026-09-04 by user directive; see the `NEVER ESTIMATE` block at `boot_view_progress`. The
+// consequence is load-bearing and is the whole point: a phase whose substeps stop advancing HOLDS,
+// so a frozen bar means frozen WORK rather than a bar that ran out of animation. Do not read a held
+// value as a cosmetic estimate. The draw is a single submit on our OWN queue (transition
 // PRESENT->COPY_DEST, CopyTextureRegion upload->backbuffer strip rect, transition back, CPU fence
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
@@ -513,11 +517,6 @@ fn boot_view_player_loaded() -> bool {
 /// stays as an immediate release: it is the strongest possible proof the world is playable, but it
 /// is written only by the PROOF-ONLY can-move probe (`can_move_probe.rs:277` -- "never fires in a
 /// normal user session"), so it can never be the product path on its own.
-/// Native loading-screen SHOWINGS a System->Quit->Load Character switch produces: the outgoing
-/// world's teardown plate, then the incoming character's load plate. The boot load produces one, so
-/// this threshold is only ever applied to a switch.
-const BOOT_VIEW_SWITCH_NATIVE_SCREENS: usize = 2;
-
 fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     use er_telemetry_core::counters::{
         BOOT_VIEW_RELEASE_NATIVE_DONE_SEEN, BOOT_VIEW_RELEASE_READY_MS,
@@ -536,17 +535,38 @@ fn boot_view_cover_release_ready(can_move_handoff: bool) -> bool {
     // The character-load gate below was written for exactly this and never got to run.
     //
     // The gate here is the one the user described in product terms: cover from the moment the first
-    // plate comes up to the moment the second fades out. `LOADING_SCREEN_CLOSE_SENT_HITS` is reset
-    // per cover window and latched once per native showing, so `>= 2` IS "the character load's own
-    // screen has finished". On the one switch whose cover survived long enough to log the whole
-    // sequence that moment was +178101ms, 12.9 s after the arm -- the correct release, against the
-    // 682 ms the code actually took.
+    // plate comes up to the moment the character load's plate fades out.
+    // `LOADING_SCREEN_COMPLETED_CLOSE_HITS` is reset per cover window and latched at each finish
+    // whose gauge is at 500/500, so `>= 1` IS "the character load's own screen has finished" --
+    // stated as the fact rather than as an ordinal, which is the 2026-09-06 correction (see
+    // `BOOT_VIEW_SWITCH_COMPLETED_NATIVE_SCREENS`). On the one switch whose cover survived long
+    // enough to log the whole sequence that moment was +178101ms, 12.9 s after the arm -- the
+    // correct release, against the 682 ms the code actually took.
     if er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_SECOND_SCREEN.load(Ordering::SeqCst)
         != 0
     {
-        let screens = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
+        // COMPLETED native loading screens a switch must show before the cover may let go: one, the
+        // character load's own plate, identified by its gauge being at 500/500 when it finishes.
+        //
+        // THIS USED TO BE `2` AND COUNT ALL PLATES, AND THAT IS WHAT KEPT THE COVER UP (2026-09-06). The
+        // switch shape it was written from -- teardown plate, then load plate -- is not the shape the
+        // user's ProfileSelect path actually produces. Measured across both switches of the run in
+        // er-quickload-autoload-debug.log: `loadscreen_builds` advanced by exactly ONE per cover window
+        // (1 -> 2, then 2 -> 3) and each window's single `finish/result sent` reported `frame=500/500`.
+        // One plate, already the character load's. `screens < 2` was therefore unsatisfiable, every
+        // DECISION line of both windows read `world_handoff=false`, and the only thing that ever stopped
+        // the cover was the 35 s FPS bail: `cover_window_ms=35005` at +82240ms and `cover_window_ms=35017`
+        // at +263339ms -- 15.3 s and 18.9 s after the bar filled. That is the "loading view does not fade
+        // out at the right time" the user reported, with the world's fade-in audible behind it.
+        //
+        // Counting COMPLETED plates asks the question the ordinal was standing in for. On the two-plate
+        // run this gate was written from (br-20260905-235624-a149) the teardown finishes at `frame=1/500`
+        // and does not count, the load finishes at `frame=500/500` and does -- the same release instant as
+        // `>= 2`. On a one-plate switch it is reachable instead of never.
+        let screens =
+            er_telemetry_core::counters::LOADING_SCREEN_COMPLETED_CLOSE_HITS.load(Ordering::SeqCst);
         er_telemetry_core::counters::BOOT_VIEW_NATIVE_SCREENS_SEEN.store(screens, Ordering::SeqCst);
-        if screens < BOOT_VIEW_SWITCH_NATIVE_SCREENS {
+        if !er_loading_portrait_core::native_loading_progress::switch_cover_may_release(screens) {
             er_telemetry_core::counters::BOOT_VIEW_RELEASE_HELD_FOR_SECOND_SCREEN
                 .fetch_add(1, Ordering::SeqCst);
             // Same reason the confirm gate clears its latches: both release facts are readily true
@@ -903,6 +923,7 @@ fn boot_view_reset_native_loading_semaphores() {
     LOADING_SCREEN_BAR_CURRENT_FRAME.store(0, Ordering::SeqCst);
     LOADING_SCREEN_BAR_MAX_FRAME.store(0, Ordering::SeqCst);
     LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::LOADING_SCREEN_COMPLETED_CLOSE_HITS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_CLOSE_SENT.store(0, Ordering::SeqCst);
     LOADING_SCREEN_UPDATE_LAST_MS.store(0, Ordering::SeqCst);
     LOADING_SCREEN_CLOSE_SENT_FIRST_MS.store(0, Ordering::SeqCst);

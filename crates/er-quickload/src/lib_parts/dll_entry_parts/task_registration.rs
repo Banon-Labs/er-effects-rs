@@ -160,6 +160,26 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                    // Answer the container question DllMain could not (bd er-effects-rs-1742).
+                    // Idempotent after the first call; a no-op on every run that did not defer.
+                    resolve_deferred_save_override();
+                    // REPAIR THE PROFILE SUMMARY BEFORE THE TITLE BUILDS ITS CONTINUE ROW.
+                    // The game deserializes `CS::ProfileSummary` exactly once per boot, and a boot
+                    // whose save-data read completes with no data leaves all ten records zeroed
+                    // with nothing to retry it. The title then inserts Continue through its
+                    // DISABLED edge and never re-arms it: measured run 2026-09-05 21:29:58, the
+                    // records were repaired at +13956ms but the row had been built at +11131ms, so
+                    // the autoload still parked on "waiting for native Continue MenuWindowJob
+                    // result" with 260/260 candidate observations carrying the idle accept
+                    // predicate. Running the same repair from HERE -- the pre-player boot tick --
+                    // puts real records in front of the row builder instead of behind it.
+                    // Self-throttling, and a no-op once the records and the container agree.
+                    refresh_boot_default_profile_summary();
+                    // Read-only observer on the MoveMap ending-request evaluator. Installed from the
+                    // BOOT tick, not from the switch path, because the black screen now reproduces on
+                    // the first autoload: the world loads and is playable, then ~2.2 s after world
+                    // entry this evaluator raises `menuData+0x5e` and the session ends. Idempotent.
+                    er_title_flow::install_movemap_advancer_probe();
                     // Install the MessageBoxDialog builder hook for native telemetry. Product
                     // autoload must NOT auto-accept: every pre/post-load message box is a hard
                     // investigation trigger whose semantic side effect must be skipped directly.

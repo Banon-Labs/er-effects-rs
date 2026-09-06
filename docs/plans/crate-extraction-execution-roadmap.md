@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,530 |
+| all `experiments/**` | 77 | 50,849 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -142,13 +142,13 @@ somebody's in-flight edit.
 | `own_load/loaders/switch_reload.rs` | 769 | stale-RVA call-site closure |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,714 | dead-counter census |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,248 | stale-RVA call-site closure |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,277 | stale-RVA call-site closure |
 | `lifecycle/task_tick.rs` | 440 | dead-counter census |
-| `input_block.rs` | 1,519 | dead-counter census |
+| `input_block.rs` | 1,551 | dead-counter census |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,462 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,099 | stale-RVA call-site closure |
 | `own_stepper/bootstrap_drive.rs` | 997 | stale-RVA call-site closure |
-| `continue_load/slot_resolution.rs` | 819 | stale-RVA call-site closure |
+| `continue_load/slot_resolution.rs` | 922 | stale-RVA call-site closure |
 | `trace/menu_constructor_capture.rs` | 1,399 | stale-RVA call-site closure |
 | `startup_hooks.rs` | 108 | dead-counter census |
 
@@ -244,17 +244,17 @@ Every row below is a current source file. `Current partition` is the exact prese
 | Current file | Lines | Current partition | Next node |
 |---|---:|---|---|
 | `can_move_probe.rs` | 679 | product `STAY`: real-module conversion template | `STAY` |
-| `continue_load.rs` | 17 | product re-export facade | D5 |
-| `continue_load/product_continue.rs` | 768 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 819 | product slot-resolution policy | D5 and R14 |
+| `continue_load.rs` | 18 | product re-export facade | D5 |
+| `continue_load/product_continue.rs` | 834 | product continue/load policy | D5 |
+| `continue_load/slot_resolution.rs` | 922 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 487 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 30 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,778 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,799 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
-| `input_block.rs` | 1,519 | product input ownership | `STAY` |
+| `input_block.rs` | 1,551 | product input ownership | `STAY` |
 | `input_trace.rs` | 934 | product diagnostic | D4 |
 | `lifecycle.rs` | 18 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 114 | product install ordering | `STAY` |
@@ -281,7 +281,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,137 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,204 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 108 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 345 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
@@ -290,7 +290,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,055 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,248 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,277 | title-flow and product modal families | R22 |
 | `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,575 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |

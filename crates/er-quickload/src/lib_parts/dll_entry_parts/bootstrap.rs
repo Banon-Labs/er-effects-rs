@@ -240,6 +240,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         refresh_direct_source_profile_summary:
             crate::experiments::refresh_direct_source_profile_summary,
         direct_source_slot_summary_real: crate::experiments::direct_source_slot_summary_real,
+        boot_slot_summary_real: er_profile_summary_core::picked_refresh::boot_slot_summary_real,
         create_continue_trace_hook: crate::experiments::create_continue_trace_hook,
         install_auto_accept_hook: crate::experiments::install_auto_accept_hook,
         decode_thunk_hop: crate::experiments::decode_thunk_hop,
@@ -352,7 +353,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 });
             }
         }
-        SaveOverrideMode::Redirect => {
+        // `Deferred` rides the same arm as `Redirect`: the container is not decided yet, so the
+        // detours must already be live for whichever answer the first game-task tick produces.
+        // Installing them costs nothing on a run that ends up needing no redirect -- they are
+        // pass-throughs until a redirect dir or a save destination is armed.
+        SaveOverrideMode::Redirect | SaveOverrideMode::Deferred => {
             START_SAVE_REDIRECT.call_once(|| {
                 let _ = std::thread::Builder::new()
                     .name("er-quickload-save-redirect".to_owned())

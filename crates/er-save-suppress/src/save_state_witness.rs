@@ -128,6 +128,11 @@ pub fn poll_abandoned_a_save(
 /// Calls forwarded through each wrapper, so a run with zero findings can be told apart from a run
 /// where the witness never installed.
 static SAVE_STATE_LOAD_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// One bit per distinct value the LOAD poll has returned (value mod 32), so the log carries each
+/// branch once instead of once per frame. Answers above 31 fold onto a low bit; the poll's own
+/// range is 0..=9, so no real answer collides.
+static LOAD_POLL_ANSWERS_SEEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 static SAVE_STATE_SAVE_LANE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Abandoning writes observed. **This is the finding.** Non-zero means saving died in this run and
 /// the fields below say who did it.
@@ -200,6 +205,22 @@ unsafe fn witness_call(
     let before_state = read_save_state();
     let original: UnionFn = unsafe { core::mem::transmute::<usize, UnionFn>(raw) };
     let answer = unsafe { original(a, b, c, d) };
+    // WHICH ANSWER THE LOAD POLL GAVE, once per distinct value (bd er-effects-rs-1742). The whole
+    // ProfileSummary boot fill hangs off this number: `STEP_LoadSaveData_Wait` (1.17 0x140af2d40)
+    // fills the summary ONLY when this returns 3. Return 0 is the "done" path and advances WITHOUT
+    // filling; 2 falls through to state 3 without filling; 4..9 are errors. The call COUNT was
+    // already witnessed (4 calls on the parked run) but the counts cannot tell those branches
+    // apart, and every attempt to infer the branch from a downstream consumer has been wrong.
+    // One line per distinct value, so a poll the game runs every frame cannot flood the log.
+    if site == SAVE_STATE_SITE_LOAD_POLL {
+        let bit = 1u32 << (answer as u32 & 31);
+        if LOAD_POLL_ANSWERS_SEEN.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+            log_message(format_args!(
+                "save-state-witness: load poll 0x679180 returned {answer} for the FIRST time                  (saveState {before_state:?} -> {after_state_preview:?}); 3 is the only answer that                  fills ProfileSummary in STEP_LoadSaveData_Wait, 0 advances without filling",
+                after_state_preview = read_save_state()
+            ));
+        }
+    }
     let after_state = read_save_state();
     // Feed the whole-set counters in `save_state_writers.rs`. Recorded for EVERY witnessed call,
     // not only for a finding: a zero there is what says the write came from outside the set, and a

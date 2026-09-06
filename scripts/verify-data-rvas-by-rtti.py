@@ -927,7 +927,7 @@ def audit(rows, old, new, old_cm, new_cm):
     return results
 
 
-# The 17 rows this file's anchors do NOT reach, pinned by name so the set can only shrink.
+# The 19 rows this file's anchors do NOT reach, pinned by name so the set can only shrink.
 #
 # It is a list rather than a count so a row LEAVING it (someone found evidence) and a row ENTERING
 # it (someone lost evidence) are different diffs. The data map still carries every one of them on
@@ -936,7 +936,7 @@ def audit(rows, old, new, old_cm, new_cm):
 #
 # Two shapes, and the distinction is the reason the set is not one bucket:
 #
-#   NO-ANCHOR (10) -- zeroed `.data` at rest in BOTH images, reached only from code 1.17 edited
+#   NO-ANCHOR (12) -- zeroed `.data` at rest in BOTH images, reached only from code 1.17 edited
 #   around, so no window is unique on both sides. There is nothing to read and nothing to vote
 #   with. `FIRST_SECTION_RVA` is what pretending otherwise looks like.
 #
@@ -972,9 +972,20 @@ UNANCHORED = {
     # +-0x400) plus a shape count of 10 sites each side -- neither of which is an anchor THIS file
     # computes, which is the whole point of listing it here.
     "0x3d5b088",
+    # `BUFFER_RVA_1162` (added 2026-09-05, `er-npc-possess`'s packet15_receive layout). NO-ANCHOR:
+    # zeroed `.data` qword in both images, all 12 rip-relative reference sites unique in 1.16.2
+    # `.text` but none of their 24-byte windows recur anywhere in 1.17 -- the referencing code was
+    # edited enough that no accessor casts a vote, and the destination holds no string/pointer for
+    # the content anchors to read either. Measured directly against `eldenring-deobf.bin` /
+    # `eldenring-deobf-1.17.bin` via this file's own `reference_index`, not carried from a comment.
+    "BUFFER_RVA_1162",
     "DLUID_SINGLETON_RVA",
     "FAKE_LOADING_SCREEN_SINGLETON_RVA",
     "FD4_IO_POOL_RVA",
+    # `GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA` (renamed from the `_RVA` spelling
+    # 2026-09-05; same address throughout). NO-ANCHOR for the same reason as `BUFFER_RVA_1162`: a
+    # zeroed `.data` byte in both images, both 1.16.2 reference-window shapes absent from 1.17.
+    "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
     "INNER_TITLE_STATE_TABLE_RVA",
     "IO_DEVICE_SINGLETON_RVA",
     "MOVIE_SKIP_FLAG_RVA",

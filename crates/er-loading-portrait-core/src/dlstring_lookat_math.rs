@@ -283,6 +283,21 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     if finish_sent != 0 && prev_finish_sent == 0 {
         let now_ms = crate::boot_view_epoch_ms().max(1) as usize;
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        // COMPLETED vs merely CLOSED, recorded at the only instant it can be read. A plate that
+        // finishes with its gauge still at frame 1 of 500 is a screen going away (the switch's
+        // return-to-title teardown); a plate that finishes at 500/500 is a world having loaded.
+        // The frame is already in this line's text, but the cover's release gate needs it as a
+        // counter, and it is unreadable a frame later -- the next screen's Update overwrites
+        // LOADING_SCREEN_BAR_CURRENT_FRAME.
+        let completed = if crate::native_loading_progress::count_completed_close(0, current, max)
+            != 0
+        {
+            er_telemetry_core::counters::LOADING_SCREEN_COMPLETED_CLOSE_HITS
+                .fetch_add(1, Ordering::SeqCst)
+                + 1
+        } else {
+            er_telemetry_core::counters::LOADING_SCREEN_COMPLETED_CLOSE_HITS.load(Ordering::SeqCst)
+        };
         let _ = LOADING_SCREEN_CLOSE_SENT_FIRST_MS.compare_exchange(
             0,
             now_ms,
@@ -290,7 +305,7 @@ unsafe fn sample_loading_screen_bar(this: usize) {
             Ordering::SeqCst,
         );
         append_autoload_debug(format_args!(
-            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x}, now_ms={now_ms})"
+            "loading-bar: native LoadingScreen finish/result sent (hits={hits}, completed={completed}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x}, now_ms={now_ms})"
         ));
     }
 }

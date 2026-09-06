@@ -98,6 +98,19 @@ pub fn direct_source_slot_summary_real() -> bool {
     unsafe { profile_slot_fingerprint(native_fullread_slot()).0 }
 }
 
+/// Does the slot the BOOT autoload will load fingerprint as a real character in the live
+/// `CS::ProfileSummary`?
+///
+/// [`direct_source_slot_summary_real`] answers this only for a picked/loose source; the default
+/// save needs the same answer, because on this build the native Continue row cannot be identified
+/// at all (its docall names `CS::BackScreen` and its accept predicate is the global menu-manager
+/// busy check), so "is the record real" is what decides whether the verified full-read chain may
+/// run instead of waiting for a row that will never arrive.
+#[must_use]
+pub fn boot_slot_summary_real() -> bool {
+    unsafe { profile_slot_fingerprint(native_fullread_slot()).0 }
+}
+
 /// Re-read the picked container's `CS::ProfileSummary` records at the title. Idempotent and
 /// self-throttling; safe to call from every autoload tick.
 ///
@@ -107,6 +120,45 @@ pub fn refresh_direct_source_profile_summary() -> bool {
     if !direct_save_file_source_active() {
         return false;
     }
+    refresh_active_container_profile_summary()
+}
+
+/// The same re-read for the DEFAULT boot container -- the save the game opens when nothing was
+/// picked and no loose `save_file` is configured.
+///
+/// The game fills `CS::ProfileSummary` exactly ONCE per boot, in `CS::ProfileSummary::Deserialize`
+/// reached from the save-data `ShowProgressJob`'s delegate. When that read completes with no data
+/// the summary stays zeroed for the rest of the boot and nothing retries it: measured run
+/// 2026-09-05 20:58:51, the wait step `0x140af2d40` polled `0x140679fd0` four times, got `1` then
+/// `0` (`FUN_140e6fe80`'s "completed, result code 0" answer, not the `3` that fills), advanced on
+/// the `0` without calling `GetProfileSummary`, and every one of the ten records stayed empty --
+/// `oracle_profile_own_summary_rows = 0`, `stats-text: DECLINED slot 0 ... name="" level=0`.
+/// The container itself was fine: 28,967,888 bytes of BND4 with all ten characters readable.
+///
+/// So this is the same repair the picked path already ships, pointed at the same container the
+/// runtime opens. It is NOT a second filler racing the native one: `attempt_profile_summary_reread`
+/// compares the live record against the container BODY first and skips the rewrite entirely when
+/// they agree, so a boot whose native read worked is left untouched, and the drift watch still
+/// defends the records if the native read lands afterwards and disagrees.
+pub fn refresh_boot_default_profile_summary() -> bool {
+    if direct_save_file_source_active() {
+        // The picked/loose-file path owns its own entry above, including which container is
+        // authoritative for it. Running both would double the attempt budget for one boot.
+        return false;
+    }
+    // SPEND NO BUDGET BEFORE THE TABLE EXISTS. This entry is called from the boot game task, which
+    // starts ticking long before `GameDataMan -> ProfileSummary` is allocated -- and every tick
+    // through the throttle costs one of the forty attempts whether or not there was anything to
+    // read. Eleven seconds of pre-summary boot at 60 fps is ~22 of them. The check is one guarded
+    // pointer read, and it makes the first REAL attempt attempt 1.
+    if unsafe { system_quit_profile_summary_ptr() } == NULL_SUMMARY {
+        return false;
+    }
+    refresh_active_container_profile_summary()
+}
+
+/// Shared body of both entries: throttle, then one re-read attempt, then watch for drift.
+fn refresh_active_container_profile_summary() -> bool {
     let state = PICKED_SUMMARY_REFRESH_STATE.load(Ordering::SeqCst);
     if state != 0 {
         // NOT DONE -- WATCHING. The refresh used to return here and never look again, which is
