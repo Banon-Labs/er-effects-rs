@@ -60,8 +60,49 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_IMAGE = os.path.join(ROOT, "eldenring-deobf.bin")
-DST_IMAGE = os.path.join(ROOT, "eldenring-deobf-1.17.bin")
+
+
+def _resolve_image(env_var, filename):
+    """Locate a deobf image: explicit env override, then this checkout, then the MAIN worktree.
+
+    The two deobf images are gitignored multi-hundred-MB RE inputs that live beside the primary
+    checkout and are never copied per worktree. Running this script from a `git worktree` therefore
+    used to die with `missing image: <worktree>/eldenring-deobf.bin` and a suggestion to REGENERATE
+    it -- advice that is both expensive and wrong, since the file exists and is one directory away.
+    Falling back to the main worktree is what makes the mapper usable from an agent worktree at all;
+    the env override matches `ER_DEOBF_BIN` in `scripts/find-deobf-bytes.py` so the two tools take
+    the same spelling for the same idea.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    local = os.path.join(ROOT, filename)
+    if os.path.exists(local):
+        return local
+    # `git rev-parse --git-common-dir` points at the PRIMARY checkout's `.git` from inside a
+    # linked worktree (and at our own `.git` otherwise), so its parent is the main working tree.
+    try:
+        import subprocess
+
+        common = subprocess.run(
+            ["git", "-C", ROOT, "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if common.returncode == 0:
+            main_root = os.path.dirname(os.path.abspath(os.path.join(ROOT, common.stdout.strip())))
+            candidate = os.path.join(main_root, filename)
+            if os.path.exists(candidate):
+                return candidate
+    except Exception:
+        pass
+    return local
+
+
+SRC_IMAGE = _resolve_image("ER_DEOBF_BIN", "eldenring-deobf.bin")
+DST_IMAGE = _resolve_image("ER_DEOBF_BIN_1170", "eldenring-deobf-1.17.bin")
 BASE = 0x140000000
 # Signature lengths tried, longest first. A long signature is the strong evidence, but it also
 # reaches past short functions into whatever follows them -- `GetScadutreeBlessing` is 25 bytes,
@@ -619,8 +660,10 @@ def main():
         if not os.path.exists(image):
             sys.exit(
                 f"missing image: {image}\n"
-                "Generate with scripts/dearxan-deobfuscate.rs against the matching eldenring.exe "
-                "(cargo run --release --example deobfuscate -- <exe> <out>)."
+                "Point at an existing copy with ER_DEOBF_BIN (1.16.2) / ER_DEOBF_BIN_1170 (1.17); "
+                "the main worktree is already searched automatically.\n"
+                "Only if neither exists, generate with scripts/dearxan-deobfuscate.rs against the "
+                "matching eldenring.exe (cargo run --release --example deobfuscate -- <exe> <out>)."
             )
     source = open(SRC_IMAGE, "rb").read()
     target = open(DST_IMAGE, "rb").read()

@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,849 |
+| all `experiments/**` | 77 | 50,895 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -142,7 +142,7 @@ somebody's in-flight edit.
 | `own_load/loaders/switch_reload.rs` | 769 | stale-RVA call-site closure |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,714 | dead-counter census |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,277 | stale-RVA call-site closure |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,280 | stale-RVA call-site closure |
 | `lifecycle/task_tick.rs` | 440 | dead-counter census |
 | `input_block.rs` | 1,551 | dead-counter census |
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,462 | dead-counter census |
@@ -252,7 +252,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 30 | product GPU-readback facade | R4-R5 |
-| `gpu_readback/boot_progress.rs` | 2,799 | loading-bar, boot-cover, and product adapter families | R4-R5 |
+| `gpu_readback/boot_progress.rs` | 2,804 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
 | `input_block.rs` | 1,551 | product input ownership | `STAY` |
 | `input_trace.rs` | 934 | product diagnostic | D4 |
@@ -267,7 +267,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `mod.rs` | 106 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 553 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 651 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 674 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 12 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,714 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
@@ -290,8 +290,8 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,055 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
-| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,277 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,575 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,280 | title-flow and product modal families | R22 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,583 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 829 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_clipboard.rs` | 7 | product re-export facade: moved to `er_quit_menu_core::build_url_clipboard` | R18 |
@@ -300,7 +300,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/generate_build_link_row.rs` | 8 | product re-export facade: moved to `er_quit_menu_core::generate_build_link_row` | R18 |
 | `startup_hooks/quit_menu/mod.rs` | 78 | quit-menu module facade | R10-R20 |
 | `startup_hooks/quit_menu/profile_05_010_editor_runtime.rs` | 1,991 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,125 | mixed profile-row title, quit, and sampler families | R11 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 2,132 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/quit_menu/save_dest_commit.rs` | 75 | product facade: implementation in `er_quit_menu_core::save_dest_commit_runtime`; this side supplies the save-redirect native source dir and the `er-save-suppress` save-job observer | R18 |
 | `startup_hooks/quit_menu/save_flow_boxes.rs` | 712 | System>Quit confirmation-box family | R18-R20 |
 | `startup_hooks/quit_menu/save_picker_menu.rs` | 3,179 | native picker, destination, and row-builder families | R17-R19 |

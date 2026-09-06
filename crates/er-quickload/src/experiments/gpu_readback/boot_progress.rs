@@ -1161,6 +1161,11 @@ fn boot_view_stamp_stop_baselines(now_ms: usize) {
 /// This is "start covering again", independent of whether the phase walk is also starting over.
 fn boot_view_reset_cover_window() {
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    // Snapshot the cumulative draw count so `title_visual_suppression_active` can tell whether THIS
+    // epoch has composited anything. Clearing BOOT_VIEW_DRAW_HITS itself is not an option -- several
+    // readers depend on the running total -- so the baseline carries the per-window answer instead.
+    er_telemetry_core::counters::BOOT_VIEW_DRAW_HITS_ARM_BASELINE
+        .store(BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst), Ordering::SeqCst);
     BOOT_VIEW_STOP_REASON.store(0, Ordering::SeqCst);
     // Post-stop draw detector + the post-release watch's baselines belong to ONE window.
     er_telemetry_core::counters::BOOT_VIEW_DRAW_AFTER_STOP.store(0, Ordering::SeqCst);
