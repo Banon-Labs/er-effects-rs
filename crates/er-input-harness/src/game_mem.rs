@@ -232,12 +232,18 @@ const MENU_DATA_RETURN_TITLE_5D_OFFSET: usize = 0x5d;
 
 /// In-world menu pane ids read at top_window+0x180 (u16).
 ///
-/// RETAINED RE FACT: `INGAMETOP_MENU_ID` is the pane id the in-world root menu reports, and it is the
-/// value `top_menu_id()` is read against to tell "root pane" from OptionSetting. Nothing dispatches on
-/// it right now (the drive only tests for `OPTIONSETTING_MENU_ID`), but it is one entry of a reversed
-/// menu-id table, not scaffolding -- deleting it would lose the reversed value.
+/// RETAINED RE FACTS, AND NOTHING DECIDES ON THEM ANY MORE (2026-09-05). Both are real values off a
+/// reversed 1.16.2 menu-id table, which is why they are kept rather than deleted. But the OFFSET
+/// they are read through, `TOP_WINDOW_MENU_ID_180_OFFSET`, has drifted on 1.17: `top_menu_id()`
+/// returns -1 or garbage there (53724, 25445, -1 measured across br-20260905-041435-e8d0 and
+/// -041731-2bc4) while `pause_menu_open()` was correctly true. Garbage compares `!=` to anything, so
+/// a phase gated on `top_menu_id() != OPTIONSETTING_MENU_ID` advances on its first frame and reports
+/// success for a press it never issued -- which is exactly what `Phase::ActivateLoadFromFile` did
+/// until it moved to the `currentTopMenuJob` pointer-change semaphore. `top_menu_id()` survives as a
+/// LOG field only. Do not gate anything on either constant until the 1.17 offset is re-measured.
 #[allow(dead_code)]
 pub const INGAMETOP_MENU_ID: i32 = 0xffff;
+#[allow(dead_code)]
 pub const OPTIONSETTING_MENU_ID: i32 = 0x25;
 pub const OPTIONSETTING_QUIT_TAB_INDEX: i32 = 8;
 

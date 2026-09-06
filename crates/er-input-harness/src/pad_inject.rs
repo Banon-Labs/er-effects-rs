@@ -523,37 +523,17 @@ pub fn install_menu_scroll_hook(base: usize) {
     }
 }
 
-/// PER-FRAME direct stamp of the menu scroll axis, resolving the device from the game base the same
-/// way `stamp_vk_direct` does. The builder hooks are too sparse to rely on here: their own doc records
-/// that the builder does NOT run per-frame while a menu is open, and the menu reads its state every
-/// frame, so the drive has to write every frame. `rows` = 0 releases.
-pub unsafe fn stamp_menu_scroll_direct(base: usize, rows: i32) {
-    if base < HEAP_LO {
-        return;
-    }
-    set_menu_scroll(rows);
-    let rd = |p: usize| -> Option<usize> {
-        if p < HEAP_LO {
-            None
-        } else {
-            unsafe { crate::win32::read_usize(p) }
-        }
-    };
-    let Some(manager) = rd(er_game_base::mem::game_data_addr(
-        base,
-        FD4_PAD_MANAGER_RVA,
-        "FD4_PAD_MANAGER_RVA",
-    ))
-    .filter(|m| *m >= HEAP_LO) else {
-        return;
-    };
-    let ndev = rd(manager + PAD_DEVICES_COUNT_40_OFFSET)
-        .unwrap_or(1)
-        .min(PAD_DEVICES_MAX);
-    for dev in 0..ndev {
-        unsafe { inject_menu_axis(manager, dev) };
-    }
-}
+// DELETED 2026-09-05: `stamp_menu_scroll_direct`. It resolved every device out of
+// `FD4PadManager.padDevices` and wrote the scroll axis into each one -- and MEASURED on
+// br-20260905-234626-ce9a that write reaches nothing the menu reads: `menu_scroll_reader_hook`
+// reported `raw_axis=0` on all 1,553 of its calls while the stamp ran every frame. The menu's device
+// comes from the padMaps tree, not padDevices (bd
+// menu-pad-device-comes-from-the-padmaps-tree-not-paddevices-2026-09-05), so the two were never the
+// same object. What actually delivered the scroll was the `set_menu_scroll` call the function made on
+// its way in, whose value the reader hook RETURNS to the game. Callers therefore got input by side
+// effect while believing it came from the write, which is the worst shape a helper can have. Call
+// `set_menu_scroll` directly, and note that it is a HELD state: it is returned on every read until
+// something sets it back to 0, so a caller that never releases is holding the direction down.
 
 pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
     if !(VK_ID_MIN..=VK_ID_MAX).contains(&id) || base < HEAP_LO {
