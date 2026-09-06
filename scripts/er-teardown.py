@@ -42,9 +42,29 @@ These are exact literals naming one appid. AGENTS.md forbids broad `wine`/`rsi` 
 patterns because they match unrelated words (`rsi` matches `version`); an appid equality test in
 `environ` has no such failure mode, and nothing here reads a command line.
 
+A TEARDOWN THAT LEAVES NO RECORD IS INDISTINGUISHABLE FROM A CRASH
+------------------------------------------------------------------
+`er-quickload` stamps `er-run-outcome.txt` with `outcome=running` the moment its exit hooks are
+armed, and its hooks rewrite that line on the way out: `clean-exit`, `exit-unclassified`, or
+`fatal-exception`. The file's own contract says that finding `running` after the process is gone
+means NO exit path ran -- "killed from outside (an agent teardown, `wineserver`, the OOM killer)".
+
+Which was true and useless, because this script was one of those outside killers and said nothing.
+Measured 2026-09-06: a run ended, the file read `outcome=running`, and there was no way to tell a
+deliberate teardown-to-rebuild from a death nobody understood. Every agent teardown was a
+permanent false positive in the one instrument built to answer "did it crash".
+
+So this script now owns that line while it kills. It stamps BEFORE signalling -- after SIGKILL
+there is no process left to write anything -- and again after the sweep, because the DLL's own
+exit hooks may fire in between and overwrite the record with a code that on this target says
+nothing (a normal quit exits `0xc0000005` under Proton). The `was=` field carries whatever the
+file said beforehand, so nothing is destroyed by being superseded. `running` then finally means
+what it claims: nobody admits to this one.
+
 Usage:
     python3 scripts/er-teardown.py --status     # report, kill nothing
     python3 scripts/er-teardown.py              # SIGTERM, wait, SIGKILL survivors
+    python3 scripts/er-teardown.py --reason rebuilding-er-invasion-warp
     python3 scripts/er-teardown.py --selftest
 """
 
@@ -95,6 +115,16 @@ APPID_NEEDLES = (
 
 # A real Elden Ring runs far more threads than this. At or below it, the process is a husk.
 HUSK_THREAD_CEILING = 4
+
+# The run-outcome file `er-quickload` owns, and the `outcome=` value this script writes into it.
+# The name and the one-line `key=value` shape are the DLL's contract -- see the module docs of
+# `crates/er-quickload/src/crashlog/veh_exit_hooks.rs`; a second format here would mean a reader
+# has to know which writer it is looking at, which is the guesswork the file exists to end.
+RUN_OUTCOME_FILE_NAME = "er-run-outcome.txt"
+RUN_OUTCOME_TORN_DOWN = "torn-down"
+# What `--reason` defaults to. Deliberately not "unknown": the reason field exists to say WHY a
+# process was killed, and a teardown run without one was still a deliberate act by an agent.
+DEFAULT_TEARDOWN_REASON = "agent-teardown"
 
 # Milliseconds to wait for SIGTERM to be honoured before escalating to SIGKILL, and again for the
 # kill itself to land. Spent inside `poll()` on a pidfd -- a readiness wait on the actual event
@@ -353,11 +383,92 @@ def game_health(prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS) ->
     return "; ".join(lines)
 
 
-def teardown(prefix: str = DEFAULT_PREFIX, verbose: bool = True) -> int:
+def game_directory(explicit: str | None = None) -> str:
+    """Where the DLLs write their artifacts, matching `er_game_base::log::game_directory_path`.
+
+    Env-overridable and current-user-aware rather than a hard-coded literal: AGENTS.md's
+    reusable-tooling rule, and the reason the old WSL2 `/mnt/c/SteamLibrary/...` path is not
+    written anywhere here -- it resolves to nothing on this machine, which reads as "the run
+    wrote no outcome" instead of "you looked in the wrong place".
+    """
+    if explicit:
+        return explicit
+    direct = os.environ.get("ER_GAME_DIR")
+    if direct:
+        return direct
+    steam = os.environ.get(
+        "ME3_STEAM_DIR", os.path.join(os.path.expanduser("~"), ".local/share/Steam")
+    )
+    return os.path.join(steam, "steamapps/common/ELDEN RING/Game")
+
+
+def read_run_outcome(game_dir: str | None = None) -> str | None:
+    """The current `er-run-outcome.txt` line, or `None` when the file is not there.
+
+    ABSENT is not the same as `running` and must not be reported as it: the DLL writes the file
+    at install, so no file at all means the logger never started and the record says nothing
+    about the game.
+    """
+    return _read(os.path.join(game_directory(game_dir), RUN_OUTCOME_FILE_NAME))
+
+
+def format_run_outcome(reason: str, previous: str | None) -> str:
+    """The line this script writes. One line, self-describing, same shape as the DLL's.
+
+    `was=` carries what the file held before, so superseding a record never destroys one -- and
+    on the second stamp it is how a DLL exit-path write that landed mid-sweep stays visible.
+    """
+    carried = "-" if previous is None else previous.strip().replace(" ", ",") or "-"
+    return (
+        f"outcome={RUN_OUTCOME_TORN_DOWN} api=er-teardown code=- "
+        f"reason={reason} was={carried}\n"
+    )
+
+
+def stamp_run_outcome(reason: str, game_dir: str | None = None) -> str | None:
+    """Record that THIS script is the reason the process is about to stop existing.
+
+    Returns the line written, or `None` when there was nowhere to write it. A failure here is
+    reported by the caller and never raises: refusing to tear down because a log could not be
+    written would be the instrument breaking the thing it measures.
+    """
+    directory = game_directory(game_dir)
+    previous = _read(os.path.join(directory, RUN_OUTCOME_FILE_NAME))
+    line = format_run_outcome(reason, previous)
+    try:
+        with open(
+            os.path.join(directory, RUN_OUTCOME_FILE_NAME), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(line)
+    except OSError:
+        return None
+    return line
+
+
+def teardown(
+    prefix: str = DEFAULT_PREFIX,
+    verbose: bool = True,
+    reason: str = DEFAULT_TEARDOWN_REASON,
+    game_dir: str | None = None,
+) -> int:
     """SIGTERM every prefix process, wait, then SIGKILL whatever survived. Returns the count."""
     targets = survey(prefix)
     if verbose:
         print(f"[er-teardown] {len(targets)} prefix process(es) to remove")
+
+    # BEFORE the first signal, because SIGKILL leaves nobody to write anything afterwards, and
+    # because a teardown that dies half way through should still have said why it started.
+    if targets:
+        stamped = stamp_run_outcome(reason, game_dir)
+        if verbose:
+            print(
+                f"[er-teardown] run outcome: {stamped.strip()}"
+                if stamped
+                else "[er-teardown] run outcome: NOT WRITTEN -- "
+                f"{os.path.join(game_directory(game_dir), RUN_OUTCOME_FILE_NAME)} "
+                "is not writable; this teardown will look like an unexplained kill"
+            )
+
     for row in targets:
         try:
             os.kill(int(row["pid"]), signal.SIGTERM)
@@ -379,6 +490,16 @@ def teardown(prefix: str = DEFAULT_PREFIX, verbose: bool = True) -> int:
     # process that is already gone (nor miss one that is not).
     wait_for_exit([int(row["pid"]) for row in survivors], KILL_GRACE_MS)
     remaining = survey(prefix)
+
+    # AGAIN, now that everything is gone. SIGTERM can reach the DLL's own exit hooks, which
+    # rewrite this file with an exit code that on this target diagnoses nothing -- a normal quit
+    # exits 0xc0000005 under Proton. Whatever they wrote is carried into `was=` rather than
+    # dropped, and the final word is the one fact neither hook could know: an agent did this.
+    if targets:
+        stamped = stamp_run_outcome(reason, game_dir)
+        if verbose and stamped:
+            print(f"[er-teardown] run outcome: {stamped.strip()}")
+
     if verbose:
         if remaining:
             print(f"[er-teardown] STILL ALIVE: {remaining}")
@@ -417,6 +538,62 @@ def selftest() -> int:
     # What matters is not the source text but that every row survey() returns was classified by
     # comm plus prefix, so that is what is asserted.
     rows = survey()
+    # THE RUN-OUTCOME CONTRACT. These are the cases that make `running` mean something: a
+    # teardown must be distinguishable from a death nobody explains, and an ABSENT file must not
+    # be reported as either.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as game_dir:
+        outcome_path = os.path.join(game_dir, RUN_OUTCOME_FILE_NAME)
+
+        check("an absent outcome file reads as None, never as running", read_run_outcome(game_dir) is None)
+
+        # The live shape the DLL stamps at install.
+        with open(outcome_path, "w", encoding="utf-8") as handle:
+            handle.write("outcome=running api=- code=-\n")
+        written = stamp_run_outcome("rebuilding-a-dll", game_dir)
+        check("a teardown stamps outcome=torn-down", written is not None and "outcome=torn-down" in written)
+        check("...naming er-teardown as the api", written is not None and "api=er-teardown" in written)
+        check("...carrying the reason it was given", written is not None and "reason=rebuilding-a-dll" in written)
+        check(
+            "...and superseding rather than destroying what was there",
+            written is not None and "was=outcome=running,api=-,code=-" in written,
+        )
+        check(
+            "the file on disk holds exactly that one line",
+            _read(outcome_path) == written,
+        )
+        check(
+            "a torn-down record no longer reads as running",
+            "outcome=running" not in (read_run_outcome(game_dir) or "").split("was=")[0],
+        )
+
+        # The second stamp: a DLL exit hook fired mid-sweep and overwrote us. Its verdict is
+        # carried, and the deliberate teardown is still the final word.
+        with open(outcome_path, "w", encoding="utf-8") as handle:
+            handle.write("outcome=exit-unclassified api=NtTerminateProcess code=0xc0000005\n")
+        second = stamp_run_outcome("rebuilding-a-dll", game_dir)
+        check(
+            "a mid-sweep exit-hook write is carried into was=, not lost",
+            second is not None and "was=outcome=exit-unclassified,api=NtTerminateProcess,code=0xc0000005" in second,
+        )
+        check(
+            "...while the final outcome is still the teardown",
+            second is not None and second.startswith("outcome=torn-down "),
+        )
+
+    # An unwritable directory must degrade to a report, never to an exception: refusing to kill
+    # because a log failed would be the instrument breaking the thing it measures.
+    check(
+        "an unwritable game directory returns None rather than raising",
+        stamp_run_outcome("whatever", "/proc/nonexistent-er-teardown-selftest") is None,
+    )
+    check(
+        "the game directory is env-overridable rather than a hard-coded literal",
+        game_directory("/explicit") == "/explicit"
+        and "ELDEN RING/Game" in game_directory(None),
+    )
+
     check(
         "every row records which rule caught it",
         all(row["matched_by"] in {"appid", "prefix", "launcher"} for row in rows),
@@ -459,6 +636,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefix", default=DEFAULT_PREFIX)
     parser.add_argument("--status", action="store_true", help="report only, kill nothing")
+    parser.add_argument(
+        "--reason",
+        default=DEFAULT_TEARDOWN_REASON,
+        help="why this teardown is happening; recorded in er-run-outcome.txt",
+    )
+    parser.add_argument(
+        "--game-dir",
+        default=None,
+        help="where er-run-outcome.txt lives (default: ER_GAME_DIR, else ME3_STEAM_DIR)",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -474,9 +661,21 @@ def main() -> int:
         for comm, count in sorted(by_comm.items()):
             print(f"    {count:3d}  {comm}")
         print(f"[er-teardown] game health: {game_health(args.prefix)}")
+        # The outcome file is reported HERE because not reading it is the whole defect this
+        # change exists to close: on 2026-09-06 "did it crash?" was answered by inference from
+        # process absence while the file that answers it sat unread beside the game.
+        outcome = read_run_outcome(args.game_dir)
+        if outcome is None:
+            print(
+                "[er-teardown] run outcome: NO FILE at "
+                f"{os.path.join(game_directory(args.game_dir), RUN_OUTCOME_FILE_NAME)} "
+                "-- the DLL's exit hooks never installed, so this says nothing about the game"
+            )
+        else:
+            print(f"[er-teardown] run outcome: {outcome.strip()}")
         return 0
 
-    teardown(args.prefix)
+    teardown(args.prefix, reason=args.reason, game_dir=args.game_dir)
     return 0
 
 
