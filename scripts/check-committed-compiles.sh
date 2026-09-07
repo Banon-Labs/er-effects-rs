@@ -75,6 +75,16 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+# THE HEAVIEST THING IN THE PUSH PATH, AND IT WAS THE ONE STEP STILL RUNNING AT THE PRIORITY IT
+# INHERITED. This gate cross-compiles the WHOLE workspace with --all-targets on a cold cache
+# (~100 s, 3.1 GB) and the pre-push hook runs it BEFORE check.sh -- so on 2026-09-06, with
+# check.sh already yielding, the desktop still froze for the first two minutes of every push.
+# Yield here too, from inside, so no caller has to remember.
+# shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+. "$repo_root/scripts/lib/cpu-courtesy.sh"
+cpu_courtesy check-committed-compiles
 target="x86_64-pc-windows-msvc"
 worktree="${ER_COMMITTED_CHECK_WORKTREE:-$repo_root/.worktrees/committed-compiles}"
 target_dir="${ER_COMMITTED_CHECK_TARGET_DIR:-$repo_root/target/committed-compiles}"

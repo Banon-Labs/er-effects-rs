@@ -36,6 +36,16 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+# Yield to whoever is using this computer, BEFORE any gate runs. The agent harness runs its
+# shells at nice -4, which is inherited by everything below and puts a 190-step suite at higher
+# priority than the desktop -- measured 2026-09-06, load average 34 on 16 cores and an
+# unresponsive machine. See scripts/lib/cpu-courtesy.sh for why this lives here and not in a
+# wrapper the caller has to remember.
+# shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+. "$repo_root/scripts/lib/cpu-courtesy.sh"
+cpu_courtesy check.sh
+
 
 # --- who may run this, and how many at once -------------------------------------------------
 # BOTH REFUSALS BELOW ARE MEASUREMENTS, NOT POLICY PREFERENCES. On 2026-09-02 three subagents
@@ -170,6 +180,49 @@ elif [[ -n $_check_skip_src ]]; then
 	printf '>>> check.sh: %s step(s) will be SKIPPED here for missing inputs (see the summary).\n' \
 		"${#_check_skip_reason[@]}" >&2
 fi
+
+# --- WHICH CARGO WORK THIS DIFF CAN ACTUALLY INVALIDATE ------------------------------------
+# A SECOND SOURCE OF SKIPS, WITH THE SAME HONESTY CONTRACT AND THE SAME MACHINERY. The first
+# asks "can this gate run HERE" (a missing game image); this one asks "can this diff have
+# broken it". The user directive is blunt: neither CI nor a push should run the whole suite
+# when the change does not require it -- a shell-script-only commit was compiling the entire
+# workspace for ~14 minutes to prove nothing about itself.
+#
+# IT IS DERIVED, NEVER A SECOND LIST. scripts/er-change-scope.py reads the step list back out
+# of THIS file (through ci-gate-portability's parser, which reads THIS file's own
+# `_check_step_pattern`) and reasons about each step's own `-p` packages against the reverse
+# dependency closure of the diff -- the same walk scripts/er-dll-closure.py performs. So a
+# cargo step added below is classified the moment it is written, with nothing to remember to
+# update. That is the property the pre-push hook's deleted 13-gate list did not have, and one
+# violation reached origin because of it (check-fnv1a-owner.py, PR #398).
+#
+# WHAT IT WILL NEVER SKIP: anything that is not cargo-shaped. Every repo-wide invariant, every
+# address-map and prologue gate, the portability ledger, shellcheck, the policy suites and
+# `cargo fmt` run on every diff regardless -- they read the whole tree, so a scoped run cannot
+# reason about them, and getting that boundary wrong is how a violation escapes.
+#
+# A SKIPPED STEP IS STILL A SKIPPED STEP: it lands in the same SKIPPED bucket, prints the same
+# "this step did NOT run; that is not a pass" banner, and its reason begins NOT SELECTED FOR
+# THIS DIFF. It is never counted as passed. And selection FAILS OPEN -- a git failure, an
+# unresolvable base, or a diff that touches anything outside a single crate selects everything.
+_check_scope_src=$(command python3 "$repo_root/scripts/er-change-scope.py" --check-sh-skips 2>/dev/null)
+_check_scope_rc=$?
+if [[ $_check_scope_rc -ne 0 ]]; then
+	printf '>>> check.sh: er-change-scope.py --check-sh-skips failed (exit %s).\n' "$_check_scope_rc" >&2
+	printf '>>> EVERY cargo step will RUN. Selection fails open; it never narrows on a guess.\n' >&2
+elif [[ -n $_check_scope_src ]]; then
+	_check_scope_n=0
+	while IFS=$'\t' read -r _scope_line _scope_reason; do
+		[[ -z ${_scope_line:-} ]] && continue
+		# A missing INPUT outranks a missing REASON TO RUN: if the portability ledger already
+		# skipped this line, keep its reason. Both are honest; the first is the more fundamental.
+		[[ -n ${_check_skip_reason[$_scope_line]:-} ]] && continue
+		_check_skip_reason[$_scope_line]=$_scope_reason
+		_check_scope_n=$((_check_scope_n + 1))
+	done <<<"$_check_scope_src"
+	printf '>>> check.sh: %s cargo step(s) NOT SELECTED for this diff (see the summary; NOT passes).\n' \
+		"$_check_scope_n" >&2
+fi
 declare -A _check_ran_at=()
 _check_ran=0
 _check_reached_end=0
@@ -294,8 +347,12 @@ bash() {
 # The rest can only hit a missing TOOL. `cupcake` deliberately has no shim: the fail-fast guard
 # further down owns that case, because later steps consume its output and would produce verdicts
 # that are not about anything.
+# `cargo` is the one tool that can also hit a missing REASON TO RUN. `_check_dep_skip` comes
+# first because "this diff cannot have broken it" is a cheaper truth than "the tool is absent",
+# and both land in the same SKIPPED bucket either way.
 cargo() {
 	_check_step_cmd[${BASH_LINENO[0]}]="cargo $*"
+	_check_dep_skip "${BASH_LINENO[0]}" cargo "$@" && return 0
 	_check_tool_skip cargo "${BASH_LINENO[0]}" cargo "$@" && return 0
 	command cargo "$@"
 }
@@ -362,7 +419,7 @@ _check_summary() {
 	printf 'passed        : %s\n' "$passed"
 	printf 'FAILED        : %s\n' "$failed"
 	printf 'INCONCLUSIVE  : %s\n' "$inconclusive"
-	printf 'SKIPPED       : %s   (input absent on this machine -- NOT passes)\n' "$skipped"
+	printf 'SKIPPED       : %s   (input absent here, or NOT SELECTED for this diff -- NOT passes)\n' "$skipped"
 	printf 'NOT RUN       : %s\n' "$not_run"
 
 	if [[ $failed -gt 0 ]]; then
@@ -382,7 +439,7 @@ _check_summary() {
 
 	if [[ $skipped -gt 0 ]]; then
 		echo
-		echo "SKIPPED steps (their input does not exist here -- NOT passes, and NOT run):"
+		echo "SKIPPED steps (input absent, or not selected for this diff -- NOT passes, NOT run):"
 		for ((i = 0; i < skipped; i++)); do
 			printf '  line %-5s %s\n' "${_check_skipped_lines[i]}" "${_check_skipped_cmds[i]}"
 			printf '        %s\n' "${_check_skip_reason[${_check_skipped_lines[i]}]:-tool not installed}"
@@ -421,7 +478,8 @@ _check_summary() {
 		rc=0
 		echo
 		echo "every step that COULD run here ran and passed."
-		echo "$skipped step(s) above were SKIPPED because their input is absent on this machine."
+		echo "$skipped step(s) above were SKIPPED -- their input is absent on this machine, or"
+		echo "this diff cannot have invalidated them. Each one names which."
 		echo "They have NO verdict. Do not read this run as covering them."
 	else
 		rc=0
@@ -537,6 +595,10 @@ python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
+# The build gates must yield to the person at the keyboard, and three of the four levers that
+# make that true are invisible from the process that sets them. See the header of
+# scripts/test-cpu-courtesy.sh.
+bash "$repo_root/scripts/test-cpu-courtesy.sh"
 # Telemetry honesty: no counter may be READ to emit an oracle while written nowhere. Selftest first,
 # so the gate is never trusted on its own say-so (er-effects-rs-56fx).
 python3 "$repo_root/scripts/check-oracle-writers.py" --selftest
@@ -1429,6 +1491,8 @@ shellcheck "$repo_root/scripts/run-portrait-dll-standalone-smoke.sh"
 shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
+shellcheck "$repo_root/scripts/lib/cpu-courtesy.sh"
+shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
 shellcheck "$repo_root/scripts/test-check-config-guard.sh"
@@ -1867,6 +1931,10 @@ python3 "$repo_root/scripts/check-shared-hook-rvas.py"
 # no decoded identity, a block printed without the DLL's testimony.
 python3 "$repo_root/scripts/er_run_lib.py"
 python3 "$repo_root/scripts/er-dll-closure.py" --selftest
+# ...and the SELECTION built on that walk: which gate work a diff can invalidate. Its selftest
+# is the anti-drift half -- it re-derives, from the build scripts and from this file, that no
+# path it waves through is a build input and that no gate here compiles without being declared.
+python3 "$repo_root/scripts/er-change-scope.py" --selftest
 python3 "$repo_root/scripts/er-dll-provenance.py" --selftest
 # (The launch-time half of that pair, `er-dll-freshness.sh --selftest`, would sit here with its
 # siblings but CANNOT: it needs a linked DLL to exist. It runs after check-rust-build.sh below.)

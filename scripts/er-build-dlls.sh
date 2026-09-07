@@ -25,6 +25,12 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+# A cold cross-compile of 26 shells is the single heaviest thing this repo does. Yield first.
+# shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+. "$REPO_ROOT/scripts/lib/cpu-courtesy.sh"
+cpu_courtesy er-build-dlls
 TARGET="${ER_BUILD_TARGET:-x86_64-pc-windows-msvc}"
 PROFILE_DIR="$REPO_ROOT/target/$TARGET/release"
 

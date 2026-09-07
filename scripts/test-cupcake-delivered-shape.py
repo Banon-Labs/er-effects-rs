@@ -67,6 +67,26 @@ import sys
 import tempfile
 from pathlib import Path
 
+def _pool_width(requested: int) -> int:
+    """Never open more workers than this run is ALLOWED to use.
+
+    Every pool below was sized against a free 16-core box -- one of them at 20. Under
+    scripts/lib/cpu-courtesy.sh a gate run is confined to an affinity mask of half the machine,
+    and each of these threads spawns a `cupcake eval` subprocess that inherits that mask, so a
+    20-wide pool on 8 permitted cores is oversubscription rather than parallelism: the same work,
+    more context switches, and a longer wall clock for the person waiting on the push.
+
+    `sched_getaffinity` reports the MASK rather than the core count, which is precisely the number
+    the cap granted. Falls back to the requested width where affinity is unavailable (never Linux,
+    where this gate runs).
+    """
+    try:
+        permitted = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return requested
+    return max(1, min(requested, permitted))
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CUPCAKE_DIR = REPO_ROOT / ".cupcake"
 PROTECTED_PATHS_TEST = CUPCAKE_DIR / "tests" / "protected_paths_test.rego"
@@ -294,7 +314,7 @@ def check_enrichment_contract() -> list[str]:
         label, typed, expected = case
         return label, typed, expected, eval_bash(typed)
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(8)) as pool:
         measured = list(pool.map(measure, ENRICHMENT_CASES))
 
     findings = []
@@ -413,7 +433,7 @@ def check_case_table() -> list[str]:
     def measure(case):
         return case, eval_bash(case["command"])
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(12)) as pool:
         measured = list(pool.map(measure, cases))
 
     rows = []
@@ -628,7 +648,7 @@ def check_shim_is_load_bearing() -> list[str]:
         name, command = case
         return name, eval_bash(command), eval_through_shim(command)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(4)) as pool:
         measured = list(pool.map(measure, SHIM_LOAD_BEARING_CASES))
 
     rows = []
@@ -660,7 +680,7 @@ def check_production_path() -> list[str]:
         mode = "some-future-mode" if "permission mode" in name else "default"
         return name, expect_allow, fragment, eval_through_shim(command, permission_mode=mode)
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(8)) as pool:
         measured = list(pool.map(measure, SHIM_CASES))
 
     rows = []
@@ -809,7 +829,7 @@ def check_hooks_path_forms() -> list[str]:
         name, command, expect_allow = case
         return name, command, expect_allow, eval_through_shim(command), eval_bash(command)
 
-    with ThreadPoolExecutor(max_workers=20) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(20)) as pool:
         measured = list(pool.map(measure, HOOKS_PATH_CASES))
 
     rows = []
@@ -1063,7 +1083,7 @@ def check_guard_layer_forms() -> list[str]:
         direct = eval_bash(command) if expect_allow else None
         return name, command, expect_allow, eval_through_shim(command), direct
 
-    with ThreadPoolExecutor(max_workers=12) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(12)) as pool:
         measured = list(pool.map(measure, GUARD_LAYER_CASES))
 
     rows = []
@@ -1188,7 +1208,7 @@ def check_hook_removal_forms() -> list[str]:
         direct = eval_bash(command) if expect_allow else None
         return name, command, expect_allow, fragment, eval_through_shim(command), direct
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=_pool_width(8)) as pool:
         measured = list(pool.map(measure, HOOK_REMOVAL_CASES))
 
     rows = []
