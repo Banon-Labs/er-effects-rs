@@ -166,6 +166,20 @@ static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
 static CANCELS: AtomicUsize = AtomicUsize::new(0);
 static KEEPS: AtomicUsize = AtomicUsize::new(0);
 static REINVADES: AtomicUsize = AtomicUsize::new(0);
+/// Matches judged a rejection that were then NOT cancelled -- the invasion proceeded anyway.
+///
+/// THE ORACLE THAT WAS MISSING, and its absence is why a broken filter looked like a working one
+/// for a whole session. Every other state this module can be in is visible from the heartbeat, but
+/// "armed, judging correctly, and enforcing nothing" was visible only to someone who read four
+/// specific lines out of 408 and understood that `NOT cancelled` meant the feature was inert. The
+/// user's report -- "if we were on the strictest settings, I didn't only invade locally. It might
+/// be disabled?" -- is that gap stated from the player's seat.
+///
+/// A non-zero value here IS the failure: the filter said no and the player went anyway. It belongs
+/// beside `CANCELS`, because the two together are the only honest statement of what the filter did
+/// -- a rejection count on its own cannot distinguish a match that was stopped from one that was
+/// merely disapproved of.
+static UNENFORCED_REJECTS: AtomicUsize = AtomicUsize::new(0);
 
 static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
@@ -688,10 +702,16 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
     let optional = unsafe { er_game_base::mem::safe_read_u16(nt + PE_SIZE_OF_OPTIONAL_HEADER) }?;
     let table = nt + PE_OPTIONAL_HEADER + optional as usize;
     let mut budget = SESSION_SCAN_QWORD_BUDGET;
-    // The best answer found so far: a session with no owner. Upgraded in place the moment some
-    // other global is seen pointing at it through `NEXT_OBJECT_OFFSET`, which is the relation
-    // `resolve_session`'s detour half uses to derive the session from the OSM.
-    let mut found: Option<(usize, usize)> = None;
+    // The two answers this scan can produce, kept SEPARATELY because the weaker one used to be
+    // able to veto the stronger one. See the shape-B arm below for what that cost.
+    //
+    // `bare`: a global that points straight at something identifying itself as a session. One
+    // condition, and it names no owner, so it can only ever yield `owner: 0`.
+    // `owned`: a global pointing at an object whose `+ NEXT_OBJECT_OFFSET` identifies itself as a
+    // session -- the exact relation `resolve_session`'s detour half uses -- so that object IS the
+    // OSM. Two linked conditions, and it is the only shape that lets the filter act.
+    let mut bare: Option<(usize, usize)> = None;
+    let mut owned: Option<(usize, usize, usize)> = None;
     for index in 0..sections as usize {
         let header = table + index * SECTION_HEADER_SIZE;
         // Composed from two u16 reads: `er-game-base` exposes `safe_read_u8`, `safe_read_u16` and
@@ -708,7 +728,7 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
         while slot + 8 <= end && budget > 0 {
             budget -= 1;
             if let Some(candidate) = unsafe { er_game_base::mem::safe_read_usize(slot) }
-                && candidate >= 0x1_0000
+                && plausible_session_pointer(candidate)
             {
                 if identifies_a_session(abi, candidate) {
                     // THE POINTER IS THE SESSION, AND THIS SHAPE NAMES NO OWNER -- but the owner
@@ -717,8 +737,8 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     // the shape that actually matched on this machine (session 0x1801b2560 via
                     // slot 0x18021a640), so returning early here is the difference between a
                     // filter that can cancel a rejected match and one that can only complain.
-                    if found.is_none() {
-                        found = Some((slot, candidate));
+                    if bare.is_none() {
+                        bare = Some((slot, candidate));
                     }
                     slot += 8;
                     continue;
@@ -727,7 +747,6 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     er_game_base::mem::safe_read_usize(candidate + ersc::NEXT_OBJECT_OFFSET)
                 } && next != 0
                     && identifies_a_session(abi, next)
-                    && found.map(|(_, session)| session == next).unwrap_or(true)
                 {
                     // THIS SHAPE HANDS BACK THE OWNER TOO, and throwing it away is what made the
                     // scan path deadly. `resolve_session`'s detour half derives the session as
@@ -736,15 +755,33 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     // `action(osm, ..)`, and returning `osm: 0` meant `cancel(0, 0, 1, 1)`
                     // dereferenced null inside `ersc.dll` at `+0x258da`, killing the process with
                     // no crash record (the unwind could not cross our MinHook frames).
-                    return Some((slot, next, candidate));
+                    //
+                    // THE VETO THAT USED TO BE HERE IS GONE. This arm additionally required
+                    // `found.map(|(_, session)| session == next).unwrap_or(true)` -- the owner had
+                    // to point at the session a previous BARE hit had already accepted. As
+                    // corroboration that is sound; as a REQUIREMENT it hands a single wrong bare
+                    // hit a veto over every real owner in the image, because a real OSM points at
+                    // the real session and the real session is not the wrong one. That is exactly
+                    // what happened on 2026-09-06 (see `plausible_session_pointer`): one garbage
+                    // qword matched first, and the filter spent the whole run unable to cancel.
+                    // Corroboration is now a REASON TO STOP EARLY, never a reason to reject.
+                    if osm_tag_matches(candidate)
+                        || bare.is_some_and(|(_, session)| session == next)
+                    {
+                        return Some((slot, next, candidate));
+                    }
+                    if owned.is_none() {
+                        owned = Some((slot, next, candidate));
+                    }
                 }
             }
             slot += 8;
         }
     }
-    // A session with no owner beats no session at all: the filter still judges every match and
-    // still logs, it just declines to drive Seamless (see `ersc_owner_or_refuse`).
-    found.map(|(slot, session)| (slot, session, 0))
+    // AN OWNER BEATS A BARE SESSION, and a bare session beats nothing at all. The middle case is
+    // the filter judging every match and logging while declining to drive Seamless (see
+    // `ersc_owner_or_refuse`); only the first case can actually cancel a rejected match.
+    owned.or_else(|| bare.map(|(slot, session)| (slot, session, 0)))
 }
 
 /// The host build has no `ersc.dll` image to walk, so there is nothing to find.
@@ -1103,13 +1140,53 @@ fn read_session_state(abi: &ersc::Abi, session: usize) -> Option<u32> {
 /// The four codes below are the ones this ABI actually reverses. A session caught mid-sequence in
 /// an unreversed state is simply not identified this pass, and the scan runs again -- which costs
 /// one more scan. Matching a string buffer costs the player every warp for the whole session.
+///
+/// AND THE VALUE CHECK IS STILL NOT ENOUGH ON ITS OWN -- see [`plausible_session_pointer`], which
+/// this now requires first. Each of the three false positives above was answered by narrowing what
+/// the FIELD may contain; the third one proved the field was never the whole question, because the
+/// address it was read from could not have been an object at all.
 fn identifies_a_session(abi: &ersc::Abi, session: usize) -> bool {
-    read_session_state(abi, session).is_some_and(|state| {
-        state == abi.state_idle
-            || state == abi.state_searching
-            || state == abi.state_cancelling
-            || state == abi.state_offer_received
-    })
+    plausible_session_pointer(session)
+        && read_session_state(abi, session).is_some_and(|state| {
+            state == abi.state_idle
+                || state == abi.state_searching
+                || state == abi.state_cancelling
+                || state == abi.state_offer_received
+        })
+}
+
+/// The smallest address worth testing. Below this is the null page and the low reservations, never
+/// an allocation.
+const MIN_PLAUSIBLE_SESSION_POINTER: usize = 0x1_0000;
+
+/// Every Seamless session pointer is at least pointer-aligned, and the one that broke the filter
+/// was not aligned at all.
+///
+/// MEASURED LIVE 2026-09-06, out of a run that judged four invasions, rejected all four and
+/// cancelled none. [`scan_for_session`] had latched `0x3dfadb` as the session, reported through
+/// `session resolved WITHOUT hooking Seamless -- found at 0x3dfadb ... owner 0x0`. Read back out of
+/// the running process, that address is not an object: it is a three-byte-misaligned window into a
+/// table of Wine pointers, and the four bytes at `+0x150` happen to read `01 00 00 00`, which is
+/// this build's `state_idle` exactly. So it satisfied every value check above, permanently -- the
+/// filter reported `ersc=0x01 IDLE` on all 53 `join-progress` samples of that run, across four
+/// join-data pushes and a committed warp, and logged exactly one session-state line (the first
+/// read) because the state it was watching could never change.
+///
+/// The cost was not a wrong reading. It was that [`scan_for_session`] then had a session it
+/// believed in, which vetoed every real owner candidate (see there), so the owner stayed `0`,
+/// [`ersc_owner_or_refuse`] declined, and all four rejections became
+/// `NOT cancelled ... the invasion PROCEEDS`. The player was sent to `0x3c313600`, the filter
+/// rejected it, and the next heartbeat records the player standing in it.
+///
+/// A session cannot live at an unaligned address. It carries a mutex sub-object and pointer fields,
+/// so the allocator gives it at least pointer alignment and MSVC's `operator new` gives 16.
+/// Requiring 8 is the weakest claim that is certainly true of every real session, so it cannot
+/// reject one -- and it discards seven of every eight garbage qwords, this one among them, its low
+/// bits being `0b011`.
+///
+/// Not `cfg`-gated: it is arithmetic, and it is what the host tests pin the measured addresses with.
+fn plausible_session_pointer(candidate: usize) -> bool {
+    candidate >= MIN_PLAUSIBLE_SESSION_POINTER && candidate.is_multiple_of(align_of::<usize>())
 }
 
 /// True when the session is in the state every option action refuses to proceed past. They take a
@@ -1642,6 +1719,7 @@ pub fn judge_incoming_match(join_data: usize) {
             if cancel_match(reason) {
                 announce_rejection(config.reject_notice, destination, reason);
             } else {
+                UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
                 crate::standalone_log(format_args!(
                     "local-invasion: NOT cancelled {destination:#010x} ({reason:?}) -- the match \
                      was judged a rejection but Seamless was not driven, so the invasion PROCEEDS. \
@@ -2264,8 +2342,17 @@ fn install_join_hook() -> usize {
         )
     } {
         Ok(()) => {
+            // SAY WHICH ADDRESS THIS IS. `address` is the seam's own 1.16.2 address;
+            // `register_union_hook` resolves it for the running build BEFORE installing anything
+            // and logs its own `HOOK TRANSLATED` line naming where the detour actually went. This
+            // line used to print the untranslated value with no qualifier, directly beneath that
+            // translation line -- so on 1.17 the log read `... -> 0x1406fc370` followed by
+            // `judging matches at ... @0x1406fb520`, which is exactly the shape of a hook left
+            // behind on a stale address. It cost the 2026-09-06 investigation its opening
+            // hypothesis: the detour was correct the whole time and had already fired four times.
             crate::standalone_log(format_args!(
-                "local-invasion: judging matches at {} @0x{address:x}",
+                "local-invasion: judging matches at {} @0x{address:x} (the seam's own address; the \
+                 HOOK TRANSLATED line above names where the detour went on this build)",
                 seam.name
             ));
             1
@@ -2826,13 +2913,19 @@ fn trace_session_field_writes(seamless: SeamlessSession) {
 #[cfg(not(windows))]
 fn trace_session_field_writes(_session: SeamlessSession) {}
 
-/// `(keeps, cancels, automatic re-searches)` so a run can be judged without reading the log.
+/// `(keeps, cancels, automatic re-searches, unenforced rejections)` so a run can be judged without
+/// reading the log.
+///
+/// The fourth number is the one that says whether the filter WORKED, as opposed to whether it ran.
+/// See [`UNENFORCED_REJECTS`]: any value above zero means a match this module rejected went ahead
+/// regardless, which from the player's seat is indistinguishable from the mod being switched off.
 #[must_use]
-pub fn tallies() -> (usize, usize, usize) {
+pub fn tallies() -> (usize, usize, usize, usize) {
     (
         KEEPS.load(Ordering::SeqCst),
         CANCELS.load(Ordering::SeqCst),
         REINVADES.load(Ordering::SeqCst),
+        UNENFORCED_REJECTS.load(Ordering::SeqCst),
     )
 }
 
