@@ -135,6 +135,65 @@ fn first_non_empty(record: &[i32], indices: impl Iterator<Item = usize>) -> i32 
     PORTRAIT_EQUIP_EMPTY_ID
 }
 
+pub const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
+
+/// The same list for a character who is TWO-HANDING, with the two-handed standing idle in front.
+///
+/// 12000000 is grounded exactly the way 3000000 above was -- off our own in-world telemetry, not
+/// from a table. Measured 2026-09-07 on Onyx Lord: `current_animation_id` held at 12000000 across
+/// nine samples over 22 seconds while the user reported he was standing still and two-handing,
+/// where the one-handed standing idle reads 3000000. The rest of the list is unchanged, so a build
+/// where 12000000 does not resolve falls through to the one-handed idle rather than to no pose.
+pub const PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED: [i32; 4] = [12000000, 3000000, 100022, 99900];
+
+/// `ChrAsmArmStyle` values that mean two-handing. Not a guess and not a name: `CS::ChrIns::
+/// IsTwoHanding` (deobf 0x1403f4930) is the whole function `ADD EAX,-0x2 ; CMP EAX,0x1 ; SETBE`,
+/// so exactly `{2, 3}` -- `LeftBothHands` and `RightBothHands` -- answer true.
+pub const CHR_ASM_ARM_STYLE_TWO_HANDED: [i32; 2] = [2, 3];
+
+/// Which idle to try on the portrait, given the arm style of the `ChrAsm` it is being built from.
+///
+/// The stance is NOT something the model build derives: `FUN_1409e6fb0` reads the equipment array
+/// and `selectedSlots`, and the only caller of `PlayerIns::GetArmStyle` in the whole image is
+/// `UpdatePlayerComponents` -- the live player. So a two-handed portrait has to come from the
+/// animation, which is why this is a list of anim ids and not a flag.
+pub fn portrait_idle_anim_ids(arm_style: i32) -> &'static [i32] {
+    if CHR_ASM_ARM_STYLE_TWO_HANDED.contains(&arm_style) {
+        &PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED
+    } else {
+        &PORTRAIT_IDLE_ANIM_IDS
+    }
+}
+
+#[cfg(test)]
+mod idle_anim_tests {
+    use super::*;
+
+    #[test]
+    fn two_handing_leads_with_the_two_handed_idle() {
+        for arm_style in CHR_ASM_ARM_STYLE_TWO_HANDED {
+            assert_eq!(portrait_idle_anim_ids(arm_style)[0], 12000000);
+        }
+    }
+
+    /// One-handed, and the ctor-fresh/unknown values, keep the list that has been shipping.
+    #[test]
+    fn everything_else_keeps_the_one_handed_idle() {
+        for arm_style in [-1, 0, 1, 4, 99] {
+            assert_eq!(portrait_idle_anim_ids(arm_style)[0], 3000000);
+        }
+    }
+
+    /// Both lists END the same way, so a build where the leading id does not resolve falls through
+    /// to the same fallbacks rather than to no pose at all.
+    #[test]
+    fn both_lists_share_their_fallback_tail() {
+        let one = PORTRAIT_IDLE_ANIM_IDS;
+        let two = PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED;
+        assert_eq!(&two[two.len() - one.len()..], &one[..]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

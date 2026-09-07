@@ -183,6 +183,7 @@ pub const PROFILE_RENDERER_SET_REQ_754_RVA: usize = 0xbb9810;
 pub const PROFILE_RENDERER_SET_REQ_755_RVA: usize = 0xbb9830;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_ARM_STYLE;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_WEAPON_ID;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RECORD_ARM_STYLE;
 /// The equipment-restore semaphores: what the write-back over the native feed actually changed.
 /// See `crate::portrait_equip_restore` for why the feed strips weapons and forces bare hands/legs,
 /// and `crate::portrait_equip_apply` for what publishes these.

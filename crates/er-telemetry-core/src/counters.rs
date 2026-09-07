@@ -2624,6 +2624,16 @@ pub static PORTRAIT_EQUIP_LIVE_WEAPON_ID: [AtomicUsize; 2] = [const { AtomicUsiz
 /// `ChrAsm::equipment.armStyle` (ChrAsm+0x08), the handedness input
 /// `getSelectedWeaponSlotIndex` reads. Packed the same way, so 0 is a real value and not "unsampled".
 pub static PORTRAIT_EQUIP_LIVE_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
+/// `armStyle` as the SAVE RECORD carries it, latched at the build kick.
+///
+/// Measured 2026-09-07 on Onyx Lord slot 1: the serialized `ChrAsmEquipment` block is
+/// `[3, 0, 0, 1, 1, 1, 1]` -- armStyle 3 = `RightBothHands`, i.e. two-handing, confirmed by the
+/// character loading into the world two-handed -- while `PORTRAIT_EQUIP_LIVE_ARM_STYLE` read 1 off
+/// `renderer+0x130`. The grip is therefore present in the record and LOST somewhere before the live
+/// stage, so anything that wants the saved grip must read the record, not the renderer. The walk
+/// that produced those bytes is self-checked: the same block's param ids come out
+/// right=4080001 left=110000 hands=1040200 legs=5210300, matching the live oracle exactly.
+pub static PORTRAIT_EQUIP_RECORD_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);

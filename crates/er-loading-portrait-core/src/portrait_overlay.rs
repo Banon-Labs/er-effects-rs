@@ -242,7 +242,7 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     // Target rect: the cropped head fills ~80% of screen height (aspect from the crop, not the square),
     // horizontally centered and bottom-anchored to the true screen bottom so the render clips exactly at the
     // monitor edge. The bar is drawn AFTER this (see boot_view_rasterize), so the bar sits in front.
-    let dst_h = (h * 80 / 100).max(1);
+    let dst_h = portrait_dst_height(h, cminy);
     let dst_w = (dst_h * crop_w / crop_h).max(1);
     let x0 = w.saturating_sub(dst_w) / 2;
     let y0 = h.saturating_sub(dst_h);
@@ -342,6 +342,31 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
     true
 }
+
+/// Height of the composited portrait, given the screen height and the crop envelope's TOP row.
+///
+/// Normally the head fills [`PORTRAIT_DST_HEIGHT_PCT`] of the screen, bottom-anchored, so the render
+/// clips at the monitor edge and the loading bar (drawn after) sits in front.
+///
+/// `cminy == 0` MEANS THE SOURCE IS ALREADY CUT. The crop envelope is the alpha bounding box of the
+/// offscreen render, so a top row of 0 says the character's silhouette reaches the very first row of
+/// the RT and is therefore truncated by the RT itself, not framed inside it. Measured 2026-09-07 on a
+/// two-handed Onyx Lord: `box=(417,0)-(966,1539)` in a `1542x1542` source -- the greatsword rides
+/// above the head and runs off the top. At the normal height that straight cut lands a fifth of the
+/// way down the screen, in plain view, which is the artifact the user reported. Mapping the crop's
+/// top row to screen row 0 instead puts the cut exactly on the game's top edge, where it cannot be
+/// seen. The cost is deliberate and bounded: the portrait is drawn larger on precisely the frames
+/// where it would otherwise show a seam, and untouched everywhere else.
+pub fn portrait_dst_height(screen_h: usize, crop_min_y: usize) -> usize {
+    if crop_min_y == 0 {
+        screen_h.max(1)
+    } else {
+        (screen_h * PORTRAIT_DST_HEIGHT_PCT / 100).max(1)
+    }
+}
+
+/// Share of screen height the portrait normally occupies.
+pub const PORTRAIT_DST_HEIGHT_PCT: usize = 80;
 
 #[cfg(test)]
 mod tests {
@@ -499,6 +524,44 @@ mod tests {
     /// Feeding one UNCHANGING source more times than the window is long is the exact shape of that bug --
     /// the old code kept counting past 40, and it also had no way to distinguish the one frame that
     /// established the envelope from the many that folded in and changed nothing.
+    /// THE REPORTED SEAM. A crop whose top row is 0 is a source the RT already truncated, so the
+    /// composite has to put that cut on the screen's own top edge; anything less leaves a visible
+    /// horizontal line partway down. Numbers are the measured ones: a 2160-high screen and the
+    /// `box=(417,0)-(966,1539)` envelope from the two-handed run.
+    #[test]
+    fn a_cut_source_is_mapped_to_the_screen_top_edge() {
+        assert_eq!(
+            portrait_dst_height(2160, 0),
+            2160,
+            "cut source fills the screen height"
+        );
+        assert_eq!(
+            2160usize.saturating_sub(portrait_dst_height(2160, 0)),
+            0,
+            "top edge is row 0"
+        );
+    }
+
+    /// An UNCUT source keeps the framing that has been shipping -- 80% of screen height, so the
+    /// dest top sits a fifth of the way down and the bar has room in front of it.
+    #[test]
+    fn an_uncut_source_keeps_the_eighty_percent_framing() {
+        assert_eq!(
+            portrait_dst_height(2160, 1),
+            2160 * PORTRAIT_DST_HEIGHT_PCT / 100
+        );
+        assert_eq!(portrait_dst_height(1080, 37), 864);
+    }
+
+    /// Never zero, at any screen size, in either branch -- the blit divides by it.
+    #[test]
+    fn the_destination_height_is_never_zero() {
+        for h in [0usize, 1, 2, 7, 1080] {
+            assert!(portrait_dst_height(h, 0) >= 1);
+            assert!(portrait_dst_height(h, 5) >= 1);
+        }
+    }
+
     #[test]
     fn crop_seed_counter_saturates_and_growth_counts_only_real_moves() {
         let _serial = PORTRAIT_GLOBALS.lock().unwrap_or_else(|e| e.into_inner());

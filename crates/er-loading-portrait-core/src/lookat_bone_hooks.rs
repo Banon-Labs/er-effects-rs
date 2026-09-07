@@ -884,6 +884,15 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                             PORTRAIT_ANIM_HANDLE_BEFORE.store(before, Ordering::SeqCst);
                             let id968_pre =
                                 unsafe { safe_read_usize(r + 0x968) }.unwrap_or(0) & 0xffff_ffff;
+                            // WHICH idle: the SAVE RECORD's arm style decides. Not the renderer's live
+                            // stage -- measured 2026-09-07, that reads 1 for a character whose record
+                            // says 3 (`RightBothHands`) and who loads into the world two-handing, so the
+                            // grip is lost somewhere between the record and `renderer+0x130`. The build
+                            // kick latches the record's value; `portrait_idle_anim_ids` turns it into a
+                            // candidate list, because the model build itself never reads armStyle.
+                            let arm_style = portrait_equip_unpack(
+                                PORTRAIT_EQUIP_RECORD_ARM_STYLE.load(Ordering::SeqCst),
+                            );
                             let mut outcome = 2usize;
                             let mut bound_id = -1i32;
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -895,7 +904,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                                 }
                                 let bind: unsafe extern "system" fn(usize, *const i32, u8, u8) =
                                     unsafe { core::mem::transmute(bind_addr) };
-                                for &id in PORTRAIT_IDLE_ANIM_IDS.iter() {
+                                for &id in portrait_idle_anim_ids(arm_style).iter() {
                                     PORTRAIT_ANIM_BIND_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
                                     unsafe { bind(r, &id, 1, 0) };
                                     let h = handle_at(r);
@@ -917,7 +926,7 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                                 "portrait-anim-bind: r=0x{r:x} loc=0x{loc:x} latches={l754:x}/{l755:x}/{l756:x} fd_neq={fd_neq} id968_pre={id968_pre} sentinel=0x{sentinel:x} handle before=0x{before:x} after=0x{:x} -> {}",
                                 PORTRAIT_ANIM_HANDLE.load(Ordering::SeqCst),
                                 if outcome == 1 {
-                                    format!("BOUND idle anim {bound_id}")
+                                    format!("BOUND idle anim {bound_id} (arm_style={arm_style})")
                                 } else {
                                     "no candidate resolved (static pose kept)".to_owned()
                                 },

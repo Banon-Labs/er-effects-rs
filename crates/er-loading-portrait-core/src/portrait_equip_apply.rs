@@ -89,6 +89,12 @@ pub unsafe fn portrait_equip_restore_apply(
         // `CHR_ASM_SIZE`, and `index` is bounded by the array the read filled.
         unsafe { core::ptr::write_volatile(address as *mut i32, *wanted) };
     }
+    // The record's own grip, latched here because this is the one place the record's `ChrAsm` is in
+    // hand on the game thread. The renderer's live stage does NOT carry it (see the counter's own
+    // doc), so the idle-anim choice reads this rather than `renderer+0x130`.
+    if let Some(arm_style) = unsafe { safe_read_i32(record_chr_asm + CHR_ASM_EQUIPMENT_OFFSET) } {
+        portrait_equip_latch_first(&PORTRAIT_EQUIP_RECORD_ARM_STYLE, arm_style);
+    }
     PORTRAIT_EQUIP_RESTORE_KICKS.fetch_add(1, Ordering::SeqCst);
     if portrait_equip_restore_is_material(&report) {
         PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS
