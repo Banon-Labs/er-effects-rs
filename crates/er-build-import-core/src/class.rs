@@ -170,30 +170,113 @@ pub fn class_name_message_id(archetype: u8) -> u32 {
     FIRST_CLASS_NAME_MESSAGE_ID + u32::from(archetype)
 }
 
+/// Starting level and the eight base attributes, keyed by the archetype byte: bytes 192 and
+/// 194..=201 of `CharaInitParam` rows 3000.. , read out of the installed `regulation.bin`.
+///
+/// # These are FLOORS, which is why this is no longer test-only
+///
+/// It sat inside `#[cfg(test)]` for as long as its only job was to pin the ORDER of
+/// [`STARTING_CLASSES`] -- two independent sources agreeing about which row is Confessor and which
+/// is Samurai. It is now also product data, because a class's base attributes are the **floor**
+/// under its character: character creation deals you these numbers, and the level-up dialog reads
+/// this same row (`0x1407c6560` -> `CS::PlayerLevelUpDialog` @ `0x14096daa0`) into a base-stats
+/// simulator held beside the live one. No ordinary play session produces a Vagabond with strength
+/// below 14.
+///
+/// The importer needs that fact, and it cannot borrow it from the engine: the native it calls to
+/// write stats, `ApplyMainPlayerStats` @ `0x140788cf0`, does no clamping whatsoever. A planner
+/// payload can carry an attribute below the base of the class it names, and the eight attributes
+/// are what the level is derived from ([`crate::stats::normalise`]) -- so a sub-base attribute
+/// silently costs the character levels it claimed to have, and nothing downstream objects. See
+/// [`crate::stats`] for the reported case and the rest of the evidence.
+///
+/// Attribute order is the game's, and it is [`ATTRIBUTE_KEYS`] index for index: vigour, mind,
+/// endurance, strength, dexterity, intelligence, faith, arcane. Byte 193 is zero on every row and
+/// is not read here.
+///
+/// Ground truth, not transcription: `scripts/check-starting-classes.py` re-reads every one of
+/// these numbers out of the installed regulation and fails on a disagreement, and the tests below
+/// cross-check the same rows against figures the planner publishes.
+pub const STARTING_STATS: &[(u8, [u8; 8])] = &[
+    (9, [15, 10, 11, 14, 13, 9, 9, 7]),    // 0  Vagabond
+    (8, [11, 12, 11, 10, 16, 10, 8, 9]),   // 1  Warrior
+    (7, [14, 9, 12, 16, 9, 7, 8, 11]),     // 2  Hero
+    (5, [10, 11, 10, 9, 13, 9, 8, 14]),    // 3  Bandit
+    (6, [9, 15, 9, 8, 12, 16, 7, 9]),      // 4  Astrologer
+    (7, [10, 14, 8, 11, 10, 7, 16, 10]),   // 5  Prophet
+    (10, [10, 13, 10, 12, 12, 9, 14, 9]),  // 6  Confessor
+    (9, [12, 11, 13, 12, 15, 9, 8, 8]),    // 7  Samurai
+    (9, [11, 12, 11, 11, 14, 14, 6, 9]),   // 8  Prisoner
+    (1, [10, 10, 10, 10, 10, 10, 10, 10]), // 9  Wretch
+    (7, [10, 12, 11, 13, 15, 8, 11, 6]),   // 10 Idus Knight   (1.17)
+    (10, [14, 8, 17, 15, 11, 7, 8, 9]),    // 11 Heavy Knight  (1.17)
+];
+
+/// The planner's key for each attribute, in the order [`STARTING_STATS`] holds them.
+///
+/// **One array, one order.** The clamp in [`crate::stats::normalise`] reads a payload key and the
+/// class base at the SAME index, so a floor applied under the wrong name is a real and silent
+/// failure mode -- Vagabond's strength base held against the build's faith. Writing the key list
+/// beside the table it indexes, rather than in the consumer, is what makes that unrepresentable;
+/// `the_planner_keys_line_up_with_the_param_row` states it as an assertion too.
+///
+/// Note `vit`: the planner spells **Endurance** that way, and it is the game's third attribute,
+/// not its Vigor. Getting that pairing wrong is the other half of the same failure.
+pub const ATTRIBUTE_KEYS: [&str; 8] = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"];
+
+/// The base attributes an archetype starts with -- the game's per-attribute floor for that class.
+///
+/// Indexed by [`ATTRIBUTE_KEYS`]. `None` means the same thing it means in
+/// [`class_for_archetype`]: either the byte is garbage, or this table is older than the game.
+///
+/// ```
+/// use er_build_import_core::class::{starting_attributes, ATTRIBUTE_KEYS};
+/// let vagabond = starting_attributes(0).expect("archetype 0 is Vagabond");
+/// let strength = ATTRIBUTE_KEYS.iter().position(|k| *k == "str").expect("str is an attribute");
+/// assert_eq!(vagabond[strength], 14);
+/// assert_eq!(starting_attributes(12), None);
+/// ```
+#[must_use]
+pub fn starting_attributes(archetype: u8) -> Option<[u8; 8]> {
+    STARTING_STATS
+        .get(usize::from(archetype))
+        .map(|(_, attributes)| *attributes)
+}
+
+/// The base attributes for a class name, however the build spelled it.
+///
+/// `None` covers both "the build named no class this table knows" and "the name is not a class at
+/// all". The caller has to tell those apart from an ABSENT name, which is why this takes a `&str`
+/// and not an `Option<&str>` -- see [`crate::stats::Floor`].
+///
+/// ```
+/// use er_build_import_core::class::starting_attributes_for_class;
+/// assert_eq!(starting_attributes_for_class("vagabond"), starting_attributes_for_class("Vagabond"));
+/// assert_eq!(starting_attributes_for_class("Tarnished"), None);
+/// ```
+#[must_use]
+pub fn starting_attributes_for_class(name: &str) -> Option<[u8; 8]> {
+    archetype_for_class(name).and_then(starting_attributes)
+}
+
+/// The level an archetype's character starts at, straight out of `CharaInitParam` byte 192.
+///
+/// ```
+/// use er_build_import_core::class::starting_level;
+/// assert_eq!(starting_level(0), Some(9)); // Vagabond
+/// assert_eq!(starting_level(9), Some(1)); // Wretch
+/// ```
+#[must_use]
+pub fn starting_level(archetype: u8) -> Option<u8> {
+    STARTING_STATS
+        .get(usize::from(archetype))
+        .map(|(level, _)| *level)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Starting level and the eight attributes, keyed by the archetype byte: bytes 192 and
-    /// 194..=201 of `CharaInitParam` rows 3000.. , read out of the installed 1.17
-    /// `regulation.bin`. This is what pins the ORDER.
-    ///
-    /// Attribute order is the game's: vigour, mind, endurance, strength, dexterity, intelligence,
-    /// faith, arcane. Byte 193 is zero on every row and is not read here.
-    const STARTING_STATS: &[(u8, [u8; 8])] = &[
-        (9, [15, 10, 11, 14, 13, 9, 9, 7]),    // 0  Vagabond
-        (8, [11, 12, 11, 10, 16, 10, 8, 9]),   // 1  Warrior
-        (7, [14, 9, 12, 16, 9, 7, 8, 11]),     // 2  Hero
-        (5, [10, 11, 10, 9, 13, 9, 8, 14]),    // 3  Bandit
-        (6, [9, 15, 9, 8, 12, 16, 7, 9]),      // 4  Astrologer
-        (7, [10, 14, 8, 11, 10, 7, 16, 10]),   // 5  Prophet
-        (10, [10, 13, 10, 12, 12, 9, 14, 9]),  // 6  Confessor
-        (9, [12, 11, 13, 12, 15, 9, 8, 8]),    // 7  Samurai
-        (9, [11, 12, 11, 11, 14, 14, 6, 9]),   // 8  Prisoner
-        (1, [10, 10, 10, 10, 10, 10, 10, 10]), // 9  Wretch
-        (7, [10, 12, 11, 13, 15, 8, 11, 6]),   // 10 Idus Knight   (1.17)
-        (10, [14, 8, 17, 15, 11, 7, 8, 9]),    // 11 Heavy Knight  (1.17)
-    ];
+    use crate::stats::CLASS_INVARIANT;
 
     /// Starting level and vigour as the PLANNER publishes them, keyed by NAME.
     ///
@@ -282,17 +365,92 @@ mod tests {
         // starting class's level is the sum of its eight attributes minus 79. It holds for all ten
         // 1.16.2 classes and for both 1.17 additions, which is the cheapest evidence that the two
         // new rows are real starting-stat blocks rather than padding that happens to be non-zero.
+        //
+        // The 79 is `stats::CLASS_INVARIANT` rather than a literal, so this test and the importer's
+        // one derivation of a level cannot disagree about the number they both rest on.
         for (archetype, (level, attributes)) in STARTING_STATS.iter().copied().enumerate() {
-            let total: u32 = attributes.iter().map(|&a| u32::from(a)).sum();
+            let total: i64 = attributes.iter().map(|&a| i64::from(a)).sum();
             assert_eq!(
-                u32::from(level),
-                total - 79,
+                i64::from(level),
+                total - CLASS_INVARIANT,
                 "archetype {archetype} ({:?}) has attributes totalling {total}, which is level {}, \
                  not {level}",
                 class_for_archetype(u8::try_from(archetype).unwrap()),
-                total - 79,
+                total - CLASS_INVARIANT,
             );
         }
+    }
+
+    #[test]
+    fn the_planner_keys_line_up_with_the_param_row() {
+        // The pairing the clamp depends on, stated rather than assumed: ATTRIBUTE_KEYS[i] names
+        // the attribute STARTING_STATS holds at [i]. Checked against the one class whose base
+        // attributes are all distinct, so every index is pinned by a different number and a
+        // transposition cannot survive.
+        //
+        // Vagabond, CharaInitParam 3000: vig 15, mnd 10, end 11, str 14, dex 13, int 9, fth 9,
+        // arc 7. Vigour and strength are the pair that matters -- 15 against 14, adjacent numbers
+        // in different positions, which is exactly the mistake a reordering would make.
+        let vagabond = starting_attributes(0).expect("archetype 0 is Vagabond");
+        let at = |key: &str| {
+            let index = ATTRIBUTE_KEYS
+                .iter()
+                .position(|candidate| *candidate == key)
+                .unwrap_or_else(|| panic!("{key} is not one of the eight attribute keys"));
+            vagabond[index]
+        };
+        assert_eq!(at("vig"), 15);
+        assert_eq!(at("mnd"), 10);
+        assert_eq!(at("vit"), 11, "the planner spells Endurance `vit`");
+        assert_eq!(at("str"), 14);
+        assert_eq!(at("dex"), 13);
+        assert_eq!(at("int"), 9);
+        assert_eq!(at("fth"), 9);
+        assert_eq!(at("arc"), 7);
+    }
+
+    #[test]
+    fn the_eight_keys_are_eight_distinct_keys() {
+        // A duplicate key would make one attribute's floor unreachable and apply another's twice,
+        // and the table above would still look right.
+        for (index, key) in ATTRIBUTE_KEYS.iter().enumerate() {
+            assert!(
+                !ATTRIBUTE_KEYS[..index].contains(key),
+                "{key} appears twice in ATTRIBUTE_KEYS"
+            );
+        }
+        assert_eq!(ATTRIBUTE_KEYS.len(), STARTING_STATS[0].1.len());
+    }
+
+    #[test]
+    fn a_class_name_resolves_to_the_base_attributes_of_its_row() {
+        // The by-name accessor is the one the importer actually calls, so it gets its own check
+        // rather than riding on the by-archetype one.
+        assert_eq!(
+            starting_attributes_for_class("Vagabond"),
+            starting_attributes(0)
+        );
+        assert_eq!(
+            starting_attributes_for_class("wretch"),
+            starting_attributes(9)
+        );
+        assert_eq!(
+            starting_attributes_for_class("Heavy Knight"),
+            starting_attributes(11)
+        );
+        assert_eq!(starting_attributes_for_class(""), None);
+        assert_eq!(starting_attributes_for_class("Tarnished"), None);
+    }
+
+    #[test]
+    fn every_class_starts_at_the_level_its_row_states() {
+        for (archetype, (level, _)) in STARTING_STATS.iter().copied().enumerate() {
+            let archetype = u8::try_from(archetype).expect("the classes fit in a byte");
+            assert_eq!(starting_level(archetype), Some(level));
+        }
+        let past_the_end = u8::try_from(STARTING_CLASS_COUNT).expect("the classes fit in a byte");
+        assert_eq!(starting_level(past_the_end), None);
+        assert_eq!(starting_attributes(past_the_end), None);
     }
 
     #[test]

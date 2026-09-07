@@ -301,7 +301,7 @@ fn the_session_watch_window_covers_every_known_field() {
     let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
     // EVERY build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
-    // v1.9.9's `0x110` but not v2.0.0's `0x150` would trace nothing on half the machines.
+    // a stale build's state offset but not the supported one's would trace nothing at all.
     for abi in ersc::SUPPORTED {
         assert!(
             abi.session_state_offset >= begin && abi.session_state_offset < end,
@@ -460,9 +460,9 @@ struct Measured {
 /// that says where its value came from -- not a silent drift.
 #[test]
 fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
-    // v2.0.0, measured 2026-09-02 -- see this module's `ersc` docs for what identifies each
-    // address; none was taken from a byte match alone. v1.9.9 is no longer here because it is no
-    // longer driven; what remains of it is `ersc::RETIRED`, checked below.
+    // The supported build, measured in place -- see this module's `ersc` docs for what
+    // identifies each address; none was taken from a byte match alone. There is one build here
+    // and there is never more than one: a build that is no longer latest leaves nothing behind.
     let expected = [Measured {
         version: "2.0.1",
         rvas: [0x2_41a0, 0x2_5850, 0x2_58d0, 0xa_d6e0],
@@ -509,82 +509,23 @@ fn the_pinned_abi_is_the_one_measured_out_of_the_supported_seamless_build() {
     }
 }
 
-/// v2.0.0 renumbered the whole session-state enum by `+1`, proven by a scan of every immediate
-/// store to the state field in both builds: seven distinct values, matching site counts, one
-/// uniform shift. That shift is the PROVENANCE of every number in the supported ABI, so it stays
-/// pinned even though v1.9.9 is no longer a build this mod drives -- a future edit to a state
-/// code has to argue with the derivation rather than slip through.
+/// Each pin has to identify a FUNCTION rather than a code shape.
 ///
-/// The v1.9.9 numbers are literals here, deliberately. They are the input to a measurement, not
-/// an ABI anything can be driven with, so a test is where they belong now.
-#[test]
-fn the_supported_state_enum_is_the_retired_one_shifted_by_exactly_one() {
-    /// v1.9.9 idle/searching/cancelling/offer-received, measured 2026-08-05.
-    const RETIRED_STATES: [u32; 4] = [0x00, 0x0d, 0x22, 0x12];
-    /// v1.9.9 session state and guard offsets, from the same measurement.
-    const RETIRED_FIELDS: [usize; 2] = [0x110, 0x10c];
-
-    let new = &ersc::SUPPORTED[0];
-    for (name, before, after) in [
-        ("idle", RETIRED_STATES[0], new.state_idle),
-        ("searching", RETIRED_STATES[1], new.state_searching),
-        ("cancelling", RETIRED_STATES[2], new.state_cancelling),
-        (
-            "offer received",
-            RETIRED_STATES[3],
-            new.state_offer_received,
-        ),
-    ] {
-        assert_eq!(before + 1, after, "{name} did not shift by exactly one");
-    }
-    // And the field group moved as a block, keeping its internal spacing: guard = mutex+0x4c,
-    // state = mutex+0x50, so state - guard is invariant across the move.
-    assert_eq!(new.session_state_offset - RETIRED_FIELDS[0], 0x40);
-    assert_eq!(new.session_guard_offset - RETIRED_FIELDS[1], 0x40);
-    assert_eq!(
-        RETIRED_FIELDS[0] - RETIRED_FIELDS[1],
-        new.session_state_offset - new.session_guard_offset,
-    );
-}
-
-/// The version gate has to be able to TELL THE BUILDS APART, and each pin has to identify a
-/// function rather than a shape.
-///
-/// Measured 2026-09-02 against the two DLLs in place: each invade pin occurs exactly once in
-/// its own build and not at all in the other. That measurement cannot run here (it needs the
-/// files), so what this pins is the property the code depends on and the reason the previous
-/// pins could not do it: the fourteen bytes every option action shares are not a
-/// discriminator, and five different v2.0.0 functions have them.
+/// The cross-build half of this test went with the retired table -- there is no second build to
+/// tell this one apart from any more. What remains is the property the code still depends on, and
+/// the one the original fourteen-byte pins actually failed: five different option actions share
+/// those fourteen bytes, so a pin that stops near them proves only that SOME option action lives
+/// at the address. The measurement that proves each pin unique needs the DLL and so cannot run
+/// here; what runs here is the shape requirement that makes such a pin possible.
 #[test]
 fn the_version_discriminator_actually_discriminates() {
     const SHARED_OPTION_ACTION_OPENING: usize = 14;
-    let old = &ersc::RETIRED[0];
-    let new = &ersc::SUPPORTED[0];
-
-    // Same address would mean the gate cannot even look in two places.
-    assert_ne!(old.invade_action_rva, new.invade_action_rva);
-    // Different bytes, and different WITHIN the shared opening's length is not enough -- they
-    // must differ somewhere a byte comparison of the full pin will reach.
-    assert_ne!(old.invade_prologue, new.invade_prologue);
-    assert_eq!(
-        old.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
-        new.invade_prologue[..SHARED_OPTION_ACTION_OPENING],
-        "the shared opening really is shared -- which is why the pins cannot stop there"
-    );
-    assert!(
-        old.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3
-            && new.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3,
-        "a pin that stops near the shared opening identifies a code shape, not a function"
-    );
-    // Neither pin is a prefix of the other, so neither build's gate can accept the other's
-    // bytes no matter which is longer.
-    let shorter = old.invade_prologue.len().min(new.invade_prologue.len());
-    assert_ne!(
-        old.invade_prologue[..shorter],
-        new.invade_prologue[..shorter]
-    );
-
     for abi in ersc::SUPPORTED {
+        assert!(
+            abi.invade_prologue.len() > SHARED_OPTION_ACTION_OPENING * 3,
+            "{}: a pin that stops near the shared opening identifies a code shape, not a function",
+            abi.version
+        );
         // Within one build the four entry points must be four different addresses.
         let mut rvas = [
             abi.show_rva,
@@ -904,9 +845,8 @@ fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
 
 #[test]
 fn the_ersc_action_prologues_are_the_bytes_read_out_of_the_shipped_dlls() {
-    // Read from the two Seamless builds in place -- v1.9.9 on 2026-08-05, v2.0.0 on
-    // 2026-09-02. If these ever need changing, re-read the DLL; do not adjust them to make a
-    // hook install.
+    // Read from the shipped Seamless DLL in place. If these ever need changing, re-read the
+    // DLL; do not adjust them to make a hook install.
     for abi in ersc::SUPPORTED {
         for (name, pin) in [
             ("invade", abi.invade_prologue),
@@ -939,4 +879,140 @@ fn the_ersc_action_prologues_are_the_bytes_read_out_of_the_shipped_dlls() {
             );
         }
     }
+}
+
+/// The address that broke the filter must not be accepted as a session, and the one that is a real
+/// session must still be.
+///
+/// # This is a regression test with a date and a log line behind it
+///
+/// 2026-09-06, live run `br-20260906-212236-d9b7`: `scan_for_session` reported
+/// `session resolved WITHOUT hooking Seamless -- found at 0x3dfadb ... owner 0x0`. Read back out of
+/// the running process through `/proc/<pid>/mem`, `0x3dfadb` is a three-byte-misaligned window into
+/// a table of Wine pointers whose bytes at `+0x150` read `01 00 00 00` -- this build's `state_idle`
+/// exactly, and permanently. The run judged four invasions, rejected all four, cancelled none, and
+/// logged `ersc=0x01` on all 53 `join-progress` samples because the "session state" it was reading
+/// was a fragment of somebody else's pointer.
+///
+/// The positive case matters as much as the negative one: the check must be weak enough that it
+/// cannot reject a real session. `0x1801b2560` is the session this module actually resolved on this
+/// machine, recorded in `scan_for_session`'s own comment.
+#[test]
+fn the_measured_false_positive_is_not_a_plausible_session_pointer() {
+    assert!(
+        !plausible_session_pointer(0x3d_fadb),
+        "0x3dfadb is not 8-aligned, so it cannot be an object carrying a mutex and pointers -- \
+         accepting it cost a live run every cancellation it should have made"
+    );
+    assert!(
+        plausible_session_pointer(0x1_801b_2560),
+        "the session this module really resolved must still pass, or the gate has replaced a false \
+         positive with a false negative"
+    );
+    // The null page and the low reservations, which no allocation reaches.
+    assert!(!plausible_session_pointer(0));
+    assert!(!plausible_session_pointer(0x150));
+    // Aligned but too low is still refused; the alignment check is not the only one.
+    assert!(!plausible_session_pointer(0x8000));
+    // Every misalignment is refused, not merely the one that was measured.
+    for offset in 1..8usize {
+        assert!(
+            !plausible_session_pointer(0x1_801b_2560 + offset),
+            "a session pointer off by {offset} byte(s) is not a session pointer"
+        );
+    }
+}
+
+/// The identity check must consult the pointer before it consults the field.
+///
+/// `identifies_a_session` answers "is this object a session", and until 2026-09-06 it only ever
+/// looked at what `+0x150` contained. Three false positives were each answered by narrowing the
+/// permitted VALUES -- zero, then any byte, then the four reversed codes -- and the third one
+/// proved the value was never the whole question, because the address it came from could not have
+/// held an object at all. If this call is ever dropped the scan is back to matching coincidences.
+#[test]
+fn the_session_identity_check_rejects_implausible_pointers_first() {
+    let code = product_code();
+    let body = code
+        .split_once("fn identifies_a_session(")
+        .expect("identifies_a_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("plausible_session_pointer("),
+        "identifies_a_session must gate on the pointer as well as the state field, or a misaligned \
+         fragment of unrelated memory reading 0x01 is a session again"
+    );
+}
+
+/// A bare session find may never veto an owner find.
+///
+/// # The shape of the bug this pins
+///
+/// `scan_for_session` produces two shapes. The bare one -- a global pointing straight at something
+/// that identifies itself as a session -- names no owner, so it can only ever yield `owner: 0`, and
+/// `ersc_owner_or_refuse` then declines to drive Seamless for the rest of the process. The owned
+/// one additionally hands back the OSM, and it is the ONLY shape that lets a rejected match be
+/// cancelled.
+///
+/// The owned arm used to carry `&& found.map(|(_, session)| session == next).unwrap_or(true)`: an
+/// owner was accepted only if it pointed at the session a previous bare hit had already accepted.
+/// One wrong bare hit therefore vetoed every real owner in the image, because a real OSM points at
+/// the real session and the real session was not the wrong one. Measured 2026-09-06: four
+/// rejections, zero cancellations, `owner 0x0` for the whole run.
+///
+/// Corroboration is still used -- it is a reason to stop scanning early. It is never a reason to
+/// reject.
+#[test]
+fn a_bare_session_find_cannot_veto_an_owner_find() {
+    let code = product_code();
+    let body = code
+        .split_once("fn scan_for_session(base: usize")
+        .expect("the windows scan_for_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        !body.contains("unwrap_or(true)"),
+        "the owner arm must not be conditional on a previous bare find agreeing with it -- that is \
+         the veto that left a live run unable to cancel anything"
+    );
+    let returns_owned_first = body.find("owned.or_else(");
+    assert!(
+        returns_owned_first.is_some(),
+        "the scan must prefer the shape that carries an owner over the shape that cannot act"
+    );
+    // A bare hit must be remembered rather than returned on sight, or the scan stops before it can
+    // ever reach the owner it needs.
+    assert!(
+        body.contains("bare = Some((slot, candidate));"),
+        "a bare session must be recorded and the scan continued, not returned immediately"
+    );
+}
+
+/// A rejection that was not enforced has to be COUNTED, not merely logged.
+///
+/// The user-visible failure on 2026-09-06 was "I didn't only invade locally. It might be disabled?"
+/// -- and the filter was armed, judging correctly, and enforcing nothing. Every other state this
+/// module can be in shows up in the heartbeat; that one showed up only as four lines buried in 408,
+/// so the run read as healthy right up until somebody read the log by hand.
+///
+/// The counter is the oracle: above zero means a match this module rejected proceeded anyway.
+#[test]
+fn an_unenforced_rejection_is_counted_and_reported() {
+    let code = product_code();
+    assert!(
+        code.contains("UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);"),
+        "the path that declines to cancel a rejected match must increment the counter, or an inert \
+         filter is indistinguishable from a working one"
+    );
+    assert!(
+        code.contains("UNENFORCED_REJECTS.load(Ordering::SeqCst),"),
+        "the counter must be published through `tallies`, or nothing outside this module can see it"
+    );
+    let heartbeat = include_str!("../drive.rs");
+    assert!(
+        heartbeat.contains("UNENFORCED={unenforced}"),
+        "the heartbeat must print the unenforced count -- it is the one number that says whether \
+         the filter worked, as opposed to whether it ran"
+    );
 }

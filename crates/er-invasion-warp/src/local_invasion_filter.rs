@@ -21,13 +21,15 @@
 //! # Why nothing in `ersc.dll` is hooked
 //!
 //! Asked directly whether the filter could avoid repeatedly cancelling, the binary answered no --
-//! and answered something better instead. Static read of the shipped `ersc.dll` (v1.9.9),
-//! 2026-08-05:
+//! and answered something better instead. Static read of the shipped `ersc.dll`, first taken
+//! 2026-08-05 and re-measured against the supported build:
 //!
-//! * `ersc+0x243e0` ("Invade world") is nine instructions: take the mutex at `S+0xC0`, bail if
-//!   `S+0x10C == 0x7fffffff`, write `S+0x110 = 0xd`, release. `ersc+0x24460` ("Cancel search") is
-//!   the same shape writing `0x22`. Neither queries anything.
-//! * Across all 4839 functions in the unpacked `.text`, `0xd` reaches `S+0x110` at exactly ONE
+//! * `ersc+0x25850` ("Invade world") does one thing: require the session idle, take the mutex at
+//!   `S+0x100`, bail if `S+0x14C == 0x7fffffff`, write `S+0x150 = 0xe`, release. Fifteen
+//!   instructions on that path out of 31 in the whole `0x75`-byte function, the rest being the
+//!   two fatal blocks it branches to. `ersc+0x258d0` ("Cancel search") is the same shape without
+//!   the idle precondition, writing `0x23`. Neither queries anything.
+//! * Across all 4903 functions in the unpacked `.text`, `0xe` reaches `S+0x150` at exactly ONE
 //!   site -- the one above. There is no client-side candidate list to filter, because starting a
 //!   search *is* that single store; everything after it happens inside the Themida-virtualised
 //!   dispatcher and on the remote side. This is why `SetMultiplayJoinData` is not a late
@@ -37,12 +39,11 @@
 //!   -- hook the actions to capture a real press and replay its arguments -- was solving a problem
 //!   that does not exist: `(OSM, 0, 1, 1)` is provably equivalent to what the engine passes.
 //!
-//! Every one of those findings survived Seamless Co-op v2.0.0 (2026-09-02) as a STATEMENT ABOUT
-//! THE MECHANISM, and none of them survived as a number. The addresses moved, the session fields
-//! moved as a block by `+0x40`, and the state enum was renumbered by `+1` throughout -- so
-//! "`0xd` reaches `S+0x110` at exactly one site" is now "`0xe` reaches `S+0x150` at exactly one
-//! site, out of 4903 functions". Both builds are therefore described side by side in [`ersc`],
-//! and which one is loaded is decided at runtime by byte-checking the invade action.
+//! Every one of those findings survived the last Seamless update as a STATEMENT ABOUT THE
+//! MECHANISM, and none of them survived as a NUMBER: the addresses moved, the session fields moved
+//! as a block, and the state enum was renumbered throughout. That is the reason the numbers above
+//! live in [`ersc`] rather than in this prose, and the reason the module they describe is
+//! identified by byte-checking the invade action before any of them is used.
 //!
 //! With the arguments unnecessary, the only thing still needed from Seamless is the OSM pointer.
 //! Reading it out of a static would have meant hooking nothing in Seamless at all; that was
@@ -66,17 +67,13 @@
 //!
 //! THE LATEST SEAMLESS CO-OP ONLY. `ersc.dll` is third-party and the user updates it on their own
 //! schedule; chasing every past build with its own address set is unbounded work on a moving
-//! target, and it buys a co-op player nothing, because v2.0.0 changed the lobby-key salt and so
-//! clients of different builds cannot see each other's sessions anyway.
+//! target, and it buys a co-op player nothing, because Seamless rotates the lobby-key salt on
+//! release and so clients of different builds cannot see each other's sessions anyway.
 //!
 //! [`resolve_ersc_abi`] therefore picks from [`ersc::SUPPORTED`] -- currently one entry -- by
 //! byte-checking the invade action, an entry point this module calls but never hooks, so its bytes
 //! stay the shipped ones. Exactly one has to match; zero or two both refuse. The table shape stays
 //! because Seamless will update again and the next build is another entry, not a rewrite.
-//!
-//! A build we USED to drive lives on in [`ersc::RETIRED`], carrying only its fingerprint, so the
-//! refusal can say "update Seamless Co-op" instead of "unrecognised build" -- the first is an
-//! instruction a player can follow, the second reads as a defect in this mod.
 //!
 //! # Fail-closed direction
 //!
@@ -85,7 +82,7 @@
 //! all leave matches alone. The failure this guards against is silently cancelling other players'
 //! invasions, which is worse than a filter that quietly does nothing. That is also why the byte
 //! checks run all the way through each action's state WRITE rather than stopping at a prologue:
-//! five different v2.0.0 functions share the option-action opening, and the write is the only
+//! five different functions share the option-action opening, and the write is the only
 //! instruction that says which one this is.
 
 use std::path::PathBuf;
@@ -169,6 +166,20 @@ static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
 static CANCELS: AtomicUsize = AtomicUsize::new(0);
 static KEEPS: AtomicUsize = AtomicUsize::new(0);
 static REINVADES: AtomicUsize = AtomicUsize::new(0);
+/// Matches judged a rejection that were then NOT cancelled -- the invasion proceeded anyway.
+///
+/// THE ORACLE THAT WAS MISSING, and its absence is why a broken filter looked like a working one
+/// for a whole session. Every other state this module can be in is visible from the heartbeat, but
+/// "armed, judging correctly, and enforcing nothing" was visible only to someone who read four
+/// specific lines out of 408 and understood that `NOT cancelled` meant the feature was inert. The
+/// user's report -- "if we were on the strictest settings, I didn't only invade locally. It might
+/// be disabled?" -- is that gap stated from the player's seat.
+///
+/// A non-zero value here IS the failure: the filter said no and the player went anyway. It belongs
+/// beside `CANCELS`, because the two together are the only honest statement of what the filter did
+/// -- a rejection count on its own cannot distinguish a match that was stopped from one that was
+/// merely disapproved of.
+static UNENFORCED_REJECTS: AtomicUsize = AtomicUsize::new(0);
 
 static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
@@ -395,25 +406,6 @@ fn resolve_ersc_abi() -> Option<&'static ersc::Abi> {
         }
         outcome => {
             if ABI.swap(ABI_REFUSED, Ordering::SeqCst) == 0 {
-                // Before calling it unrecognised, check whether it is a build we USED to drive.
-                // "Update Seamless Co-op" is something a player can act on; "unrecognised build"
-                // reads as a defect in this mod and gets reported as one.
-                if let Some(retired) = ersc::RETIRED.iter().find(|retired| {
-                    prologue_matches(base + retired.invade_action_rva, retired.invade_prologue)
-                }) {
-                    crate::standalone_log(format_args!(
-                        "local-invasion: ersc.dll @0x{base:x} is {}, which this mod NO LONGER \
-                         SUPPORTS -- it drives the latest Seamless Co-op only. Update Seamless \
-                         Co-op to {} and the filter arms itself. Until then it stays inert and \
-                         will NOT cancel anything. Note that the two builds cannot see each \
-                         other's sessions in any case: v2.0.0 changed the lobby-key salt.",
-                        retired.version,
-                        ersc::SUPPORTED
-                            .first()
-                            .map_or("a supported build", |abi| abi.version),
-                    ));
-                    return None;
-                }
                 let known: Vec<&str> = ersc::SUPPORTED.iter().map(|abi| abi.version).collect();
                 let complaint = if outcome.is_some() {
                     "matches MORE THAN ONE of the builds below, so the discriminator is not \
@@ -710,10 +702,16 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
     let optional = unsafe { er_game_base::mem::safe_read_u16(nt + PE_SIZE_OF_OPTIONAL_HEADER) }?;
     let table = nt + PE_OPTIONAL_HEADER + optional as usize;
     let mut budget = SESSION_SCAN_QWORD_BUDGET;
-    // The best answer found so far: a session with no owner. Upgraded in place the moment some
-    // other global is seen pointing at it through `NEXT_OBJECT_OFFSET`, which is the relation
-    // `resolve_session`'s detour half uses to derive the session from the OSM.
-    let mut found: Option<(usize, usize)> = None;
+    // The two answers this scan can produce, kept SEPARATELY because the weaker one used to be
+    // able to veto the stronger one. See the shape-B arm below for what that cost.
+    //
+    // `bare`: a global that points straight at something identifying itself as a session. One
+    // condition, and it names no owner, so it can only ever yield `owner: 0`.
+    // `owned`: a global pointing at an object whose `+ NEXT_OBJECT_OFFSET` identifies itself as a
+    // session -- the exact relation `resolve_session`'s detour half uses -- so that object IS the
+    // OSM. Two linked conditions, and it is the only shape that lets the filter act.
+    let mut bare: Option<(usize, usize)> = None;
+    let mut owned: Option<(usize, usize, usize)> = None;
     for index in 0..sections as usize {
         let header = table + index * SECTION_HEADER_SIZE;
         // Composed from two u16 reads: `er-game-base` exposes `safe_read_u8`, `safe_read_u16` and
@@ -730,7 +728,7 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
         while slot + 8 <= end && budget > 0 {
             budget -= 1;
             if let Some(candidate) = unsafe { er_game_base::mem::safe_read_usize(slot) }
-                && candidate >= 0x1_0000
+                && plausible_session_pointer(candidate)
             {
                 if identifies_a_session(abi, candidate) {
                     // THE POINTER IS THE SESSION, AND THIS SHAPE NAMES NO OWNER -- but the owner
@@ -739,8 +737,8 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     // the shape that actually matched on this machine (session 0x1801b2560 via
                     // slot 0x18021a640), so returning early here is the difference between a
                     // filter that can cancel a rejected match and one that can only complain.
-                    if found.is_none() {
-                        found = Some((slot, candidate));
+                    if bare.is_none() {
+                        bare = Some((slot, candidate));
                     }
                     slot += 8;
                     continue;
@@ -749,7 +747,6 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     er_game_base::mem::safe_read_usize(candidate + ersc::NEXT_OBJECT_OFFSET)
                 } && next != 0
                     && identifies_a_session(abi, next)
-                    && found.map(|(_, session)| session == next).unwrap_or(true)
                 {
                     // THIS SHAPE HANDS BACK THE OWNER TOO, and throwing it away is what made the
                     // scan path deadly. `resolve_session`'s detour half derives the session as
@@ -758,15 +755,33 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize, usize
                     // `action(osm, ..)`, and returning `osm: 0` meant `cancel(0, 0, 1, 1)`
                     // dereferenced null inside `ersc.dll` at `+0x258da`, killing the process with
                     // no crash record (the unwind could not cross our MinHook frames).
-                    return Some((slot, next, candidate));
+                    //
+                    // THE VETO THAT USED TO BE HERE IS GONE. This arm additionally required
+                    // `found.map(|(_, session)| session == next).unwrap_or(true)` -- the owner had
+                    // to point at the session a previous BARE hit had already accepted. As
+                    // corroboration that is sound; as a REQUIREMENT it hands a single wrong bare
+                    // hit a veto over every real owner in the image, because a real OSM points at
+                    // the real session and the real session is not the wrong one. That is exactly
+                    // what happened on 2026-09-06 (see `plausible_session_pointer`): one garbage
+                    // qword matched first, and the filter spent the whole run unable to cancel.
+                    // Corroboration is now a REASON TO STOP EARLY, never a reason to reject.
+                    if osm_tag_matches(candidate)
+                        || bare.is_some_and(|(_, session)| session == next)
+                    {
+                        return Some((slot, next, candidate));
+                    }
+                    if owned.is_none() {
+                        owned = Some((slot, next, candidate));
+                    }
                 }
             }
             slot += 8;
         }
     }
-    // A session with no owner beats no session at all: the filter still judges every match and
-    // still logs, it just declines to drive Seamless (see `ersc_owner_or_refuse`).
-    found.map(|(slot, session)| (slot, session, 0))
+    // AN OWNER BEATS A BARE SESSION, and a bare session beats nothing at all. The middle case is
+    // the filter judging every match and logging while declining to drive Seamless (see
+    // `ersc_owner_or_refuse`); only the first case can actually cancel a rejected match.
+    owned.or_else(|| bare.map(|(slot, session)| (slot, session, 0)))
 }
 
 /// The host build has no `ersc.dll` image to walk, so there is nothing to find.
@@ -1048,7 +1063,7 @@ fn install_show_observer() -> usize {
     if !prologue_matches(address, abi.show_prologue) {
         if SHOW_HOOK_INSTALLED.swap(1, Ordering::SeqCst) == 0 {
             // The version is the GENERATED constant, not a literal: this line and the pins it is
-            // talking about have to name the same build, and a hand-typed "v1.9.9" beside a
+            // talking about have to name the same build, and a hand-typed version beside a
             // repinned constant is a refusal that lies about why it refused.
             let supported = ersc::SUPPORTED_VERSION;
             crate::standalone_log(format_args!(
@@ -1097,8 +1112,8 @@ fn osm_tag_matches(osm: usize) -> bool {
 /// The session state, or `None` when the value is not one a session would hold -- which is also
 /// how a wrong pointer is rejected.
 ///
-/// Takes the [`ersc::Abi`] rather than reading a module constant because v2.0.0 moved this field
-/// from `S+0x110` to `S+0x150`. Reading the wrong one would not fault -- it would return a
+/// Takes the [`ersc::Abi`] rather than reading a module constant because a Seamless update has
+/// already moved this field once. Reading the wrong one would not fault -- it would return a
 /// plausible small number from a neighbouring field, and every decision below would be made on it.
 fn read_session_state(abi: &ersc::Abi, session: usize) -> Option<u32> {
     let raw =
@@ -1125,13 +1140,53 @@ fn read_session_state(abi: &ersc::Abi, session: usize) -> Option<u32> {
 /// The four codes below are the ones this ABI actually reverses. A session caught mid-sequence in
 /// an unreversed state is simply not identified this pass, and the scan runs again -- which costs
 /// one more scan. Matching a string buffer costs the player every warp for the whole session.
+///
+/// AND THE VALUE CHECK IS STILL NOT ENOUGH ON ITS OWN -- see [`plausible_session_pointer`], which
+/// this now requires first. Each of the three false positives above was answered by narrowing what
+/// the FIELD may contain; the third one proved the field was never the whole question, because the
+/// address it was read from could not have been an object at all.
 fn identifies_a_session(abi: &ersc::Abi, session: usize) -> bool {
-    read_session_state(abi, session).is_some_and(|state| {
-        state == abi.state_idle
-            || state == abi.state_searching
-            || state == abi.state_cancelling
-            || state == abi.state_offer_received
-    })
+    plausible_session_pointer(session)
+        && read_session_state(abi, session).is_some_and(|state| {
+            state == abi.state_idle
+                || state == abi.state_searching
+                || state == abi.state_cancelling
+                || state == abi.state_offer_received
+        })
+}
+
+/// The smallest address worth testing. Below this is the null page and the low reservations, never
+/// an allocation.
+const MIN_PLAUSIBLE_SESSION_POINTER: usize = 0x1_0000;
+
+/// Every Seamless session pointer is at least pointer-aligned, and the one that broke the filter
+/// was not aligned at all.
+///
+/// MEASURED LIVE 2026-09-06, out of a run that judged four invasions, rejected all four and
+/// cancelled none. [`scan_for_session`] had latched `0x3dfadb` as the session, reported through
+/// `session resolved WITHOUT hooking Seamless -- found at 0x3dfadb ... owner 0x0`. Read back out of
+/// the running process, that address is not an object: it is a three-byte-misaligned window into a
+/// table of Wine pointers, and the four bytes at `+0x150` happen to read `01 00 00 00`, which is
+/// this build's `state_idle` exactly. So it satisfied every value check above, permanently -- the
+/// filter reported `ersc=0x01 IDLE` on all 53 `join-progress` samples of that run, across four
+/// join-data pushes and a committed warp, and logged exactly one session-state line (the first
+/// read) because the state it was watching could never change.
+///
+/// The cost was not a wrong reading. It was that [`scan_for_session`] then had a session it
+/// believed in, which vetoed every real owner candidate (see there), so the owner stayed `0`,
+/// [`ersc_owner_or_refuse`] declined, and all four rejections became
+/// `NOT cancelled ... the invasion PROCEEDS`. The player was sent to `0x3c313600`, the filter
+/// rejected it, and the next heartbeat records the player standing in it.
+///
+/// A session cannot live at an unaligned address. It carries a mutex sub-object and pointer fields,
+/// so the allocator gives it at least pointer alignment and MSVC's `operator new` gives 16.
+/// Requiring 8 is the weakest claim that is certainly true of every real session, so it cannot
+/// reject one -- and it discards seven of every eight garbage qwords, this one among them, its low
+/// bits being `0b011`.
+///
+/// Not `cfg`-gated: it is arithmetic, and it is what the host tests pin the measured addresses with.
+fn plausible_session_pointer(candidate: usize) -> bool {
+    candidate >= MIN_PLAUSIBLE_SESSION_POINTER && candidate.is_multiple_of(align_of::<usize>())
 }
 
 /// True when the session is in the state every option action refuses to proceed past. They take a
@@ -1158,8 +1213,9 @@ fn session_guard_poisoned(abi: &ersc::Abi, session: usize) -> bool {
 ///
 /// The replacement rests on a fact from the static scan rather than on inference: across the whole
 /// unpacked `.text`, the searching code is written to the state field at EXACTLY ONE site, inside
-/// the Invade-world action. That held in v1.9.9 (`0x110 = 0x0d`, 4839 functions) and still holds in
-/// v2.0.0 at the renumbered value (`0x150 = 0x0e`, 4903 functions). So a transition into it means
+/// the Invade-world action -- `0x150 = 0x0e`, one site out of 4903 functions, measured
+/// 2026-09-06; it held across the last update at the pre-renumber value too. So a transition
+/// into it means
 /// that action ran and nothing else, and the only remaining question is who ran it. Ours are
 /// claimed by [`note_state_after_our_action`] before this ever sees them, so an unclaimed one is
 /// the user pressing the option -- which is precisely, and only, when riding along is wanted.
@@ -1212,13 +1268,13 @@ fn note_state_after_our_action(session: SeamlessSession, what: &str) {
 ///   * reaching idle -> the attempt is over; how long it lasted decides the delay
 ///
 /// That state is the progress marker rather than a later one because it is the first step past the
-/// fast-fail path: the measured v1.9.9 spin ran `0x0d -> 0x0e -> 0x11 -> 0x14 -> idle` and never
-/// touched `0x12`, while every healthy attempt in the same run passed through it within ~150 ms.
+/// fast-fail path: the measured spin ran four states back to idle without ever touching the
+/// marker, while every healthy attempt in the same run passed through it within ~150 ms.
 ///
-/// v2.0.0 renumbered the enum `+1`, so this is the one number carried across by inference rather
-/// than read out of an instruction -- and carrying it is what keeps the marker CORRECT: `0x12`
-/// unshifted lands on `0x11`'s successor, which is on the fast-fail path, so leaving it alone
-/// would clear the penalty on exactly the attempts that earned it.
+/// The last update renumbered the enum `+1`, so this is the one number carried across by
+/// inference rather than read out of an instruction -- and carrying it is what keeps the marker
+/// CORRECT: left unshifted it would land on the fast-fail path, clearing the penalty on exactly
+/// the attempts that earned it.
 fn note_attempt_progress(abi: &ersc::Abi, previous: usize, state: u32) {
     let Ok(mut backoff) = RESTART_BACKOFF.lock() else {
         return;
@@ -1327,9 +1383,9 @@ const fn implied_fps(ticks: u64, ms: u64) -> Option<u64> {
 /// without a lookup. Anything else prints as a bare number rather than a guessed label -- the
 /// state machine lives inside the Themida-virtualised dispatcher and most of it is simply unknown.
 ///
-/// A `match` over the [`ersc::Abi`]'s fields rather than over constants, because the numbers these
-/// names belong to are different in v2.0.0: printing `SEARCHING` beside `0x0d` on a build where
-/// searching is `0x0e` would put a wrong reading into the one log the next diagnosis starts from.
+/// A `match` over the [`ersc::Abi`]'s fields rather than over constants, because an update moves
+/// the numbers these names belong to: printing `SEARCHING` beside a code that means something else
+/// on the loaded build would put a wrong reading into the one log the next diagnosis starts from.
 fn state_name(abi: &ersc::Abi, state: u32) -> &'static str {
     match state {
         _ if state == abi.state_idle => "IDLE",
@@ -1663,6 +1719,7 @@ pub fn judge_incoming_match(join_data: usize) {
             if cancel_match(reason) {
                 announce_rejection(config.reject_notice, destination, reason);
             } else {
+                UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
                 crate::standalone_log(format_args!(
                     "local-invasion: NOT cancelled {destination:#010x} ({reason:?}) -- the match \
                      was judged a rejection but Seamless was not driven, so the invasion PROCEEDS. \
@@ -1803,7 +1860,7 @@ fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
 /// Drive ERSC's own "Cancel search" for a rejected match.
 ///
 /// This calls the exact option callback the user's click calls, with `(OSM, 0, 1, 1)`. The zero is
-/// not a guess: the cancel action reads `rcx` and nothing else -- true of both builds' -- so no
+/// not a guess: the cancel action reads `rcx` and nothing else -- so no
 /// captured argument is required and none is invented. Everything past this point -- tearing the
 /// match down, returning the session to idle -- is Seamless's own code doing what it always does.
 /// [`scan_for_session`], but at most once per session rather than once per call.
@@ -2163,9 +2220,9 @@ fn watch_for_stall(session: SeamlessSession) {
 ///
 /// # Why "not idle" and not "== SEARCHING"
 ///
-/// Searching is only the FIRST state of an attempt. The v1.9.9 sequence runs `0x0d` through
-/// `0x0e`, `0x11`, the `0x12` offer, `0x13`, `0x14`, and a cancel unwinds via `0x22`/`0x23` (add
-/// one to each on v2.0.0) -- and the player is just as committed at every one of them as at the
+/// Searching is only the FIRST state of an attempt. The sequence runs `0x0e` through `0x0f`,
+/// `0x12`, the `0x13` offer, `0x14`, `0x15`, and a cancel unwinds via `0x23`/`0x24`
+/// -- and the player is just as committed at every one of them as at the
 /// first. Gating on `SEARCHING` alone would unblock the warp the instant a host was found, which
 /// is the worst possible moment for it: the destination has been decided and the player is about
 /// to be moved there by Seamless.
@@ -2224,7 +2281,7 @@ fn ersc_module_base() -> Option<usize> {
 /// disarms the filter; it must never make it call into the middle of an instruction.
 ///
 /// The `prologue` here is not a prologue in the "opening few bytes" sense: it runs all the way
-/// through the action's state WRITE. Five different v2.0.0 functions share the first fourteen
+/// through the action's state WRITE. Five different functions share the first fourteen
 /// bytes, so a short check would prove only that SOME option action is at this address -- and
 /// calling the wrong one cancels other players' invasions.
 fn ersc_action(abi: &ersc::Abi, rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
@@ -2285,8 +2342,17 @@ fn install_join_hook() -> usize {
         )
     } {
         Ok(()) => {
+            // SAY WHICH ADDRESS THIS IS. `address` is the seam's own 1.16.2 address;
+            // `register_union_hook` resolves it for the running build BEFORE installing anything
+            // and logs its own `HOOK TRANSLATED` line naming where the detour actually went. This
+            // line used to print the untranslated value with no qualifier, directly beneath that
+            // translation line -- so on 1.17 the log read `... -> 0x1406fc370` followed by
+            // `judging matches at ... @0x1406fb520`, which is exactly the shape of a hook left
+            // behind on a stale address. It cost the 2026-09-06 investigation its opening
+            // hypothesis: the detour was correct the whole time and had already fired four times.
             crate::standalone_log(format_args!(
-                "local-invasion: judging matches at {} @0x{address:x}",
+                "local-invasion: judging matches at {} @0x{address:x} (the seam's own address; the \
+                 HOOK TRANSLATED line above names where the detour went on this build)",
                 seam.name
             ));
             1
@@ -2622,8 +2688,8 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
 /// yields `None` and the sample is skipped rather than faulting.
 ///
 /// `session` carries the Seamless state alongside the value that build calls IDLE, because the two
-/// only mean anything together: v2.0.0 renumbered the enum, so `0` is idle on one build and an
-/// active state on the other.
+/// only mean anything together: an update renumbered the enum once already, so a bare state code
+/// that is idle on one build is an active state on another.
 #[cfg(windows)]
 fn trace_join_progress(session: Result<(u32, u32), &'static str>) {
     let ersc_state = session.ok().map(|(state, _)| state);
@@ -2847,13 +2913,19 @@ fn trace_session_field_writes(seamless: SeamlessSession) {
 #[cfg(not(windows))]
 fn trace_session_field_writes(_session: SeamlessSession) {}
 
-/// `(keeps, cancels, automatic re-searches)` so a run can be judged without reading the log.
+/// `(keeps, cancels, automatic re-searches, unenforced rejections)` so a run can be judged without
+/// reading the log.
+///
+/// The fourth number is the one that says whether the filter WORKED, as opposed to whether it ran.
+/// See [`UNENFORCED_REJECTS`]: any value above zero means a match this module rejected went ahead
+/// regardless, which from the player's seat is indistinguishable from the mod being switched off.
 #[must_use]
-pub fn tallies() -> (usize, usize, usize) {
+pub fn tallies() -> (usize, usize, usize, usize) {
     (
         KEEPS.load(Ordering::SeqCst),
         CANCELS.load(Ordering::SeqCst),
         REINVADES.load(Ordering::SeqCst),
+        UNENFORCED_REJECTS.load(Ordering::SeqCst),
     )
 }
 
