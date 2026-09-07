@@ -2592,6 +2592,75 @@ pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
 /// Tri-state verdict for that capture-frame sample: 0 never sampled, 1 clean, 2 bad. Deliberately not
 /// a boolean -- "the oracle never ran" must not read as a pass.
 pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
+
+// --- THE REPAIR ITSELF (2026-09-06) ------------------------------------------------------------
+// The native feed `FUN_140bbe1a0` erases the record's armaments and replaces its gauntlets and
+// greaves with the bare-body rows before the portrait is built; the kick now writes the record's own
+// `equipment_param_ids` back over the fed array. These count what that write actually changed, so a
+// portrait that still renders bare can be told apart from a portrait whose character IS bare.
+/// Build kicks on which the write-back ran at all (the inbox and record both read cleanly).
+pub static PORTRAIT_EQUIP_RESTORE_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where the write-back found NOTHING to change -- the character is genuinely bare-handed and
+/// bare-armed. Not a failure, and the reason `..._KICKS` alone cannot be read as proof of a repair.
+pub static PORTRAIT_EQUIP_RESTORE_NOOP_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// Armament indices restored, summed across kicks.
+pub static PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Ammunition indices restored, summed across kicks.
+pub static PORTRAIT_EQUIP_RESTORE_AMMO_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Protector indices restored, summed across kicks (hands and legs in practice).
+pub static PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where a write was attempted but the inbox read or write-back failed, so the portrait is
+/// being built from the feed's mutilated array. A non-zero value invalidates the run's picture.
+pub static PORTRAIT_EQUIP_RESTORE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// First kick's record ids, packed by `portrait_equip_pack` so a real `-1` (slot empty) is
+/// distinguishable from "never sampled". Order: right weapon, left weapon, hands, legs.
+pub static PORTRAIT_EQUIP_RESTORE_RECORD_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// What the LIVE ChrAsm at `renderer+0x130` -- the one `FUN_1409e6fb0` re-reads every frame -- holds
+/// for the armaments and the handedness, first sample of the window. Writing the inbox proves only
+/// that we wrote the inbox; these are the values the model build actually resolves from, so they are
+/// what separates "the repair reached the renderer" from "the repair reached a buffer".
+/// Packed by `portrait_equip_pack`: right weapon, left weapon.
+pub static PORTRAIT_EQUIP_LIVE_WEAPON_ID: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+/// `ChrAsm::equipment.armStyle` (ChrAsm+0x08), the handedness input
+/// `getSelectedWeaponSlotIndex` reads. Packed the same way, so 0 is a real value and not "unsampled".
+pub static PORTRAIT_EQUIP_LIVE_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
+/// `armStyle` as the SAVE RECORD carries it, latched at the build kick.
+///
+/// Measured 2026-09-07 on Onyx Lord slot 1: the serialized `ChrAsmEquipment` block is
+/// `[3, 0, 0, 1, 1, 1, 1]` -- armStyle 3 = `RightBothHands`, i.e. two-handing, confirmed by the
+/// character loading into the world two-handed -- while `PORTRAIT_EQUIP_LIVE_ARM_STYLE` read 1 off
+/// `renderer+0x130`. The grip is therefore present in the record and LOST somewhere before the live
+/// stage, so anything that wants the saved grip must read the record, not the renderer. The walk
+/// that produced those bytes is self-checked: the same block's param ids come out
+/// right=4080001 left=110000 hands=1040200 legs=5210300, matching the live oracle exactly.
+pub static PORTRAIT_EQUIP_RECORD_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
+/// Times the record's arm style was written into `CSChrAsmModelIns+0x328`, and what a read-back
+/// immediately afterwards saw. A write count with a read-back that does not match is the engine
+/// overwriting us per frame; a match with no visible change means the field is consumed only when
+/// the parts are attached, i.e. it needs to be set before the model build rather than after.
+/// `armStyle` as the FEED left it in the renderer inbox (`renderer+0x548+0x08`), read immediately
+/// before the repair overwrites it, packed by `portrait_equip_pack`. This is the value that
+/// separates the two candidate explanations for a portrait that will not two-hand: if the feed's
+/// `ChrAsm::Copy` carried the record's grip through, this equals `PORTRAIT_EQUIP_RECORD_ARM_STYLE`
+/// and the grip is lost LATER (inbox -> live); if the eight `EquipItemBySpecialIndex` clears
+/// recompute it, this reads 0/1 while the record reads 3, and the loss is the feed's.
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_FED: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where the record's `armStyle` was written back over the inbox's, and the read-back that
+/// followed. Same shape as the model-instance pair below and for the same reason: a write that does
+/// not stick is a different bug from a write that sticks and changes nothing.
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_READBACK: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_MODEL_ARM_STYLE_WRITES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_MODEL_ARM_STYLE_READBACK: AtomicUsize = AtomicUsize::new(0);
+/// Times the previewed save's `CS::ProfileSummary` records were put back after the game's
+/// return-title save overwrote them, and the slot mask that write covered.
+///
+/// A switch to a foreign save that ends with ZERO here is a switch whose loading-screen portrait was
+/// built from whatever the game left in the records -- which, when the picked slot IS the resident
+/// character's slot, is the PREVIOUS character (measured run br-20260907-191016-4020). A non-zero
+/// count with a mask that omits the picked slot is the same failure with a different cause.
+pub static PROFILE_SUMMARY_REAPPLIED_AFTER_RETURN_TITLE: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_SUMMARY_REAPPLIED_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);

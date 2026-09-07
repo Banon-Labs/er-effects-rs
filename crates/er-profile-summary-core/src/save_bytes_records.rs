@@ -13,6 +13,11 @@ use er_game_base::profile_summary::{
     profile_summary_record_offset,
 };
 
+use er_game_base::profile_summary::PROFILE_SUMMARY_TOTAL_BYTES;
+use er_telemetry_core::counters::{
+    PROFILE_SUMMARY_REAPPLIED_AFTER_RETURN_TITLE, PROFILE_SUMMARY_REAPPLIED_SLOT_MASK,
+};
+
 use crate::host::append_autoload_debug;
 use crate::serialized_slot::{
     PROFILE_PREVIEW_FACE_HASH, PROFILE_PREVIEW_PLACE_NAME_UNSOURCED, SerializedSaveSlot,
@@ -32,6 +37,12 @@ use crate::serialized_slot::{
 /// before the zeroing below, so callers must capture it first.
 ///
 /// Returns the mask of slots written plus each written slot's attribute line.
+/// THE CALLER HANDS OVER A CLONE OF ITS CANDIDATE BYTES, AND MUST. Emptying the swap state's
+/// `candidate_bytes` for the duration of this call (a `mem::take`) would make
+/// `system_quit_committed_foreign_save_path` -- which the own-load feed reads to decide whether the
+/// switch overrides the configured save -- report "no pick is active" for that window. One ~28 MB
+/// memcpy per switch is cheaper than that race.
+///
 /// # Safety
 ///
 /// `summary` must be the LIVE `CS::ProfileSummary` allocation: this zeroes all ten records and
@@ -133,4 +144,59 @@ pub unsafe fn write_profile_summary_records_from_save_bytes(
         }
     }
     (mask, preview_stats)
+}
+
+/// Put the previewed save's records back into the LIVE `CS::ProfileSummary` after the game's
+/// return-title save has overwritten them.
+///
+/// THE FILE WAS NEVER THE ONLY CASUALTY. The re-commit above exists because the return-title save
+/// re-writes the ACTIVE slot in the save FILE; measured 2026-09-07 (run br-20260907-191016-4020) it
+/// re-writes the in-memory summary record for that slot too, from the RESIDENT character. The user
+/// picked slot 1 of a foreign save (`Nephilim`), the preview wrote that container's ten records at
+/// +112752ms, and 5.8s later every build kick still read `record=0x88071f38` naming `Onyx Lord` --
+/// the character being replaced. The loading screen therefore showed the PREVIOUS character's
+/// portrait for the whole window, and the pipeline's own face fingerprint said so twice:
+///
+/// ```text
+/// FACE-IDENTITY MISMATCH #1 at build kick slot=1: record face hash 0x78c81601a96719fc
+///                                              != preview 0xdca15e8a24495fa9
+/// PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot=1 record(name='Onyx Lord') vs loaded(name='Nephilim')
+/// ```
+///
+/// Nothing consumed either line: the bridge-hold revocation is the only consumer and no hold was
+/// outstanding (`oracle_portrait_bridge_same_identity_holds = 0`), so the wrong record simply built
+/// the portrait. Restoring the records here is the fix at the layer where the damage happens --
+/// after the game's save has completed, before the title's first build kick (700ms of margin
+/// measured) -- rather than a refusal at the kick, which would trade a wrong portrait for none.
+///
+/// The re-stamped `PROFILE_PREVIEW_FACE_HASH` matters as much as the records: the writer takes both
+/// from the same bytes, so the fingerprint keeps describing the record it was taken from and the
+/// mismatch check stays a real signal instead of a permanent alarm.
+///
+/// # Safety
+///
+/// `summary` must be the LIVE `CS::ProfileSummary` allocation and `base` the running game module
+/// base; this writes that allocation through raw pointers. Game/menu thread only, which is where
+/// the bc4-terminal re-commit already runs. A zero `summary` is handled, not undefined.
+pub unsafe fn reapply_profile_summary_after_return_title_save(
+    base: usize,
+    summary: usize,
+    bytes: &[u8],
+) {
+    if summary == 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: cannot re-apply the previewed records after the return-title save -- live ProfileSummary unavailable; the portrait will build from the resident character's record"
+        ));
+        return;
+    }
+    let snapshot = unsafe {
+        core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+    };
+    let (mask, _stats) =
+        unsafe { write_profile_summary_records_from_save_bytes(base, summary, &snapshot, bytes) };
+    PROFILE_SUMMARY_REAPPLIED_AFTER_RETURN_TITLE.fetch_add(1, Ordering::SeqCst);
+    PROFILE_SUMMARY_REAPPLIED_SLOT_MASK.store(mask, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: re-applied the previewed save's ProfileSummary records after the return-title save summary=0x{summary:x} slot_mask=0x{mask:x} -- the game's save had put the RESIDENT character back into the active slot's record, which is what the loading portrait builds from"
+    ));
 }

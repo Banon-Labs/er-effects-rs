@@ -178,6 +178,7 @@ pub unsafe fn portrait_equip_read_sample(
         effective,
         record: record_ids,
         model_ins,
+        chr_asm,
     })
 }
 
@@ -213,6 +214,39 @@ pub unsafe fn portrait_equip_oracle_sample(base: usize, summary: usize, target_s
         // counting edge is `model_ins != this`. If a bad frame carries a DIFFERENT model, it is a
         // real post-rebuild defect. One run decides it; nothing here assumes which.
         PORTRAIT_EQUIP_WINDOW_OPEN_MODEL_INS.store(sample.model_ins, Ordering::SeqCst);
+    }
+    // THE ARMAMENT HALF, read off the same live ChrAsm. `FUN_1409e6fb0` resolves weapons
+    // (`EquipParamWeapon::GetEntry`) and handedness
+    // (`getSelectedWeaponSlotIndex(&equipment.armStyle, 0|1)` -> `selectedWeaponSlotIndex`) from
+    // exactly this object, so a non-empty id here is the model build being ASKED for a weapon.
+    // `ChrAsmEquipment` is `{ armStyle @ +0 (4 bytes), selectedSlots @ +4 }` and sits at ChrAsm+0x08.
+    unsafe {
+        let mut right = PORTRAIT_EQUIP_OVERRIDE_ABSENT;
+        let mut left = PORTRAIT_EQUIP_OVERRIDE_ABSENT;
+        for index in 0..PORTRAIT_EQUIP_WEAPON_COUNT {
+            let Some(id) = safe_read_i32(
+                sample.chr_asm
+                    + CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
+                    + index * core::mem::size_of::<i32>(),
+            ) else {
+                continue;
+            };
+            if id == PORTRAIT_EQUIP_OVERRIDE_ABSENT {
+                continue;
+            }
+            // Odd indices are the right hand, even the left: `GetBySpecialIndex` returns
+            // `selected*2` for LeftWeaponSlot and `selected*2 + 1` for RightWeaponSlot.
+            if index % 2 == 1 && right == PORTRAIT_EQUIP_OVERRIDE_ABSENT {
+                right = id;
+            } else if index % 2 == 0 && left == PORTRAIT_EQUIP_OVERRIDE_ABSENT {
+                left = id;
+            }
+        }
+        portrait_equip_latch_first(&PORTRAIT_EQUIP_LIVE_WEAPON_ID[0], right);
+        portrait_equip_latch_first(&PORTRAIT_EQUIP_LIVE_WEAPON_ID[1], left);
+        if let Some(arm_style) = safe_read_i32(sample.chr_asm + CHR_ASM_EQUIPMENT_OFFSET) {
+            portrait_equip_latch_first(&PORTRAIT_EQUIP_LIVE_ARM_STYLE, arm_style);
+        }
     }
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNK0, sample.unk0);
     portrait_equip_latch_first(&PORTRAIT_EQUIP_FIRST_UNKD4, sample.unkd4);

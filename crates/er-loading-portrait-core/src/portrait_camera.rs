@@ -57,7 +57,12 @@ pub const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
 // the render was fine but the framing starved the keyer. Pull back generously so even the biggest head
 // leaves background margin for the depth key. The overlay aspect-covers the keyed RT, so a smaller head
 // in the RT still composites; a head with no surrounding background does not.
-pub const PROFILE_CAM_DISTANCE_SCALE: f32 = 6.0;
+// ZOOM OUT FOR THE BODY (2026-09-07, user: "All I wanted to do was see more of the character's
+// legs"). At 6.0 the character's alpha filled 1540 of the offscreen render's 1542 rows (measured:
+// `box=(270,0)-(1167,1539)` in a 1542-square RT), so the legs were not merely mis-composited -- they
+// were outside the render entirely and no amount of blit arithmetic could recover them. This is the
+// only knob that changes what the RT CONTAINS.
+pub const PROFILE_CAM_DISTANCE_SCALE: f32 = 8.0;
 /// Slight vertical tilt only (was 0.40 = a forehead close-up).
 pub const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
 /// Head-on by default (2026-06-30, user): zero horizontal turn so the camera faces the character

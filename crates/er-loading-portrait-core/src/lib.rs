@@ -156,6 +156,14 @@ pub use stats_lines::*;
 
 pub mod portrait_equip;
 
+pub mod portrait_equip_restore;
+pub use portrait_equip_restore::*;
+
+#[cfg(windows)]
+pub mod portrait_equip_apply;
+#[cfg(windows)]
+pub use portrait_equip_apply::*;
+
 #[cfg(windows)]
 pub mod portrait_equip_oracle;
 #[cfg(windows)]

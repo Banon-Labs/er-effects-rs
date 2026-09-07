@@ -799,3 +799,52 @@ mod loading_cover_chr_asm_image_tests {
         assert!(image_from(&body).is_none());
     }
 }
+
+/// Corpus diagnostics for the serialized `ChrAsmEquipment` block, run against a real save named by
+/// `ER_ARM_STYLE_SAVE` (`<path>:<slot>`). Skips when unset, so it costs nothing in CI.
+///
+/// WHY IT EXISTS. The loading portrait picks its idle animation from `armStyle`, and a user
+/// observed the portrait one-handed while the SAME save loaded into the world two-handing -- so the
+/// grip is in the save and our reading of it disagrees with the game's. The runtime layout is
+/// `ChrAsmEquipment { armStyle @ +0, selectedSlots @ +4 }` (Ghidra 1.16.2, 28 bytes); whether the
+/// SAVE serializes it in that order is exactly what this dumps rather than assumes.
+#[cfg(test)]
+mod arm_style_corpus {
+    use super::*;
+
+    /// Legal `ChrAsmArmStyle` values. `CS::ChrIns::IsTwoHanding` (deobf 0x1403f4930) is
+    /// `ADD EAX,-0x2 ; CMP EAX,0x1 ; SETBE`, so 2 and 3 are the two-handed pair and the enum has at
+    /// least four members.
+    const ARM_STYLE_MAX: u32 = 3;
+
+    #[test]
+    fn the_serialized_equipment_block_holds_a_legal_arm_style_somewhere() {
+        let Ok(spec) = std::env::var("ER_ARM_STYLE_SAVE") else {
+            eprintln!("ER_ARM_STYLE_SAVE unset -- skipping");
+            return;
+        };
+        let (path, slot) = spec.rsplit_once(':').expect("<path>:<slot>");
+        let slot: usize = slot.parse().expect("slot index");
+        let data = std::fs::read(path).expect("save readable");
+        let body = er_save_loader::bnd4::slot_body(&data, slot).expect("slot body");
+        let pgd = SerializedSaveSlot::new(body)
+            .player_game_data()
+            .expect("player game data");
+        let mut off = SerializedSaveSlot::new(body)
+            .walk_to_chr_asm_sections(pgd)
+            .expect("chr asm sections");
+        off += SAVE_CHR_ASM_EQUIPMENT_SIZE;
+        let equipment = &body[off..off + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE];
+        let dwords: Vec<u32> = equipment
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
+            .collect();
+        eprintln!("serialized ChrAsmEquipment dwords for {path} slot {slot}: {dwords:?}");
+        assert!(
+            dwords.iter().any(|d| *d <= ARM_STYLE_MAX),
+            "no dword in the block is a legal arm style: {dwords:?}"
+        );
+    }
+}

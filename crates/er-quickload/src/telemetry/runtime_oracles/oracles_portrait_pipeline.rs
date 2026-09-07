@@ -90,6 +90,66 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_equip_capture_verdict",
         PORTRAIT_EQUIP_CAPTURE_VERDICT.load(Ordering::SeqCst),
     );
+    // THE REPAIR'S OWN SEMAPHORES. `restore_kicks` counts build kicks where the write-back ran;
+    // `restore_failures > 0` means at least one portrait was built from the native feed's stripped
+    // ChrAsm and the run's picture is not evidence for anything. `restore_noop_kicks` is the
+    // honest-zero case -- a character genuinely holding nothing and wearing nothing on arms or legs
+    // -- and is why a zero in the three slot counters is NOT by itself a failure. The four
+    // `restore_record_*` ids are what the SAVE says the character has, so a portrait that still
+    // renders bare against non-negative ids here is a downstream defect, not a missing input.
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_kicks",
+        PORTRAIT_EQUIP_RESTORE_KICKS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_model_arm_style_writes",
+        PORTRAIT_MODEL_ARM_STYLE_WRITES.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_inbox_arm_style_writes",
+        PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES.load(Ordering::SeqCst),
+    );
+    // The SWITCH's own record repair. Zero on a run whose portrait showed the previous character
+    // means the records were never put back after the game's return-title save (see
+    // `reapply_profile_summary_after_return_title_save`); the mask says which slots it covered.
+    push_json_usize(
+        body,
+        "oracle_profile_summary_reapplied_after_return_title",
+        er_telemetry_core::counters::PROFILE_SUMMARY_REAPPLIED_AFTER_RETURN_TITLE.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_profile_summary_reapplied_slot_mask",
+        er_telemetry_core::counters::PROFILE_SUMMARY_REAPPLIED_SLOT_MASK.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_noop_kicks",
+        PORTRAIT_EQUIP_RESTORE_NOOP_KICKS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_failures",
+        PORTRAIT_EQUIP_RESTORE_FAILURES.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_weapon_slots",
+        PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_ammo_slots",
+        PORTRAIT_EQUIP_RESTORE_AMMO_SLOTS.load(Ordering::SeqCst),
+    );
+    push_json_usize(
+        body,
+        "oracle_portrait_equip_restore_protector_slots",
+        PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS.load(Ordering::SeqCst),
+    );
     {
         let unpack = crate::experiments::portrait_equip_unpack;
         let effective =
@@ -99,7 +159,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         let recorded =
             |slot: usize| unpack(PORTRAIT_EQUIP_RECORD_PARAM_ID[slot].load(Ordering::SeqCst));
         body.push_str(&format!(
-            "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n",
+            "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n  \"oracle_portrait_equip_restore_record_right_weapon\": {},\n  \"oracle_portrait_equip_restore_record_left_weapon\": {},\n  \"oracle_portrait_equip_restore_record_hands\": {},\n  \"oracle_portrait_equip_restore_record_legs\": {},\n  \"oracle_portrait_equip_live_right_weapon\": {},\n  \"oracle_portrait_equip_live_left_weapon\": {},\n  \"oracle_portrait_equip_live_arm_style\": {},\n  \"oracle_portrait_equip_record_arm_style\": {},\n  \"oracle_portrait_model_arm_style_readback\": {},\n  \"oracle_portrait_equip_inbox_arm_style_fed\": {},\n  \"oracle_portrait_equip_inbox_arm_style_readback\": {},\n",
             effective(0),
             effective(1),
             effective(2),
@@ -113,6 +173,17 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             unpack(PORTRAIT_EQUIP_FIRST_UNK0.load(Ordering::SeqCst)),
             unpack(PORTRAIT_EQUIP_FIRST_UNKD4.load(Ordering::SeqCst)),
             unpack(PORTRAIT_EQUIP_FIRST_UNKD8.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RESTORE_RECORD_ID[0].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RESTORE_RECORD_ID[1].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RESTORE_RECORD_ID[2].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RESTORE_RECORD_ID[3].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_LIVE_WEAPON_ID[0].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_LIVE_WEAPON_ID[1].load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_LIVE_ARM_STYLE.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RECORD_ARM_STYLE.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_MODEL_ARM_STYLE_READBACK.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_INBOX_ARM_STYLE_FED.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_INBOX_ARM_STYLE_READBACK.load(Ordering::SeqCst)),
         ));
     }
     // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0

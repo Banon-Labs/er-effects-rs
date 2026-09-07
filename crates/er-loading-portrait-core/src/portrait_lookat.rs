@@ -145,7 +145,10 @@ pub const PROFILE_ANIM_HANDLE_OFFSET: usize = 0x96c;
 /// idles. The first id whose bind leaves a real handle (!= sentinel and != 0xffffffff
 /// resolve-failure) wins; a failed candidate leaves no active entry, so falling through is
 /// side-effect-free beyond having stopped the static pose anim.
-pub const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
+pub use crate::portrait_equip_restore::{
+    CHR_ASM_ARM_STYLE_TWO_HANDED, PORTRAIT_IDLE_ANIM_IDS, PORTRAIT_IDLE_ANIM_IDS_TWO_HANDED,
+    portrait_idle_anim_ids,
+};
 pub use er_telemetry_core::counters::PORTRAIT_ANIM_BOUND_LOC;
 /// The (renderer, anim-holder X) pair the idle anim was last bound on. The loading window's model
 /// is rebuilt several times (content-RT pin moves) and a rebuild either ctor's a NEW renderer

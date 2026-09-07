@@ -37,6 +37,10 @@ pub(crate) use crate::pgd_layout::*;
 #[cfg(windows)]
 pub(crate) use crate::portrait_camera::*;
 #[cfg(windows)]
+pub(crate) use crate::portrait_equip::*;
+#[cfg(windows)]
+pub(crate) use crate::portrait_equip_restore::*;
+#[cfg(windows)]
 pub(crate) use crate::portrait_lookat::*;
 #[cfg(windows)]
 pub(crate) use crate::portrait_overlay::*;

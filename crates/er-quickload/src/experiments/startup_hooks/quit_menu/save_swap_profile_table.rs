@@ -512,27 +512,37 @@ pub(crate) fn write_save_bytes_for_overwrite(path: &str, bytes: &[u8]) -> std::i
 /// Idempotent per switch via the `recommitted` latch (the terminal block can re-enter when the final
 /// functor submit defers).
 pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
-    let mut st = system_quit_save_swap_lock();
-    if !st.committed || st.recommitted || st.path.is_empty() || st.candidate_bytes.is_empty() {
+    let candidate = {
+        let mut st = system_quit_save_swap_lock();
+        if !st.committed || st.recommitted || st.path.is_empty() || st.candidate_bytes.is_empty() {
+            return;
+        }
+        match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
+            Ok(()) => {
+                st.recommitted = true;
+                append_autoload_debug(format_args!(
+                    "system-quit-save-swap: RE-committed foreign save after return-title save (bc4 terminal) path='{}' len={} hash=0x{:016x}; the game's return-title save had re-written the ACTIVE slot over the activation-time commit",
+                    st.path,
+                    st.candidate_bytes.len(),
+                    st.candidate_hash
+                ));
+            }
+            Err(err) => {
+                append_autoload_debug(format_args!(
+                    "system-quit-save-swap: FAILED to re-commit foreign save after return-title save path='{}': {err}; a same-slot switch will fresh-deserialize the clobbered ACTIVE slot",
+                    st.path
+                ));
+                return;
+            }
+        }
+        // Cloned rather than `mem::take`n; see the callee's doc for why emptying it would race.
+        st.candidate_bytes.clone()
+    };
+    let Ok(base) = game_module_base() else {
         return;
-    }
-    match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
-        Ok(()) => {
-            st.recommitted = true;
-            append_autoload_debug(format_args!(
-                "system-quit-save-swap: RE-committed foreign save after return-title save (bc4 terminal) path='{}' len={} hash=0x{:016x}; the game's return-title save had re-written the ACTIVE slot over the activation-time commit",
-                st.path,
-                st.candidate_bytes.len(),
-                st.candidate_hash
-            ));
-        }
-        Err(err) => {
-            append_autoload_debug(format_args!(
-                "system-quit-save-swap: FAILED to re-commit foreign save after return-title save path='{}': {err}; a same-slot switch will fresh-deserialize the clobbered ACTIVE slot",
-                st.path
-            ));
-        }
-    }
+    };
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    unsafe { reapply_profile_summary_after_return_title_save(base, summary, &candidate) };
 }
 
 /// The game-owned save file a Load-Save-Profiles pick has COMMITTED foreign character bytes into this

@@ -43,9 +43,10 @@ pub const PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE: usize = 1 << 0;
 pub const PORTRAIT_EQUIP_BAD_HEAD: usize = 1 << 1;
 /// The effective CHEST id is not the one the target save record carries.
 pub const PORTRAIT_EQUIP_BAD_CHEST: usize = 1 << 2;
-/// The effective HANDS id is not the bare-body default the native feed equips into that slot.
+/// The effective HANDS id is not the one the target save record carries. (Until 2026-09-06 this
+/// asserted the BARE-BODY default instead, which made the missing-gauntlets defect score as a pass.)
 pub const PORTRAIT_EQUIP_BAD_HANDS: usize = 1 << 3;
-/// The effective LEGS id is not the bare-body default the native feed equips into that slot.
+/// The effective LEGS id is not the one the target save record carries. (Same 2026-09-06 flip.)
 pub const PORTRAIT_EQUIP_BAD_LEGS: usize = 1 << 4;
 
 /// Protector slot indices within the four the oracle covers.
@@ -79,6 +80,9 @@ pub struct PortraitEquipSample {
     /// non-capture bad frames all precede the model being rebuilt for the new character, and a
     /// value that both classifies and explains would beg that question.
     pub model_ins: usize,
+    /// Address of the live `ChrAsm` this sample was read from, so the weapon/handedness latches read
+    /// the SAME object the protector comparison did rather than re-resolving the renderer.
+    pub chr_asm: usize,
 }
 
 /// The bare-body row `CS::ChrAsm::GetDefaultProtectorParamId` returns for a protector slot, and which
@@ -111,12 +115,10 @@ pub fn portrait_effective_protector_id(
 /// Classify one sample. Returns the OR of the `PORTRAIT_EQUIP_BAD_*` bits; 0 = this frame would render
 /// the character's own armor.
 ///
-/// HEAD and CHEST are compared against the RECORD's own ids, which is stronger than any absolute
+/// ALL FOUR slots are compared against the RECORD's own ids, which is stronger than any absolute
 /// row-id floor and needs no unverifiable magic number: an empty slot is `-1` in both places and
-/// passes, exactly as a bare-headed character should. HANDS and LEGS are compared against the
-/// bare-body defaults instead, because the native feed overwrites those two with
-/// `GetDefaultProtectorParamId(2)` / `(3)` immediately after copying the record -- a portrait wearing
-/// its own gauntlets would be the deviation, not the fix.
+/// passes, exactly as a bare-headed character should. Hands and legs joined head and chest on
+/// 2026-09-06, when the kick started restoring them over the native feed's bare-body defaults.
 pub fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
     let mut mask = 0usize;
     if sample.unk0 >= 0 || sample.unkd4 >= 0 || sample.unkd8 >= 0 {
@@ -128,14 +130,17 @@ pub fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
     if sample.effective[PORTRAIT_EQUIP_SLOT_CHEST] != sample.record[PORTRAIT_EQUIP_SLOT_CHEST] {
         mask |= PORTRAIT_EQUIP_BAD_CHEST;
     }
-    if sample.effective[PORTRAIT_EQUIP_SLOT_HANDS]
-        != protector_default_param_id(PORTRAIT_EQUIP_SLOT_HANDS)
-    {
+    // HANDS and LEGS are now held to the SAME standard as head and chest -- the record's own row --
+    // because the kick restores them over the native feed (see
+    // `crate::portrait_equip_restore`). They used to be compared against
+    // `protector_default_param_id`, i.e. the oracle asserted that a portrait wearing its own
+    // gauntlets was the deviation. That was a faithful description of what the feed does and a
+    // wrong description of what the portrait should show, and while it held, the defect the user
+    // reported -- no arm armour, no leg armour -- was a PASS in every window this oracle scored.
+    if sample.effective[PORTRAIT_EQUIP_SLOT_HANDS] != sample.record[PORTRAIT_EQUIP_SLOT_HANDS] {
         mask |= PORTRAIT_EQUIP_BAD_HANDS;
     }
-    if sample.effective[PORTRAIT_EQUIP_SLOT_LEGS]
-        != protector_default_param_id(PORTRAIT_EQUIP_SLOT_LEGS)
-    {
+    if sample.effective[PORTRAIT_EQUIP_SLOT_LEGS] != sample.record[PORTRAIT_EQUIP_SLOT_LEGS] {
         mask |= PORTRAIT_EQUIP_BAD_LEGS;
     }
     mask
@@ -191,6 +196,7 @@ mod tests {
             record,
             // Fixed: the classifier must not read it, and these cases assert exactly that.
             model_ins: 0,
+            chr_asm: 0,
         }
     }
 
@@ -203,8 +209,8 @@ mod tests {
             0,
             0,
             0,
-            [21000, 21100, 10200, 10300],
-            [21000, 21100, -1, -1],
+            [21000, 21100, 21200, 21300],
+            [21000, 21100, 21200, 21300],
         );
         assert_eq!(s.effective, [0, 100, 200, 300]);
         let mask = portrait_equip_sample_bad_mask(&s);
@@ -223,10 +229,10 @@ mod tests {
             -1,
             -1,
             -1,
-            [21000, 21100, 10200, 10300],
-            [21000, 21100, -1, -1],
+            [21000, 21100, 21200, 21300],
+            [21000, 21100, 21200, 21300],
         );
-        assert_eq!(s.effective, [21000, 21100, 10200, 10300]);
+        assert_eq!(s.effective, [21000, 21100, 21200, 21300]);
         assert_eq!(portrait_equip_sample_bad_mask(&s), 0);
     }
 
@@ -234,7 +240,7 @@ mod tests {
     /// record rather than an absolute row-id floor is what keeps that from reading as a failure.
     #[test]
     fn an_unarmored_character_is_not_a_failure() {
-        let s = sample(-1, -1, -1, [-1, -1, 10200, 10300], [-1, -1, -1, -1]);
+        let s = sample(-1, -1, -1, [-1, -1, -1, -1], [-1, -1, -1, -1]);
         assert_eq!(portrait_equip_sample_bad_mask(&s), 0);
     }
 
@@ -242,10 +248,32 @@ mod tests {
     /// armor, so the mismatch is caught -- the class PR #128 was built around, still covered.
     #[test]
     fn armor_lost_between_the_record_and_the_live_chr_asm_is_flagged() {
-        let s = sample(-1, -1, -1, [-1, -1, 10200, 10300], [21000, 21100, -1, -1]);
+        let s = sample(-1, -1, -1, [-1, -1, -1, -1], [21000, 21100, 21200, 21300]);
         assert_eq!(
             portrait_equip_sample_bad_mask(&s),
-            PORTRAIT_EQUIP_BAD_HEAD | PORTRAIT_EQUIP_BAD_CHEST
+            PORTRAIT_EQUIP_BAD_HEAD
+                | PORTRAIT_EQUIP_BAD_CHEST
+                | PORTRAIT_EQUIP_BAD_HANDS
+                | PORTRAIT_EQUIP_BAD_LEGS
+        );
+    }
+
+    /// THE REPORTED DEFECT, as a test: the record names gauntlets and greaves, and the live ChrAsm
+    /// carries the bare-body rows the native feed forced in. Under the pre-2026-09-06 rule this was
+    /// the DEFINITION of a pass; it is now flagged on both slots, and head and chest -- which the
+    /// feed never touches -- stay clean, so the mask names the two that are actually wrong.
+    #[test]
+    fn the_native_feeds_bare_hands_and_legs_are_now_a_failure() {
+        let s = sample(
+            -1,
+            -1,
+            -1,
+            [21000, 21100, 10200, 10300],
+            [21000, 21100, 21200, 21300],
+        );
+        assert_eq!(
+            portrait_equip_sample_bad_mask(&s),
+            PORTRAIT_EQUIP_BAD_HANDS | PORTRAIT_EQUIP_BAD_LEGS
         );
     }
 
@@ -257,10 +285,10 @@ mod tests {
             5,
             -1,
             -1,
-            [21000, 21100, 10200, 10300],
-            [21000, 21100, -1, -1],
+            [21000, 21100, 21200, 21300],
+            [21000, 21100, 21200, 21300],
         );
-        assert_eq!(s.effective, [21000, 21100, 205, 10300]);
+        assert_eq!(s.effective, [21000, 21100, 205, 21300]);
         assert_eq!(
             portrait_equip_sample_bad_mask(&s),
             PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE | PORTRAIT_EQUIP_BAD_HANDS
