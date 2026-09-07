@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
-# Prove scripts/lib/cpu-courtesy.sh actually binds -- all four levers, not just the two with
+# Prove scripts/lib/cpu-courtesy.sh actually binds -- all five levers, not just the two with
 # obvious env vars.
 #
 # WHY A TEST AND NOT AN EYEBALL: the library's whole claim is that it caps parallelism the caller
-# never asked about. Three of its four levers are invisible to the process that sets them
+# never asked about. Four of its five levers are invisible to the process that sets them
 # (`CARGO_BUILD_JOBS` and `SWEEP_JOBS` are read by children; the affinity mask is read by
-# `os.sched_getaffinity` inside an unrelated Python pool), so "it printed a line" proves nothing.
-# Each assertion below therefore observes the lever from where it is actually consumed.
+# `os.sched_getaffinity` inside an unrelated Python pool; the scheduling policy is read back via
+# `chrt -p` in a child, not from the setter), so "it printed a line" proves nothing. Each assertion
+# below therefore observes the lever from where it is actually consumed.
 #
 # MEASURED 2026-09-06, the failure this exists to keep fixed: with every gate process reniced to
 # 19, scripts/check-moveset-table.py still held 81.4% of a 16-core box, because it sizes its pool
 # from os.cpu_count(). Priority decides who wins a contended core; it does nothing about how many
 # cores are contended.
+#
+# THE SCHED-IDLE LEVER GETS A DIFFERENT SHAPE OF ASSERTION, NOT A LITERAL ONE. On this machine
+# `chrt -i` is the lever that actually survives ananicy-cpp's periodic renice (see
+# scripts/lib/cpu-courtesy.sh); on a GitHub runner or a locked-down container `chrt` may be
+# absent, or present but refused. The probe therefore re-attempts the same idempotent `chrt -i -p
+# 0` call itself and reports whether IT could set the policy; the assertion only expects
+# `SCHED_IDLE` when the probe just proved the syscall is available, so a runner without it self-
+# reports "nothing to assert" instead of failing.
 #
 # EVERY NUMBER HERE IS DERIVED FROM THE LIVE MACHINE, NEVER A LITERAL. A GitHub runner has 2-4
 # cores, and `taskset -c 0-3` on a 2-core box fails (best-effort, so it silently changes nothing)
@@ -43,23 +52,34 @@ small=2; ((cores < 2)) && small=1
 #
 # Renice and the affinity mask are also one-way and inherited, so each scenario must be its own
 # process or it reads the previous one's leftovers and passes for the wrong reason.
-probe() { # probe <env assignments...> -- prints "nice jobs sweep pyaffinity"
+probe() { # probe <env assignments...> -- prints "nice jobs sweep pyaffinity sched settable"
 	# shellcheck disable=SC2016  # the $-expansions belong to the inner shell, deliberately
 	env -u SWEEP_JOBS -u CARGO_BUILD_JOBS -u ER_CPU_COURTESY_APPLIED \
-		-u ER_BUILD_JOBS -u ER_JOB_DIVISOR -u ER_NICE_FLOOR "$@" bash -c '
+		-u ER_BUILD_JOBS -u ER_JOB_DIVISOR -u ER_NICE_FLOOR -u ER_SCHED_IDLE "$@" bash -c '
 		set -euo pipefail
 		. scripts/lib/cpu-courtesy.sh
 		cpu_courtesy selftest 2>/dev/null
-		printf "%s %s %s %s\n" \
+		sched=$(chrt -p $$ 2>/dev/null | sed -n "s/.*scheduling policy: //p")
+		# Re-attempt the very call cpu_courtesy already made (idempotent -- SCHED_IDLE set twice
+		# is still SCHED_IDLE) to find out, from right here, whether THIS host can grant it at
+		# all. That is what tells the test whether an unmet "expected SCHED_IDLE" is a real
+		# regression or just an environment (missing/refused chrt) that never had the lever.
+		if command -v chrt >/dev/null 2>&1 && chrt -i -p 0 $$ >/dev/null 2>&1; then
+			settable=1
+		else
+			settable=0
+		fi
+		printf "%s %s %s %s %s %s\n" \
 			"$(nice)" "$CARGO_BUILD_JOBS" "$SWEEP_JOBS" \
-			"$(python3 -c "import os; print(len(os.sched_getaffinity(0)))")"
+			"$(python3 -c "import os; print(len(os.sched_getaffinity(0)))")" \
+			"${sched:-none}" "$settable"
 	'
 }
 
 echo "[test-cpu-courtesy] host reports $cores cores"
 
 echo "explicit cap (ER_BUILD_JOBS=$small):"
-read -r _ n_jobs n_sweep n_aff < <(probe "ER_BUILD_JOBS=$small")
+read -r _ n_jobs n_sweep n_aff _ < <(probe "ER_BUILD_JOBS=$small")
 check "CARGO_BUILD_JOBS" "$small" "$n_jobs"
 check "SWEEP_JOBS"       "$small" "$n_sweep"
 # THE LOAD-BEARING ONE. A pool with no env knob at all -- and check-moveset-table.py's default --
@@ -69,7 +89,7 @@ check "python affinity"  "$small" "$n_aff"
 
 echo "derived cap (half the machine):"
 want=$((cores / 2)); ((want < 1)) && want=1
-read -r d_nice d_jobs _ d_aff < <(probe ER_JOB_DIVISOR=2)
+read -r d_nice d_jobs _ d_aff _ < <(probe ER_JOB_DIVISOR=2)
 check "CARGO_BUILD_JOBS" "$want" "$d_jobs"
 check "python affinity"  "$want" "$d_aff"
 
@@ -77,8 +97,24 @@ echo "priority floor:"
 # Only ever yields. The harness runs agent shells at -4, so this asserts the direction that
 # matters: whatever we inherited, we come out at the floor or above it, never below.
 if [[ "$d_nice" -ge 10 ]]; then ok "nice $d_nice >= floor 10"; else bad "nice $d_nice is below the floor"; fi
-read -r h_nice _ _ _ < <(probe ER_NICE_FLOOR=3)
+read -r h_nice _ _ _ _ _ < <(probe ER_NICE_FLOOR=3)
 if [[ "$h_nice" -ge 3 ]]; then ok "respects ER_NICE_FLOOR=3 (got $h_nice)"; else bad "ER_NICE_FLOOR ignored: $h_nice"; fi
+
+echo "sched-idle lever (survives an ananicy-cpp-style renice reversion; see scripts/lib/cpu-courtesy.sh):"
+read -r _ _ _ _ i_sched i_settable < <(probe)
+if [[ "$i_settable" == "1" ]]; then
+	# The probe just proved, from inside its own child, that THIS host can grant SCHED_IDLE --
+	# so a mismatch here is a real regression in cpu_courtesy, not an environment gap.
+	check "sched policy (ER_SCHED_IDLE=1 default)" "SCHED_IDLE" "$i_sched"
+else
+	ok "chrt is absent or refused here -- sched-idle is a documented best-effort no-op, nothing to assert"
+fi
+read -r _ _ _ _ o_sched _ < <(probe ER_SCHED_IDLE=0)
+if [[ "$o_sched" != "SCHED_IDLE" ]]; then
+	ok "ER_SCHED_IDLE=0 leaves the inherited scheduling policy alone (got ${o_sched:-none})"
+else
+	bad "ER_SCHED_IDLE=0 was ignored: still SCHED_IDLE"
+fi
 
 echo "nesting does not ratchet the cap:"
 # THE REGRESSION THIS PINS: er_cpu_count calls nproc, which reports the affinity MASK. A second
@@ -102,7 +138,7 @@ nested=$(env -u SWEEP_JOBS -u CARGO_BUILD_JOBS -u ER_CPU_COURTESY_APPLIED bash -
 check "jobs/sweep/affinity unchanged by a nested call" "${nested%%|*}" "${nested##*|}"
 
 echo "caller's environment wins:"
-read -r _ _ s_sweep _ < <(probe "ER_BUILD_JOBS=$cores" SWEEP_JOBS=1)
+read -r _ _ s_sweep _ _ _ < <(probe "ER_BUILD_JOBS=$cores" SWEEP_JOBS=1)
 check "SWEEP_JOBS honoured when preset" 1 "$s_sweep"
 
 if [[ $fail -eq 0 ]]; then
