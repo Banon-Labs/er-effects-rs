@@ -836,8 +836,10 @@ mod arm_style_corpus {
         off += SAVE_CHR_ASM_EQUIPMENT_SIZE;
         let equipment = &body[off..off + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE];
         let dwords: Vec<u32> = equipment
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect();
         eprintln!("serialized ChrAsmEquipment dwords for {path} slot {slot}: {dwords:?}");
         assert!(
