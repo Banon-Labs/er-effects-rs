@@ -595,6 +595,10 @@ python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
+# ...and that the hook cannot let any of the ~250 gates below edit the live repository. git
+# exports GIT_DIR to hooks in a LINKED WORKTREE, so a fixture write leaks onto the shared
+# checkout; see the header of scripts/test-pre-push-scrubs-git-env.sh.
+bash "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 # The build gates must yield to the person at the keyboard, and three of the four levers that
 # make that true are invisible from the process that sets them. See the header of
 # scripts/test-cpu-courtesy.sh.
@@ -1479,6 +1483,7 @@ shellcheck "$repo_root/scripts/check.sh"
 shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
+shellcheck "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 shellcheck "$repo_root/scripts/pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/test-pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/probe-dll-build-determinism.sh"
