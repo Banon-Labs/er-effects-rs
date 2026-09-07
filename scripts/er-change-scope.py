@@ -172,6 +172,68 @@ def is_build_input(path: str) -> bool:
     return True
 
 
+# --- prose is not a build input ---------------------------------------------------------------
+#
+# `is_build_input` decides on the `path` alone, which cannot tell a comment edit from a code edit.
+# Measured 2026-09-07 on the comment-caps branch: 1,026 changed .rs/.py/.sh files, 1,021 of them
+# comment-only, and four of the five real ones sat outside crates/ -- so the select-everything rule
+# fired and all 28 DLLs were rebuilt and retested for a diff that cannot change a single byte of
+# compiled output.
+#
+# So the paths that reach cargo are filtered once more, by CONTENT: a .rs file whose code is
+# byte-identical with its comments blanked cannot change what cargo compiles.
+#
+# One comment is code, and is deliberately kept in the comparison: a ``` block inside a doc comment
+# is a rustdoc example, and `cargo test` compiles and runs it. `prose_spans` already excludes
+# fenced blocks, so blanking exactly the spans it returns leaves every doctest line in place and an
+# edit to one reads as a real change.
+#
+# Everything else fails closed. A file with no base version (added), one that cannot be read, one
+# whose extension the comment scanner does not know: all stay build inputs.
+
+
+def comment_scanner():
+    return _load(REPO_ROOT / "scripts" / "check-comment-caps.py", "er_comment_caps")
+
+
+def code_projection(text: str, suffix: str, scanner) -> str | None:
+    """`text` with prose blanked, or None when the scanner has no dialect for `suffix`."""
+    dialect = scanner.SCANNED_SUFFIXES.get(suffix)
+    if dialect is None:
+        return None
+    prose = {line for line, _ in scanner.prose_spans(text, dialect)}
+    return "\n".join("" if n in prose else body for n, body in enumerate(text.splitlines(), 1))
+
+
+def prose_only_paths(paths: list[str], base: str, head: str | None, scanner) -> set[str]:
+    """The subset of `paths` whose code is unchanged once comments are blanked."""
+    inert: set[str] = set()
+    for path in paths:
+        suffix = Path(path).suffix
+        try:
+            before = _blob(f"{base}:{path}")
+            after = _blob(f"{head}:{path}") if head else Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ScopeError):
+            continue  # unreadable or newly added: not provably inert, so it stays a build input
+        left = code_projection(before, suffix, scanner)
+        right = code_projection(after, suffix, scanner)
+        if left is not None and left == right:
+            inert.add(path)
+    return inert
+
+
+def _blob(spec: str) -> str:
+    out = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "show", spec],
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT_SECONDS,
+    )
+    if out.returncode != 0:
+        raise ScopeError(f"cannot read {spec}")
+    return out.stdout
+
+
 def crate_of(path: str) -> str | None:
     parts = Path(path).parts
     return parts[1] if len(parts) >= 2 and parts[0] == "crates" else None
@@ -222,6 +284,11 @@ def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str,
         )
 
     build_inputs = [path for path in changed_paths if is_build_input(path)]
+    # Then drop the ones that are provably prose. `revs` mode compares two commits; the default
+    # compares the merge base against the working tree, which is what the caller is about to
+    # validate.
+    prose_only = prose_only_paths(build_inputs, merge_base, revs[-1] if revs else None, comment_scanner())
+    build_inputs = [path for path in build_inputs if path not in prose_only]
     outside = sorted({path for path in build_inputs if crate_of(path) is None})
     if select_all_reason is None and outside:
         select_all_reason = (
@@ -271,6 +338,7 @@ def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str,
         "revs": list(revs),
         "changed_file_count": len(changed_paths),
         "build_input_count": len(build_inputs),
+        "prose_only_count": len(prose_only),
         "non_build_changed": sorted(set(changed_paths) - set(build_inputs))[:20],
         "select_all": select_all,
         "select_all_reason": select_all_reason,
@@ -362,6 +430,10 @@ def summary_md(scope: dict) -> str:
         "",
         f"`{scope['changed_file_count']}` changed path(s), `{scope['build_input_count']}` of "
         f"which can reach cargo. **{len(selected)} of {len(scope['dlls'])}** DLLs selected.",
+        "",
+        f"`{scope.get('prose_only_count', 0)}` changed source file(s) were comment-only and are "
+        "not counted above: with prose blanked their code is byte-identical, and rustdoc "
+        "```` ``` ```` blocks are kept in that comparison because a doctest is compiled.",
         "",
         "A DLL marked *not selected* was **NOT checked here**. That is not a pass.",
         "",
@@ -467,6 +539,35 @@ def selftest() -> int:
     check(not is_build_input("scripts/check.sh"), "a shell script is not a build input")
     check(not is_build_input("docs/plans/whatever.md"), "a doc is not a build input")
     check(not is_build_input("README.md"), "a root markdown file is not a build input")
+
+    # --- prose is not a build input ---------------------------------------------------------
+    scanner = comment_scanner()
+
+    def code(text: str) -> str | None:
+        return code_projection(text, ".rs", scanner)
+
+    body = "fn f() -> u8 {\n    1\n}\n"
+    check(
+        code("// one wording\n" + body) == code("// another wording entirely\n" + body),
+        "a comment edit leaves the code projection identical",
+    )
+    check(
+        code("/// doc\n" + body) != code("/// doc\nfn f() -> u8 {\n    2\n}\n"),
+        "a code edit changes the projection",
+    )
+    # The one comment that is code: rustdoc compiles and runs it.
+    fence_a = "/// Example.\n///\n/// ```\n/// assert_eq!(f(), 1);\n/// ```\n" + body
+    fence_b = "/// Example.\n///\n/// ```\n/// assert_eq!(f(), 2);\n/// ```\n" + body
+    check(code(fence_a) != code(fence_b), "a doctest edit is a code change, not prose")
+    check(
+        code(fence_a) == code("/// Reworded.\n///\n/// ```\n/// assert_eq!(f(), 1);\n/// ```\n" + body),
+        "...while the prose around the same doctest is not",
+    )
+    check(code_projection("x", ".toml", scanner) is None, "an unknown suffix has no projection")
+    check(
+        prose_only_paths(["crates/nope/src/does-not-exist.rs"], "HEAD", None, scanner) == set(),
+        "a path with no base version fails closed and stays a build input",
+    )
 
     # --- Anti-drift 1: no build script reads anything the predicate waves through ----------
     literals = _build_script_paths()
