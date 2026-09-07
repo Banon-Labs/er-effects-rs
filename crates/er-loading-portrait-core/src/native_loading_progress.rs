@@ -307,9 +307,21 @@ pub mod tracker {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     const CAP: u64 = 20_000;
+
+    /// The tracker is two process-global atomics, and cargo runs a crate's tests in parallel
+    /// threads of one process, so the two tests that drive it interleave: one calls `reset` while
+    /// the other is mid-sequence, and the second read comes back with the first test's number.
+    /// Measured 2026-09-07 in a `check.sh` run -- `tracker_stamps_only_on_change` failed with
+    /// `left: 900, right: 1000`, then passed alone and passed on two full-crate reruns, which is
+    /// the signature of a race rather than a regression. Every test touching `tracker::` takes
+    /// this lock; the poison arm keeps one failing test from turning the other into a second
+    /// failure that hides it.
+    static TRACKER: Mutex<()> = Mutex::new(());
 
     /// Below the cap nothing fires, however the gauge behaves.
     #[test]
@@ -413,6 +425,9 @@ mod tests {
 
     #[test]
     fn tracker_stamps_only_on_change() {
+        let _serialised = TRACKER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         tracker::reset();
         assert_eq!(tracker::progress_ms(), 0);
         tracker::note_frame(900, 5); // baseline
@@ -431,6 +446,9 @@ mod tests {
     /// unreachable in the very code path it exists to protect.
     #[test]
     fn tracker_first_sample_is_a_baseline_not_progress() {
+        let _serialised = TRACKER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         tracker::reset();
         tracker::note_frame(50_000, 3);
         assert_eq!(
