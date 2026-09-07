@@ -42,6 +42,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # unresponsive machine. See scripts/lib/cpu-courtesy.sh for why this lives here and not in a
 # wrapper the caller has to remember.
 # shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check.sh
 

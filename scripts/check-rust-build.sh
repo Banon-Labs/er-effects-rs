@@ -23,6 +23,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # This gate builds AND relinks every shell, then re-attests provenance for all of them. Same
 # reason as the compile gate: yield from inside rather than trusting the caller to wrap it.
 # shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check-rust-build
 target="x86_64-pc-windows-msvc"

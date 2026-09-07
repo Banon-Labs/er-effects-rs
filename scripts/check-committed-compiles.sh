@@ -82,6 +82,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # check.sh already yielding, the desktop still froze for the first two minutes of every push.
 # Yield here too, from inside, so no caller has to remember.
 # shellcheck source=lib/cpu-courtesy.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check-committed-compiles
 target="x86_64-pc-windows-msvc"

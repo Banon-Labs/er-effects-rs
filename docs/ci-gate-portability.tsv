@@ -226,5 +226,6 @@ blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook need
 portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only
 blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample
 portable	-	test-check-config-guard.sh	source/AST/text analysis only
+portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1
 portable	-	check-save-disable-warnings.py	source/AST/text analysis only
 portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only
