@@ -877,6 +877,15 @@ opa test "$repo_root/.cupcake/"
 # python, so the regression is catchable HERE. See scripts/test-regulation-params-zstd-skip.py.
 python3 "$repo_root/scripts/test-regulation-params-zstd-skip.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+# Capitals in a comment name something -- a const, an env var, an acronym, a register, an
+# upstream symbol -- and are never emphasis. The tree carried 38,682 shouted English words when
+# this landed, so the gate is a per-file ratchet against scripts/comment-caps.baseline.json:
+# a file may not gain shouted words, and a file that loses them must record it with
+# `--update-baseline`, so the recorded debt stays the real debt. Burn a file down with
+# `scripts/check-comment-caps.py --fix <path>`, then read the diff -- a shouted word is
+# sometimes load-bearing and wants a rewritten sentence rather than a lowercase letter.
+python3 "$repo_root/scripts/check-comment-caps.py" --selftest
+python3 "$repo_root/scripts/check-comment-caps.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
 # 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage NON-null
 # `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same

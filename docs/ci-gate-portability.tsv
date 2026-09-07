@@ -113,6 +113,8 @@ portable	-	test-cupcake-delivered-shape.py --selftest	source/AST/text analysis o
 portable	-	test-cupcake-delivered-shape.py	source/AST/text analysis only
 portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only
+portable	-	check-comment-caps.py --selftest	source/AST/text analysis only
+portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself
 portable	-	check-no-unguarded-cstr-from-ptr.py --selftest	source/AST/text analysis only
 portable	-	check-no-unguarded-cstr-from-ptr.py	source/AST/text analysis only
 portable	-	check-prologue-bytes.py --selftest	source/AST/text analysis only
