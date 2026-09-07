@@ -109,11 +109,25 @@ if [[ "$i_settable" == "1" ]]; then
 else
 	ok "chrt is absent or refused here -- sched-idle is a documented best-effort no-op, nothing to assert"
 fi
+# ...and the opt-out leaves the policy AS INHERITED -- which is not the same as "SCHED_OTHER",
+# and asserting the literal is what broke this gate inside check.sh on 2026-09-06.
+#
+# The scheduling policy is INHERITED PROCESS STATE, not an environment variable. check.sh calls
+# cpu_courtesy on itself long before reaching this gate, so every child here is ALREADY
+# SCHED_IDLE -- and a SCHED_IDLE process cannot raise itself back to SCHED_OTHER without
+# CAP_SYS_NICE. "ER_SCHED_IDLE=0 => SCHED_OTHER" is therefore unsatisfiable in the environment
+# this gate actually runs in, and the earlier simulation missed it because it reproduced the
+# suite's env vars (SWEEP_JOBS, CARGO_BUILD_JOBS, ER_CPU_COURTESY_APPLIED) but could not
+# reproduce its process state.
+#
+# The real invariant, true in both environments: the opt-out CHANGES NOTHING. Measure what this
+# shell already is, then require the opted-out child to match it.
+inherited_sched=$(chrt -p $$ 2>/dev/null | sed -n 's/.*scheduling policy: //p')
 read -r _ _ _ _ o_sched _ < <(probe ER_SCHED_IDLE=0)
-if [[ "$o_sched" != "SCHED_IDLE" ]]; then
-	ok "ER_SCHED_IDLE=0 leaves the inherited scheduling policy alone (got ${o_sched:-none})"
+if [[ -z "$inherited_sched" ]]; then
+	ok "chrt cannot report this shell's policy -- nothing to compare the opt-out against"
 else
-	bad "ER_SCHED_IDLE=0 was ignored: still SCHED_IDLE"
+	check "ER_SCHED_IDLE=0 leaves the policy as inherited" "$inherited_sched" "$o_sched"
 fi
 
 echo "nesting does not ratchet the cap:"
