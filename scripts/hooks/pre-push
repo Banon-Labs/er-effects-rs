@@ -30,9 +30,44 @@ printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
 # multiply the cost for a case that has not happened here.
 mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
 if [[ ${#pushed_shas[@]} -gt 0 ]]; then
-	printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
-		"${#pushed_shas[@]}" >&2
-	bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+	# ...BUT ONLY IF THESE COMMITS CAN CHANGE WHAT CARGO COMPILES (user directive 2026-09-06).
+	#
+	# The complaint that produced this is concrete and was measured: a commit touching one shell
+	# script compiled the whole workspace for ~14 minutes before the push, to prove nothing
+	# whatever about the change. `cargo` is not the gate here; the COMMIT is, and a commit that
+	# adds no Rust, no manifest, no build input has no compile question to answer.
+	#
+	# scripts/er-change-scope.py decides, from the same reverse-dependency walk
+	# scripts/er-dll-closure.py performs, over the PUSHED TIPS rather than the working tree --
+	# `--rev` per tip, because what reaches origin is what this gate is about, and a dirty tree
+	# is not that.
+	#
+	# THE SKIP IS LOUD AND IT IS NOT A PASS. It prints what it did not do and why, in the same
+	# vocabulary scripts/check.sh uses for its own skips. And it FAILS OPEN: exit 1 from the
+	# scope tool (a git failure, an unresolvable base, anything it cannot answer) runs the gate,
+	# and so does any diff touching a build input outside a single crate. Only a clean exit 3 --
+	# "provably nothing that reaches cargo changed" -- skips it.
+	scope_argv=()
+	for sha in "${pushed_shas[@]}"; do scope_argv+=(--rev "$sha"); done
+	# `|| scope_rc=$?` -- NOT a bare call. This script runs under `set -e`, and exit 3 is this
+	# tool's SUCCESS signal ("provably no cargo work"), so a bare invocation aborts the whole
+	# hook the instant the skip is warranted. Measured 2026-09-06: the push died with one line
+	# ("failed to push some refs"), no hook output at all, and the branch never reached origin
+	# -- a skip path that killed the push it was written to make cheap.
+	scope_rc=0
+	python3 scripts/er-change-scope.py --rust-touched "${scope_argv[@]}" || scope_rc=$?
+	if [[ $scope_rc -eq 3 ]]; then
+		printf 'pre-push: check-committed-compiles.sh NOT SELECTED for this push -- no pushed\n' >&2
+		printf '          commit touches anything cargo compiles. It did NOT run; that is not a\n' >&2
+		printf '          pass for it, and scripts/check.sh below reports the same for its own\n' >&2
+		printf '          cargo steps. Force everything with ER_SCOPE_ALL=1 git push.\n' >&2
+		printf '%s\n' "$(python3 scripts/er-change-scope.py "${scope_argv[@]}" | head -6)" >&2
+	else
+		[[ $scope_rc -ne 0 ]] && printf 'pre-push: scope undecidable -- running the compile gate anyway\n' >&2
+		printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
+			"${#pushed_shas[@]}" >&2
+		bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+	fi
 fi
 
 # PARITY WITH CI, NOT A SUBSET OF IT (user directive 2026-09-03).
@@ -49,5 +84,12 @@ fi
 # how often it was wrong. CI already solved this for itself (see .github/workflows/check.yml: it
 # runs check.sh precisely so its gate set is DERIVED rather than re-listed); the hook was the last
 # place still holding a copy of the list. Now there is no list to drift, because there is one file.
+#
+# SELECTION DID NOT REINTRODUCE A SUBSET (2026-09-06). The list is still gone: check.sh is still
+# the one file, and the gates it does not run on a given push are chosen by the SAME derived
+# computation CI uses, recomputed from the diff every time, with no second inventory anywhere to
+# fall behind. What changed is only that a cargo step the diff cannot have broken is reported
+# SKIPPED -- "NOT SELECTED FOR THIS DIFF" -- instead of being run. SKIPPED is not `passed` in
+# check.sh's summary and never has been, so a narrowed run says out loud what it did not cover.
 printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
 exec bash scripts/check.sh
