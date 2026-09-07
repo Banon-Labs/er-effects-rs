@@ -1621,6 +1621,34 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # `ER-EFFECTS-COMMENT-CAPS-GUARD`, live. Its opa suite proves the logic; these two prove the
+        # policy survives cupcake's WASM runtime, which is the half that went inert for 36 days
+        # once already. The allow case is the load-bearing one: this guard refuses a write, so a
+        # false positive costs an author an edit they cannot make.
+        PolicyCase(
+            "deny-write-shouted-word-into-a-comment",
+            "",
+            False,
+            "shouted word going into a comment",
+            {
+                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
+                "content": "// this is NOT the same pointer\nfn f() {}\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-backticked-mnemonic-in-a-comment",
+            "",
+            True,
+            None,
+            {
+                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
+                "content": "// the x86 `NOT` instruction, quoted\nfn f() {}\n",
+            },
+            include_timeout=False,
+            tool_name="Write",
+        ),
         # AskUserQuestion (the multiple-choice questionnaire tool). Corrected 2026-08-15: the prior
         # unconditional PreToolUse deny (block_askuserquestion) fired outside /goal work -- a legitimate
         # design-interview question from the `grilling` skill was blocked while not in any /goal work.

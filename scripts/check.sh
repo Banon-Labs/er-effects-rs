@@ -830,6 +830,12 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/tests/c
 # 58/58 to fail 3/58. The bypass is genuinely gated, by these suites, now that they run.
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/builtins/protected_paths.rego" "$repo_root/.cupcake/tests/protected_paths_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_tmp_scripts_guard.rego" "$repo_root/.cupcake/tests/edit_no_tmp_scripts_guard_test.rego"
+# The write-time half of the comment-caps rule. scripts/check-comment-caps.py is the authority and
+# runs above; this guard refuses the edit while the author still has the sentence in hand. Its
+# negative cases are the load-bearing ones -- it denies a write, so a false positive costs an edit
+# nobody can make -- and the live half runs in test-cupcake-policies.py, because an opa-green
+# policy that cupcake's WASM runtime cannot execute returns nothing and reads as a clean turn.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_comment_caps_guard.rego" "$repo_root/.cupcake/tests/edit_no_comment_caps_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
