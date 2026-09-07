@@ -1701,7 +1701,17 @@ def main() -> int:
     # than an order of magnitude of margin. Widening the pool is safe here precisely because it does
     # not change what any one case does; that is why the far slower delivered-shape gate is NOT
     # folded in as a 177th unit of work but left as its own step in the callers.
-    max_workers = min(12, max(1, len(cases)))
+    # ...BUT NEVER WIDER THAN THE MACHINE THIS RUN IS ALLOWED. `12` was written against a free
+    # 16-core box; under scripts/lib/cpu-courtesy.sh a gate run is confined to an affinity mask of
+    # half that, and 12 threads each spawning a `cupcake eval` subprocess onto 8 permitted cores is
+    # oversubscription, not parallelism. sched_getaffinity reports the MASK rather than the core
+    # count, so this reads the same number the cap actually granted. Falls back to 12 on a platform
+    # without affinity (never Linux, where this gate runs).
+    try:
+        permitted = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        permitted = 12
+    max_workers = min(12, permitted, max(1, len(cases)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(run_case, case): case for case in cases}
         for future in as_completed(futures):

@@ -51,6 +51,20 @@ pub const DIALOG_CTX_PARENT_50_OFFSET: usize = 0x50;
 pub const CSMENUMAN_MENU_DATA_08_OFFSET: usize = 0x8;
 /// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
 pub const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
+/// `CSMenuManImp+0x494`, set to 1 by `CS::CSLuaEventScriptImitation::RegistReturnTitle`
+/// (1.16.2 `0x14059d8b0` -> 1.17 `0x14059e700`, paired on a 43B/21B-fixed signature and read back
+/// to confirm the same body: `proxy->controlFlags |= 0x800`, `CSMenuMan+0x494 = 1`, `CSNetMan`
+/// singleton check).
+///
+/// WHY THIS IS AN ORACLE AND NOT DECORATION (2026-09-04). `RegistReturnTitle` has SIX callers and
+/// every one of them is a network-disconnect handler: `OnDisconnectEOSServer`,
+/// `OnDisconnectGameServer`, `OnFailedGetBlockNum`, `OnLanCutError`, `OnNpServerSignOut`,
+/// `OnSuspendResumeLanDisconnect`. So a 1 here means a disconnect forced a return to title, which
+/// is a completely different cause from anything in our own switch/cover code -- and it is the
+/// leading suspect for the black screen, where a SPURIOUS return-title request (InGameStep+0xd8
+/// going 1 -> 2) appeared 17.2s after the world loaded with nothing in our code asking for it
+/// (run br-20260904-165518-e3be). The flag is a pure read: no detour, no patched byte.
+pub const CSMENUMAN_REGIST_RETURN_TITLE_FLAG_494_OFFSET: usize = 0x494;
 /// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
 pub const RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA: usize = 0x3d6c5e8;
 /// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`

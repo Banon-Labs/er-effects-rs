@@ -13,6 +13,10 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
+mod cover_predicates;
+
+pub use cover_predicates::{cover_owns_current_loading_screen, title_visual_suppression_active};
+
 /// Number of standalone read-side ticks that have executed (proves the game-thread
 /// callback is live in the telemetry-only DLL). Owned here from the start.
 pub static STANDALONE_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -408,6 +412,27 @@ pub static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize:
 pub static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive ticks on which `SYSTEM_QUIT_QUICKLOAD_PHASE` has been stuck at
+/// `TITLE_OWNER_SEEN` while the world is demonstrably up.
+///
+/// THE LATCH THIS EXISTS TO BREAK (measured 2026-09-04, run br-20260904-181251-0586). The only
+/// path back to `PHASE_IDLE` is the post-finish stable-proof block, and it is gated on
+/// `phase >= AUTOLOAD_HANDOFF (4)`. A switch that reaches `TITLE_OWNER_SEEN (3)` and is then torn
+/// down never advances to 4, so it can never reach that reset: `active_switch` stays true for the
+/// rest of the process and the load-job Run guard never lifts. Observed effect -- `Load Character
+/// from File` becomes a silent no-op FOREVER: the row resolves, the picker opens, the ProfileSelect
+/// activation is ALLOWED, and then the log says `forwarding native (load-job Run remains guarded)`
+/// while two WHY-NOT lines spin for the rest of the session naming `active_switch=true(phase=3)`.
+/// Meanwhile SWITCH-ORACLE reported a perfectly healthy world: `player=true ig_d8=1 pstep=7/7`.
+///
+/// Phase 3 means "the title owner appeared, handing off to the product Continue autoload". With the
+/// player present and the InGameStep resting in-world, the title owner is long gone and that handoff
+/// has either completed or died -- either way the latch is stale, so this counts how long that
+/// contradiction has held rather than acting on a single frame.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Number of times the stale `TITLE_OWNER_SEEN` latch above was actually broken. Stays 0 on a
+/// healthy session; a non-zero value means a switch was torn down and the recovery caught it.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -1329,6 +1354,14 @@ pub static BOOT_VIEW_FPS_BAIL_RESUMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_OWN_MENU_LOAD_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `BOOT_VIEW_DRAW_HITS` as it stood when the cover window was last ARMED.
+///
+/// `BOOT_VIEW_DRAW_HITS` is cumulative for the life of the process and `boot_view_reset_cover_window`
+/// deliberately does not clear it, so it cannot answer "has THIS cover epoch drawn anything". That
+/// question is what `title_visual_suppression_active` needs: a rearmed cover that never composites
+/// must not be allowed to force-hide the title. Subtracting this baseline turns the cumulative
+/// counter into the per-epoch answer without disturbing any existing reader of the total.
+pub static BOOT_VIEW_DRAW_HITS_ARM_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DECISION_LOG_MS: AtomicU64 = AtomicU64::new(0);
 pub static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1772,56 +1805,6 @@ pub const NATIVE_LS_GATE_COUNT: usize = 6;
 pub static NATIVE_LS_EXPOSURE_OWNED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Boot-view epoch ms of the first owned exposure frame (0 = none).
 pub static NATIVE_LS_EXPOSURE_OWNED_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
-
-/// Is the native loading screen currently on screen one the product's loading cover OWNS?
-///
-/// # Why this question has to be asked at all
-///
-/// The cover is not a replacement for every vanilla loading screen. It covers the dead early-boot
-/// gap, and it covers a System->Quit -> Load Character switch, which re-arms it through
-/// `rearm_boot_progress_for_own_menu_load`. Everything else the engine puts a `CS::LoadingScreen`
-/// up for -- a world-map fast travel, a death respawn, a legacy-dungeon transition -- is the game's
-/// own screen and always has been.
-///
-/// Without this distinction `NATIVE_LS_EXPOSURE_FRAMES` files those screens as the vanilla
-/// flash-through defect. Measured 2026-08-30, run `dll:d37d919a`: a fast travel at 589 409 ms
-/// (`02_120_WorldMap` -> confirm `01_010_MessageBox` -> `warp_requested=true` -> `02_903_NowLoading2`)
-/// produced 331 exposure frames filed as `gate=4 (cover-stopped-or-nothing-to-draw)` in a session
-/// with ZERO character reloads (`oracle_current_load_epoch = 0`, no rearm line in 6.8 M lines).
-/// Read literally that says the cover failed on a second load; there was no second load.
-///
-/// # Why the answer must NOT come from the loading screen itself
-///
-/// The tempting signal -- "a native loading screen is up, so re-arm" -- is the one that must never
-/// be used, and the release predicate is why. On a fast travel the player never leaves, so
-/// `boot_view_player_loaded()` is ALREADY true, and the native bar still reaches 998; a cover armed
-/// on that signal is releasable on its first frame (a cover flash over gameplay), and with
-/// `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM` set it is releasable NEVER, because the fresh-deser count it
-/// waits on only bumps when a character deserializes. That second case is an opaque full-screen
-/// cover over live gameplay until `BOOT_VIEW_BACKSTOP_LIFETIME_MS`.
-///
-/// # The three ways the cover can own the screen, and why they cannot hide a real hole
-///
-/// `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` is documented as the authoritative total-load witness
-/// -- exactly one increment per forwarded `continue_confirm`, boot included -- and a warp does not
-/// forward one. It bumps at the CONFIRM, i.e. before the character load's screen appears, so the
-/// er-effects-rs-q6vk shape (a switch whose cover released early during the return-to-title
-/// teardown, leaving the character load bare) still answers TRUE here and stays filed as gate 4.
-pub fn cover_owns_current_loading_screen() -> bool {
-    // Armed: either the boot window, or a switch that re-armed it. `BOOT_VIEW_STOPPED` is cleared
-    // by `boot_view_reset_cover_window`, so this is live state and not a one-shot.
-    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
-        return true;
-    }
-    // A System->Quit switch is in flight. Cleared at the stop, so it covers only the armed span --
-    // the delta below is what carries the case where the cover stopped too early.
-    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
-        return true;
-    }
-    // A world load was requested after the cover last let go.
-    SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
-        != BOOT_VIEW_STOP_LOAD_WITNESS.load(Ordering::SeqCst)
-}
 pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);

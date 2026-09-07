@@ -210,6 +210,7 @@ portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only
 portable	-	er_run_lib.py	source/AST/text analysis only
 blocked	git-baseline	er-dll-closure.py --selftest	calls git merge-base origin/main HEAD; on a shallow clone three --with/--without cases FAIL rather than skip
+portable	-	er-change-scope.py --selftest	pure: reads the build scripts, check.sh and scripts/ only -- no git baseline, unlike the closure tool above
 partial	build-artifact	er-dll-provenance.py --selftest	10 closure cases still run; 'fingerprint checks not exercised'
 blocked	crash-logging-dll	er-dll-freshness.sh --selftest	needs a linked er_crash_logging.dll to attest -- named by FILE, not by 'some dll exists': a partly-built tree passed build-artifact and the gate then exited 1 about the missing build
 partial	save-corpus	er-pick-save.py --selftest	argument and size-invariant cases still PASS; 'skip no save corpus found'
@@ -225,5 +226,7 @@ blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook need
 portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only
 blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample
 portable	-	test-check-config-guard.sh	source/AST/text analysis only
+portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own
+portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1
 portable	-	check-save-disable-warnings.py	source/AST/text analysis only
 portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only

@@ -33,6 +33,7 @@ pub mod equip;
 pub mod model;
 pub mod name;
 pub mod plan;
+pub mod stats;
 
 pub use catalog::{Catalog, Entry, Kind};
 pub use equip::{

@@ -633,18 +633,16 @@ def collect(maps):
 # Co-op's, the next three are bounds that were being ranked as migration work above real
 # functions, and the last two are the control -- an exclusion that also ate real addresses would
 # look like progress.
-# The SUPPORTED build's four addresses, plus the one v1.9.9 address that outlived it. This mod
-# drives the latest Seamless Co-op only (2026-09-02), so `ersc::SUPPORTED` holds v2.0.0 alone and
-# v1.9.9 survives in `ersc::RETIRED` as an invade-action FINGERPRINT -- enough to name the build in
-# a refusal, and nothing else. That retired RVA still has to classify as ersc.dll: it is exactly as
-# plausible-looking a game `.text` address as it was while it was being driven, and misfiling it
-# would put Seamless work back into the 1.17 game-migration queue.
+# The supported build's four addresses. This mod drives the latest Seamless Co-op only, and a build
+# that is no longer latest leaves NOTHING behind -- no second ABI entry, no fingerprint, no pinned
+# address -- so there is exactly one build's worth of rows here and there never needs to be more.
+# They are here because each is as plausible-looking a game `.text` address as any, and misfiling
+# one would put Seamless work into the 1.17 game-migration queue it does not belong in.
 # What these rows assert is ATTRIBUTION -- "this address belongs to ersc.dll, not eldenring.exe" --
 # never "this is what still lives at that offset in the DLL on your disk". Seamless is third-party
 # and updates on its own schedule: run scripts/ersc_identify.py to see which build is installed and
 # scripts/locate-ersc-entry-points.py to re-measure before trusting a name here.
 FOREIGN_CASES = [
-    (0x243E0, "ersc.dll", "V199_INVADE_ACTION_RVA -- ersc \"Invade world\", the RETIRED fingerprint"),
     (0x241A0, "ersc.dll", "V201_SHOW_RVA -- ersc!show, Seamless v2.0.1"),
     (0x25850, "ersc.dll", "V201_INVADE_ACTION_RVA -- ersc \"Invade world\", v2.0.1"),
     (0x258D0, "ersc.dll", "V201_CANCEL_ACTION_RVA -- ersc \"Cancel search\", v2.0.1"),
@@ -703,12 +701,12 @@ def selftest(maps):
         failures.append("enum-alias constants are invisible: TITLE_TOP_DIALOG_IS_IN_STATE_RVA")
     if syms.get("GET_CURRENT_MAP_ID_RVA") != 0x5EEFB0:
         failures.append("plain literal constants are invisible: GET_CURRENT_MAP_ID_RVA")
-    # One name per Seamless build the tree still declares -- the supported one and the retired
-    # fingerprint -- so a future edit that drops either out of the foreign table fails here rather
-    # than silently reclassifying that build's RVAs as the game's. This gate has already earned
-    # its keep once: it went red on 2026-09-02 when v1.9.9 left `ersc::SUPPORTED`, which is the
-    # behaviour wanted -- the fixtures move deliberately, in the same commit, or not at all.
-    for name in ("V199_INVADE_ACTION_RVA", "V201_SHOW_RVA"):
+    # The supported build's constants must be attributed to ersc.dll, so an edit that drops them
+    # out of the foreign table fails here rather than silently reclassifying that build's RVAs as
+    # the game's. This gate has earned its keep twice already: it went red when the retired build
+    # left `ersc::SUPPORTED`, and again when that build's last constant was deleted outright --
+    # both times the fixtures moved deliberately, in the same commit, which is the whole point.
+    for name in ("V201_SHOW_RVA",):
         if foreign_syms.get(name) != "ersc.dll":
             failures.append(
                 f"a constant declared inside `mod ersc` is not attributed to ersc.dll: {name}"
