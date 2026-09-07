@@ -181,6 +181,18 @@ pub const PROFILE_RENDERER_SET_STREAM_INDEX_RVA: usize = 0xbb8c00;
 pub const PROFILE_RENDERER_SET_REQ_754_RVA: usize = 0xbb9810;
 /// `FUN_140bb9920(renderer)` (dump): `renderer+0x755 = 1` (set together with +0x754 at kick time).
 pub const PROFILE_RENDERER_SET_REQ_755_RVA: usize = 0xbb9830;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_ARM_STYLE;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_WEAPON_ID;
+/// The equipment-restore semaphores: what the write-back over the native feed actually changed.
+/// See `crate::portrait_equip_restore` for why the feed strips weapons and forces bare hands/legs,
+/// and `crate::portrait_equip_apply` for what publishes these.
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_AMMO_SLOTS;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_FAILURES;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_KICKS;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_NOOP_KICKS;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_RECORD_ID;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS;
 /// RAM oracle tripwire: max count of NON-target renderers observed holding a live model (+0x778 != 0)
 /// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
 /// loading screen -- the swap-bug precondition returned.

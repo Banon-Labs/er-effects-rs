@@ -112,3 +112,12 @@ pub const CHR_ASM_OVERRIDE_ABSENT: i32 = crate::portrait_equip::PORTRAIT_EQUIP_O
 /// renderer, not what it is rendering -- which is precisely how the PR #128 oracle passed a run the
 /// user saw as nude (bd er-effects-rs-91l5).
 pub const PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET: usize = 0x130;
+
+/// `CSMenuProfModelRend` -> the INBOX `ChrAsm`, the one `set_model_source` writes and mutilates.
+///
+/// Not inferred from the trio above: `FUN_140bb9800` -- the ChrAsm getter every part of
+/// `FUN_140bbe1a0` passes around -- is the whole function `return param_1 + 0x548;`, and
+/// `FUN_140bb9850(renderer, source)` is `ChrAsm::Copy(renderer + 0x548, source)`. So the feed's
+/// eight weapon clears and its two default-protector writes all land HERE, and here is where the
+/// record's own param ids have to be put back before the build kick consumes them.
+pub const PROFILE_RENDERER_CHR_ASM_INBOX_OFFSET: usize = 0x548;

@@ -512,6 +512,12 @@ pub(crate) unsafe fn kick_target_profile_slot(
         // armor from those ids alone (see `runtime_chr_asm_image`). What the resulting live ChrAsm
         // actually resolves to is measured per frame by `portrait_equip_oracle_sample`.
         set_model_source(renderer, record + PROFILE_SUMMARY_CHR_ASM_OFFSET);
+        // Undo it: see `er_loading_portrait_core::portrait_equip_restore`. Only window there is.
+        er_loading_portrait_core::portrait_equip_restore_apply(
+            renderer,
+            record + PROFILE_SUMMARY_CHR_ASM_OFFSET,
+            slot,
+        );
         let fd = facedata_buffer(record + PROFILE_SUMMARY_FACE_DATA_OFFSET, 1);
         set_facedata(renderer, fd);
         set_byte290(renderer, b290);

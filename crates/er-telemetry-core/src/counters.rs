@@ -2592,6 +2592,38 @@ pub static PORTRAIT_EQUIP_CAPTURE_EFFECTIVE_ID: [AtomicUsize; 4] =
 /// Tri-state verdict for that capture-frame sample: 0 never sampled, 1 clean, 2 bad. Deliberately not
 /// a boolean -- "the oracle never ran" must not read as a pass.
 pub static PORTRAIT_EQUIP_CAPTURE_VERDICT: AtomicUsize = AtomicUsize::new(0);
+
+// --- THE REPAIR ITSELF (2026-09-06) ------------------------------------------------------------
+// The native feed `FUN_140bbe1a0` erases the record's armaments and replaces its gauntlets and
+// greaves with the bare-body rows before the portrait is built; the kick now writes the record's own
+// `equipment_param_ids` back over the fed array. These count what that write actually changed, so a
+// portrait that still renders bare can be told apart from a portrait whose character IS bare.
+/// Build kicks on which the write-back ran at all (the inbox and record both read cleanly).
+pub static PORTRAIT_EQUIP_RESTORE_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where the write-back found NOTHING to change -- the character is genuinely bare-handed and
+/// bare-armed. Not a failure, and the reason `..._KICKS` alone cannot be read as proof of a repair.
+pub static PORTRAIT_EQUIP_RESTORE_NOOP_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// Armament indices restored, summed across kicks.
+pub static PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Ammunition indices restored, summed across kicks.
+pub static PORTRAIT_EQUIP_RESTORE_AMMO_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Protector indices restored, summed across kicks (hands and legs in practice).
+pub static PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where a write was attempted but the inbox read or write-back failed, so the portrait is
+/// being built from the feed's mutilated array. A non-zero value invalidates the run's picture.
+pub static PORTRAIT_EQUIP_RESTORE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// First kick's record ids, packed by `portrait_equip_pack` so a real `-1` (slot empty) is
+/// distinguishable from "never sampled". Order: right weapon, left weapon, hands, legs.
+pub static PORTRAIT_EQUIP_RESTORE_RECORD_ID: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+/// What the LIVE ChrAsm at `renderer+0x130` -- the one `FUN_1409e6fb0` re-reads every frame -- holds
+/// for the armaments and the handedness, first sample of the window. Writing the inbox proves only
+/// that we wrote the inbox; these are the values the model build actually resolves from, so they are
+/// what separates "the repair reached the renderer" from "the repair reached a buffer".
+/// Packed by `portrait_equip_pack`: right weapon, left weapon.
+pub static PORTRAIT_EQUIP_LIVE_WEAPON_ID: [AtomicUsize; 2] = [const { AtomicUsize::new(0) }; 2];
+/// `ChrAsm::equipment.armStyle` (ChrAsm+0x08), the handedness input
+/// `getSelectedWeaponSlotIndex` reads. Packed the same way, so 0 is a real value and not "unsampled".
+pub static PORTRAIT_EQUIP_LIVE_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);
