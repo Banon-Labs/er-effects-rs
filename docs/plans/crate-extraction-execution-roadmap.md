@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 77 | 50,895 |
+| all `experiments/**` | 77 | 51,049 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -148,7 +148,7 @@ somebody's in-flight edit.
 | `startup_hooks/quit_menu/system_quit_ownership_repro.rs` | 1,462 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,099 | stale-RVA call-site closure |
 | `own_stepper/bootstrap_drive.rs` | 997 | stale-RVA call-site closure |
-| `continue_load/slot_resolution.rs` | 922 | stale-RVA call-site closure |
+| `continue_load/slot_resolution.rs` | 969 | stale-RVA call-site closure |
 | `trace/menu_constructor_capture.rs` | 1,399 | stale-RVA call-site closure |
 | `startup_hooks.rs` | 108 | dead-counter census |
 
@@ -246,7 +246,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `can_move_probe.rs` | 679 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 18 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 834 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 922 | product slot-resolution policy | D5 and R14 |
+| `continue_load/slot_resolution.rs` | 969 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 487 | product gate policy | D1 |
 | `gating/runtime_modes.rs` | 134 | product runtime-mode policy | D1 |
@@ -263,7 +263,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `lifecycle/title_visual_startup.rs` | 177 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
-| `menu_diag/menu_observation.rs` | 689 | product menu observation | D4 |
+| `menu_diag/menu_observation.rs` | 779 | product menu observation | D4 |
 | `mod.rs` | 106 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 553 | product core own-stepper | D5 |
@@ -281,7 +281,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
 | `save_redirect/file_ops.rs` | 346 | save-file hook implementation | R32-R37 |
-| `save_redirect/path_hooks.rs` | 2,204 | save source/path policy and redirect adapters | R32-R37 |
+| `save_redirect/path_hooks.rs` | 2,221 | save source/path policy and redirect adapters | R32-R37 |
 | `startup_hooks.rs` | 108 | product startup root and arming facade | `STAY` |
 | `startup_hooks/diagnostics/layout_global_hooks.rs` | 345 | mixed title, quit, and product diagnostics | R11 and R22 |
 | `startup_hooks/diagnostics/mod.rs` | 23 | diagnostics module facade | `STAY` |
