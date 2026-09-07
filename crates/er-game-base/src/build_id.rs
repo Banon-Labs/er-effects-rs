@@ -76,19 +76,23 @@ unsafe extern "system" {
     fn GetModuleFileNameW(module: usize, filename: *mut u16, size: u32) -> u32;
 }
 
-/// Base address and file name of the module this code is linked into.
+/// Base address and FULL PATH of the module this code is linked into.
 ///
-/// Returns `None` on host builds and on the (unobserved) failure of either call, so the
-/// identity line degrades a field at a time instead of vanishing.
+/// Returns `None` on host builds and on the (unobserved) failure of either call, so a caller
+/// degrades a field at a time instead of vanishing.
+///
+/// `own_module` below keeps only the leaf, which is what an identity line wants. The DIRECTORY
+/// is what a DLL that ships beside its own data needs: `mushroom-man-runtime` is inert unless
+/// the model binders it depends on sit next to it, and that question cannot be asked of a leaf.
 #[cfg(windows)]
-pub fn own_module() -> Option<(usize, String)> {
+pub fn own_module_path() -> Option<(usize, String)> {
     let mut module: usize = 0;
-    // SAFETY: `own_module` is code in this module, so its address is inside the mapped image
+    // SAFETY: `own_module_path` is code in this module, so its address is inside the mapped image
     // the loader is being asked about, and `module` is a live out-param for the duration.
     let resolved = unsafe {
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            own_module as *const u16,
+            own_module_path as *const u16,
             &mut module,
         )
     };
@@ -102,16 +106,27 @@ pub fn own_module() -> Option<(usize, String)> {
     if written == 0 {
         return Some((module, String::new()));
     }
-    let path = String::from_utf16_lossy(&buffer[..written as usize]);
+    Some((
+        module,
+        String::from_utf16_lossy(&buffer[..written as usize]),
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn own_module_path() -> Option<(usize, String)> {
+    None
+}
+
+/// Base address and file name of the module this code is linked into.
+///
+/// Returns `None` on host builds and on the (unobserved) failure of either call, so the
+/// identity line degrades a field at a time instead of vanishing.
+pub fn own_module() -> Option<(usize, String)> {
+    let (module, path) = own_module_path()?;
     // The leaf is what a tester actually has on disk and what `er-crash-modules.txt` lists;
     // the directory is the game install and says nothing.
     let name = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
     Some((module, name))
-}
-
-#[cfg(not(windows))]
-pub fn own_module() -> Option<(usize, String)> {
-    None
 }
 
 /// `IMAGE_FILE_HEADER::TimeDateStamp` of a mapped module: when its linker wrote it.
