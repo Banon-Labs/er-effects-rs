@@ -6,6 +6,32 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
+#
+# Measured with scripts/measure-git-hook-env.sh on git 2.55.0. From the MAIN checkout a pre-push
+# hook sees only GIT_EDITOR/GIT_EXEC_PATH/GIT_PREFIX. From a LINKED WORKTREE it also sees GIT_DIR
+# -- and GIT_DIR wins over cwd, so a gate that builds a throwaway repository and configures it
+# with `git -C <fixture> config ...` silently edits THIS repository instead of the fixture.
+#
+# That is not hypothetical. A push from .worktrees/teardown-outcome on 2026-09-06 came back with
+# scripts/check-gate-config-guard.sh reporting the suite had rewritten the config it was checking:
+#     core.hooksPath  scripts/hooks -> /home/banon/projects/er-mods-rs/scripts/hooks
+# an absolute path computed for a fixture, landing on the shared checkout that every other
+# worktree and every other agent reads. The guard caught it and refused the push, which is the
+# system working -- but the damage was already written, and the same shape had corrupted this
+# key once before in the same session.
+#
+# Scrubbed HERE rather than in each gate, because "every script that might build a git fixture
+# remembers to unset these" is not a property anything enforces, and the gates are ~250 and
+# growing. `git rev-parse --local-env-vars` is git's own list of the variables that pin a
+# command to a specific repository; with them gone, every `git` below resolves from cwd, which
+# the `cd` above has already set to the worktree being pushed. repo_root is captured first, so
+# the scrub cannot change which tree this hook is about.
+#
+# Deliberately unquoted: the output is a space-separated list of NAMES and must word-split.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 # GIT FEEDS THE REFS BEING PUSHED ON STDIN, AND IT CAN ONLY BE READ ONCE. Both consumers below
 # need it: the main-push guard reads it to see which refs are involved (and must still see an
 # EMPTY stream as a valid case -- that is one of its own tests), and the compile gate reads it to
