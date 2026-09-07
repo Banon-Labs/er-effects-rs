@@ -40,6 +40,13 @@ from pathlib import Path
 PROFILE_NAME = "mushroom-man"
 DEFAULT_GAME = "eldenring"
 WINDOWS_ME3_RELATIVE_PATH = Path("garyttierney") / "me3" / "bin" / "me3.exe"
+# me3 install locations to try when neither --me3 nor ME3_EXE/ME3_BIN names one. Current-user
+# aware: a native Linux me3 lives on PATH or under this user's ~/.local/bin, and the Windows
+# layout is reached through LOCALAPPDATA. The /mnt/c/Users glob is the retired WSL2 layout and
+# is searched LAST, so on a box without /mnt it costs one failed stat rather than making a
+# present me3 read as missing.
+NATIVE_ME3_FALLBACKS = (Path("~/.local/bin/me3"),)
+WSL_LOCAL_APP_DATA_ROOT = Path("/mnt/c/Users")
 
 REQUIRED_PAYLOAD_FILES = (
     Path("mushroom_man.dll"),
@@ -182,9 +189,12 @@ def local_app_data_candidates() -> list[Path]:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         candidates.append(Path(local_app_data))
-    wsl_users = Path("/mnt/c/Users")
-    if wsl_users.is_dir():
-        for user_dir in sorted(wsl_users.iterdir()):
+    try:
+        wsl_users_present = WSL_LOCAL_APP_DATA_ROOT.is_dir()
+    except OSError:
+        wsl_users_present = False
+    if wsl_users_present:
+        for user_dir in sorted(WSL_LOCAL_APP_DATA_ROOT.iterdir()):
             candidate = user_dir / "AppData" / "Local"
             try:
                 if candidate.is_dir():
@@ -195,6 +205,24 @@ def local_app_data_candidates() -> list[Path]:
 
 
 def locate_default_me3() -> Path | None:
+    """me3 for the generated launcher / --launch: env override, then PATH, then known installs."""
+    for variable in ("ME3_EXE", "ME3_BIN"):
+        override = os.environ.get(variable)
+        if override:
+            found = shutil.which(override)
+            if found:
+                return Path(found)
+            candidate = Path(override).expanduser()
+            if candidate.is_file():
+                return candidate
+    for name in ("me3", "me3.exe"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    for fallback in NATIVE_ME3_FALLBACKS:
+        candidate = fallback.expanduser()
+        if candidate.is_file():
+            return candidate
     for local_app_data in local_app_data_candidates():
         candidate = local_app_data / WINDOWS_ME3_RELATIVE_PATH
         if candidate.is_file():
@@ -278,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--me3",
         type=Path,
-        help="explicit path to me3.exe for the generated launcher/--launch",
+        help="explicit path to me3 for the generated launcher/--launch (env: ME3_EXE, ME3_BIN)",
     )
     parser.add_argument(
         "--launch", action="store_true", help="launch ME3 after writing the profile"
@@ -354,7 +382,7 @@ def main() -> int:
 
     if args.launch:
         if me3_path is None:
-            fail("--launch requested, but me3.exe was not found; pass --me3 <path>")
+            fail("--launch requested, but me3 was not found; pass --me3 <path> or set ME3_EXE")
         subprocess.run(
             [
                 str(me3_path),

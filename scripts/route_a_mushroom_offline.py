@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,15 +28,122 @@ DSR_TARGETS = [
 ]
 ER_PLAYER_FILTER = "chr/c0000"
 ER_DONOR_FILTER = "parts/bd_m_1010"
-DEFAULT_ER_GAME = Path("/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game")
-DEFAULT_DSR_CANDIDATES = [
-    Path("/mnt/c/SteamLibrary/steamapps/common/DARK SOULS REMASTERED"),
-    Path("/mnt/d/Steam/steamapps/common/DARK SOULS REMASTERED"),
-    Path("/mnt/d/steam/steamapps/common/DARK SOULS REMASTERED"),
-    Path("/mnt/c/SteamLibrary/steamapps/common/Dark Souls Prepare to Die Edition"),
+# Tool/game discovery. Every default below is derived at run time from an env override, then
+# PATH, then the CURRENT user's home. Nothing names a literal home directory or a machine that no
+# longer exists: the /mnt/... entries are the retired WSL2 layout and come LAST, so on a native
+# Linux box they cost a failed stat instead of reporting a present install as missing.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Steam roots to search, in preference order. ME3_STEAM_DIR is the repo-wide override name
+# (~/Elden/launch.sh and scripts/me3_live_launch.py use it too).
+STEAM_ROOT_CANDIDATES = [
+    "~/.local/share/Steam",
+    "~/.steam/steam",
+    "~/.var/app/com.valvesoftware.Steam/.local/share/Steam",
+    # Retired WSL2 layout, last resort only.
+    "/mnt/c/SteamLibrary",
+    "/mnt/d/Steam",
+    "/mnt/d/steam",
 ]
-DEFAULT_FSTOOLS = Path("/home/choza/projects/fstools-rs/target/debug/fstools_cli")
-DEFAULT_WITCHY = Path("/mnt/d/Witchy BND/WitchyBND.exe")
+ER_GAME_RELPATH = Path("steamapps") / "common" / "ELDEN RING" / "Game"
+DSR_GAME_RELPATHS = [
+    Path("steamapps") / "common" / "DARK SOULS REMASTERED",
+    Path("steamapps") / "common" / "Dark Souls Prepare to Die Edition",
+]
+
+
+def steam_roots() -> list[Path]:
+    roots: list[Path] = []
+    override = os.environ.get("ME3_STEAM_DIR")
+    if override:
+        roots.append(Path(override).expanduser())
+    roots.extend(Path(candidate).expanduser() for candidate in STEAM_ROOT_CANDIDATES)
+    return roots
+
+
+def first_existing(candidates: list[Path]) -> Path | None:
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def default_er_game() -> Path:
+    """Elden Ring `Game` directory: env override, then any Steam root that holds it."""
+    override = os.environ.get("ER_GAME_DIR")
+    if override:
+        return Path(override).expanduser()
+    candidates = [root / ER_GAME_RELPATH for root in steam_roots()]
+    return first_existing(candidates) or candidates[0]
+
+
+def default_dsr_candidates() -> list[Path]:
+    """Dark Souls Remastered / PTDE directories to try, best first."""
+    override = os.environ.get("DSR_GAME_DIR")
+    if override:
+        return [Path(override).expanduser()]
+    return [
+        root / relative for root in steam_roots() for relative in DSR_GAME_RELPATHS
+    ]
+
+
+def default_fstools() -> Path:
+    """fstools_cli: env override, then PATH, then a sibling/`$HOME` fstools-rs checkout."""
+    override = os.environ.get("FSTOOLS_CLI")
+    if override:
+        return Path(override).expanduser()
+    on_path = shutil.which("fstools_cli")
+    if on_path:
+        return Path(on_path)
+    candidates = [
+        root / "target" / profile / "fstools_cli"
+        for root in (
+            REPO_ROOT.parent / "fstools-rs",
+            Path.home() / "projects" / "fstools-rs",
+        )
+        for profile in ("release", "debug")
+    ]
+    return first_existing(candidates) or candidates[0]
+
+
+def default_witchy() -> Path:
+    """WitchyBND: env override, then PATH, then this user's install / a sibling checkout."""
+    override = os.environ.get("WITCHY_BND")
+    if override:
+        return Path(override).expanduser()
+    on_path = shutil.which("WitchyBND")
+    if on_path:
+        return Path(on_path)
+    candidates = [
+        Path.home() / ".local/share/witchybnd/runtime/WitchyBND",
+        REPO_ROOT / ".deps/WitchyBND/WitchyBND",
+        REPO_ROOT / ".deps/WitchyBND/WitchyBND.exe",
+        REPO_ROOT.parent / "WitchyBND/WitchyBND",
+        REPO_ROOT.parent / "WitchyBND/WitchyBND.exe",
+        Path("/mnt/d/Witchy BND/WitchyBND.exe"),
+    ]
+    return first_existing(candidates) or candidates[0]
+
+
+def default_witchy_pty(witchy: Path) -> Path | None:
+    """PTY wrapper for WitchyBND, or None when this host has none.
+
+    WitchyBND's PromptPlus console layer refuses to start when stdout is redirected
+    ("PromptPlus requires a terminal/console without redirection environment!", exit 1), so a
+    scripted run on native Linux has to give it a pseudo-terminal. The WSL2 path got a console
+    from cmd.exe instead; both are handled in run_witchy().
+    """
+    override = os.environ.get("WITCHY_PTY")
+    if override:
+        return Path(override).expanduser()
+    return first_existing(
+        [
+            witchy.parent / "witchy-pty.py",
+            witchy.parent.parent / "witchy-pty.py",
+            Path.home() / ".local/share/witchybnd/witchy-pty.py",
+            Path.home() / "er-extract/run-witchy-pty.py",
+        ]
+    )
 
 
 @dataclass
@@ -82,6 +190,9 @@ def run_command(
 
 
 def wsl_to_windows(path: Path) -> str:
+    """Windows spelling of a path -- WSL2 only; a native Linux tool takes the path as is."""
+    if shutil.which("wslpath") is None:
+        return str(path)
     result = run_command(["wslpath", "-w", str(path)])
     if not result.accepted:
         raise RuntimeError(
@@ -91,7 +202,7 @@ def wsl_to_windows(path: Path) -> str:
 
 
 def find_dsr_game(explicit: Path | None) -> Path | None:
-    candidates = [explicit] if explicit else DEFAULT_DSR_CANDIDATES
+    candidates = [explicit] if explicit else default_dsr_candidates()
     for candidate in candidates:
         if candidate and candidate.exists():
             return candidate
@@ -172,7 +283,11 @@ def expected_witchy_dir(input_path: Path) -> Path:
 
 def run_witchy(witchy: Path, input_path: Path) -> CommandResult:
     if not witchy.exists():
-        return CommandResult(str(witchy), 127, "", "WitchyBND.exe not found", False)
+        return CommandResult(
+            str(witchy), 127, "", f"WitchyBND not found at {witchy}; set WITCHY_BND", False
+        )
+    if shutil.which("cmd.exe") is None or witchy.suffix.lower() != ".exe":
+        return run_witchy_native(witchy, input_path)
     cmd_dir = input_path.parent / ".witchy-cmd"
     cmd_dir.mkdir(parents=True, exist_ok=True)
     script = cmd_dir / f"unpack-{input_path.name}.cmd"
@@ -184,6 +299,30 @@ def run_witchy(witchy: Path, input_path: Path) -> CommandResult:
     )
     script_win = wsl_to_windows(script)
     result = run_command(["cmd.exe", "/c", script_win], accept=(0, 82))
+    out_dir = expected_witchy_dir(input_path)
+    result.accepted = result.accepted and out_dir.exists()
+    return result
+
+
+def run_witchy_native(witchy: Path, input_path: Path) -> CommandResult:
+    """Run WitchyBND directly, through a PTY wrapper when one is available (see above)."""
+    pty_wrapper = default_witchy_pty(witchy)
+    if pty_wrapper is not None:
+        log_path = input_path.parent / ".witchy-cmd" / f"unpack-{input_path.name}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable,
+            str(pty_wrapper),
+            "--log",
+            str(log_path),
+            "--",
+            str(witchy),
+            "-p",
+            str(input_path),
+        ]
+    else:
+        command = [str(witchy), "-p", str(input_path)]
+    result = run_command(command, accept=(0, 82))
     out_dir = expected_witchy_dir(input_path)
     result.accepted = result.accepted and out_dir.exists()
     return result
@@ -272,18 +411,28 @@ def main() -> int:
         default=Path("target/mushroom-route-a-offline"),
         help="Output directory",
     )
-    parser.add_argument("--dsr-game", type=Path, help="Dark Souls/DSR game directory")
+    parser.add_argument(
+        "--dsr-game",
+        type=Path,
+        help="Dark Souls/DSR game directory (env: DSR_GAME_DIR, ME3_STEAM_DIR)",
+    )
     parser.add_argument(
         "--er-game",
         type=Path,
-        default=DEFAULT_ER_GAME,
-        help="Elden Ring Game directory",
+        default=default_er_game(),
+        help="Elden Ring Game directory (env: ER_GAME_DIR, ME3_STEAM_DIR)",
     )
     parser.add_argument(
-        "--fstools", type=Path, default=DEFAULT_FSTOOLS, help="fstools_cli path"
+        "--fstools",
+        type=Path,
+        default=default_fstools(),
+        help="fstools_cli path (env: FSTOOLS_CLI)",
     )
     parser.add_argument(
-        "--witchy", type=Path, default=DEFAULT_WITCHY, help="WitchyBND.exe path"
+        "--witchy",
+        type=Path,
+        default=default_witchy(),
+        help="WitchyBND executable path (env: WITCHY_BND)",
     )
     parser.add_argument(
         "--status", action="store_true", help="Only report availability/status"

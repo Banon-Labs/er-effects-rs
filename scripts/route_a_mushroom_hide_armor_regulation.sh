@@ -27,6 +27,7 @@ Usage:
 
 Environment overrides:
   ER_REGULATION_BIN     input regulation.bin when --input is omitted
+  ME3_STEAM_DIR         Steam root to search for the Elden Ring install
   SMITHBOX_BINARY_DIR   Smithbox binary install containing Andre.Formats.dll
 EOF
 }
@@ -53,17 +54,47 @@ xml_escape() {
 	python3 -c 'import html,sys; print(html.escape(sys.argv[1], quote=True))' "$1"
 }
 
-windows_path() {
-	wslpath -w "$(realpath -m "$1")"
+# Path spelling for whichever toolchain we are driving. A Windows dotnet/powershell reached from
+# WSL needs `wslpath -w`; a native Linux dotnet takes the path as is. Keyed on wslpath actually
+# existing, never on a hard-coded host assumption.
+maybe_windows_path() {
+	local path
+	path="$(realpath -m "$1")"
+	if command -v wslpath >/dev/null 2>&1; then
+		wslpath -w "$path"
+		return
+	fi
+	printf '%s\n' "$path"
 }
 
+# Directory separator matching the spelling maybe_windows_path produces.
+path_separator() {
+	if command -v wslpath >/dev/null 2>&1; then
+		printf '\\'
+	else
+		printf '/'
+	fi
+}
+
+# Env override first, then the repo/sibling checkouts, then the CURRENT user's home. /mnt/d is
+# the retired WSL2 layout and is LAST-resort only: it does not exist on a native Linux box, so
+# leaving it ahead of a real install made a present Smithbox read as "the tool is missing".
 find_smithbox_dir() {
 	if [[ -n "$smithbox_dir" ]]; then
 		printf '%s\n' "$smithbox_dir"
 		return
 	fi
 	local candidate
-	for candidate in "$repo_root/.deps/Smithbox" "$repo_root/../Smithbox" "$repo_root/../smithbox" /mnt/d/Smithbox; do
+	for candidate in \
+		"$repo_root/.deps/Smithbox" \
+		"$repo_root/../Smithbox" \
+		"$repo_root/../smithbox" \
+		"$HOME/.local/share/smithbox/app" \
+		"$HOME/.local/share/Smithbox/app" \
+		"$HOME/.local/share/Smithbox" \
+		"$HOME/Smithbox" \
+		/opt/Smithbox \
+		/mnt/d/Smithbox; do
 		if [[ -f "$candidate/Andre.Formats.dll" && -f "$candidate/Andre.SoulsFormats.dll" ]]; then
 			printf '%s\n' "$candidate"
 			return
@@ -92,8 +123,16 @@ find_elden_ring_regulation() {
 		printf '%s\n' "$input_regulation"
 		return
 	fi
+	# Steam roots, current-user aware. ME3_STEAM_DIR is the repo-wide override (~/Elden/launch.sh
+	# and scripts/me3_live_launch.py use the same name); the /mnt/? glob is the retired WSL2
+	# layout, kept last so it cannot shadow the native install.
 	local manifest install_dir steamapps game_dir candidate
-	for manifest in /mnt/?/{SteamLibrary,steam,Steam}/steamapps/appmanifest_1245620.acf; do
+	for manifest in \
+		${ME3_STEAM_DIR:+"$ME3_STEAM_DIR/steamapps/appmanifest_1245620.acf"} \
+		"$HOME/.local/share/Steam/steamapps/appmanifest_1245620.acf" \
+		"$HOME/.steam/steam/steamapps/appmanifest_1245620.acf" \
+		"$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/appmanifest_1245620.acf" \
+		/mnt/?/{SteamLibrary,steam,Steam}/steamapps/appmanifest_1245620.acf; do
 		[[ -f "$manifest" ]] || continue
 		install_dir="$(read_acf_value "$manifest" installdir)"
 		[[ -n "$install_dir" ]] || continue
@@ -150,9 +189,10 @@ require_file "scripts/route_a_mushroom_hide_armor_regulation.cs" "C# regulation 
 
 project_dir="target/mushroom-regulation-patcher"
 mkdir -p "$project_dir"
-smithbox_win="$(windows_path "$smithbox_dir")"
-andref="$(xml_escape "$smithbox_win\\Andre.Formats.dll")"
-soulsf="$(xml_escape "$smithbox_win\\Andre.SoulsFormats.dll")"
+smithbox_win="$(maybe_windows_path "$smithbox_dir")"
+sep="$(path_separator)"
+andref="$(xml_escape "${smithbox_win}${sep}Andre.Formats.dll")"
+soulsf="$(xml_escape "${smithbox_win}${sep}Andre.SoulsFormats.dll")"
 cat >"$project_dir/mushroom-regulation-patcher.csproj" <<EOF
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -185,10 +225,18 @@ else
 fi
 mkdir -p "$(dirname "$output_regulation")" "$(dirname "$summary_path")"
 
-project_win="$(windows_path "$project_dir")"
-input_win="$(windows_path "$input_regulation")"
-output_win="$(windows_path "$output_regulation")"
-smithbox_arg_win="$(windows_path "$smithbox_dir")"
-summary_win="$(windows_path "$summary_path")"
-powershell.exe -NoProfile -Command \
-	"\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$project_win'; dotnet run --configuration Release -- '$input_win' '$output_win' '$smithbox_arg_win' '$summary_win'"
+project_win="$(maybe_windows_path "$project_dir")"
+input_win="$(maybe_windows_path "$input_regulation")"
+output_win="$(maybe_windows_path "$output_regulation")"
+smithbox_arg_win="$(maybe_windows_path "$smithbox_dir")"
+summary_win="$(maybe_windows_path "$summary_path")"
+if command -v powershell.exe >/dev/null 2>&1; then
+	powershell.exe -NoProfile -Command \
+		"\$ErrorActionPreference = 'Stop'; Set-Location -LiteralPath '$project_win'; dotnet run --configuration Release -- '$input_win' '$output_win' '$smithbox_arg_win' '$summary_win'"
+else
+	if ! command -v dotnet >/dev/null 2>&1; then
+		echo "missing dotnet; install the .NET SDK or set a PATH that has it" >&2
+		exit 1
+	fi
+	(cd "$project_win" && dotnet run --configuration Release -- "$input_win" "$output_win" "$smithbox_arg_win" "$summary_win")
+fi

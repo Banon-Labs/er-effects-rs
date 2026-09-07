@@ -12,8 +12,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 sweep_root="target/mushroom-route-a-offline/arm-sweep"
-witchy="/mnt/d/Witchy BND/WitchyBND.exe"
-me3_exe="${ME3_EXE:-}"
+witchy="${WITCHY_BND:-}"
+witchy_pty="${WITCHY_PTY:-}"
+me3_exe="${ME3_EXE:-${ME3_BIN:-}}"
 
 bd_high_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010.partsbnd.dcx"
 bd_low_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010_l.partsbnd.dcx"
@@ -33,20 +34,140 @@ require_path() {
 	fi
 }
 
+print_usage() {
+	cat <<'EOF'
+route_a_mushroom_build_arm_sweep.sh
+
+Preset sweep:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh
+  bash scripts/route_a_mushroom_build_arm_sweep.sh less-contorted more-out
+
+Single configurable variant:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label my-test [slider args] [--launch]
+
+Environment overrides (each is discovered from PATH/$HOME when unset):
+  WITCHY_BND       WitchyBND executable
+  WITCHY_PTY       PTY wrapper used to run WitchyBND (its console refuses redirected stdout)
+  ME3_EXE/ME3_BIN  me3 executable
+
+Useful slider args forwarded to route_a_mushroom_export:
+  --arm-x-swell <float>                 width/sideways scaling for arm vertices
+  --arm-y-swell <float>                 vertical scaling around the arm center
+  --arm-z-swell <float>                 front/back volume for arm vertices
+  --arm-shoulder-out <float>            outward shoulder offset
+  --arm-upper-out <float>               outward upper-arm offset
+  --arm-forearm-out <float>             outward forearm offset
+  --arm-upper-to-shoulder-abs-x <float> inner upper-arm threshold remapped to shoulder
+  --arm-forearm-to-upper-abs-x <float>  inner forearm threshold remapped to upper arm
+  --arm-forearm-to-hand-abs-x <float>   outer forearm threshold remapped to hand/weapon grip
+  --vertical-stretch <float>            mushroom height stretch
+  --torso-x-scale <float>               shrink/widen non-arm torso/body band
+  --torso-z-scale <float>               flatten/deepen non-arm torso/body band
+  --cap-x-scale <float>                 shrink/widen cap band
+  --cap-z-scale <float>                 flatten/deepen cap band
+  --torso-start-norm-y <float>          normalized height where torso scaling starts
+  --cap-start-norm-y <float>            normalized height where cap scaling starts
+
+Example build-only custom profile:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
+
+Example build and launch custom profile:
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
+EOF
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+	print_usage
+	exit 0
+fi
+
+
+# Tool discovery. Env override first, then PATH, then the CURRENT user's home; the /mnt/...
+# entries are the retired WSL2 layout and are LAST-resort only, so on a native Linux box they
+# cost one failed stat instead of masking a real install as "the tool is missing".
 locate_me3() {
 	if [[ -n "$me3_exe" ]]; then
 		printf '%s\n' "$me3_exe"
 		return
 	fi
 	local candidate
-	for candidate in /mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
+	for candidate in me3 me3.exe; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			command -v "$candidate"
+			return
+		fi
+	done
+	for candidate in \
+		"$HOME/.local/bin/me3" \
+		/mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
 		if [[ -f "$candidate" ]]; then
 			printf '%s\n' "$candidate"
 			return
 		fi
 	done
-	echo "could not find me3.exe; set ME3_EXE" >&2
+	echo "could not find me3; set ME3_EXE" >&2
 	exit 1
+}
+
+locate_witchy() {
+	if [[ -n "$witchy" ]]; then
+		printf '%s\n' "$witchy"
+		return
+	fi
+	if command -v WitchyBND >/dev/null 2>&1; then
+		command -v WitchyBND
+		return
+	fi
+	local candidate
+	for candidate in \
+		"$HOME/.local/share/witchybnd/runtime/WitchyBND" \
+		"$repo_root/.deps/WitchyBND/WitchyBND" \
+		"$repo_root/.deps/WitchyBND/WitchyBND.exe" \
+		"$repo_root/../WitchyBND/WitchyBND" \
+		"$repo_root/../WitchyBND/WitchyBND.exe" \
+		"/mnt/d/Witchy BND/WitchyBND.exe"; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	echo "could not find WitchyBND; set WITCHY_BND" >&2
+	exit 1
+}
+
+# WitchyBND's PromptPlus console layer refuses to start with stdout redirected
+# ("PromptPlus requires a terminal/console without redirection environment!", exit 1). The WSL2
+# path gave it a console via cmd.exe; a native Linux run needs a PTY wrapper instead.
+locate_witchy_pty() {
+	if [[ -n "$witchy_pty" ]]; then
+		printf '%s\n' "$witchy_pty"
+		return
+	fi
+	local witchy_dir candidate
+	witchy_dir="$(cd "$(dirname "$witchy")" && pwd)"
+	for candidate in \
+		"$witchy_dir/witchy-pty.py" \
+		"$witchy_dir/../witchy-pty.py" \
+		"$HOME/.local/share/witchybnd/witchy-pty.py" \
+		"$HOME/er-extract/run-witchy-pty.py"; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	printf '\n'
+}
+
+# A Windows me3.exe driven from WSL needs `wslpath -w`; a native Linux me3 takes the path as is.
+# Keyed on wslpath actually existing, never on a hard-coded host assumption.
+maybe_windows_path() {
+	local path
+	path="$(realpath -m "$1")"
+	if command -v wslpath >/dev/null 2>&1; then
+		wslpath -w "$path"
+		return
+	fi
+	printf '%s\n' "$path"
 }
 
 copy_donor_payload() {
@@ -75,7 +196,7 @@ write_me3_profile() {
 	local mod_dir="$variant_dir/mod"
 	local profile_path="$variant_dir/mushroom-arm-${label}.me3"
 	local package_path
-	package_path="$(wslpath -w "$(realpath -m "$mod_dir")")"
+	package_path="$(maybe_windows_path "$mod_dir")"
 	mkdir -p "$mod_dir/parts" "$mod_dir/facegen"
 	cat >"$profile_path" <<EOF
 profileVersion = "v1"
@@ -111,15 +232,18 @@ stage_model_variant_aliases() {
 		--summary "$summary_path"
 }
 
+# WSL2-only: hand WitchyBND.exe a real Windows console, from the directory the discovered
+# binary actually lives in rather than a hard-coded drive letter.
 write_witchy_cmd() {
 	local cmd_path="$1"
 	local input_path="$2"
-	local input_win
-	input_win="$(wslpath -w "$input_path")"
+	local input_win witchy_dir_win
+	input_win="$(maybe_windows_path "$input_path")"
+	witchy_dir_win="$(maybe_windows_path "$(dirname "$witchy")")"
 	{
 		printf '@echo off\r\n'
-		printf 'cd /d D:\\Witchy BND\r\n'
-		printf 'WitchyBND.exe "%s"\r\n' "$input_win"
+		printf 'cd /d "%s"\r\n' "$witchy_dir_win"
+		printf '"%s" "%s"\r\n' "$(basename "$witchy")" "$input_win"
 	} >"$cmd_path"
 }
 
@@ -130,8 +254,15 @@ run_witchy_pack() {
 	local cmd_path="$variant_dir/pack-${tag}.cmd"
 	local out_path="$variant_dir/pack-${tag}.out"
 	local code=0
-	write_witchy_cmd "$cmd_path" "$input_path"
-	timeout 30s cmd.exe /c "$(wslpath -w "$cmd_path")" >"$out_path" 2>&1 || code=$?
+	: >"$out_path"
+	if command -v cmd.exe >/dev/null 2>&1 && [[ "$witchy" == *.exe ]]; then
+		write_witchy_cmd "$cmd_path" "$input_path"
+		timeout 30s cmd.exe /c "$(maybe_windows_path "$cmd_path")" >"$out_path" 2>&1 || code=$?
+	elif [[ -n "$witchy_pty" ]]; then
+		timeout 30s python3 "$witchy_pty" --log "$out_path" -- "$witchy" -p "$input_path" >/dev/null 2>&1 || code=$?
+	else
+		timeout 30s "$witchy" -p "$input_path" >"$out_path" 2>&1 || code=$?
+	fi
 	case "$code" in
 	0 | 82) ;;
 	*)
@@ -200,6 +331,8 @@ build_variant() {
 }
 
 me3_exe="$(locate_me3)"
+witchy="$(locate_witchy)"
+witchy_pty="$(locate_witchy_pty)"
 require_path "$witchy"
 require_path "$me3_exe"
 require_path "$bd_high_fallback"
@@ -231,42 +364,6 @@ variant_params() {
 	esac
 }
 
-print_usage() {
-	cat <<'EOF'
-route_a_mushroom_build_arm_sweep.sh
-
-Preset sweep:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh
-  bash scripts/route_a_mushroom_build_arm_sweep.sh less-contorted more-out
-
-Single configurable variant:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label my-test [slider args] [--launch]
-
-Useful slider args forwarded to route_a_mushroom_export:
-  --arm-x-swell <float>                 width/sideways scaling for arm vertices
-  --arm-y-swell <float>                 vertical scaling around the arm center
-  --arm-z-swell <float>                 front/back volume for arm vertices
-  --arm-shoulder-out <float>            outward shoulder offset
-  --arm-upper-out <float>               outward upper-arm offset
-  --arm-forearm-out <float>             outward forearm offset
-  --arm-upper-to-shoulder-abs-x <float> inner upper-arm threshold remapped to shoulder
-  --arm-forearm-to-upper-abs-x <float>  inner forearm threshold remapped to upper arm
-  --arm-forearm-to-hand-abs-x <float>   outer forearm threshold remapped to hand/weapon grip
-  --vertical-stretch <float>            mushroom height stretch
-  --torso-x-scale <float>               shrink/widen non-arm torso/body band
-  --torso-z-scale <float>               flatten/deepen non-arm torso/body band
-  --cap-x-scale <float>                 shrink/widen cap band
-  --cap-z-scale <float>                 flatten/deepen cap band
-  --torso-start-norm-y <float>          normalized height where torso scaling starts
-  --cap-start-norm-y <float>            normalized height where cap scaling starts
-
-Example build-only custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
-
-Example build and launch custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --arm-forearm-to-hand-abs-x 0.48 --torso-x-scale 0.88 --cap-x-scale 0.92
-EOF
-}
 
 remove_variant_from_index() {
 	local variant="$1"
@@ -285,18 +382,13 @@ PY
 print_launch_command() {
 	local profile_path="$1"
 	local profile_win
-	profile_win="$(wslpath -w "$(realpath -m "$profile_path")")"
+	profile_win="$(maybe_windows_path "$profile_path")"
 	printf '\nlaunch command:\n'
 	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
 		"$repo_root" \
 		"$me3_exe" \
 		"$profile_win"
 }
-
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-	print_usage
-	exit 0
-fi
 
 if [[ "${1:-}" == "--label" ]]; then
 	if [[ "$#" -lt 2 ]]; then
@@ -340,7 +432,7 @@ if [[ "${1:-}" == "--label" ]]; then
 	tail -n 1 "$sweep_root/variant-index.tsv"
 	print_launch_command "$profile_path"
 	if [[ "$launch_after" == true ]]; then
-		"$me3_exe" launch -g eldenring --online false -p "$(wslpath -w "$(realpath -m "$profile_path")")"
+		"$me3_exe" launch -g eldenring --online false -p "$(maybe_windows_path "$profile_path")"
 	fi
 	exit 0
 fi
