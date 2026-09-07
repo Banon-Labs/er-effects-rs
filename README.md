@@ -44,7 +44,7 @@ anything else here unless the notes say so.
 | `er_build_export.dll` | The inverse: encodes the live character into a self-contained planner link, copies it, opens it. Carries appearance too, as a `faceData` AOB the planner ignores. |
 | `er_death_persist.dll` | Keeps the transformation body-buffs (Rock Heart, Priestess Heart, Lamenter's Mask) through death. |
 | `er_net_effects.dll` | Keyboard-selected SpEffects applied to your own character. The original feature of this repo. [Manual](crates/er-net-effects/README.md) |
-| `mushroom_man.dll` | Zeroes the model id on every head/body/arm/leg `EquipParamProtector` row, so armour is worn but never rendered. |
+| `mushroom_man.dll` | Zeroes the model id on every head/body/arm/leg `EquipParamProtector` row, so armour is worn but never rendered. Half a mod on its own: it stays inert unless the mushroom model binders are beside it (`parts/`, `facegen/` in the same folder, that folder loaded as an ME3 `[[packages]]` entry -- what `scripts/install_mushroom_man.py` sets up), because without them the patch strips armour and puts nothing in its place. |
 
 ### Multiplayer
 

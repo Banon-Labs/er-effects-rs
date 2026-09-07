@@ -13,9 +13,10 @@ donor_mesh_index=13
 max_source_vertices=""
 texture_dir="target/mushroom-route-a-offline/dsr/dsr-loose-mushroom/c2280-chrbnd-dcx/c2280-tpf"
 texture_source_prefix="c2280"
-blender_exe="/mnt/c/Program Files/Blender Foundation/Blender 4.4/blender.exe"
-witchy="/mnt/d/Witchy BND/WitchyBND.exe"
-me3_exe="${ME3_EXE:-}"
+blender_exe="${BLENDER_EXE:-}"
+witchy="${WITCHY_BND:-}"
+witchy_pty="${WITCHY_PTY:-}"
+me3_exe="${ME3_EXE:-${ME3_BIN:-}}"
 
 fc_high_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000-partsbnd-dcx"
 fc_low_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000_l-partsbnd-dcx"
@@ -42,6 +43,13 @@ Defaults:
   --texture-dir target/mushroom-route-a-offline/dsr/dsr-loose-mushroom/c2280-chrbnd-dcx/c2280-tpf
   --source-prefix c2280
 
+Environment overrides (each is discovered from PATH/$HOME when unset):
+  BLENDER_EXE      blender executable
+  WITCHY_BND       WitchyBND executable
+  WITCHY_PTY       PTY wrapper used to run WitchyBND (its console refuses redirected stdout)
+  ME3_EXE/ME3_BIN  me3 executable
+  MUSHROOM_MAN_DLL prebuilt mushroom_man.dll instead of building one
+
 Adult c2270 example targeting the visible FC donor mesh:
   bash scripts/build_mushroom_blender_edit.sh --label adult-user-scaled --blend target/mushroom-route-a-offline/blender-compare/mushroom_adult_raw_game_compare.blend --object-name EDIT_ME_ADULT --donor-mesh-index 13 --max-source-vertices 1500 --texture-dir target/mushroom-route-a-offline/dsr/dsr-loose-mushroom/c2270-chrbnd-dcx/c2270-tpf --source-prefix c2270
 EOF
@@ -55,20 +63,119 @@ require_path() {
 	fi
 }
 
+# Tool discovery. Every default below is env-overridable and derived from the CURRENT user's
+# home or PATH; no machine's literal home directory appears. The /mnt/... entries are the
+# retired WSL2 layout and are kept only as LAST-resort candidates -- on a native Linux box they
+# simply do not exist, so they cost one failed stat and never shadow a real install.
 locate_me3() {
 	if [[ -n "$me3_exe" ]]; then
 		printf '%s\n' "$me3_exe"
 		return
 	fi
 	local candidate
-	for candidate in /mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
+	for candidate in me3 me3.exe; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			command -v "$candidate"
+			return
+		fi
+	done
+	for candidate in \
+		"$HOME/.local/bin/me3" \
+		/mnt/c/Users/*/AppData/Local/garyttierney/me3/bin/me3.exe; do
 		if [[ -f "$candidate" ]]; then
 			printf '%s\n' "$candidate"
 			return
 		fi
 	done
-	echo "could not find me3.exe; set ME3_EXE" >&2
+	echo "could not find me3; set ME3_EXE" >&2
 	exit 1
+}
+
+locate_blender() {
+	if [[ -n "$blender_exe" ]]; then
+		printf '%s\n' "$blender_exe"
+		return
+	fi
+	if command -v blender >/dev/null 2>&1; then
+		command -v blender
+		return
+	fi
+	local candidate
+	for candidate in \
+		/opt/blender/blender \
+		/usr/local/bin/blender \
+		"$HOME/.local/bin/blender" \
+		/mnt/c/Program\ Files/Blender\ Foundation/Blender\ */blender.exe; do
+		if [[ -x "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	echo "could not find blender; set BLENDER_EXE" >&2
+	exit 1
+}
+
+locate_witchy() {
+	if [[ -n "$witchy" ]]; then
+		printf '%s\n' "$witchy"
+		return
+	fi
+	if command -v WitchyBND >/dev/null 2>&1; then
+		command -v WitchyBND
+		return
+	fi
+	local candidate
+	for candidate in \
+		"$HOME/.local/share/witchybnd/runtime/WitchyBND" \
+		"$repo_root/.deps/WitchyBND/WitchyBND" \
+		"$repo_root/.deps/WitchyBND/WitchyBND.exe" \
+		"$repo_root/../WitchyBND/WitchyBND" \
+		"$repo_root/../WitchyBND/WitchyBND.exe" \
+		"/mnt/d/Witchy BND/WitchyBND.exe"; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	echo "could not find WitchyBND; set WITCHY_BND" >&2
+	exit 1
+}
+
+# WitchyBND's PromptPlus console layer refuses to start when stdout is redirected
+# ("PromptPlus requires a terminal/console without redirection environment!", exit 1), so on a
+# native Linux install the packing calls below MUST go through a PTY wrapper. Absent one we fall
+# back to invoking WitchyBND directly, which is what the WSL2 console path did.
+locate_witchy_pty() {
+	if [[ -n "$witchy_pty" ]]; then
+		printf '%s\n' "$witchy_pty"
+		return
+	fi
+	local witchy_dir candidate
+	witchy_dir="$(cd "$(dirname "$witchy")" && pwd)"
+	for candidate in \
+		"$witchy_dir/witchy-pty.py" \
+		"$witchy_dir/../witchy-pty.py" \
+		"$HOME/.local/share/witchybnd/witchy-pty.py" \
+		"$HOME/er-extract/run-witchy-pty.py"; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	printf '\n'
+}
+
+# me3/Blender path spelling. A Windows me3.exe driven from WSL needs `wslpath -w`; a native
+# Linux me3 and a native Linux Blender take the path as is. Keyed on wslpath actually existing,
+# never on a hard-coded host assumption.
+maybe_windows_path() {
+	local path
+	path="$(realpath -m "$1")"
+	if command -v wslpath >/dev/null 2>&1; then
+		wslpath -w "$path"
+		return
+	fi
+	printf '%s\n' "$path"
 }
 
 copy_donor_payload() {
@@ -98,8 +205,13 @@ run_witchy_pack() {
 	local label_name="$2"
 	local input_path="$3"
 	local log_path="$work_dir/pack-${label_name}.log"
+	: >"$log_path"
 	set +e
-	"$witchy" -p "$input_path" >"$log_path" 2>&1
+	if [[ -n "$witchy_pty" ]]; then
+		python3 "$witchy_pty" --log "$log_path" -- "$witchy" -p "$input_path" >/dev/null 2>&1
+	else
+		"$witchy" -p "$input_path" >"$log_path" 2>&1
+	fi
 	local status=$?
 	set -e
 	if [[ "$status" -ne 0 && "$status" -ne 82 ]]; then
@@ -125,8 +237,8 @@ write_me3_profile() {
 	local mod_dir="$2"
 	local native_dll="$3"
 	local package_path native_path
-	package_path="$(wslpath -w "$(realpath -m "$mod_dir")")"
-	native_path="$(wslpath -w "$(realpath -m "$native_dll")")"
+	package_path="$(maybe_windows_path "$mod_dir")"
+	native_path="$(maybe_windows_path "$native_dll")"
 	cat >"$profile_path" <<EOF
 profileVersion = "v1"
 
@@ -157,7 +269,7 @@ stage_model_variant_aliases() {
 print_launch_command() {
 	local profile_path="$1"
 	local profile_win
-	profile_win="$(wslpath -w "$(realpath -m "$profile_path")")"
+	profile_win="$(maybe_windows_path "$profile_path")"
 	printf '\nlaunch command:\n'
 	printf 'cd %q && %q launch -g eldenring --online false -p %q\n' \
 		"$repo_root" \
@@ -217,6 +329,9 @@ if [[ ! "$label" =~ ^[A-Za-z0-9._-]+$ ]]; then
 fi
 
 me3_exe="$(locate_me3)"
+blender_exe="$(locate_blender)"
+witchy="$(locate_witchy)"
+witchy_pty="$(locate_witchy_pty)"
 require_path "$blender_exe"
 require_path "$witchy"
 require_path "$me3_exe"
@@ -246,14 +361,14 @@ mkdir -p "$export_dir" "$mod_dir/parts" "$mod_dir/facegen"
 
 blender_export_args=(
 	--object-name "$object_name"
-	--output-dir "$(wslpath -w "$(realpath -m "$export_dir")")"
+	--output-dir "$(maybe_windows_path "$export_dir")"
 )
 if [[ -n "$max_source_vertices" ]]; then
 	blender_export_args+=(--max-source-vertices "$max_source_vertices")
 fi
 
-"$blender_exe" --background "$(wslpath -w "$(realpath -m "$blend_path")")" \
-	--python "$(wslpath -w scripts/export_mushroom_blender_edit.py)" -- \
+"$blender_exe" --background "$(maybe_windows_path "$blend_path")" \
+	--python "$(maybe_windows_path scripts/export_mushroom_blender_edit.py)" -- \
 	"${blender_export_args[@]}" \
 	>"$variant_dir/export-blender-edit.log" 2>&1
 
@@ -329,5 +444,5 @@ printf 'export connectivity audit:\n%s\n' "$variant_dir/export-connectivity-audi
 print_launch_command "$profile_path"
 
 if [[ "$launch_after" == true ]]; then
-	"$me3_exe" launch -g eldenring --online false -p "$(wslpath -w "$(realpath -m "$profile_path")")"
+	"$me3_exe" launch -g eldenring --online false -p "$(maybe_windows_path "$profile_path")"
 fi

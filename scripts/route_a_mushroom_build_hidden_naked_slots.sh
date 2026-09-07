@@ -12,6 +12,7 @@ cd "$repo_root"
 
 output_root="target/mushroom-route-a-offline/hidden-naked-slots"
 witchy="${WITCHY_BND:-}"
+witchy_pty="${WITCHY_PTY:-}"
 
 usage() {
 	cat <<'EOF'
@@ -23,7 +24,8 @@ Usage:
   bash scripts/route_a_mushroom_build_hidden_naked_slots.sh [--output-root path] [--witchy path]
 
 Environment:
-  WITCHY_BND   explicit WitchyBND.exe path
+  WITCHY_BND   explicit WitchyBND executable path
+  WITCHY_PTY   PTY wrapper used to run WitchyBND (its console refuses redirected stdout)
 EOF
 }
 
@@ -35,14 +37,24 @@ require_path() {
 	fi
 }
 
+# Env override first, then PATH, then the CURRENT user's home. The /mnt/d entry is the retired
+# WSL2 layout and is LAST-resort only: on a native Linux box it does not exist, so leaving it
+# first made a present install read as "the tool is missing".
 find_witchy() {
 	if [[ -n "$witchy" ]]; then
 		printf '%s\n' "$witchy"
 		return
 	fi
+	if command -v WitchyBND >/dev/null 2>&1; then
+		command -v WitchyBND
+		return
+	fi
 	local candidate
 	for candidate in \
+		"$HOME/.local/share/witchybnd/runtime/WitchyBND" \
+		"$repo_root/.deps/WitchyBND/WitchyBND" \
 		"$repo_root/.deps/WitchyBND/WitchyBND.exe" \
+		"$repo_root/../WitchyBND/WitchyBND" \
 		"$repo_root/../WitchyBND/WitchyBND.exe" \
 		"/mnt/d/Witchy BND/WitchyBND.exe"; do
 		if [[ -f "$candidate" ]]; then
@@ -50,15 +62,44 @@ find_witchy() {
 			return
 		fi
 	done
-	echo "could not find WitchyBND.exe; pass --witchy or set WITCHY_BND" >&2
+	echo "could not find WitchyBND; pass --witchy or set WITCHY_BND" >&2
 	exit 1
+}
+
+# WitchyBND's PromptPlus console layer refuses to start when stdout is redirected
+# ("PromptPlus requires a terminal/console without redirection environment!", exit 1), which is
+# exactly what pack_with_witchy does below. A PTY wrapper is therefore the invocation on a native
+# Linux install; without one we fall back to the direct call the WSL2 console path used.
+find_witchy_pty() {
+	if [[ -n "$witchy_pty" ]]; then
+		printf '%s\n' "$witchy_pty"
+		return
+	fi
+	local witchy_dir candidate
+	witchy_dir="$(cd "$(dirname "$witchy")" && pwd)"
+	for candidate in \
+		"$witchy_dir/witchy-pty.py" \
+		"$witchy_dir/../witchy-pty.py" \
+		"$HOME/.local/share/witchybnd/witchy-pty.py" \
+		"$HOME/er-extract/run-witchy-pty.py"; do
+		if [[ -f "$candidate" ]]; then
+			printf '%s\n' "$candidate"
+			return
+		fi
+	done
+	printf '\n'
 }
 
 pack_with_witchy() {
 	local input_dir="$1"
 	local log_path="$2"
 	local status=0
-	"$witchy" -p "$input_dir" >"$log_path" 2>&1 || status=$?
+	: >"$log_path"
+	if [[ -n "$witchy_pty" ]]; then
+		python3 "$witchy_pty" --log "$log_path" -- "$witchy" -p "$input_dir" >/dev/null 2>&1 || status=$?
+	else
+		"$witchy" -p "$input_dir" >"$log_path" 2>&1 || status=$?
+	fi
 	case "$status" in
 	0 | 82) ;;
 	*)
@@ -91,6 +132,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 witchy="$(find_witchy)"
+witchy_pty="$(find_witchy_pty)"
 require_path "$witchy"
 require_path "scripts/route_a_mushroom_hide_flver_faces.rs"
 require_path "target/mushroom-route-a-offline/er-naked-parts/hd_m_0000-partsbnd-dcx/HD_M_0000.flver"

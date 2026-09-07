@@ -80,6 +80,14 @@ def find_dictionary(explicit: str | None, repo_root: Path) -> Path:
             / "Assets"
             / "File Dictionaries"
             / "ER-File-Dictionary.json",
+            # This user's Smithbox install. The /mnt/d entry below it is the retired WSL2
+            # layout, kept LAST so a present install is never reported as missing.
+            Path.home()
+            / ".local/share/smithbox/app/Assets/File Dictionaries/ER-File-Dictionary.json",
+            Path.home()
+            / ".local/share/Smithbox/app/Assets/File Dictionaries/ER-File-Dictionary.json",
+            Path.home()
+            / ".local/share/Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json",
             Path("/mnt/d/Smithbox/Assets/File Dictionaries/ER-File-Dictionary.json"),
         ]
     )
@@ -97,18 +105,48 @@ def find_witchy(explicit: str | None, repo_root: Path) -> Path:
         candidates.append(Path(explicit))
     env_path = os.environ.get("WITCHY_BND")
     if env_path:
-        candidates.append(Path(env_path))
+        candidates.append(Path(env_path).expanduser())
+    on_path = shutil.which("WitchyBND")
+    if on_path:
+        candidates.append(Path(on_path))
     candidates.extend(
         [
+            repo_root / ".deps" / "WitchyBND" / "WitchyBND",
             repo_root / ".deps" / "WitchyBND" / "WitchyBND.exe",
+            repo_root / ".." / "WitchyBND" / "WitchyBND",
             repo_root / ".." / "WitchyBND" / "WitchyBND.exe",
+            # This user's Witchy install. The /mnt/d entry is the retired WSL2 layout, kept
+            # LAST so it cannot shadow a real install with "the tool is missing".
+            Path.home() / ".local/share/witchybnd/runtime/WitchyBND",
             Path("/mnt/d/Witchy BND/WitchyBND.exe"),
         ]
     )
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise SystemExit("could not find WitchyBND.exe; pass --witchy or set WITCHY_BND")
+    raise SystemExit("could not find WitchyBND; pass --witchy or set WITCHY_BND")
+
+
+def find_witchy_pty(witchy: Path) -> Path | None:
+    """PTY wrapper for WitchyBND, or None when this host has none.
+
+    WitchyBND's PromptPlus console layer refuses to start when stdout is redirected
+    ("PromptPlus requires a terminal/console without redirection environment!", exit 1), and
+    run_witchy_pack() below writes straight into a log file. On a native Linux install the
+    wrapper is therefore the invocation, not an extra.
+    """
+    env_path = os.environ.get("WITCHY_PTY")
+    if env_path:
+        return Path(env_path).expanduser()
+    for candidate in (
+        witchy.parent / "witchy-pty.py",
+        witchy.parent.parent / "witchy-pty.py",
+        Path.home() / ".local/share/witchybnd/witchy-pty.py",
+        Path.home() / "er-extract/run-witchy-pty.py",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def dictionary_part_names(dictionary_path: Path) -> tuple[list[str], list[str]]:
@@ -175,13 +213,32 @@ def rename_if_exists(alias_dir: Path, old_name: str, new_name: str) -> None:
 
 def run_witchy_pack(witchy: Path, alias_dir: Path, log_path: Path) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8", errors="replace") as log:
+    pty_wrapper = find_witchy_pty(witchy)
+    if pty_wrapper is not None:
+        log_path.write_bytes(b"")
         proc = subprocess.run(
-            [str(witchy), "-p", str(alias_dir)],
-            stdout=log,
-            stderr=subprocess.STDOUT,
+            [
+                sys.executable,
+                str(pty_wrapper),
+                "--log",
+                str(log_path),
+                "--",
+                str(witchy),
+                "-p",
+                str(alias_dir),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=30,
         )
+    else:
+        with log_path.open("w", encoding="utf-8", errors="replace") as log:
+            proc = subprocess.run(
+                [str(witchy), "-p", str(alias_dir)],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+            )
     if proc.returncode not in (0, 82):
         tail = ""
         if log_path.exists():
@@ -301,8 +358,14 @@ def stage_hidden_slots(parts_dir: Path, hidden_slot_dir: Path) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mod-dir", required=True, type=Path)
-    parser.add_argument("--dictionary", type=Path)
-    parser.add_argument("--witchy", type=Path)
+    parser.add_argument(
+        "--dictionary",
+        type=Path,
+        help="ER-File-Dictionary.json (env: ER_FILE_DICTIONARY_JSON, SMITHBOX_BINARY_DIR)",
+    )
+    parser.add_argument(
+        "--witchy", type=Path, help="WitchyBND executable path (env: WITCHY_BND)"
+    )
     parser.add_argument(
         "--fc-source-high",
         type=Path,
