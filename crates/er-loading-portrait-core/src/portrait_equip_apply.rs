@@ -93,7 +93,13 @@ pub unsafe fn portrait_equip_restore_apply(
     // hand on the game thread. The renderer's live stage does NOT carry it (see the counter's own
     // doc), so the idle-anim choice reads this rather than `renderer+0x130`.
     if let Some(arm_style) = unsafe { safe_read_i32(record_chr_asm + CHR_ASM_EQUIPMENT_OFFSET) } {
-        portrait_equip_latch_first(&PORTRAIT_EQUIP_RECORD_ARM_STYLE, arm_style);
+        // STORED PER KICK, NOT LATCHED FIRST-SAMPLE. Every other value here is latched, because for
+        // those the question is "what did this window start with" and a later frame must not erase a
+        // bad early one. This one is different: it is an INPUT to the next model build, read once per
+        // kick, and each kick may be a DIFFERENT character. Latching it froze the first character's
+        // grip onto every portrait after it -- a two-handed character followed by a dual-wielder drew
+        // the dual-wielder with the two-handed idle, both weapons still attached.
+        PORTRAIT_EQUIP_RECORD_ARM_STYLE.store(portrait_equip_pack(arm_style), Ordering::SeqCst);
     }
     PORTRAIT_EQUIP_RESTORE_KICKS.fetch_add(1, Ordering::SeqCst);
     if portrait_equip_restore_is_material(&report) {

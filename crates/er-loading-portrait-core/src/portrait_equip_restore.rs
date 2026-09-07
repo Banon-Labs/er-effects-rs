@@ -176,6 +176,21 @@ mod idle_anim_tests {
         }
     }
 
+    /// A DUAL-WIELDER MUST NOT INHERIT THE PREVIOUS CHARACTER'S GRIP. The arm style is an input to
+    /// the next build, so it is stored per kick rather than latched; this pins the values, since the
+    /// selector is the only thing that reads it and a stale 3 here drew a one-handed-each character
+    /// with the two-handed idle and both weapons still attached.
+    #[test]
+    fn a_one_handed_arm_style_after_a_two_handed_one_selects_the_one_handed_idle() {
+        assert_eq!(portrait_idle_anim_ids(3)[0], 12000000);
+        assert_eq!(
+            portrait_idle_anim_ids(1)[0],
+            3000000,
+            "the later character wins"
+        );
+        assert_eq!(portrait_idle_anim_ids(0)[0], 3000000);
+    }
+
     /// One-handed, and the ctor-fresh/unknown values, keep the list that has been shipping.
     #[test]
     fn everything_else_keeps_the_one_handed_idle() {

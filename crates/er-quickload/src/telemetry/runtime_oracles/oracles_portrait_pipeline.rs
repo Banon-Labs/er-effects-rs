@@ -136,7 +136,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         let recorded =
             |slot: usize| unpack(PORTRAIT_EQUIP_RECORD_PARAM_ID[slot].load(Ordering::SeqCst));
         body.push_str(&format!(
-            "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n  \"oracle_portrait_equip_restore_record_right_weapon\": {},\n  \"oracle_portrait_equip_restore_record_left_weapon\": {},\n  \"oracle_portrait_equip_restore_record_hands\": {},\n  \"oracle_portrait_equip_restore_record_legs\": {},\n  \"oracle_portrait_equip_live_right_weapon\": {},\n  \"oracle_portrait_equip_live_left_weapon\": {},\n  \"oracle_portrait_equip_live_arm_style\": {},\n",
+            "  \"oracle_portrait_equip_effective_head\": {},\n  \"oracle_portrait_equip_effective_chest\": {},\n  \"oracle_portrait_equip_effective_hands\": {},\n  \"oracle_portrait_equip_effective_legs\": {},\n  \"oracle_portrait_equip_capture_head\": {},\n  \"oracle_portrait_equip_capture_chest\": {},\n  \"oracle_portrait_equip_capture_hands\": {},\n  \"oracle_portrait_equip_capture_legs\": {},\n  \"oracle_portrait_equip_record_head\": {},\n  \"oracle_portrait_equip_record_chest\": {},\n  \"oracle_portrait_equip_unk0\": {},\n  \"oracle_portrait_equip_unkd4\": {},\n  \"oracle_portrait_equip_unkd8\": {},\n  \"oracle_portrait_equip_restore_record_right_weapon\": {},\n  \"oracle_portrait_equip_restore_record_left_weapon\": {},\n  \"oracle_portrait_equip_restore_record_hands\": {},\n  \"oracle_portrait_equip_restore_record_legs\": {},\n  \"oracle_portrait_equip_live_right_weapon\": {},\n  \"oracle_portrait_equip_live_left_weapon\": {},\n  \"oracle_portrait_equip_live_arm_style\": {},\n  \"oracle_portrait_equip_record_arm_style\": {},\n",
             effective(0),
             effective(1),
             effective(2),
@@ -157,6 +157,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             unpack(PORTRAIT_EQUIP_LIVE_WEAPON_ID[0].load(Ordering::SeqCst)),
             unpack(PORTRAIT_EQUIP_LIVE_WEAPON_ID[1].load(Ordering::SeqCst)),
             unpack(PORTRAIT_EQUIP_LIVE_ARM_STYLE.load(Ordering::SeqCst)),
+            unpack(PORTRAIT_EQUIP_RECORD_ARM_STYLE.load(Ordering::SeqCst)),
         ));
     }
     // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
