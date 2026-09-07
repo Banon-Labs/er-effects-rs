@@ -338,7 +338,13 @@ pub unsafe fn maybe_build_stats_text() {
     // Size the font as a constant FRACTION of the RT height instead (shared consts in `stats_lines`, so
     // every build path uses the SAME em sizing). rt_dim is the offscreen size we patch the portrait RT
     // to (confirmed == oracle_ls_portrait_h).
-    let rt_dim = (PROFILE_OFFSCREEN_SIZE_TARGET & 0xffff_ffff) as f32;
+    // The HIGH dword -- the RT HEIGHT, which is what the paragraph above has always said this sizes
+    // against. It read the LOW dword (width) instead, and the two agree only because the RT is
+    // square, so the bug was invisible: a 2056x1542 render would have silently grown the text 33%.
+    // That widening was tried and reverted on 2026-09-07 (see `PROFILE_OFFSCREEN_SIZE_TARGET`); this
+    // read is corrected anyway, because a latent dependency on width == height is worth removing
+    // whether or not the next attempt at a non-square render lands.
+    let rt_dim = ((PROFILE_OFFSCREEN_SIZE_TARGET >> 32) & 0xffff_ffff) as f32;
     let em_px = rt_dim * (STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM);
     let (w, h, rgba) = render_lines_to_rgba(font, &lines, em_px, [238, 228, 202, 255]);
     if w == 0 || h == 0 {

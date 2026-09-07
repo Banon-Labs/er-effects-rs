@@ -101,6 +101,7 @@ pub unsafe fn portrait_equip_restore_apply(
         // the dual-wielder with the two-handed idle, both weapons still attached.
         PORTRAIT_EQUIP_RECORD_ARM_STYLE.store(portrait_equip_pack(arm_style), Ordering::SeqCst);
     }
+    unsafe { restore_equipment_block(inbox, record_chr_asm) };
     PORTRAIT_EQUIP_RESTORE_KICKS.fetch_add(1, Ordering::SeqCst);
     if portrait_equip_restore_is_material(&report) {
         PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS
@@ -136,4 +137,54 @@ pub unsafe fn portrait_equip_restore_apply(
         ));
     }
     Some(report)
+}
+
+/// Put the record's whole `ChrAsmEquipment` block back over the one the feed left in the inbox.
+///
+/// WHY THE PARAM IDS WERE NOT ENOUGH. Restoring `equipment_param_ids` gives the portrait its
+/// weapons back, but it does not give it the GRIP: `armStyle` lives in a different block
+/// (`ChrAsm+0x08`), and the per-frame model-resource request reads it -- `getSelectedWeaponSlotIndex
+/// (&equipment.armStyle, 0|1)` in `FUN_1409e6fb0` -- to decide both handedness and WHICH of the
+/// three slots per hand is the active armament. Writing the model instance's own `chrAsmArmStyle`
+/// (`CSChrAsmModelIns+0x328`) after the fact did stick (writes 4 / read-back 3, run
+/// br-20260907-191016-4020) and changed nothing on screen, which is the signature of a value that
+/// is consumed when the parts are ATTACHED rather than read per frame. This write happens in the
+/// one window where that is still ahead of us: after the feed, before the `+0x754` build kick.
+///
+/// The whole 28-byte block, not just the first dword, because the selected-slot indices that follow
+/// `armStyle` choose which armament each hand draws; restoring the ids while leaving the feed's
+/// selection would be half a character.
+///
+/// # Safety
+///
+/// Both pointers must be live `ChrAsm`-shaped memory on the game thread; every dword is proved
+/// readable at its destination before it is written, so a stale pointer writes nothing.
+unsafe fn restore_equipment_block(inbox: usize, record_chr_asm: usize) {
+    let fed_arm_style = unsafe { safe_read_i32(inbox + CHR_ASM_EQUIPMENT_OFFSET) };
+    if let Some(fed) = fed_arm_style {
+        PORTRAIT_EQUIP_INBOX_ARM_STYLE_FED.store(portrait_equip_pack(fed), Ordering::SeqCst);
+    }
+    let mut wrote = false;
+    for offset in (0..CHR_ASM_EQUIPMENT_SIZE).step_by(core::mem::size_of::<i32>()) {
+        let at = CHR_ASM_EQUIPMENT_OFFSET + offset;
+        let (Some(wanted), Some(have)) = (unsafe { safe_read_i32(record_chr_asm + at) }, unsafe {
+            safe_read_i32(inbox + at)
+        }) else {
+            continue;
+        };
+        if wanted == have {
+            continue;
+        }
+        // SAFETY: the read above proved this dword mapped and readable on this thread, and `at` is
+        // bounded by the equipment block's own size.
+        unsafe { core::ptr::write_volatile((inbox + at) as *mut i32, wanted) };
+        wrote = true;
+    }
+    if !wrote {
+        return;
+    }
+    PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES.fetch_add(1, Ordering::SeqCst);
+    if let Some(back) = unsafe { safe_read_i32(inbox + CHR_ASM_EQUIPMENT_OFFSET) } {
+        PORTRAIT_EQUIP_INBOX_ARM_STYLE_READBACK.store(portrait_equip_pack(back), Ordering::SeqCst);
+    }
 }

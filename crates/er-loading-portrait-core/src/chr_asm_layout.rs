@@ -48,6 +48,13 @@ pub const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
 // the two independent `0x16`s are what make ENTRY_COUNT 22 rather than assumed. Ghidra's 1.16.2
 // type agrees throughout (`equipment` 0x8, `equipmentGaItemHandles` 0x24, `equipmentParamIds`
 // 0x7c, object size 0xe8), and 1.17 aligns 38/38 with zero moved offsets.
+/// Bytes in `CS::ChrAsmEquipment`, the block at `ChrAsm+0x08` that carries `armStyle` and the
+/// per-hand selected-slot indices. DERIVED from the two neighbouring offsets rather than assumed:
+/// the ctor walk above shows `equipment` starting at 0x08 and the gaitem-handle array ctor taking
+/// `ChrAsm+0x24`, so the block is exactly the 0x1c bytes between them -- which is also the seven
+/// dwords the serialized record carries (`[armStyle, ...]`, measured `[3, 0, 0, 1, 1, 1, 1]`).
+pub const CHR_ASM_EQUIPMENT_SIZE: usize = CHR_ASM_GAITEM_HANDLES_OFFSET - CHR_ASM_EQUIPMENT_OFFSET;
+const _: () = assert!(CHR_ASM_EQUIPMENT_SIZE == 0x1c);
 const _: () = assert!(CHR_ASM_EQUIPMENT_OFFSET == 0x08);
 const _: () = assert!(CHR_ASM_GAITEM_HANDLES_OFFSET == 0x24);
 const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x7c);
@@ -121,3 +128,20 @@ pub const PROFILE_RENDERER_CHR_ASM_LIVE_OFFSET: usize = 0x130;
 /// eight weapon clears and its two default-protector writes all land HERE, and here is where the
 /// record's own param ids have to be put back before the build kick consumes them.
 pub const PROFILE_RENDERER_CHR_ASM_INBOX_OFFSET: usize = 0x548;
+
+/// `CS::CSChrAsmModelIns::chrAsmArmStyle` (+0x328) -- the two-hand state on the MODEL INSTANCE, the
+/// object that owns weapon placement.
+///
+/// Named in the 1.16.2 dump's own type, not inferred: `CSChrAsmModelIns` is 880 bytes with
+/// `chrAsmArmStyle: ChrAsmArmStyle` at +0x328, `dummyPolyLocationModifiers:
+/// CSFD4LocationChrAsmMdlDmypolyProxy*[27]` at +0x100 and `partsArray: CSPartsModelIns*[25]` at
+/// +0x1d8 -- i.e. the field sits with the machinery that decides whether a weapon hangs in a hand or
+/// on the back. The portrait's instance is built by `FUN_140bbb3b0` (`HeapAlloc(0x370)` = 880) and
+/// stored at `renderer+0x778`, which is the same pointer the equip oracle reads as `model_ins`.
+///
+/// NOTHING IN OUR PATH WRITES IT, which is why a two-handed portrait still holds its off-hand out to
+/// the side instead of stowing it: the idle animation says two-handing while this field still says
+/// otherwise. The three setters the constructor's caller does invoke (`FUN_1409eb720`,
+/// `FUN_1409eb5e0`, `FUN_1409eb9b0`) touch flag bits at +0x20 and a pointer at +0x320; none is an
+/// arm-style setter, so there is no native call to prefer over the write.
+pub const CHR_ASM_MODEL_INS_ARM_STYLE_OFFSET: usize = 0x328;

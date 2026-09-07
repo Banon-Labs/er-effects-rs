@@ -893,6 +893,32 @@ pub unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4Task
                             let arm_style = portrait_equip_unpack(
                                 PORTRAIT_EQUIP_RECORD_ARM_STYLE.load(Ordering::SeqCst),
                             );
+                            // AND TELL THE MODEL INSTANCE, which is what actually places the weapons. The idle animation
+                            // alone leaves the off-hand held out to the side: `CSChrAsmModelIns` owns
+                            // `chrAsmArmStyle` (+0x328) next to its dummy-poly location proxies and parts array, and
+                            // nothing in our path had ever written it. Same source as the idle choice -- the record --
+                            // so the pose and the placement cannot disagree.
+                            if let Some(model_ins) =
+                                unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                                    .filter(|m| {
+                                        *m != 0
+                                            && unsafe { er_game_base::mem::is_heap_aligned_ptr(*m) }
+                                    })
+                            {
+                                let at = model_ins + CHR_ASM_MODEL_INS_ARM_STYLE_OFFSET;
+                                // Read first: it proves the dword is mapped before anything is stored into it, the
+                                // same read-then-write shape the equipment restore uses.
+                                if unsafe { safe_read_i32(at) }.is_some() {
+                                    // SAFETY: `model_ins` is the renderer's own live `CSChrAsmModelIns` (880 bytes),
+                                    // heap-aligned and just proven readable at this offset, on the game thread.
+                                    unsafe { core::ptr::write_volatile(at as *mut i32, arm_style) };
+                                    PORTRAIT_MODEL_ARM_STYLE_WRITES.fetch_add(1, Ordering::SeqCst);
+                                    if let Some(back) = unsafe { safe_read_i32(at) } {
+                                        PORTRAIT_MODEL_ARM_STYLE_READBACK
+                                            .store(portrait_equip_pack(back), Ordering::SeqCst);
+                                    }
+                                }
+                            }
                             let mut outcome = 2usize;
                             let mut bound_id = -1i32;
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

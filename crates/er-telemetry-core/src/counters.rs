@@ -2634,6 +2634,33 @@ pub static PORTRAIT_EQUIP_LIVE_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
 /// that produced those bytes is self-checked: the same block's param ids come out
 /// right=4080001 left=110000 hands=1040200 legs=5210300, matching the live oracle exactly.
 pub static PORTRAIT_EQUIP_RECORD_ARM_STYLE: AtomicUsize = AtomicUsize::new(0);
+/// Times the record's arm style was written into `CSChrAsmModelIns+0x328`, and what a read-back
+/// immediately afterwards saw. A write count with a read-back that does not match is the engine
+/// overwriting us per frame; a match with no visible change means the field is consumed only when
+/// the parts are attached, i.e. it needs to be set before the model build rather than after.
+/// `armStyle` as the FEED left it in the renderer inbox (`renderer+0x548+0x08`), read immediately
+/// before the repair overwrites it, packed by `portrait_equip_pack`. This is the value that
+/// separates the two candidate explanations for a portrait that will not two-hand: if the feed's
+/// `ChrAsm::Copy` carried the record's grip through, this equals `PORTRAIT_EQUIP_RECORD_ARM_STYLE`
+/// and the grip is lost LATER (inbox -> live); if the eight `EquipItemBySpecialIndex` clears
+/// recompute it, this reads 0/1 while the record reads 3, and the loss is the feed's.
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_FED: AtomicUsize = AtomicUsize::new(0);
+/// Kicks where the record's `armStyle` was written back over the inbox's, and the read-back that
+/// followed. Same shape as the model-instance pair below and for the same reason: a write that does
+/// not stick is a different bug from a write that sticks and changes nothing.
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_EQUIP_INBOX_ARM_STYLE_READBACK: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_MODEL_ARM_STYLE_WRITES: AtomicUsize = AtomicUsize::new(0);
+pub static PORTRAIT_MODEL_ARM_STYLE_READBACK: AtomicUsize = AtomicUsize::new(0);
+/// Times the previewed save's `CS::ProfileSummary` records were put back after the game's
+/// return-title save overwrote them, and the slot mask that write covered.
+///
+/// A switch to a foreign save that ends with ZERO here is a switch whose loading-screen portrait was
+/// built from whatever the game left in the records -- which, when the picked slot IS the resident
+/// character's slot, is the PREVIOUS character (measured run br-20260907-191016-4020). A non-zero
+/// count with a mask that omits the picked slot is the same failure with a different cause.
+pub static PROFILE_SUMMARY_REAPPLIED_AFTER_RETURN_TITLE: AtomicUsize = AtomicUsize::new(0);
+pub static PROFILE_SUMMARY_REAPPLIED_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static TESTNET_FF_STUCK_FRAMES: AtomicUsize = AtomicUsize::new(0);

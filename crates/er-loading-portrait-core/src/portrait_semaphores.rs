@@ -181,6 +181,9 @@ pub const PROFILE_RENDERER_SET_STREAM_INDEX_RVA: usize = 0xbb8c00;
 pub const PROFILE_RENDERER_SET_REQ_754_RVA: usize = 0xbb9810;
 /// `FUN_140bb9920(renderer)` (dump): `renderer+0x755 = 1` (set together with +0x754 at kick time).
 pub const PROFILE_RENDERER_SET_REQ_755_RVA: usize = 0xbb9830;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_INBOX_ARM_STYLE_FED;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_INBOX_ARM_STYLE_READBACK;
+pub use er_telemetry_core::counters::PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_ARM_STYLE;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_LIVE_WEAPON_ID;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RECORD_ARM_STYLE;
@@ -194,6 +197,8 @@ pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_NOOP_KICKS;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_PROTECTOR_SLOTS;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_RECORD_ID;
 pub use er_telemetry_core::counters::PORTRAIT_EQUIP_RESTORE_WEAPON_SLOTS;
+pub use er_telemetry_core::counters::PORTRAIT_MODEL_ARM_STYLE_READBACK;
+pub use er_telemetry_core::counters::PORTRAIT_MODEL_ARM_STYLE_WRITES;
 /// RAM oracle tripwire: max count of NON-target renderers observed holding a live model (+0x778 != 0)
 /// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
 /// loading screen -- the swap-bug precondition returned.
@@ -328,6 +333,23 @@ pub const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
 /// global flag && `size_struct[+0x8]`) to stay x1, producing a 1542x1542 portrait RT that the
 /// full-backbuffer GPU composite then scales up. The stats font auto-tracks this (em_px = rt_dim*48/2056),
 /// so on-screen text size is unchanged.
+/// WIDENED 2026-09-07 (user: a long weapon is "cut off in the viewport, width wise"). The square RT
+/// was the reason: `Bean Smith` came out `box=(300,615)-(1539,1539)` -- the alpha runs to the render's
+/// last usable column, so the weapon was clipped by the RENDER and no compositing change could bring
+/// it back. Width 0x808 = 2056, height unchanged at 0x606 = 1542 (4:3).
+///
+/// WHICH HALF IS WIDTH IS MEASURED, NOT ASSUMED. `CS::CSMenuProfModelRend::CSMenuProfModelRend`
+/// (1.16.2 dump, 0x140bbdf20) sets the camera aspect at `+0xa24` to
+/// `(float)*(int *)(&DAT_143b39848 + row) / (float)*(int *)(&DAT_143b3984c + row)` -- numerator at
+/// row+0x00, denominator at row+0x04 -- so the LOW dword is width and the high dword is height, and
+/// the engine derives the render aspect from them rather than stretching a square.
+/// REVERTED TO SQUARE 2026-09-07. Widening the low dword to 0x808 (2056x1542) to give a long weapon
+/// horizontal room was built and launched, and that run DIED at the title with a C++/Rust throw
+/// before a portrait was ever rendered (run br-20260907-201055-59a5, +35938ms, `exception
+/// code=0xe06d7363`). The same throw address appears in an earlier run on a build WITHOUT this
+/// change, so this is CORRELATION, not proof -- but a non-square portrait RT is unproven and the
+/// crash is real, so it does not stay in while it is both. The weapon's side cut is handled instead
+/// where it costs nothing: `portrait_dst_left` anchors a cut side to the matching display edge.
 pub const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0606_0000_0606;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
