@@ -1,10 +1,10 @@
-//! Can we reproduce an ARBITRARY movie byte-for-byte?
+//! Can we reproduce an arbitrary movie byte-for-byte?
 //!
 //! This is the precondition for ever touching a movie we do not have a baked fingerprint for
 //! -- i.e. a `.gfx` a user supplied through ME3 from some other mod. The badge edit itself is
 //! already structural (it finds tiles by their named children, mirrors `AttributeIcon`, reads
 //! the placeholder's atlas cell, allocates fresh character ids), so it does not care about
-//! exact bytes. What DOES care is the writer: if `parse -> write` is not the identity on an
+//! exact bytes. What does care is the writer: if `parse -> write` is not the identity on an
 //! unmodified movie, then re-serialising someone else's movie could silently drop or reshape
 //! a tag we did not model, and we would hand the game a corrupted HUD.
 //!
@@ -80,7 +80,7 @@ fn corpus_roundtrip_identity() {
     if bad.len() > 40 {
         println!("  ... and {} more", bad.len() - 40);
     }
-    // Not an assertion about the corpus as a whole -- this test EXISTS to measure it. The
+    // Not an assertion about the corpus as a whole -- this test exists to measure it. The
     // movies we actually ship an edit for must round-trip, though; that is non-negotiable.
     for target in &er_gfx::arts_badge::TARGETS {
         let path = root.join(target.file_name);

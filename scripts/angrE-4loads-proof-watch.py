@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Prove save slot angrE loads >=N (default 4) times IN A ROW via the DLL, no crash / no stall.
+"""Prove save slot angrE loads >=N (default 4) times in a row via the DLL, no crash / no stall.
 
-WHY v2 (the v1 MMS-FINISH oracle was WRONG): `MMS-FINISH` fires once per map-block MoveMap
-completion, i.e. MANY times per single character load (a boot autoload emitted 10 within 3.4s),
+Why v2 (the v1 MMS-finish oracle was wrong): `MMS-FINISH` fires once per map-block MoveMap
+completion, i.e. Many times per single character load (a boot autoload emitted 10 within 3.4s),
 so counting it declared a false "10 loads". A genuine controllable load is instead the game's own
-RAM state: the player character becomes RENDER-READY / AVAILABLE and STAYS that way. This harness
+RAM state: the player character becomes render-ready / available and stays that way. This harness
 polls the DLL's live telemetry.json (RAM oracles) and counts a load only when the player reaches a
 sustained controllable state, with a return-to-title dip required between consecutive loads so one
 settled load can never be miscounted as several.
 
-GENUINE-LOAD oracle (per load, rising edge that persists):
+Genuine-load oracle (per load, rising edge that persists):
   a load counts when oracle_player_render_ready (or player_available) has been True for >= PERSIST_S
-  continuous seconds AND oracle_char_name == angrE. The NEXT load is only eligible after the player
+  continuous seconds and oracle_char_name == angrE. The next load is only eligible after the player
   first drops out of the controllable state (render_ready & available both False) -- i.e. a real
   System->Quit / return-title dip. This makes each count a distinct load, not a sample.
 
-CRASH disproof: a new `access-violation` line in the crash log, or the game process exiting, before
-N loads -> FAIL (the switch-#4 GX command-queue overflow AV is exactly this).
+Crash disproof: a new `access-violation` line in the crash log, or the game process exiting, before
+N loads -> fail (the switch-#4 GX command-queue overflow AV is exactly this).
 
-STALL disproof: game alive, fewer than N loads, and NO new genuine load for STALL_S seconds while
-also not currently sustaining a fresh controllable state -> FAIL. Lenient by default so user-paced
+Stall disproof: game alive, fewer than N loads, and no new genuine load for STALL_S seconds while
+also not currently sustaining a fresh controllable state -> fail. Lenient by default so user-paced
 System->Quit->Continue think-time does not trip it.
 
-This harness does NOT tear the game down except on a final verdict, and it prints incremental state
+This harness does not tear the game down except on a final verdict, and it prints incremental state
 so the operator can see each load land. RAM oracles are the run-stopping evidence; the wall clock is
 only a backstop. Screenshots are never consulted.
 

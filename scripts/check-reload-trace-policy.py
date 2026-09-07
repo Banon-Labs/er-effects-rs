@@ -23,10 +23,10 @@ POLICY_PATH = REPO_ROOT / ".auto" / "reload_trace_policy.rego"
 OPA_TIMEOUT_SECONDS = 10
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT ANOTHER AD-HOC STRIPPER. `code_only` lives in `scripts/rva_symbols.py` and is
+# One dialect, not another ad-HOC stripper. `code_only` lives in `scripts/rva_symbols.py` and is
 # shared by `check-stale-rva-calls.py`, `gate-stale-rva-calls.py` and others for the same reason
-# it is needed here: a snippet counter run over RAW source text reads prose as code. On 2026-08-30
-# this gate denied a clean `er-reload-trace` build because a `//` comment explaining a REMOVED
+# it is needed here: a snippet counter run over raw source text reads prose as code. On 2026-08-30
+# this gate denied a clean `er-reload-trace` build because a `//` comment explaining a removed
 # hook's history said the words `product_autoload_enabled()` while describing another crate's
 # gating function -- not importing or calling it. `SAVE_OR_LOADER_SNIPPETS` matched the substring
 # `product_autoload` inside that prose and `save_or_loader_count` went from 0 to 1. Comments and
@@ -76,7 +76,7 @@ DIRECT_GAME_WRITE_SNIPPETS = (
 # Hooks now go through `er-hook`'s shared union (`register_union_hook`/`register_shared_hook`)
 # rather than this crate calling the raw MinHook FFI (`MH_CreateHook`/`MH_EnableHook`) itself --
 # see the "NO RAW MinHook FFI HERE" comment at the top of `crates/er-reload-trace/src/lib.rs`,
-# which explains WHY (a hand-resolved `base + spec.rva` wrote 34 stale five-byte JMPs into live
+# which explains why (a hand-resolved `base + spec.rva` wrote 34 stale five-byte JMPs into live
 # 1.17 code, 19 of them splitting an instruction, with zero refusals and zero crash record) and
 # says explicitly that this fact should be re-pointed here. `has_minhook` now asserts the union
 # path is used; the raw externs get their own deny below so the bypass that comment describes
@@ -114,7 +114,7 @@ def facts_from_text(
 
     `blank` defaults to the real `code_only` and exists as a parameter only so `selftest` can pass
     a deliberately-broken stand-in and prove the controls are capable of failing (see the
-    NON-VACUITY block there). Product code must never call this with anything but the default.
+    non-VACUITY block there). Product code must never call this with anything but the default.
     """
     code_text = blank(source_text)
     return {
@@ -139,7 +139,7 @@ def build_input() -> dict[str, object]:
     source_text = "\n".join(read_text(path) for path in source_paths)
     # Blanked to real code only -- see the `code_only` import comment above. Every fact below is
     # derived from the blanked text, never from `source_text` directly, so a comment or string
-    # literal that merely NAMES a forbidden (or required) API cannot flip a fact.
+    # literal that merely names a forbidden (or required) API cannot flip a fact.
     facts = facts_from_text(source_text)
     facts["crate_path"] = "crates/er-reload-trace"
     facts["cdylib"] = cargo_cdylib()
@@ -174,22 +174,22 @@ def opa_eval(facts: dict[str, object]) -> tuple[bool, list[str]]:
 
 
 def _blank_nothing(text: str) -> str:
-    """The gate's behaviour BEFORE this fix -- comments and strings are not stripped at all.
+    """The gate's behaviour before this fix -- comments and strings are not stripped at all.
 
     Frozen and named for what it is, not composed from `code_only`: it is `selftest`'s stand-in
-    for "the private stripper never ran", used only to show that a prose control WOULD have been
+    for "the private stripper never ran", used only to show that a prose control would have been
     misread as code by the old gate. Never used outside `selftest`.
     """
     return text
 
 
 def _blank_everything(text: str) -> str:
-    """A `blank` that sees NOTHING -- every character replaced with a space, offsets preserved.
+    """A `blank` that sees nothing -- every character replaced with a space, offsets preserved.
 
     `selftest`'s stand-in for a code_only that broke in the other direction: over-blanking, the
     failure mode `scripts/audit-1170-gate-bypass.py` shipped with (its private char-literal-blind
     stripper erased live code in 42 files). Used only to prove the positive control in
-    `selftest` is capable of failing -- see the NON-VACUITY block. Never used outside `selftest`.
+    `selftest` is capable of failing -- see the non-VACUITY block. Never used outside `selftest`.
     """
     return " " * len(text)
 
@@ -205,10 +205,10 @@ def selftest() -> int:
         if not condition:
             failures.append(name)
 
-    # ---------------------------------------------------------------- WORLD 1: THE PROSE FALSE POSITIVE
+    # ---------------------------------------------------------------- World 1: The prose false positive
     # Frozen verbatim from crates/er-reload-trace/src/lib.rs, the exact text that flipped
-    # save_or_loader_count from 0 to 1 on 2026-08-30. It is a `//` comment describing a REMOVED
-    # hook and the gating function of ANOTHER crate (er-quickload) -- not an import, not a call.
+    # save_or_loader_count from 0 to 1 on 2026-08-30. It is a `//` comment describing a removed
+    # hook and the gating function of another crate (er-quickload) -- not an import, not a call.
     prose_control = (
         "    // title_native_ready_733150 REMOVED 2026-08-30. `er-quickload` detours the same\n"
         "    // prologue for the same purpose, gated by `trace_continue_enabled()` =\n"
@@ -227,8 +227,8 @@ def selftest() -> int:
         broken["save_or_loader_count"] > 0,
     )
 
-    # ---------------------------------------------------------------- WORLD 2: A GENUINE VIOLATION
-    # A FROZEN LITERAL, not composed from SAVE_OR_LOADER_SNIPPETS: widening the snippet list must
+    # ---------------------------------------------------------------- World 2: A genuine violation
+    # a frozen literal, not composed from SAVE_OR_LOADER_SNIPPETS: widening the snippet list must
     # not silently widen this control too, or "the gate still catches the real thing" stops being
     # provable. `fn f<'a>(...)` is here on purpose -- `'a` is a lifetime, not a char literal, and a
     # naive blanker that does not know the difference (the exact bug `audit-1170-gate-bypass.py`
@@ -246,7 +246,7 @@ def selftest() -> int:
         caught["save_or_loader_count"] > 0,
     )
 
-    # NON-VACUITY, per the task: regress the matcher, confirm the control FAILS, then restore.
+    # Non-VACUITY, per the task: regress the matcher, confirm the control fails, then restore.
     # `_blank_everything` simulates "the gate can no longer see anything" -- the exact failure
     # mode this whole fix exists to avoid landing in accidentally. If the real-violation control
     # could not be made to read zero here, it would prove nothing above: a control that always
@@ -269,7 +269,7 @@ def selftest() -> int:
         % (caught["save_or_loader_count"], regressed["save_or_loader_count"], restored["save_or_loader_count"])
     )
 
-    # ---------------------------------------------------------------- has_minhook / raw FFI DENY
+    # ---------------------------------------------------------------- has_minhook / raw FFI deny
     # The crate's own top-of-file comment ("NO RAW MinHook FFI HERE...") documents that hooks now
     # go through `er_hook::register_union_hook` / `register_shared_hook`, and asks this gate to
     # re-point `has_minhook` there and deny the raw externs if they come back.
@@ -311,7 +311,7 @@ def selftest() -> int:
         ffi_history_comment["raw_minhook_ffi_count"] == 0,
     )
 
-    # ---------------------------------------------------------------- AGAINST THE ACTUAL CRATE
+    # ---------------------------------------------------------------- Against the actual crate
     # The real file this fix was written against must come out clean end to end: this is the
     # regression that originally failed.
     live_paths = crate_sources()

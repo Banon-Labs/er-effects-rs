@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Untangle: move a NAMED SET of top-level items out of crates/er-quickload/src/experiments/mod.rs
+"""Untangle: move a named set of top-level items out of crates/er-quickload/src/experiments/mod.rs
 into a sibling submodule, preserving behavior (pure code motion).
 
     extract-experiments-items.py <module> <name1> [<name2> ...]
     extract-experiments-items.py <module> --suffix _enabled --suffix _disabled
     extract-experiments-items.py <module> --names-file <path>
 
-Unlike the line-range carver, this pulls items by NAME wherever they sit in the
+Unlike the line-range carver, this pulls items by name wherever they sit in the
 interleaved core. For each requested top-level item (fn / unsafe fn / static /
 const / struct / enum / impl-with-name), it takes the item plus its immediately
 preceding contiguous doc-comment / attribute block, removes them from mod.rs,

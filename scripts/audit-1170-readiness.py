@@ -1,92 +1,92 @@
 #!/usr/bin/env python3
-"""Score every cdylib on whether a STALE game address can still reach ELDEN RING 1.17 silently.
+"""Score every cdylib on whether a stale game address can still reach ELDEN RING 1.17 silently.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 The game went 1.16.2 -> 1.17 on 2026-08-27 and every RVA in this workspace was written for 1.16.2.
-`er_game_base::game_build` translates or REFUSES a known address, and `er-hook`'s `MhHook::new`
+`er_game_base::game_build` translates or refuses a known address, and `er-hook`'s `MhHook::new`
 routes detours through it -- so a hook on a moved function fails loudly instead of corrupting the
 image. That protection only covers addresses that actually go through it.
 
-Three things a hand-built `base + SOME_RVA` can be used FOR, and they are not equally dangerous.
+Three things a hand-built `base + SOME_RVA` can be used for, and they are not equally dangerous.
 Counting them together overstates the problem by an order of magnitude, so this separates them:
 
   EXEC   `transmute(base + SOME_RVA)` and then call it. On 1.17 that is a call into whatever now
-         occupies the address. Nothing refuses, nothing logs, and the game executes it. WORST.
-         NOTE: a MAPPED constant used this way is just as broken as an unmapped one. The map knows
+         occupies the address. Nothing refuses, nothing logs, and the game executes it. Worst.
+         NOTE: a mapped constant used this way is just as broken as an unmapped one. The map knows
          the 1.17 destination; `base + RVA` never asks it, so the call still goes to the 1.16.2
          address. Sites are tagged `[UNMAPPED]` only to say whether the fix is one `game_rva()`
          call away or needs the address found first -- never to say the site is safe.
-  WRITE  a raw store / `write_code_byte` at `base + SOME_RVA`. Corrupts the image for every later
+  Write  a raw store / `write_code_byte` at `base + SOME_RVA`. Corrupts the image for every later
          reader, not just this one caller.
-  READ   `safe_read_usize(base + SOME_RVA)`, or an identity compare `vt != base + SOME_VTABLE_RVA`.
+  Read   `safe_read_usize(base + SOME_RVA)`, or an identity compare `vt != base + SOME_VTABLE_RVA`.
          Fault-safe by construction: a stale address yields a wrong answer or `None`, never a
-         fault. This is the SILENT class -- the feature quietly stops working and nothing says so.
+         fault. This is the silent class -- the feature quietly stops working and nothing says so.
          Measured 2026-08-29: `TITLE_OWNER_VTABLE_RVA` is `CS::TitleStep` in 1.16.2 and nothing in
          1.17, and its three scans simply find no owner, forever, without a single log line.
 
-A raw write PRECEDED BY A SIGNATURE CHECK is counted separately and is not a defect: comparing the
+A raw write preceded by a signature check is counted separately and is not a defect: comparing the
 expected opcode before storing turns a stale address into a refusal. Measured 2026-08-29 --
-`apply_splash_skip` did exactly that and logged `ABORT -- byte at 0x140b0c35d is 0x4a, expected
+`apply_splash_skip` did exactly that and logged `abort -- byte at 0x140b0c35d is 0x4a, expected
 0x74` on a 1.17 image where the naive write would have smashed a `lea` displacement.
 
-WHAT IT DOES NOT CLAIM
+What it does not claim
 ----------------------
 Zero ungated sites is not "this DLL works on 1.17". It means no address can reach the game without
-the gate having a say. Whether the mapped destinations are the RIGHT functions is
+the gate having a say. Whether the mapped destinations are the right functions is
 `scripts/verify-rva-map-1170.py`'s job, and whether the DLL then behaves is a runtime question --
 the `runtime` column is read from a recorded results file, never inferred.
 
-HOW THIS DIVIDES WITH `check-stale-rva-calls.py`
+How this divides with `check-stale-rva-calls.py`
 ------------------------------------------------
-That script already ratchets ungated CALLS repo-wide, keyed on (file, RVA constant). It is the
+That script already ratchets ungated calls repo-wide, keyed on (file, RVA constant). It is the
 authority on that set and on converting it; this one deliberately does not re-litigate it. What
 this adds is the two things a repo-wide call count cannot say:
 
-  * PER-CDYLIB attribution. A flat repo-wide total hides one DLL regressing while another
+  * Per-CDYLIB attribution. A flat repo-wide total hides one DLL regressing while another
     improves, and "does THIS DLL have 1.17 fixes" is a per-DLL question.
-  * The WRITE and read/compare buckets, which that script does not measure at all. 0 ungated
+  * The write and read/compare buckets, which that script does not measure at all. 0 ungated
     WRITEs across all 27 cdylibs is a safety property nothing else in the tree guards.
 
 Refresh both baselines together when you bank an improvement.
 
-WHAT THE `consts` AND `unmapd` COLUMNS COULD SEE UNTIL 2026-08-30
+What the `consts` and `unmapd` columns could see until 2026-08-30
 -----------------------------------------------------------------
 Three regexes -- `CONST`, `CONST_ALIAS`, `USE_ALIAS` -- decided which constants exist and what
 address each holds. All three required the name to be spelled `*RVA*`, and the first also required
 `: usize` and a hex literal on the spot. A constant they could not resolve has no address, so it is
 tagged `[UNMAPPED]` at every use site: the audit says "this needs a 1.17 row" about an address that
 may well already have one, and the map owner is sent to re-derive it. Five ordinary spellings were
-invisible: `: u32` / `: u64` constants, enum discriminants, constants DEFINED from a discriminant,
+invisible: `: u32` / `: u64` constants, enum discriminants, constants defined from a discriminant,
 constants whose name never carried the suffix, and every constant declared in a crate this closure
 does not include but whose value it uses.
 
 Values now come from `scripts/rva_symbols.py`. Measured on this tree: 362 -> 640 constants resolved
 across the union of all 27 cdylib closures, and `er-quickload` alone went 285 -> 534.
 
-TWO THINGS THAT DELIBERATELY DID NOT CHANGE, so the widening does not manufacture work:
+Two things that deliberately did not change, so the widening does not manufacture work:
 
-  * WHAT COUNTS AS AN ADDRESS. Dropping the name filter without a replacement would file every
-    millisecond cap and bitmask as an unmapped address. The replacement is by what the constant IS
-    or DOES -- see `ADDRESS_NAME` / `ADDRESS_USE` / `mapped_source_addresses` below -- never by
+  * What counts as an address. Dropping the name filter without a replacement would file every
+    millisecond cap and bitmask as an unmapped address. The replacement is by what the constant is
+    or does -- see `ADDRESS_NAME` / `ADDRESS_USE` / `mapped_source_addresses` below -- never by
     what it is called alone.
-  * `HAND_BUILT`, the USE-site matcher, keeps its `*RVA*` operand filter. Measured: dropping it
+  * `HAND_BUILT`, the use-site matcher, keeps its `*RVA*` operand filter. Measured: dropping it
     adds 55 matches across 32 new operand names, and they are PE-header fields
     (`PE_DOS_LFANEW_OFFSET`, `DOS_PE_OFFSET_FIELD`), struct offsets (`REC_LEVEL_OFFSET`) and plain
     locals (`i`, `gap`, `size`, `offset`) -- not stale-address hazards. `check-stale-rva-calls.py`
-    does drop that filter, because it has a VALUE gate to exclude the PE fields by what they are;
-    this audit has none, so here the filter earns its place. That division is the one the "HOW THIS
-    DIVIDES" section above already draws.
+    does drop that filter, because it has a value gate to exclude the PE fields by what they are;
+    this audit has none, so here the filter earns its place. That division is the one the "how this
+    divides" section above already draws.
 
-THE RATCHET
+The ratchet
 -----------
 `--check` compares the per-DLL counts against `docs/recon/dll-1170-ungated-ledger.tsv` and exits 1
-if any went UP. That is the part that makes this a proof rather than a snapshot: 0 ungated WRITEs
+if any went up. That is the part that makes this a proof rather than a snapshot: 0 ungated WRITEs
 across all 27 cdylibs is a real safety property today, and the ledger is what stops the next commit
 from quietly taking it away. `--refresh` rewrites the ledger, so a deliberate increase shows up as
 a reviewable diff instead of the invisible default.
 
-USAGE
+Usage
     python3 scripts/audit-1170-readiness.py
     python3 scripts/audit-1170-readiness.py --dll er-quickload
     python3 scripts/audit-1170-readiness.py --check     # the gate
@@ -105,7 +105,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. `rva_symbols` resolves every declaration spelling in this tree to a value
+# One dialect, not four. `rva_symbols` resolves every declaration spelling in this tree to a value
 # and blanks comments and string bodies before anything is matched. This file had a hand-rolled
 # partial version of both: `CONST` + `CONST_ALIAS` + `USE_ALIAS` covered three of the spellings and
 # missed the rest, and prose was skipped only when a `//` began the line.
@@ -132,8 +132,8 @@ DATA_MAP = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.data.tsv")
 RUNTIME_RESULTS = os.path.join(REPO, "docs", "recon", "dll-1170-runtime-results.json")
 LEDGER = os.path.join(REPO, "docs", "recon", "dll-1170-ungated-ledger.tsv")
 
-# THE DECLARATION READER THIS FILE USED TO BE, all three regexes, frozen as LITERALS so
-# `--selftest` can prove the replacement is load-bearing. Every control below must be INVISIBLE to
+# The declaration reader this file used to be, all three regexes, frozen as LITERALS so
+# `--selftest` can prove the replacement is load-bearing. Every control below must be invisible to
 # these and visible to the resolver; a control both see would pass on the broken audit and prove
 # nothing. Spelled out rather than composed, so they cannot quietly widen along with the live code.
 #
@@ -142,10 +142,10 @@ LEDGER = os.path.join(REPO, "docs", "recon", "dll-1170-ungated-ledger.tsv")
 #
 #     const CAP_BUILDER_RVA: u32 = 0x826510;        a `: u32` address constant
 #     MenuJobWait = 0x00b0d400,                     an enum discriminant
-#     const X_RVA: usize = Enum::Variant as usize;  a constant defined FROM one
+#     const X_RVA: usize = Enum::Variant as usize;  a constant defined from one
 #     const GET_MAIN_PLAYER_STATS: usize = 0x...;   an address whose name never carried the suffix
 #
-# (A literal wrapped onto the next line IS visible to these -- `\s*` spans newlines -- which is why
+# (A literal wrapped onto the next line is visible to these -- `\s*` spans newlines -- which is why
 # `--selftest` asserts the wrapped case as an ordinary positive and never as a hidden one. A control
 # has to be checked against the frozen matcher, not assumed.)
 LEGACY_CONST = re.compile(r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*usize\s*=\s*(0x[0-9a-fA-F_]+)")
@@ -158,17 +158,17 @@ LEGACY_USE_ALIAS = re.compile(
     r"\s+as\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*;"
 )
 # A constant-shaped identifier: SCREAMING_SNAKE, which is what a map row's label looks like when
-# the label IS a constant name rather than a source location.
+# the label is a constant name rather than a source location.
 CONST_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-# WHAT COUNTS AS AN ADDRESS CONSTANT for the per-DLL columns. Dropping the `*RVA*` name filter is
+# What counts as an address constant for the per-DLL columns. Dropping the `*RVA*` name filter is
 # what makes the wider set visible, so something has to replace it or every millisecond cap and
 # bitmask in the tree becomes an "unmapped address" the map owner is told to go and derive.
 #
-# The replacement is by what the thing IS or DOES, never by what it is called:
+# The replacement is by what the thing is or does, never by what it is called:
 #   * a value that could be an RVA at all -- at or above the end of the PE headers, below the
 #     image size;
-#   * AND one of: this tree's address NAMING convention; the code USING it as an address
+#   * and one of: this tree's address naming convention; the code using it as an address
 #     (`base + X`, `game_rva(X)`, `game_data_addr(base, X, ..)`); or an earlier pass having already
 #     called that number a game address by giving it a row in a curated map.
 # The last is required to be >= 0x100000, because a small round number lands on a real address by
@@ -181,7 +181,7 @@ IMAGE_BASE = 0x140000000
 # `PATCH_RETRY_LOG_INTERVAL: u32 = 100_000` is a log throttle, not an address.
 ADDRESS_NAME = re.compile(r"(?:^|_)(?:RVA|RVAS|VA|VAS)(?:_|$)")
 # Using a constant as an address is stronger evidence than naming it like one -- but only when the
-# thing it is added to is a MODULE BASE. `x + FOO` is how this tree walks structs as well as
+# thing it is added to is a module base. `x + FOO` is how this tree walks structs as well as
 # images, and the loose form promotes struct-field offsets (0x10f0, 0x1200) into "addresses".
 ADDRESS_USE = re.compile(
     r"(?<![.\w])\$?(?:base|module_base|image_base|game_base|game_module_base|exe_base)\s*"
@@ -191,13 +191,13 @@ ADDRESS_USE = re.compile(
 )
 # `base + SOMETHING_RVA` / `image_base + SOMETHING_RVA` -- an address built by hand.
 #
-# THE OPERAND IS NOT ALWAYS A SCREAMING_SNAKE CONSTANT, and assuming it was is how this audit
+# The OPERAND is not always a SCREAMING_SNAKE constant, and assuming it was is how this audit
 # reported `er-reload-trace 0 0` on the very day that crate wrote 34 five-byte JMPs into live 1.17
 # code. Its installer reads
 #
 #     let target = base + spec.rva;
 #
-# -- a lowercase FIELD of a hook-table row, covering all 40 of its detours in one line. The old
+# -- a lowercase field of a hook-table row, covering all 40 of its detours in one line. The old
 # pattern required an identifier containing an uppercase `RVA`, and `.` was not even in its
 # character class, so zero of those sites matched and the ratchet was blind at precisely the crate
 # that corrupted the image. Three shapes must all match: a bare constant, a `::`-pathed constant,
@@ -226,12 +226,12 @@ GATED = re.compile(
 #
 #     *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = 1;
 #
-# Six such stores existed while this audit reported ZERO ungated writes across all 27 cdylibs --
+# Six such stores existed while this audit reported zero ungated writes across all 27 cdylibs --
 # and the ledger's whole claim is that zero. One of the six was the title's zero-input accept byte,
 # writing to a stale 1.16.2 address on every 1.17 boot: the menu never opened, and nothing in the
 # gate said a word, because a store to a moved global neither faults nor logs. The assignment can
 # also sit on the next line, which is why this is matched against the window rather than one line.
-# The fourth alternative is a MinHook install, and it is a WRITE in the only sense that matters:
+# The fourth alternative is a MinHook install, and it is a write in the only sense that matters:
 # `MH_CreateHook` copies the prologue and `MH_EnableHook` stores a five-byte `E9 rel32` over it.
 # Reaching either with a hand-built address the gate never saw is how 19 live instructions got
 # split on 2026-08-29 -- so it belongs in the bucket whose ledger claim is "no DLL can corrupt the
@@ -241,9 +241,9 @@ RAW_WRITE = re.compile(
     r"|as\s*\*mut\s+[\w:]+\s*\)\s*="
     r"|MH_CreateHook\s*\(|MH_EnableHook\s*\("
 )
-# The address is turned into something callable. Matched against the text IMMEDIATELY BEFORE the
+# The address is turned into something callable. Matched against the text immediately before the
 # `base + rva`, not a window: `is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA)` sits two lines
-# from a `transmute` and is a DATA pointer, and a window-based match filed 13 such arguments as
+# from a `transmute` and is a data pointer, and a window-based match filed 13 such arguments as
 # executable code. A stale data pointer is still wrong -- the comparison silently never matches --
 # but it is the read/compare hazard, not the execute one, and conflating them inflates the number
 # that matters most.
@@ -274,19 +274,19 @@ def crate_sources(pkgs: dict, crate: str) -> list[str]:
 
 
 class MappedRows:
-    """What the 1.16.2 -> 1.17 tables carry, keyed BOTH ways.
+    """What the 1.16.2 -> 1.17 tables carry, keyed both ways.
 
-    A MAP ROW IS AN ADDRESS PAIR. Its third column is a LABEL, and the label's spelling is decided
+    A map row is an address pair. Its third column is a label, and the label's spelling is decided
     by whichever generator wrote the row -- not by whether the row is mapped. `select-needed-1170-
     rows.py` writes the `const *_RVA` name when the workspace declares one and a `file.rs:line`
-    SOURCE LOCATION when the address comes from somewhere with no constant name (a `MapSeam { rva:
+    source location when the address comes from somewhere with no constant name (a `MapSeam { rva:
     ... }` field, a hook-table row), and three rows carry a `(refused at runtime 0x...)` note
     instead.
 
-    Reading the label and asking "is this a constant this crate uses" therefore answers NO for
+    Reading the label and asking "is this a constant this crate uses" therefore answers no for
     every row of the second and third shapes, however completely mapped they are. That is not a
     near-miss. On 2026-08-30 the five `er-invasion-warp` map seams -- 0x876140, 0x885ed0, 0x888aa0,
-    0x88b7b0, 0x88bac0, every one of them mapped at +0xff0, verified IDENTICAL 1.000 BOTH-ENTRIES,
+    0x88b7b0, 0x88bac0, every one of them mapped at +0xff0, verified identical 1.000 both-entries,
     present in both generated tables -- reported `[UNMAPPED]`, and an agent spent a session
     re-deriving addresses the ledger already held.
 
@@ -314,11 +314,11 @@ def _as_mapped(mapped) -> MappedRows:
 
 
 def mapped_constants() -> MappedRows:
-    """Read every map row, keeping its 1.16.2 ADDRESS and, when the label is one, its name.
+    """Read every map row, keeping its 1.16.2 address and, when the label is one, its name.
 
-    THE SET OF TABLES IS THE ONE `er-game-base/build.rs` GENERATES THE RUNTIME TABLE FROM, because
+    The set of tables is the one `er-game-base/build.rs` generates the runtime table from, because
     "mapped" has to mean "the resolver can answer for this address" and nothing else. That file
-    reads FOUR maps -- `VERIFIED_MAP`, `FUNCTION_MAP` (needed), `DATA_MAP`, `NEEDED_VERIFIED_MAP`
+    reads four maps -- `VERIFIED_MAP`, `FUNCTION_MAP` (needed), `DATA_MAP`, `NEEDED_VERIFIED_MAP`
     -- and drops the rows listed in `QUARANTINE`.
 
     This audit read two of them. That was survivable while the declaration reader could only see
@@ -342,7 +342,7 @@ def mapped_constants() -> MappedRows:
         try:
             with open(table, encoding="utf-8") as handle:
                 for line in handle:
-                    # `#` comments out the UNUSED rows at the foot of the data table; only a row
+                    # `#` comments out the unused rows at the foot of the data table; only a row
                     # that starts with its 1.16.2 address is a promoted mapping.
                     if not line.startswith("0x"):
                         continue
@@ -361,7 +361,7 @@ def mapped_constants() -> MappedRows:
                         names.add(label)
         except OSError:
             pass
-    # A QUARANTINED ROW IS NOT A MAPPING. `er-hook/build.rs` drops these from the generated table
+    # A QUARANTINED row is not a mapping. `er-hook/build.rs` drops these from the generated table
     # precisely so the address refuses, which is the same outcome as having no row -- and the whole
     # point of the column is what the resolver can answer.
     try:
@@ -385,9 +385,9 @@ _MAP_SOURCES: set[int] | None = None
 
 
 def mapped_source_addresses() -> set[int]:
-    """Every 1.16.2 address a CURATED map already calls a game address, cached for the run.
+    """Every 1.16.2 address a curated map already calls a game address, cached for the run.
 
-    Used ONLY as one of the three pieces of evidence that a constant is an address at all -- not as
+    Used only as one of the three pieces of evidence that a constant is an address at all -- not as
     the "is it mapped" test, which is `mapped_constants()` and reads the two tables this audit
     reports against. `functions.tsv` is excluded on purpose: it is a 128k-row dump of every
     function in the image, so membership in it is nearly free and would admit any round number.
@@ -430,11 +430,11 @@ def _canonical(name: str, alias: dict) -> str:
 def symbol_index(paths: list[str]):
     """The resolver's index for this source set, reusing the cached whole-tree one when possible.
 
-    Every path under `crates/` is served by the ONE cached index, because rebuilding it per cdylib
+    Every path under `crates/` is served by the one cached index, because rebuilding it per cdylib
     closure would mean 27 walks of 500 files. Fixture paths outside the tree get their own small
     index, which is what lets `--selftest` feed `scan()` a temp file.
 
-    Resolving against the WHOLE tree is also more correct than resolving against the closure: a
+    Resolving against the whole tree is also more correct than resolving against the closure: a
     constant written `const FILE_OPEN_RVA: usize = er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;`
     only has a value if the file that declares its target is being read too.
     """
@@ -446,7 +446,7 @@ def symbol_index(paths: list[str]):
 def _declarations(index, paths):
     """`(declared, address_constants)` for the declarations that live in `paths`.
 
-    `declared` is EVERY resolvable symbol -- as wide as possible, because it is what a use site's
+    `declared` is every resolvable symbol -- as wide as possible, because it is what a use site's
     operand is looked up in, and a name that cannot be resolved is tagged `[UNMAPPED]` without
     anyone having checked. `address_constants` is the narrower, evidence-tested subset that the
     per-DLL `consts` and `unmapd` columns are counted over.
@@ -496,7 +496,7 @@ def scan(paths: list[str], mapped) -> dict:
     mapped = _as_mapped(mapped)
     index = symbol_index(paths)
     declared, address_constants = _declarations(index, paths)
-    # An alias is another NAME for a declared address, and the audit reads the name at the USE
+    # An alias is another name for a declared address, and the audit reads the name at the use
     # site. `rva_symbols` collects every `use a::b::OLD as NEW;` in the tree, including the ones
     # that strip the `_RVA` suffix, which is exactly where the hand-rolled version stopped.
     alias: dict[str, str] = {
@@ -531,11 +531,11 @@ def scan(paths: list[str], mapped) -> dict:
                     text = code_only(handle.read())
             except OSError:
                 continue
-        # THE MATCHING RUNS ON MASKED TEXT. `code_only` blanks comments and string bodies to
+        # The matching runs on masked text. `code_only` blanks comments and string bodies to
         # spaces without moving anything, so line numbers and the +/-3 line windows still line up.
         # The old `startswith("//")` test caught a whole-line comment and nothing else: a trailing
         # `// like base + FOO_RVA`, a `/* ... */` block and a quoted example all counted as
-        # hand-built addresses, and the sibling call gate had TWO OF ITS THREE baseline rows turn
+        # hand-built addresses, and the sibling call gate had two of its three baseline rows turn
         # out to be exactly that.
         lines = text.splitlines()
         for index_of_line, line in enumerate(lines):
@@ -547,12 +547,12 @@ def scan(paths: list[str], mapped) -> dict:
             window = "\n".join(lines[max(0, index_of_line - 3) : index_of_line + 4])
             if GATED.search(window):
                 continue
-            # What this OCCURRENCE is used for, judged from the text right before it.
+            # What this occurrence is used for, judged from the text right before it.
             before = line[: hand.start()].rstrip()
             where = f"{os.path.relpath(path, REPO)}:{index_of_line + 1}"
             entry = (where, label(name))
             # Order matters: a write is a write even if the same window also reads, and an exec is
-            # worse than a read. Only a window with NEITHER is the benign read/compare bucket.
+            # worse than a read. Only a window with neither is the benign read/compare bucket.
             if RAW_WRITE.search(window):
                 buckets["checked_write" if SIGNATURE_CHECK.search(window) else "write"].append(entry)
             elif EXEC_USE.search(before) or EXEC_USE.search(
@@ -561,11 +561,11 @@ def scan(paths: list[str], mapped) -> dict:
                 buckets["exec"].append(entry)
             else:
                 buckets["read"].append(entry)
-    # The COLUMNS are counted over the evidence-tested subset, not over every resolvable symbol:
+    # The columns are counted over the evidence-tested subset, not over every resolvable symbol:
     # `declared` deliberately holds every constant in the closure so a use site can be looked up,
-    # and reporting a millisecond cap as an unmapped ADDRESS would be inventing work for the map
+    # and reporting a millisecond cap as an unmapped address would be inventing work for the map
     # owner. An address constant whose value is a table of addresses counts as mapped only when
-    # EVERY entry is.
+    # every entry is.
     unmapped = sorted(
         name
         for name, addrs in address_constants.items()
@@ -586,15 +586,15 @@ def runtime_results() -> dict:
 
 
 def _positive_control() -> list[str]:
-    """Run the WHOLE scan over the exact code that corrupted 1.17, and over its fix.
+    """Run the whole scan over the exact code that corrupted 1.17, and over its fix.
 
     Asserting the regexes in isolation is not enough, and this audit has now been wrong twice in
     the same way: `RAW_WRITE` missed six real cast-and-assign stores, and `HAND_BUILT` missed all
-    40 of `er-reload-trace`'s detour sites -- both times the ledger reported ZERO and both times
+    40 of `er-reload-trace`'s detour sites -- both times the ledger reported zero and both times
     the zero was believed. A pattern test cannot catch that, because the bucket a site lands in
     also depends on the gate check and the +/-3 line window. So this feeds `scan()` the real
     before-and-after text and asserts the verdict FLIPS: the ungated install scores 1 ungated
-    WRITE, and the same installer routed through either gate spelling scores 0. Both gated forms
+    write, and the same installer routed through either gate spelling scores 0. Both gated forms
     are checked because the crate that caused this uses the cross-DLL registrar, not the one the
     obvious fix reaches for.
     """
@@ -651,21 +651,21 @@ fn install_one(base: usize, spec: &HookSpec) -> bool {
 
 
 def _label_shape_control() -> list[str]:
-    """Prove the reader sees a map row through BOTH spellings of its third column.
+    """Prove the reader sees a map row through both spellings of its third column.
 
-    The 2026-08-30 failure was not a regex missing a syntax; it was the reader keying on the SHAPE
+    The 2026-08-30 failure was not a regex missing a syntax; it was the reader keying on the shape
     it expected a column to have. `mapped_constants()` returned column 3 verbatim, so a row labelled
     with a `file.rs:line` source location contributed a source location to a set that was then
-    searched for constant NAMES -- and every such row read `[UNMAPPED]` while being fully mapped.
+    searched for constant names -- and every such row read `[UNMAPPED]` while being fully mapped.
 
     Asserting `mapped_constants()` in isolation would not catch a recurrence, because what broke is
-    the JOIN between the table and the use site. So this runs the whole `scan()` over source text
+    the join between the table and the use site. So this runs the whole `scan()` over source text
     that uses four real addresses under names the tables have never heard of, and asserts the tag:
 
-      * a row whose label is a CONSTANT NAME                    -> recognised, by address
-      * a row whose label is a `file.rs:line` SOURCE LOCATION   -> recognised, by address
+      * a row whose label is a constant name                    -> recognised, by address
+      * a row whose label is a `file.rs:line` source location   -> recognised, by address
       * a row that lives in the GLOBALS table, not `needed.tsv` -> recognised, by address
-      * an address in NEITHER table                             -> still says [UNMAPPED]
+      * an address in neither table                             -> still says [UNMAPPED]
 
     The last case is the negative control, and it is the reason this cannot pass by tagging
     nothing. The three addresses are the ones the incident named, so a table that drops them fails
@@ -739,21 +739,21 @@ pub const DLSTRING_WCHAR_SUBSTR_RVA: usize = {name_labelled:#x};
 def _declaration_control() -> list[str]:
     """Prove the audit resolves constants the three frozen regexes could not -- through `scan()`.
 
-    THE TAG IS THE DELIVERABLE, so the control asserts the tag rather than the regex. Four
+    The tag is the DELIVERABLE, so the control asserts the tag rather than the regex. Four
     addresses that all have map rows are declared in four spellings the old reader could not
     resolve, and each is then read at a `base + X` site. A constant whose value cannot be resolved
     is tagged `[UNMAPPED]` -- which reads as "go and derive this address" for an address that is
     already derived, verified and in the ledger, and that is the failure this control exists to
     stop recurring.
 
-    Each spelling is also asserted INVISIBLE to the frozen regexes. A control they can see would
+    Each spelling is also asserted invisible to the frozen regexes. A control they can see would
     pass on the broken audit and prove nothing.
     """
     mapped = mapped_constants()
     enum_form = 0x876140  # needed.tsv, labelled `crates/er-invasion-warp/src/map_seams.rs:244`
     u32_form = 0x116C70  # needed.tsv, labelled `DLSTRING_WCHAR_SUBSTR_RVA`
     unsuffixed = 0x2BA4C80  # data.tsv, labelled `SCALEFORM_MEMORY_FILE_VTABLE_RVA`
-    # In no table. It is inside the image window on purpose: an address OUTSIDE it is discarded as
+    # In no table. It is inside the image window on purpose: an address outside it is discarded as
     # not-an-address before the mapped test runs, so it would pass this control without the mapped
     # test having been exercised at all.
     absent = 0x7FEEDB0
@@ -816,7 +816,7 @@ fn probe(base: usize) {{
         )
     if result["unmapped"] != ["ABSENT_RVA"]:
         out.append(f"declaration control: unmapped list is {result['unmapped']}, expected ABSENT_RVA")
-    # NON-VACUITY: the three frozen regexes must resolve NONE of the four spellings above. If one
+    # Non-VACUITY: the three frozen regexes must resolve none of the four spellings above. If one
     # of them can, that case proves nothing and has to be replaced.
     legacy = {name for name, _literal in LEGACY_CONST.findall(text)}
     legacy |= {name for name, _target in LEGACY_CONST_ALIAS.findall(text)}
@@ -833,11 +833,11 @@ fn probe(base: usize) {{
 
 
 def _masking_control() -> list[str]:
-    """Prove a `base + FOO_RVA` inside a COMMENT or a string is not counted as a site.
+    """Prove a `base + FOO_RVA` inside a comment or a string is not counted as a site.
 
     The old skip was `line.lstrip().startswith("//")`, which sees a whole-line comment and nothing
     else. A trailing comment, a `/* */` block and a quoted example all counted -- and the sibling
-    gate `check-stale-rva-calls.py` had TWO OF ITS THREE baseline rows turn out to be exactly that,
+    gate `check-stale-rva-calls.py` had two of its three baseline rows turn out to be exactly that,
     which is worse than a plain false positive: a baseline holding non-findings stays green while
     real sites are added beside them.
     """
@@ -860,7 +860,7 @@ def _masking_control() -> list[str]:
             f"masking control: counted {found}, expected only ['REAL_SITE_RVA'] -- the other three "
             "are a trailing comment, a block comment and a string body"
         )
-    # NON-VACUITY: the pre-fix line filter really did read three of those four as sites.
+    # Non-VACUITY: the pre-fix line filter really did read three of those four as sites.
     legacy_visible = [
         line
         for line in prose.splitlines()
@@ -877,7 +877,7 @@ def _masking_control() -> list[str]:
 def selftest() -> int:
     """Assert the regex set on facts established by the 2026-08-29 bisect."""
     failures = []
-    # The splash-skip site is a raw write WITH a signature check -- it must not read as a defect.
+    # The splash-skip site is a raw write with a signature check -- it must not read as a defect.
     sample = """
     let target = (base + SPLASH_SKIP_RVA) as *mut u8;
     let existing = unsafe { *target };
@@ -892,14 +892,14 @@ def selftest() -> int:
     # Same store with the value on the following line, which is how rustfmt leaves the long ones.
     if not RAW_WRITE.search("*((module_base + SOME_RVA) as *mut u8) =\n    VALUE;"):
         failures.append("RAW_WRITE missed a cast-and-assign store split across lines")
-    # A read through the same cast is NOT a write; misfiling it would inflate the count it guards.
+    # A read through the same cast is not a write; misfiling it would inflate the count it guards.
     if RAW_WRITE.search("let after = unsafe { *((base + SOME_RVA) as *const u8) };"):
         failures.append("RAW_WRITE wrongly claimed a `*const` read is a store")
     if not SIGNATURE_CHECK.search(sample):
         failures.append("SIGNATURE_CHECK missed an EXPECTED-opcode compare")
     if not HAND_BUILT.search("let x = base + SOME_RVA;"):
         failures.append("HAND_BUILT missed `base + SOME_RVA`")
-    # THE SHAPE THE RATCHET WAS BLIND TO. `er-reload-trace` built all 40 of its detour targets from
+    # The shape the ratchet was blind to. `er-reload-trace` built all 40 of its detour targets from
     # this one line, and the ledger read `er-reload-trace 0 0` while it was writing five-byte JMPs
     # at stale 1.16.2 addresses. A lowercase, dotted field access is not an exotic spelling.
     for sample, why in (
@@ -922,7 +922,7 @@ def selftest() -> int:
         failures.append("GATED missed register_shared_hook(")
     if not GATED.search("unsafe { register_union_hook(target, handler, slot) }"):
         failures.append("GATED missed register_union_hook(")
-    # A MinHook install on a hand-built address is an image WRITE, not a fault-safe read.
+    # A MinHook install on a hand-built address is an image write, not a fault-safe read.
     if not RAW_WRITE.search("MH_CreateHook(target as *mut c_void, detour, &mut tramp)"):
         failures.append("RAW_WRITE missed a raw MH_CreateHook install")
     if not RAW_WRITE.search("unsafe { MH_EnableHook(target as *mut c_void) }"):
@@ -946,7 +946,7 @@ def selftest() -> int:
     if len(mapped_constants()) < 100:
         failures.append(f"only {len(mapped_constants())} mapped constants read from {NEEDED}")
 
-    # NON-VACUITY OF EVERY INPUT, before anything is concluded from it. A walk that reads nothing
+    # Non-VACUITY of every input, before anything is concluded from it. A walk that reads nothing
     # produces `0 unmapped, 0 ungated` -- the most comfortable wrong answer this tool can give.
     index = rva_symbols.index()
     if index.files_read < 200:
@@ -964,7 +964,7 @@ def selftest() -> int:
             f"only {len(address_constants)} address constants found across the whole tree; the "
             "declaration reader is broken and every per-DLL column below it is unfounded"
         )
-    # NOTHING WAS LOST: every constant the three frozen regexes could resolve must still resolve.
+    # Nothing was LOST: every constant the three frozen regexes could resolve must still resolve.
     legacy_named = set()
     for text in index.text.values():
         legacy_named.update(name for name, _literal in LEGACY_CONST.findall(text))

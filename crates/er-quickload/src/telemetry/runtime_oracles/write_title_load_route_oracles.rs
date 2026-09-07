@@ -5,13 +5,13 @@
 
 /// Emit the title-time deserialize + picked-summary oracle fields.
 ///
-/// `oracle_title_time_deser_calls` MUST be 0 on a correct run. Non-zero means a save was
+/// `oracle_title_time_deser_calls` must be 0 on a correct run. Non-zero means a save was
 /// deserialized at the boot title through `0x14067b290` instead of in-world from
 /// `CS::MoveMapStep::DoSaveStuff`, its only caller in the whole image -- the picked-save crash
 /// (`gaitemInsTable[-1]` AV at `0x67141a`), which before this counter existed left no trace but a
 /// debug log that stopped mid-line with no shutdown sequence.
 ///
-/// The picked-summary fields alongside it say WHY that route was taken:
+/// The picked-summary fields alongside it say why that route was taken:
 ///   * `oracle_picked_summary_state` 1 = the game's own boot save-data read had already populated
 ///     `CS::ProfileSummary`; 2 = this DLL re-read the staged container at the title; 0 = neither,
 ///     which is the only case that legitimately falls back to the title-time full read.
@@ -21,10 +21,10 @@
 ///   * `oracle_picked_summary_slot_mask` is which slots the re-read rewrote (bit N = slot N).
 ///
 /// The drift pair is the loading-screen identity oracle (bd er-effects-rs-ccud):
-///   * `oracle_picked_summary_record_drifts` MUST be 0 for a run whose records were never
+///   * `oracle_picked_summary_record_drifts` must be 0 for a run whose records were never
 ///     overwritten after we wrote them. Non-zero means something -- the game's own boot
 ///     `CS::ProfileSummary::Deserialize` is the known one -- replaced the body-derived records with
-///     the container's stale `USER_DATA010` table, which is what puts a DIFFERENT character's face
+///     the container's stale `USER_DATA010` table, which is what puts a different character's face
 ///     and stats on the loading screen.
 ///   * `oracle_picked_summary_reasserts` counts the corrections made in response, capped at
 ///     `REASSERT_MAX_REWRITES`. `reasserts == drifts` means every drift was corrected; a value

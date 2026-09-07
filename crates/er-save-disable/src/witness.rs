@@ -89,7 +89,7 @@ pub(crate) struct WriteSite {
     /// entry can be matched against the reverse-engineered save call graph.
     pub(crate) game_rvas: Vec<usize>,
     /// Frames outside the game's `.text` (CRT, kernel32/ntdll, Wine internals),
-    /// kept as ABSOLUTE addresses. Retaining them rather than just counting them is
+    /// kept as absolute addresses. Retaining them rather than just counting them is
     /// what makes an attribution failure diagnosable: if `game_rvas` is empty, these
     /// say whether the writer was genuinely another module or whether the range test
     /// was wrong.
@@ -226,7 +226,7 @@ unsafe fn wide_is_save_path(ptr: *const u16) -> bool {
 ///
 /// Pure and unit-tested on purpose. The first census run silently produced empty
 /// RVA lists because this classification treated `module_text_range`'s second tuple
-/// element as an END address when it is a SIZE -- every frame then failed the range
+/// element as an end address when it is a size -- every frame then failed the range
 /// test and was written off as foreign, which looks identical to "the writer is not
 /// game code". Attribution failing silently is the worst outcome for a census, so
 /// the arithmetic now lives somewhere a test can pin it.
@@ -357,7 +357,7 @@ fn track_handle(handle: usize, path: &str) {
         return;
     };
     if census.handles.len() >= MAX_TRACKED_HANDLES {
-        // An untracked save handle makes its writes invisible to BOTH
+        // An untracked save handle makes its writes invisible to both
         // `escaped_write_sites` and `total_bytes_to_disk` -- the census under-reports
         // and reads clean. Same rule as a full site table: say so once, loudly.
         let dropped = HANDLES_DROPPED.fetch_add(1, Ordering::SeqCst) + 1;
@@ -399,7 +399,7 @@ fn forget_handle(handle: usize) {
 /// save-path filter to make it merely harmless.
 ///
 /// Returns `None` without running `body` if this thread is already inside the guard --
-/// callers that are already observers (see `record`) must NOT use this, or their
+/// callers that are already observers (see `record`) must not use this, or their
 /// snapshot would be silently skipped.
 #[cfg(windows)]
 pub(crate) fn with_guard<T>(body: impl FnOnce() -> T) -> Option<T> {
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn repeated_writes_from_one_call_site_collapse_into_one_entry() {
-        // The census enumerates distinct call SITES. A save writes its ~2.5MB
+        // The census enumerates distinct call sites. A save writes its ~2.5MB
         // container in many chunks from the same code path; if those did not
         // collapse, the site list would overflow its cap and lose real sites.
         record("test:ChunkedWrite", r"...\ER0000.sl2", 1024);
@@ -671,14 +671,14 @@ mod tests {
     }
 
     // ELDEN RING's real layout: image base 0x140000000, .text starting one page in
-    // and spanning tens of megabytes. `module_text_range` reports (start, SIZE).
+    // and spanning tens of megabytes. `module_text_range` reports (start, size).
     const GAME_BASE: usize = 0x1_4000_0000;
     const TEXT_START: usize = 0x1_4000_1000;
     const TEXT_SIZE: usize = 0x0300_0000;
 
     #[test]
     fn game_frames_become_rvas_and_foreign_frames_are_kept() {
-        // The regression: reading the tuple's second element as an END address makes
+        // The regression: reading the tuple's second element as an end address makes
         // `address < 0x3000000` false for every real frame, so the whole stack is
         // written off as foreign and the census reports "no game frames captured"
         // for writes that came straight out of game code.

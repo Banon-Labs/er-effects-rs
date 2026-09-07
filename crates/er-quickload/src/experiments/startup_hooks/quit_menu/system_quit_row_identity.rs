@@ -1,11 +1,11 @@
 use super::*;
 
-// POSITIVE row identity for the System -> Quit dialog.
+// Positive row identity for the System -> Quit dialog.
 //
 // S7 moved the pure row-decision core to `er-quit-menu-core::rows`; this slice moved the live
 // memory-capture and telemetry half to `er-quit-menu-core::row_identity`. What is left here is the
-// product facade: the two reads whose offsets belong to `er_title_flow` (the dialog slot CURSOR and
-// slot BOUND) are performed on this side and handed over as values, and the row-table reset stays
+// product facade: the two reads whose offsets belong to `er_title_flow` (the dialog slot cursor and
+// slot bound) are performed on this side and handed over as values, and the row-table reset stays
 // because it also tears down the build-url editor, whose 02_990 field lives in the product.
 
 pub(crate) use er_quit_menu_core::row_identity::{
@@ -22,7 +22,7 @@ pub(crate) use er_quit_menu_core::rows::{
 /// Forget the captured row table. Called when the Quit tab starts building a dialog so a rebuilt
 /// pane can never be resolved against another dialog's indices.
 pub(crate) fn system_quit_row_table_reset(dialog: usize) {
-    // The Quit tab is building a FRESH dialog, so any link field latched against the previous one
+    // The Quit tab is building a fresh dialog, so any link field latched against the previous one
     // is pointing at a dead `MenuJobQueue`. This is the only moment that is reliably true, which is
     // why the editor's reset hangs off the row table's rather than having a lifecycle of its own.
     reset_build_url_editor_state();

@@ -1,26 +1,26 @@
-//! The RAM/pixel semaphores the invasion-warp feature must go green on to be PROVEN.
+//! The RAM/pixel semaphores the invasion-warp feature must go green on to be proven.
 //!
 //! AGENTS.md is explicit: a rendered/behavioural feature is never proven by build success,
 //! launch success, "no crash", hook counters, or "the draw task ran". So the oracles are
-//! designed HERE, before any runtime exists, and this module is the single place their names
+//! designed here, before any runtime exists, and this module is the single place their names
 //! and pass conditions are written down.
 //!
-//! Most of these are NAMES and CONTRACTS, not counters. A counter that is read to emit an
+//! Most of these are names and contracts, not counters. A counter that is read to emit an
 //! oracle but never written reports 0 forever and actively misinforms
 //! (`scripts/check-oracle-writers.py`), so each atomic lands in the same change that first
-//! WRITES it. Today that is oracle 1 only: [`INVASION_WARP_CATALOG_TARGETS`],
+//! writes it. Today that is oracle 1 only: [`INVASION_WARP_CATALOG_TARGETS`],
 //! [`INVASION_WARP_CATALOG_BLOCKS`] and [`INVASION_WARP_CATALOG_AREAS`] are written by
 //! [`crate::sampler`] every time the live singleton is read. Oracles 2-5 stay names until the
 //! UI interception that can write them exists.
 //!
 //! # The proof chain
 //!
-//! Five oracles, in the order a run must satisfy them. A run that stops early is NEGATIVE or
+//! Five oracles, in the order a run must satisfy them. A run that stops early is negative or
 //! UNPROVEN evidence, never product proof.
 //!
 //! 1. [`ORACLE_INVASION_WARP_CATALOG_TARGETS`] / [`ORACLE_INVASION_WARP_CATALOG_BLOCKS`] --
 //!    the catalog was actually read out of the live `CSAutoInvadePoint`. Pass condition is an
-//!    EXACT match against the shipped fingerprints, not "> 0": with only the base container
+//!    exact match against the shipped fingerprints, not "> 0": with only the base container
 //!    mounted the totals are 257 blocks / 4482 points, and with `_dlc02` as well 365 / 7073
 //!    (`crate::aip::AIP_FINGERPRINT_BASE`, `AIP_FINGERPRINT_DLC02`). A smaller number means
 //!    the read raced the loader; a larger one means it double-counted.
@@ -35,7 +35,7 @@
 //!    / [`ORACLE_INVASION_WARP_REQUESTED_YAW`] -- what the warp was asked to do. Must equal
 //!    the selected target's block and its `world_position(block_origin)`.
 //! 5. [`ORACLE_INVASION_WARP_FINAL_BLOCK`] / [`ORACLE_INVASION_WARP_FINAL_POSITION`] -- where
-//!    the local player actually ENDED UP, read back from the player instance after the warp
+//!    the local player actually ended up, read back from the player instance after the warp
 //!    settled. This is the direct objective measurement; 1-4 only prove the request was
 //!    formed. Pass condition: same block, and position within
 //!    [`INVASION_WARP_POSITION_TOLERANCE_METRES`] of the requested one.
@@ -44,7 +44,7 @@
 //!
 //! [`ORACLE_INVASION_WARP_SESSION_TOUCHES`] counts any entry into a session/multiplayer path
 //! from this feature. The user's hard boundary is that the feature never fakes an invasion,
-//! so "we did not start a session" has to be MEASURED, not asserted. Any non-zero value fails
+//! so "we did not start a session" has to be measured, not asserted. Any non-zero value fails
 //! the run outright regardless of how the other five look.
 //!
 //! [`ORACLE_INVASION_WARP_MSGBOX_BUILDS`] is the standing repo-wide rule restated for this
@@ -56,11 +56,11 @@
 //! opens by warning about:
 //!
 //! * SESSION_TOUCHES would have no writer, because there is no call site to count. The catalog
-//!   slice makes exactly one kind of engine access -- a fault-tolerant READ of
+//!   slice makes exactly one kind of engine access -- a fault-tolerant read of
 //!   `CSAutoInvadePoint` (see [`crate::live_read`]) -- and calls nothing under `CSNetMan` /
 //!   `QuickmatchManager` / `CSBreakInPointManager`. A counter incremented from a branch no
 //!   reachable code takes reports 0 for a structural reason, not a measured one, and a reader
-//!   cannot tell those apart. What DOES carry evidence today is the absence of any such call in
+//!   cannot tell those apart. What does carry evidence today is the absence of any such call in
 //!   a crate whose only unsafe engine surface is one read -- reviewable, but not a semaphore.
 //! * MSGBOX_BUILDS needs either a detour on the `CS::MessageBoxDialog` builder (`0x1409275b0`)
 //!   or the passive full-address-space vtable scan `er_telemetry_core::read::dialog_active` runs.
@@ -98,26 +98,26 @@ pub const ORACLE_INVASION_WARP_REQUESTED_YAW: &str = "oracle_invasion_warp_reque
 pub const ORACLE_INVASION_WARP_FINAL_BLOCK: &str = "oracle_invasion_warp_final_block";
 /// World-space position the local player occupied after the warp settled.
 pub const ORACLE_INVASION_WARP_FINAL_POSITION: &str = "oracle_invasion_warp_final_position";
-/// MUST STAY ZERO: entries into any session/multiplayer path from this feature.
+/// Must stay ZERO: entries into any session/multiplayer path from this feature.
 pub const ORACLE_INVASION_WARP_SESSION_TOUCHES: &str = "oracle_invasion_warp_session_touches";
-/// MUST STAY ZERO: `CS::MessageBoxDialog` builds during the run.
+/// Must stay ZERO: `CS::MessageBoxDialog` builds during the run.
 pub const ORACLE_INVASION_WARP_MSGBOX_BUILDS: &str = "oracle_invasion_warp_msgbox_builds";
 
-/// How many legacy-dungeon (non-area-60/61) targets were OFFERED to the world-map injection.
+/// How many legacy-dungeon (non-area-60/61) targets were offered to the world-map injection.
 ///
 /// Zero means no such map has been resident this session yet -- the MSB source accumulates as maps
 /// load, so a fresh boot in the overworld legitimately offers none.
 pub const ORACLE_INVASION_WARP_LEGACY_PINS_SEEN: &str = "oracle_invasion_warp_legacy_pins_seen";
-/// How many of those the world-map coordinate converters actually ACCEPTED.
+/// How many of those the world-map coordinate converters actually accepted.
 ///
 /// This is the decisive number for legacy-dungeon coverage, and the reason it is an oracle rather
 /// than a log line: `seen > 0 && placed == 0` says the converter set cannot place a dungeon pin at
-/// all, in which case reading MORE dungeon MSBs (the whole non-resident-map sweep) would produce
+/// all, in which case reading more dungeon MSBs (the whole non-resident-map sweep) would produce
 /// nothing visible and the converter is what needs fixing first. `placed` tracking `seen` says the
 /// opposite. No amount of build or launch success answers that question; only this pair does.
 pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_legacy_pins_placed";
 
-/// Injected pins that were appended to the list but CANNOT BE DRAWN, because all eight of their
+/// Injected pins that were appended to the list but cannot be drawn, because all eight of their
 /// label text ids are negative.
 ///
 /// This is the oracle whose absence let a whole class of missing icons look like success.
@@ -131,7 +131,7 @@ pub const ORACLE_INVASION_WARP_LEGACY_PINS_PLACED: &str = "oracle_invasion_warp_
 /// own area and a legacy area whose graces carry no `PlaceName` label yields `-1` for every pin in
 /// every dungeon of that area.
 ///
-/// MUST BE ZERO. Any non-zero value is missing icons.
+/// Must be zero. Any non-zero value is missing icons.
 pub const ORACLE_INVASION_WARP_UNDRAWABLE_PINS: &str = "oracle_invasion_warp_undrawable_pins";
 
 // --- Location matchmaking: publish (host side) and hunt (invader side) ----------------------
@@ -144,11 +144,11 @@ pub const ORACLE_INVASION_WARP_UNDRAWABLE_PINS: &str = "oracle_invasion_warp_und
 
 /// How many times this host wrote its current map onto its own Seamless lobby.
 ///
-/// The HOST half of location matchmaking. Above zero means an invader running this DLL can ask
+/// The host half of location matchmaking. Above zero means an invader running this DLL can ask
 /// Steam for this player by location; zero means this player is only findable the old way.
 pub const ORACLE_INVASION_WARP_LOBBY_PUBLISHES: &str = "oracle_invasion_warp_lobby_publishes";
 
-/// How many publishes were REFUSED -- Steam not ready, no lobby yet, or (the loud one) a lobby
+/// How many publishes were refused -- Steam not ready, no lobby yet, or (the loud one) a lobby
 /// that does not carry Seamless's own advertisement marker.
 ///
 /// Not a failure on its own: the first ticks of any run refuse while Seamless is still creating
@@ -161,7 +161,7 @@ pub const ORACLE_INVASION_WARP_LOBBY_REFUSALS: &str = "oracle_invasion_warp_lobb
 /// The INVADER half. This is the one fact about hunt mode that no amount of offline work can
 /// establish: the hook goes onto a vtable slot inside `steamclient64.dll`, not the game image, and
 /// whether our union dispatcher can take that target is only answerable in a live process. False
-/// with `hunt = true` means hunt is INERT and every query went out unfiltered -- which looks
+/// with `hunt = true` means hunt is inert and every query went out unfiltered -- which looks
 /// exactly like "nobody is hosting there" from the player's seat.
 pub const ORACLE_INVASION_WARP_HUNT_HOOKED: &str = "oracle_invasion_warp_hunt_hooked";
 
@@ -172,11 +172,11 @@ pub const ORACLE_INVASION_WARP_HUNT_HOOKED: &str = "oracle_invasion_warp_hunt_ho
 /// is the only proof that Seamless's own search went out narrowed to one place.
 pub const ORACLE_INVASION_WARP_HUNT_FILTERS: &str = "oracle_invasion_warp_hunt_filters";
 
-// --- ORACLE 1 counters --------------------------------------------------------------------
+// --- Oracle 1 counters --------------------------------------------------------------------
 //
 // Written by `crate::sampler` on every successful read of the live `CSAutoInvadePoint`, read
 // by `catalog_oracle_json` to emit the three `oracle_invasion_warp_catalog_*` fields. They are
-// the ONLY oracle atomics in this crate; see the module docs for why the negative oracles have
+// the only oracle atomics in this crate; see the module docs for why the negative oracles have
 // none.
 
 /// Total targets in the catalog last read out of the live singleton.
@@ -296,7 +296,7 @@ pub fn publish_document(status: &str, detail: &str) {
 ///
 /// # The bug this exists to fix, caught by the feature it was measuring
 ///
-/// The document was only ever written by the catalog sampler, which STOPS once the catalog totals
+/// The document was only ever written by the catalog sampler, which stops once the catalog totals
 /// latch -- normally within the first seconds of a run. Every counter written after that moment
 /// was invisible: the file froze with `hunt_filters: 0` while the in-memory counter climbed, and
 /// the verdict line went on saying "no query has been narrowed" after a query had been narrowed.
@@ -304,7 +304,7 @@ pub fn publish_document(status: &str, detail: &str) {
 /// Measured 2026-08-06: the DLL logged `hunt: asking Steam for hosts at m61_54_46_00 only (#1)`
 /// while the telemetry document, last written 4 minutes earlier, reported zero filters -- and the
 /// driver that read it concluded the detour had declined. A counter that is written but never
-/// PUBLISHED misinforms exactly as badly as one that is published but never written, and this
+/// published misinforms exactly as badly as one that is published but never written, and this
 /// module opens by warning about the second while shipping the first.
 ///
 /// Returns whether anything was written, so a caller can tell a quiet tick from a stale one.
@@ -412,7 +412,7 @@ pub fn describe_location_matchmaking(
     format!("{host}; {invader}")
 }
 
-// --- ORACLE 1 pass conditions ---------------------------------------------------------------
+// --- Oracle 1 pass conditions ---------------------------------------------------------------
 
 /// Totals for an install with only `other:/AutoInvadePoint.aipbnd` mounted: one area (60).
 pub const EXPECTED_CATALOG_BASE: InvasionWarpCatalogSummary = InvasionWarpCatalogSummary {
@@ -430,7 +430,7 @@ pub const EXPECTED_CATALOG_BASE_DLC02: InvasionWarpCatalogSummary = InvasionWarp
 
 /// Which shipped fingerprint a live read matched -- oracle 1's pass condition.
 ///
-/// The condition is EXACT equality, never `> 0`: a smaller total means the read raced the
+/// The condition is exact equality, never `> 0`: a smaller total means the read raced the
 /// loader, a larger one means it double-counted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogFingerprintVerdict {
@@ -438,7 +438,7 @@ pub enum CatalogFingerprintVerdict {
     MatchBase,
     /// Exactly [`EXPECTED_CATALOG_BASE_DLC02`] -- both containers mounted.
     MatchBaseAndDlc02,
-    /// Neither. Oracle 1 FAILS.
+    /// Neither. Oracle 1 fails.
     Mismatch,
 }
 
@@ -524,7 +524,7 @@ fn json_escape(value: &str) -> String {
     out
 }
 
-/// The feature's oracle telemetry document, built from the CURRENT counter values.
+/// The feature's oracle telemetry document, built from the current counter values.
 ///
 /// `status` is the sampler's phase (`waiting` / `sampling` / `latched` / `gave_up`) and
 /// `detail` is the human-readable reason behind it. The two negative oracles are emitted as
@@ -589,7 +589,7 @@ value above zero is missing icons, not missing captions\",\
 ///
 /// Not zero, and not a fudge factor either: the engine drops a warped character onto the
 /// floor and resolves collision, so the settled Y in particular is expected to differ from
-/// the authored point. The bound is tight enough that landing at a DIFFERENT spawn point
+/// the authored point. The bound is tight enough that landing at a different spawn point
 /// (the shipped points are tens of metres apart) still fails.
 pub const INVASION_WARP_POSITION_TOLERANCE_METRES: f32 = 5.0;
 
@@ -632,7 +632,7 @@ pub fn warp_arrival_within_tolerance(requested: [f32; 3], settled: [f32; 3]) -> 
 mod tests {
     use super::*;
 
-    /// SERIALISES THE THREE TESTS THAT MUTATE THIS MODULE'S PROCESS-GLOBAL PUBLISH STATE.
+    /// SERIALISES the three tests that MUTATE this module'S process-global publish state.
     ///
     /// `publish_document`, `publish_lobby_oracles`, `publish_hunt_oracles` and
     /// `republish_if_location_matchmaking_changed` all read and write statics --
@@ -640,12 +640,12 @@ mod tests {
     /// Rust runs the tests in one binary across several threads, so without this the three of
     /// them interleave on that shared state.
     ///
-    /// MEASURED, 2026-09-02: `a_counter_that_moves_after_the_sampler_latches...` failed on
+    /// Measured, 2026-09-02: `a_counter_that_moves_after_the_sampler_latches...` failed on
     /// "an unchanged counter set must not rewrite the document" in one `check.sh` run and passed
     /// in the previous run on the identical tree. The interleaving is exactly that assertion's
     /// blind spot -- `the_telemetry_document_carries_all_four_location_matchmaking_counters`
     /// calls `publish_lobby_oracles(5, 2)`, and when that lands between the other test's
-    /// `publish_document` and its first republish check, the counters HAVE changed and the
+    /// `publish_document` and its first republish check, the counters have changed and the
     /// republish correctly returns true. The test was right; its isolation was missing.
     ///
     /// A plain `Mutex` rather than a lock crate: the only requirement is mutual exclusion, and
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn a_counter_that_moves_after_the_sampler_latches_still_reaches_the_document() {
         let _serialised = publish_state_guard();
-        // THE MEASURED BUG, 2026-08-06. The document was written only by the catalog sampler,
+        // The measured bug, 2026-08-06. The document was written only by the catalog sampler,
         // which stops at `Latched`. A hunt filter added minutes later left the file reporting
         // zero, and the driver reading it concluded the detour had declined -- a false negative
         // produced by the very instrument meant to prevent them.
@@ -877,7 +877,7 @@ mod tests {
             classify_catalog(EXPECTED_CATALOG_BASE_DLC02),
             CatalogFingerprintVerdict::MatchBaseAndDlc02
         );
-        // One block short of the DLC total: a read that raced the loader must FAIL, not pass
+        // One block short of the DLC total: a read that raced the loader must fail, not pass
         // on a "> 0" reading.
         let mut short = EXPECTED_CATALOG_BASE_DLC02;
         short.block_count -= 1;
@@ -911,7 +911,7 @@ mod tests {
         assert!(base_only.contains("MATCH (base only"), "{base_only}");
 
         // A failing read still prints both fingerprints, so the user never has to look
-        // anything up to see WHY it failed.
+        // anything up to see why it failed.
         let bad = describe_catalog_oracle(InvasionWarpCatalogSummary {
             block_count: 12,
             target_count: 40,

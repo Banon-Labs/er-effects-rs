@@ -6,13 +6,13 @@ facts line:
 
   STALLFACTS|friction=..|admission=..|handback=..|blame=..|acted=0|1|blocked=0|1|question=0|1|owned=0|1
 
-The RULE over those facts lives in .cupcake/policies/claude/no_stall_on_friction.rego and is covered
-by .cupcake/tests/no_stall_on_friction_test.rego. THIS file covers the EXTRACTION, and it does so
-against the VERBATIM corpus from the session that prompted the policy (2026-08-04) -- the real
+The rule over those facts lives in .cupcake/policies/claude/no_stall_on_friction.rego and is covered
+by .cupcake/tests/no_stall_on_friction_test.rego. This file covers the extraction, and it does so
+against the verbatim corpus from the session that prompted the policy (2026-08-04) -- the real
 turn-ending messages sent immediately after user frustration. Between the two suites the corpus is
 proven end to end: text in, facts out, halt or no halt.
 
-We drive the script against crafted transcript JSONL under a temporary HOME so its
+We drive the script against crafted transcript JSONL under a temporary home so its
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the facts.
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ def user(text: str) -> dict:
 
 
 def tool_result() -> dict:
-    """A tool-result carrier user event -- must NOT split the assistant turn."""
+    """A tool-result carrier user event -- must not split the assistant turn."""
     return {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
 
 
@@ -140,7 +140,7 @@ def main() -> int:
         question="0",
     )
 
-    # Corpus #4 -- sarcasm, then a decision handed back. The turn DID act (it wrote a script and hit
+    # Corpus #4 -- sarcasm, then a decision handed back. The turn did act (it wrote a script and hit
     # a guard), so acted=1 must be reported and the policy must halt anyway.
     expect_facts(
         "corpus-4-handback-after-acting",
@@ -156,7 +156,7 @@ def main() -> int:
         question="0",
     )
 
-    # --- verbatim corpus: the turn that was CORRECT -----------------------------------------------
+    # --- verbatim corpus: the turn that was correct -----------------------------------------------
 
     # Corpus #2 -- the assistant admitted it and resumed the abandoned work in the same turn.
     expect_facts(
@@ -267,7 +267,7 @@ def main() -> int:
 
     # --- turn boundaries --------------------------------------------------------------------------
 
-    # A slip in a NON-final block of the turn must not be masked by a later clean block.
+    # A slip in a non-final block of the turn must not be masked by a later clean block.
     expect_facts(
         "admission-in-nonfinal-block",
         [

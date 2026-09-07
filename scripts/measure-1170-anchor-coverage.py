@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """How much of an address range can `map-rvas-1162-to-1170.py` resolve, and what do anchors buy?
 
-WHY A MEASUREMENT AND NOT AN IMPRESSION. "The map is sparse around 0x9axxxx" is the kind of claim
+Why a measurement and not an impression. "The map is sparse around 0x9axxxx" is the kind of claim
 that gets repeated for months without anybody knowing whether it is still true. This runs the
-mapper over EVERY `.pdata`-declared function entry in a range and counts, so the sparseness has a
+mapper over every `.pdata`-declared function entry in a range and counts, so the sparseness has a
 number and a fix has a before and an after.
 
-THE ONE-ADDRESS-AT-A-TIME RULE, which is the whole point of the harness. `resolve_all` lets the
-addresses in a work list anchor EACH OTHER: map fifty neighbours together and the ones that match
+The one-address-at-A-time rule, which is the whole point of the harness. `resolve_all` lets the
+addresses in a work list anchor each OTHER: map fifty neighbours together and the ones that match
 uniquely settle the ones that do not, so a batch run flatters itself and tells you nothing about
-the situation an agent is actually in -- holding ONE address that a feature needs. So every entry
-here is mapped ALONE. Pass 1 is computed once per address (`map_all`) and pass 2 is then run under
+the situation an agent is actually in -- holding one address that a feature needs. So every entry
+here is mapped alone. Pass 1 is computed once per address (`map_all`) and pass 2 is then run under
 each anchor policy over that same cached candidate list, which is both fast and the only way to be
 sure the two policies were judged on identical evidence.
 
@@ -19,7 +19,7 @@ sure the two policies were judged on identical evidence.
                      picked one of them
     unresolved       neither -- the honest answer, and a Ghidra lookup
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/measure-1170-anchor-coverage.py
     ... --region 0x870000:0x880000 --region 0x9a0000:0x9b0000
     ... --anchors none              # what the tool could do before any ledger was consulted
@@ -82,7 +82,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # RE-EXEC UNDER uv IF capstone IS ABSENT, the bootstrap `check-leaf-extent-pdata-coverage.py`
+    # RE-EXEC under uv if capstone is absent, the bootstrap `check-leaf-extent-pdata-coverage.py`
     # and `verify-thunk-rva-1170.py` already carry. There is no system pip here, so the mapper's
     # decoder import would otherwise die with a bare ImportError at exit 1 -- indistinguishable
     # from a real finding.
@@ -132,14 +132,14 @@ def main():
                     done.add(candidate)
             return done
 
-        # ONE ADDRESS PER `settle` CALL, and this loop is the whole harness. `settle` anchors on
+        # One address per `settle` call, and this loop is the whole harness. `settle` anchors on
         # every uniquely-mapped address in the dict it is handed, so passing a whole region at once
         # lets that region's unique entries anchor the rest of it -- which measures a batch run,
         # not the question asked, and flatters the tool by exactly the amount the caller's typing
-        # happened to help. Handing `settle` ONE address leaves the ledger as the only anchor
+        # happened to help. Handing `settle` one address leaves the ledger as the only anchor
         # source there is, which is what somebody holding a single address a feature needs
         # actually has. The difference is not cosmetic. Measured over the three default regions
-        # with NO ledger: batched, 855 of 1,121 entries resolve; one at a time, 128 do, and every
+        # with no ledger: batched, 855 of 1,121 entries resolve; one at a time, 128 do, and every
         # one of those 128 matched uniquely and needed no anchor at all.
         settled = {}
         for va in entries:
@@ -170,8 +170,8 @@ def main():
             for va in sorted(unresolved):
                 print(f"    unresolved {va:#x}  ({settled[va][1]})")
         if args.suggest:
-            # GREEDY, and greedy is the right shape here for a reason worth stating: an anchor's
-            # value is not its own correctness but how many OTHER addresses its delta settles, and
+            # Greedy, and greedy is the right shape here for a reason worth stating: an anchor's
+            # value is not its own correctness but how many other addresses its delta settles, and
             # that is a set-cover payoff -- the second anchor 0x2000 from the first is worth almost
             # nothing, while one in an untouched span is worth a hundred entries. Ranking
             # candidates independently would pick a cluster.

@@ -2,14 +2,14 @@
 //!
 //! The importer itself lives in `er-build-import-runtime`, which the standalone
 //! `er-build-import` shell also drives. This module is only the row's two halves inside the
-//! product DLL: the PRESS, which hands the runtime a URL, and the per-frame TICK, which is the game
+//! product DLL: the press, which hands the runtime a URL, and the per-frame tick, which is the game
 //! thread the runtime needs in order to touch anything.
 //!
 //! # Why the press cannot just do the import
 //!
 //! The press arrives on whichever thread dispatched the menu activation, inside a native
 //! `PropertyNewButtonController` action. The import mutates the inventory, the `CSGaitemImp`
-//! singleton, `PlayerGameData` and the equipment slots, and it begins with a blocking HTTPS GET.
+//! singleton, `PlayerGameData` and the equipment slots, and it begins with a blocking HTTPS get.
 //! Neither belongs there. So the press only calls `request`, which spawns the fetch worker and
 //! returns; the recurring `FrameBegin` task then applies the parsed build once the game can take it
 //! (params streamed, character in the world). That split is the runtime's whole shape, and this row
@@ -50,7 +50,7 @@ impl BuildUrlPress {
 /// Handle a confirmed press of the Load Build from URL row: open the link field.
 ///
 /// The press itself imports nothing. It latches a request for the field, which the menu pump
-/// submits and the player then accepts or backs out of; only an accepted, VALIDATED link becomes an
+/// submits and the player then accepts or backs out of; only an accepted, validated link becomes an
 /// import. That is the whole point of the row -- pressing it must never apply a build the player
 /// has not just looked at and confirmed.
 pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
@@ -58,7 +58,7 @@ pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
     // Drain first, because `request` clears the runtime's error slot as it claims the machine. The
     // per-frame drain in `system_quit_build_import_tick` has almost certainly already taken it, but
     // "almost certainly" is how a failure the player asked about goes missing -- and draining here
-    // also guarantees the line lands ABOVE this press in the log, attributed to the right request.
+    // also guarantees the line lands above this press in the log, attributed to the right request.
     drain_build_import_failure();
     set_build_url_row_help(er_build_import_core::BUILD_URL_ROW_HELP);
     if request_build_url_editor(dialog) {
@@ -69,7 +69,7 @@ pub(crate) fn system_quit_start_build_import(dialog: usize) -> BuildUrlPress {
     }
 }
 
-/// Hand a VALIDATED link to the importer. Called only by the link field, after
+/// Hand a validated link to the importer. Called only by the link field, after
 /// `er_build_import_core::validate_build_url` has accepted it.
 pub(crate) fn system_quit_start_build_import_url(url: &str) -> BuildUrlPress {
     match er_build_import_runtime::request(url) {
@@ -88,7 +88,7 @@ pub(crate) fn system_quit_start_build_import_url(url: &str) -> BuildUrlPress {
 ///
 /// Best effort, and deliberately quiet on failure: the import has already been requested by the
 /// time this runs, so a read-only game directory must not turn a working import into an error the
-/// player sees. Only links that VALIDATED reach here, so the file never gains a key the boot
+/// player sees. Only links that validated reach here, so the file never gains a key the boot
 /// importer would then refuse.
 pub(crate) fn persist_build_url(url: &str) {
     let Some(path) = er_game_base::log::game_directory_path()

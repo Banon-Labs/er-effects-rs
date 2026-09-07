@@ -11,7 +11,7 @@
 //!
 //! So the classifier is allowed to be wrong, and this catches it: non-neutral, the playhead not
 //! advancing, no input consumed, for long enough that nothing else explains it. The animation is then forced
-//! back to idle and written into `er-npc-possess.derived.toml` as `unusable`, so the SAME move
+//! back to idle and written into `er-npc-possess.derived.toml` as `unusable`, so the same move
 //! cannot cost the player a second session. The classifier heals from its own failures rather than
 //! needing a corpus change.
 //!
@@ -22,11 +22,11 @@
 //! Only the conjunction -- non-neutral, the playhead frozen, and nobody asking for anything -- has
 //! no innocent reading.
 //!
-//! # It asks whether the ANIMATION advanced, not whether the BODY moved
+//! # It asks whether the animation advanced, not whether the body moved
 //!
 //! It used to ask the second, and that was wrong in a way that got worse the longer a possession
 //! lasted. A stance, a charge and a wind-up all animate correctly while translating nothing; more
-//! damagingly, while locomotion is broken EVERY attack translates nothing, so the watchdog would
+//! damagingly, while locomotion is broken every attack translates nothing, so the watchdog would
 //! deny one animation every four seconds until the creature's moveset was empty. Denials are
 //! permanent for the session, so that is unrecoverable without releasing. The playhead --
 //! `animQueue[readIdx].localTime` -- answers the question actually being asked.
@@ -46,7 +46,7 @@ pub(crate) struct Sample {
     /// The animation the TimeAct queue says is playing, from
     /// `CSChrTimeActModule::anim_queue[read_idx].anim_id`.
     pub(crate) animation: i32,
-    /// Is the playing animation one of THIS creature's shipped moves?
+    /// Is the playing animation one of this creature's shipped moves?
     ///
     /// Resolved by the dispatcher against the table rather than from the id's magnitude. A
     /// possessed Battlemage idles in animation 43000 and spawns through 3009000/3009500; the old
@@ -56,9 +56,9 @@ pub(crate) struct Sample {
     pub(crate) is_known_move: bool,
     /// `animQueue[readIdx].localTime` -- how far into the clip the playhead is.
     ///
-    /// THIS IS THE LIVENESS TEST, and it replaced root motion on 2026-09-02 because root motion
-    /// was measuring the wrong thing. The question is whether the ANIMATION is progressing; the
-    /// old test asked whether the BODY was translating, and those come apart badly. A stance, a
+    /// This is the LIVENESS test, and it replaced root motion on 2026-09-02 because root motion
+    /// was measuring the wrong thing. The question is whether the animation is progressing; the
+    /// old test asked whether the body was translating, and those come apart badly. A stance, a
     /// charge and a wind-up all animate perfectly while going nowhere -- and, decisively, while
     /// locomotion is broken every attack in the game goes nowhere, so the watchdog would work its
     /// way through the moveset denying one animation per four seconds until the creature had
@@ -68,13 +68,13 @@ pub(crate) struct Sample {
     /// `None` when the field did not read, which is treated as advancing -- failing the other way
     /// would force idle out of a healthy attack whenever a pointer chain missed.
     pub(crate) local_time: Option<f32>,
-    /// Did the engine ACT on the player's input this frame -- did a request actually land?
+    /// Did the engine act on the player's input this frame -- did a request actually land?
     ///
-    /// CONSUMED, not held, and the distinction is the whole value of this field. Reading it as
+    /// Consumed, not held, and the distinction is the whole value of this field. Reading it as
     /// "the player is touching the controller" hands the softlock case a free pass: somebody
     /// stuck in a pose mashes and holds, which would reset the timer on every frame and mean the
     /// watchdog could never fire in the one situation it exists for. Input that produced nothing
-    /// is evidence OF being stuck, not evidence against it.
+    /// is evidence of being stuck, not evidence against it.
     pub(crate) input_consumed: bool,
     pub(crate) now_ms: u64,
 }
@@ -109,7 +109,7 @@ pub(crate) enum Verdict {
         /// The animation to fire to get out -- always the idle clip.
         idle: i32,
         /// The animation that stuck, to be written into the derived file as `unusable`. This is
-        /// the FIRED id, not the played one, because that is what the config would have to name.
+        /// the fired id, not the played one, because that is what the config would have to name.
         blame: i32,
     },
 }
@@ -229,9 +229,9 @@ mod tests {
     #[test]
     fn a_frozen_animation_is_forced_back_to_idle_and_blamed() {
         let mut dog = watchdog();
-        // TWO samples before the clock can start, and that is not slack: one reading cannot tell
+        // Two samples before the clock can start, and that is not slack: one reading cannot tell
         // a frozen playhead from a moving one. The first establishes the baseline, and suspicion
-        // begins at the first frame that fails to advance PAST it.
+        // begins at the first frame that fails to advance past it.
         assert_eq!(dog.observe(stuck(0)), Verdict::Fine);
         assert_eq!(dog.observe(stuck(1)), Verdict::Fine);
         assert_eq!(dog.observe(stuck(THRESHOLD_MS)), Verdict::Fine);
@@ -268,7 +268,7 @@ mod tests {
         );
     }
 
-    /// THE DEFECT THIS FIELD'S DEFINITION EXISTS TO CLOSE. A player who is genuinely stuck mashes
+    /// The defect this field'S definition exists to close. A player who is genuinely stuck mashes
     /// buttons; if "input" meant "a button is down" rather than "a request landed", every one of
     /// those presses would reset the timer and the watchdog could never fire in the exact
     /// situation it is for.
@@ -276,7 +276,7 @@ mod tests {
     fn mashing_at_a_softlock_does_not_hold_the_watchdog_off() {
         let mut dog = watchdog();
         for step in 0..20 {
-            // Buttons going down every frame, and NOTHING landing -- which is what being stuck
+            // Buttons going down every frame, and nothing landing -- which is what being stuck
             // looks like from the driver's side, because the request slot never clears.
             let mashing = Sample {
                 input_consumed: false,
@@ -318,8 +318,8 @@ mod tests {
         }
     }
 
-    /// THE REGRESSION THIS TEST EXISTS FOR. An attack that animates correctly while the body goes
-    /// nowhere is a stance, a charge, a wind-up -- or ANY attack at all while locomotion is
+    /// The regression this test exists for. An attack that animates correctly while the body goes
+    /// nowhere is a stance, a charge, a wind-up -- or any attack at all while locomotion is
     /// broken. The old root-motion test denied all of them, one every four seconds, permanently
     /// for the session. The playhead advancing is what says the animation is healthy.
     #[test]
@@ -404,7 +404,7 @@ mod tests {
     /// The ids that broke the threshold, pinned so no future ceiling can reintroduce it.
     ///
     /// Measured on the live 2026-09-02 Battlemage run: a possessed c3704 idles in a 3-second
-    /// LOOP whose id is 43000 and spawns through 3009000 and 3009500. Its shipped moves top out
+    /// loop whose id is 43000 and spawns through 3009000 and 3009500. Its shipped moves top out
     /// at 6023. Every one of those three is above any threshold that would still call 3000 an
     /// attack, which is why the test is membership and not magnitude.
     #[test]

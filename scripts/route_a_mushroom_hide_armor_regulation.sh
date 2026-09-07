@@ -76,8 +76,8 @@ path_separator() {
 	fi
 }
 
-# Env override first, then the repo/sibling checkouts, then the CURRENT user's home. /mnt/d is
-# the retired WSL2 layout and is LAST-resort only: it does not exist on a native Linux box, so
+# Env override first, then the repo/sibling checkouts, then the current user's home. /mnt/d is
+# the retired WSL2 layout and is last-resort only: it does not exist on a native Linux box, so
 # leaving it ahead of a real install made a present Smithbox read as "the tool is missing".
 find_smithbox_dir() {
 	if [[ -n "$smithbox_dir" ]]; then

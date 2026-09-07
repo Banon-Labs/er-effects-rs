@@ -14,7 +14,7 @@
 //!    ```
 //!
 //!    `IsGameInForeground` (`0x14266df00`) is four instructions: `GetForegroundWindow()` compared
-//!    against `CSWindowImp+0x8`. So `bVar2` is "run the normal input update", and the ONLY way an
+//!    against `CSWindowImp+0x8`. So `bVar2` is "run the normal input update", and the only way an
 //!    unfocused frame reaches it is through `CSPadStep+0xba`.
 //!
 //! 2. `CSPadStep+0xba` is not state. `STEP_Update` REWRITES it at its own tail, every frame:
@@ -35,7 +35,7 @@
 //!    jmp   qword ptr [rsp - 8]
 //!    ```
 //!
-//!    Ghidra reports exactly ONE reader of `0x144588af1` (that instruction) and exactly TWO callers
+//!    Ghidra reports exactly one reader of `0x144588af1` (that instruction) and exactly two callers
 //!    of the getter (`STEP_Update` and the `CSPadStep` constructor). The byte ships as `0x00` in
 //!    both images. There is no other consumer to disturb.
 //!
@@ -47,7 +47,7 @@
 //!    FD4::FD4PadManager::Update(GLOBAL_FD4PadManager, time);   // 0x142667c70
 //!    ```
 //!
-//!    and SKIPS `CSMouseMan::Update` entirely. `FD4PadManager::Update` latches that byte forward
+//!    and skips `CSMouseMan::Update` entirely. `FD4PadManager::Update` latches that byte forward
 //!    into `+0x2f9`, and every `CSInGamePad` query short-circuits on it -- `FUN_142664380`,
 //!    `FUN_142664280`, `FUN_1426640f0`, all reached from `PollInput` (`0x142665060`), each opening
 //!    with `if (GLOBAL_FD4PadManager->field625_0x2f9 == false) { ...read the pad... }`. So a probe
@@ -57,14 +57,14 @@
 //!
 //! `docs/recon/rva-map-1162-to-1170.functions.tsv` already carries both callers
 //! (`0xe33aa0 -> 0xe358a0`, `0xe328d0 -> 0xe346d0`). Decoding those two 1.17 functions
-//! (`scripts/find-debug-flag-getter.py`) finds the getter call at the IDENTICAL byte offsets --
+//! (`scripts/find-debug-flag-getter.py`) finds the getter call at the identical byte offsets --
 //! `+0xa3c` and `+0x7e` -- both reaching one stub at `0x140e55020`, which reads `0x14458cb71`.
 //! That is `0x4588af1 + 0x4080`, and `+0x4080` is the delta every already-mapped `.data` neighbour
 //! moved by (`0x4588e98`, `0x4589390`, `0x45896a8`, `0x4589ad8`, `0x4589bdc`).
 //! `scripts/map-data-rvas-1162-to-1170.py 0x4588af1 --confirm 0x458cb71` agrees, and the pair is
 //! recorded in that script's `SHAPE_RESCUED` table so the generated map carries it.
 //!
-//! # What was ELIMINATED
+//! # What was eliminated
 //!
 //! * **Patching `IsGameInForeground` itself** -- a user directive already forbids it (2026-07-16,
 //!   `crates/er-title-flow/src/constants_autoload_state.rs`), and the reason is visible right here:
@@ -77,7 +77,7 @@
 //!   `0x6` (`| DISCL_FOREGROUND`) when
 //!   `DLUserInputManagerImpl+0x88f` (`Ext.UserInput.CooperativeLevel.SetForeGround.Keyboard`) is
 //!   set. That field comes from `GetPropertyBoolean(props, name, false)` -- a debug system
-//!   property, default FALSE -- so the shipped device is acquired BACKGROUND and keeps delivering
+//!   property, default false -- so the shipped device is acquired background and keeps delivering
 //!   while unfocused. Not the gate.
 //! * **The DLUID `+0x88d` "input active" latch** that `er-input-harness` re-asserts every frame.
 //!   Its only consumer is guarded by the same default-false `Ext.*.SetForeGround.*` flags --
@@ -88,8 +88,8 @@
 
 /// `Game.Debug.IsEnableControlOnDisactiveWindow`'s backing byte.
 ///
-/// `_DATA_` IS LOAD-BEARING IN THE NAME, not decoration. This is a `.data` address, translated by
-/// the DATA map (`docs/recon/rva-map-1162-to-1170.data.tsv`), and NOTHING detours it -- this shell
+/// `_DATA_` is load-bearing in the name, not decoration. This is a `.data` address, translated by
+/// the data map (`docs/recon/rva-map-1162-to-1170.data.tsv`), and nothing detours it -- this shell
 /// writes the byte, `er-quickload`'s `can_move_probe` reads it. `scripts/check-shared-hook-rvas.py`
 /// cannot tell an aliased data address from a hook target by text (it says so itself, and a
 /// proximity rule for it was tried and rejected), so it read the two crates naming this one value
@@ -160,13 +160,13 @@ const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
 /// Cheap plausibility screen for the dereferenced singleton, matching `er-input-harness`.
 const HEAP_LO: usize = 0x10000;
 
-/// Hold `[DLUID+0x88d] = 1`, the SECOND (and, on a stock build, inert) focus latch.
+/// Hold `[DLUID+0x88d] = 1`, the second (and, on a stock build, inert) focus latch.
 ///
 /// # Why it is here even though it is expected to do nothing
 ///
 /// This is the lever `er-input-harness` re-asserts every frame and the one the standing RE notes
 /// name as "the input-accept-while-unfocused flag". Its only consumer in the whole image is
-/// `FUN_141f6bad0` (the pad poll), and it is read ONLY inside
+/// `FUN_141f6bad0` (the pad poll), and it is read only inside
 ///
 /// ```text
 /// if (mgr->Ext_UserInput_CooperativeLevel_SetForeGround_Pad != false) {
@@ -182,7 +182,7 @@ const HEAP_LO: usize = 0x10000;
 /// switch.
 ///
 /// It is asserted anyway because the cost is one byte store on a pointer we already validate, and
-/// because the ONE configuration where it matters -- a build or a `.ini` that does set those
+/// because the one configuration where it matters -- a build or a `.ini` that does set those
 /// properties -- is precisely the configuration where forcing only the `CSPadStep` flag would
 /// leave the pad poll returning early with no log line to say why. Its return value is reported
 /// separately so a run can tell which lever actually did the work.

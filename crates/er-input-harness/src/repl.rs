@@ -1,4 +1,4 @@
-//! A LIVE COMMAND LOOP, so exploring the running game stops costing a relaunch.
+//! A live command loop, so exploring the running game stops costing a relaunch.
 //!
 //! # Why this exists
 //!
@@ -9,10 +9,10 @@
 //!
 //! # Why not Frida
 //!
-//! Frida would give read AND call in one attach, which is exactly the shape wanted here. It is not
+//! Frida would give read and call in one attach, which is exactly the shape wanted here. It is not
 //! usable on this target: `frida.attach()` on the Wine/Proton `eldenring.exe` injects a bootstrapper
-//! that segfaults INSIDE the game -- "bootstrapper crashed with signal 11", process gone, measured
-//! 2026-08-12 on a live session that was being held open. Attaching at SPAWN is a different code
+//! that segfaults inside the game -- "bootstrapper crashed with signal 11", process gone, measured
+//! 2026-08-12 on a live session that was being held open. Attaching at spawn is a different code
 //! path and might survive, but me3 owns the spawn: it launches the exe and injects the mod host, so
 //! there is no point at which frida could own the process first without displacing the loader the
 //! whole product depends on.
@@ -31,8 +31,8 @@
 //! <command>
 //! ```
 //!
-//! The sequence number is what makes the file a QUEUE rather than a repeating instruction: the
-//! command runs when the number CHANGES, so rewriting the file with the same number is inert and a
+//! The sequence number is what makes the file a queue rather than a repeating instruction: the
+//! command runs when the number changes, so rewriting the file with the same number is inert and a
 //! command cannot fire twice because a frame happened to re-read it. Results go to the harness log,
 //! which is already redirected per-run.
 //!
@@ -64,7 +64,7 @@
 //! indistinguishable from a pointer that is not landing at all. So the sweep drives itself: it
 //! holds one coordinate per poll -- the game needs a frame to hit-test, which is exactly why this
 //! cannot be a loop inside a single command -- and logs only the coordinates where a hovered cell
-//! CHANGED. The output is therefore a coordinate-to-row map, and after one sweep a row is addressed
+//! changed. The output is therefore a coordinate-to-row map, and after one sweep a row is addressed
 //! by index rather than searched for.
 //!
 //! ```text
@@ -91,7 +91,7 @@ use crate::win32::read_usize;
 /// How often the command file is consulted. A file read every frame would be a syscall per frame for
 /// a path that is idle almost always; 12 frames is a fifth of a second at 60fps and still costs the
 /// game thread almost nothing. It was 30, which put up to half a second of dead time in front of
-/// EVERY press -- the dominant cost when the drive is walking a menu one row at a time.
+/// every press -- the dominant cost when the drive is walking a menu one row at a time.
 const POLL_INTERVAL_FRAMES: u64 = 12;
 /// Chunk size for the memory walk -- same 64KB the title-owner scan uses.
 const CHUNK_BYTES: usize = 0x10000;
@@ -113,7 +113,7 @@ const GRID_CONTROL_SELECTED_D4_OFFSET: usize = 0xd4;
 const PROFILE_DIALOG_CURSOR_GRID_A38_OFFSET: usize = 0xa38;
 const PROFILE_DIALOG_SLOT_BOUND_B08_OFFSET: usize = 0xb08;
 
-/// Report the picker's cursor by NAME rather than leaving it as one of a dozen anonymous grids.
+/// Report the picker's cursor by name rather than leaving it as one of a dozen anonymous grids.
 ///
 /// A bare scan lists every live `CS::GridControl` and cannot say which one the screen in front of
 /// the user is driving. That ambiguity produced a false negative worth avoiding twice: a Right press
@@ -149,7 +149,7 @@ const SWEEP_POLL_INTERVAL_FRAMES: u64 = 5;
 
 /// A held input that releases itself after N polls. Without this a press is either instantaneous
 /// (gone before the game reads it) or permanent (the drive silently owns the key for the rest of the
-/// run) -- and the menu needs an EDGE, so neither works.
+/// run) -- and the menu needs an edge, so neither works.
 struct Hold {
     /// `Some(dik)` for a DirectInput scancode, `None` for a virtual key.
     dik: Option<u8>,
@@ -179,7 +179,7 @@ fn advance_hold(base: usize) -> bool {
         hold.polls_left -= 1;
         return true;
     }
-    // Release EVERY channel a hold could have engaged, not just the one it declared. A `force`
+    // Release every channel a hold could have engaged, not just the one it declared. A `force`
     // hold declares neither a scancode nor a virtual key, and leaving its answer latched would make
     // the menu see that code held for the rest of the session.
     crate::menu_query::clear_forced();
@@ -192,7 +192,7 @@ fn advance_hold(base: usize) -> bool {
     }
     *guard = None;
     drop(guard);
-    // The RELEASE is the half that commits a menu action, so the cells are read after it rather
+    // The release is the half that commits a menu action, so the cells are read after it rather
     // than while the key is still down.
     let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
     let (hits, _) = scan_for_qword(vtable, DEFAULT_MAX_HITS);
@@ -211,7 +211,7 @@ fn advance_hold(base: usize) -> bool {
 struct Typing {
     /// `(dik, needs_shift)` per character, already resolved -- an unmappable character is rejected
     /// when the command is parsed rather than silently skipped mid-path, because a save path missing
-    /// one character fails as a WRONG path, not as an obvious error.
+    /// one character fails as a wrong path, not as an obvious error.
     keys: Vec<(u8, bool)>,
     index: usize,
     /// Two-phase per character: press, then release. A held-through transition types one character.
@@ -229,11 +229,11 @@ static TYPING: std::sync::Mutex<Option<Typing>> = std::sync::Mutex::new(None);
 /// command starts per poll, and only once the previous press has been released.
 static QUEUE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-/// ASCII to DirectInput scancode, plus whether SHIFT is required. Only the characters a Windows save
+/// ASCII to DirectInput scancode, plus whether shift is required. Only the characters a Windows save
 /// path can contain are mapped; anything else returns `None` so the caller can refuse the whole
 /// string.
 fn ascii_to_dik(c: char) -> Option<(u8, bool)> {
-    // SHIFTED SPECIALS FIRST. They must be tested before the base table, not after: `:` is not in
+    // Shifted specials first. They must be tested before the base table, not after: `:` is not in
     // the base table at all, so an arrangement that matches the base first returns `None` and the
     // whole string is refused -- which is exactly what happened to
     // `Z:\home\banon\...\ER0000.co2`, a path whose only unmappable character was its drive colon.
@@ -335,7 +335,7 @@ fn advance_typing() -> bool {
         typing.releasing = false;
         typing.index += 1;
     } else {
-        // SHIFT rides the USER32 virtual-key channel while the character rides the DirectInput one.
+        // Shift rides the USER32 virtual-key channel while the character rides the DirectInput one.
         // They are different stages, and a shifted character needs both down at the same instant.
         if shift {
             crate::key_inject::hold_vk(0x10); // VK_SHIFT
@@ -348,14 +348,14 @@ fn advance_typing() -> bool {
 
 /// A walk over the FD4 pad virtual-key id space, one id per poll.
 ///
-/// WHY THE PAD AND NOT ANOTHER KEY. The binding table this drive already dumps says list up/down are
-/// menu codes 0x2c/0x2d, and BOTH read `kb=0xffffffff` -- unbound on the keyboard by design, with
+/// Why the PAD and not another key. The binding table this drive already dumps says list up/down are
+/// menu codes 0x2c/0x2d, and both read `kb=0xffffffff` -- unbound on the keyboard by design, with
 /// only pad ids (9 and 10) attached. That is consistent with everything measured on the save-file
 /// picker: Down, S and Tab leave the dialog byte-identical, and a 36-point mouse sweep across the
 /// whole screen produced no cursor transition on any of the twelve live GridControls. The pad is the
 /// one channel the table says exists and the one this drive has never injected.
 ///
-/// It is a SWEEP rather than a single id because the binding table's small numbers (9, 10) and the
+/// It is a sweep rather than a single id because the binding table's small numbers (9, 10) and the
 /// virtual-key array's 1000..1080 ids are two different numbering schemes, and the mapping between
 /// them has never been measured -- guessing `1000 + 9` would be exactly the kind of assumption that
 /// produces a silent no-op indistinguishable from a dead channel.
@@ -426,7 +426,7 @@ struct Sweep {
     nx: u32,
     ny: u32,
     index: u32,
-    /// Cells from the previous point, so only CHANGES are logged. A sweep that printed every point
+    /// Cells from the previous point, so only changes are logged. A sweep that printed every point
     /// would bury the four or five transitions that matter under fifty identical lines.
     previous: Vec<(usize, i32)>,
 }
@@ -648,14 +648,14 @@ fn run_command(base: usize, line: &str) {
                 harness_log!("repl: point needs two decimal coordinates -- 'point <x> <y>'");
                 return;
             };
-            // BOTH LAYERS. The pad-device pair is the field the menu reads; the USER32 answer is
+            // Both layers. The pad-device pair is the field the menu reads; the USER32 answer is
             // what refills that field each frame. Writing only the first was measured inert (five
             // coordinates, hovered cell never left 0), so the cursor answer is the one that matters
             // and the pad write is kept only so the very next hit-test does not lag a frame behind.
             let wrote = crate::pad_inject::write_menu_pointer(x, y);
             let held = crate::key_inject::hold_cursor(x, y);
             harness_log!("repl: point {x} {y} -> pad_wrote={wrote} cursor_held={held}");
-            // Report the cell IN THE SAME COMMAND. A separate read would race the game's own
+            // Report the cell in the same command. A separate read would race the game's own
             // hit-test and the pointer's decay back to whatever the device reports, which is how a
             // pointer write gets scored as ineffective when it actually worked for one frame.
             let vtable = base + GRID_CONTROL_VTABLE_RVA_1170;
@@ -737,9 +737,9 @@ fn run_command(base: usize, line: &str) {
             });
         }
         Some("openmenu") => {
-            // THE PAUSE MENU IS NOT OPENED BY A KEYPRESS. `Phase::OpenPauseMenu` sets the
+            // The pause menu is not opened by a KEYPRESS. `Phase::OpenPauseMenu` sets the
             // request-open-IngameTop flag at `CSPopupMenu+0x121` (reached through `CSMenuMan+0x80`),
-            // which `CSPopupMenu::Update` consumes on the next frame -- it opened in ONE frame in run
+            // which `CSPopupMenu::Update` consumes on the next frame -- it opened in one frame in run
             // br-20260905-194101-bd9d. That mechanism lived only inside the phase table, so a REPL
             // drive (which runs with `phases=0`) had no way to reach it and every attempt to open the
             // menu by sending a scancode failed silently. Exposed as a verb so the drive never has to
@@ -768,7 +768,7 @@ fn run_command(base: usize, line: &str) {
                 match ascii_to_dik(c) {
                     Some(pair) => keys.push(pair),
                     None => {
-                        // REFUSE THE WHOLE STRING. Skipping one character of a save path yields a
+                        // Refuse the whole string. Skipping one character of a save path yields a
                         // path that is wrong rather than one that is obviously broken, and the
                         // failure then looks like "the save is missing".
                         harness_log!("repl: type REFUSED -- no scancode for {c:?} in {text:?}");
@@ -874,9 +874,9 @@ fn run_command(base: usize, line: &str) {
                 return;
             };
             let polls = parse_usize(parts.next()).unwrap_or(3) as u32;
-            // WHY A SEPARATE VERB FROM `key`. `key` stamps a DirectInput SCANCODE, which is what
+            // Why a separate VERB from `key`. `key` stamps a DirectInput SCANCODE, which is what
             // the game's menus read. The native SoftwareKeyboardJob behind the path field is a
-            // Windows TEXT surface and reads USER32 instead, so DirectInput cannot reach it at all:
+            // Windows text surface and reads USER32 instead, so DirectInput cannot reach it at all:
             // Escape (DIK 0x01) and Return (DIK 0x1c) both produced no log line and no state change
             // while the field was open, and a 74-character `type` left the field showing its
             // prefilled path. Two channels, two verbs -- collapsing them would make "the key never
@@ -894,7 +894,7 @@ fn run_command(base: usize, line: &str) {
             });
         }
         Some("release") => {
-            // HAND THE MOUSE BACK. While a position is held, every `GetCursorPos` in the process is
+            // Hand the mouse back. While a position is held, every `GetCursorPos` in the process is
             // answered with it -- including the user's own, if they take the session over. A drive
             // that can point must be able to stop pointing, or it silently owns the pointer for the
             // rest of the run.
@@ -979,7 +979,7 @@ pub fn on_frame(base: usize) {
         // `point` fight it for the same field and make the resulting map unattributable.
         return;
     }
-    // The queue is drained BEFORE a new file is read, so a drive already in progress finishes its
+    // The queue is drained before a new file is read, so a drive already in progress finishes its
     // steps rather than being interrupted by a re-read of the same sequence number.
     if advance_queue(base) {
         return;
@@ -998,7 +998,7 @@ pub fn on_frame(base: usize) {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
-    // REPLACE, don't append. A new sequence number is a new instruction from the operator; leaving
+    // Replace, don't append. A new sequence number is a new instruction from the operator; leaving
     // a half-finished previous drive in front of it would run stale presses against a screen that
     // has moved on, which is worse than dropping them.
     guard.clear();

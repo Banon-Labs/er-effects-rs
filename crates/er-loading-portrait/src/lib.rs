@@ -4,16 +4,16 @@
 //! `er-loading-bar`): it proves the `er-loading-portrait-core` feature crate can be built
 //! and loaded as its own native DLL without dragging product hooks, autoload, save
 //! picking, or product runtime state along. On attach it installs a standalone host seam
-//! (own log file, portrait gates ON, everything else neutral), the crate's now-loading
+//! (own log file, portrait gates on, everything else neutral), the crate's now-loading
 //! observer + tip-suppression hooks, and a portrait+stats-only display host: the isolated
 //! native-overlay window on native Windows, the in-swapchain Present compositor on Wine.
 //!
-//! NEVER load this DLL alongside `er_quickload.dll` in one me3 profile (double Present
+//! Never load this DLL alongside `er_quickload.dll` in one me3 profile (double Present
 //! detour / double MinHook) -- see Cargo.toml.
 
 // Everything this shell does -- the log writer, the gates, the host seam it installs, the
 // portrait/stats composition -- exists to serve `#[cfg(windows)]` entry points. Off Windows those
-// entry points are not compiled, so the helpers are unused BY CONSTRUCTION; the `rlib` half still
+// entry points are not compiled, so the helpers are unused by construction; the `rlib` half still
 // builds on the host so the seam-install tests can run. Scoped to `not(windows)` deliberately: the
 // shipping target (x86_64-pc-windows-msvc) keeps full dead-code enforcement over this file.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -105,8 +105,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so `er_crash_logging` writes no record at all and the process
         // just vanishes. This hook is what turns that silence into a file:line. The hook is
         // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
@@ -158,14 +158,14 @@ pub extern "C" fn er_loading_portrait_host_stub() -> i32 {
 /// destroyed it, and `run-portrait-dll-standalone-smoke.sh` additionally `rm -f`'d the live file
 /// pre-launch, which takes the `.prev` with it (two prior runs at once, neither the deleting
 /// run's). The redirect and its game-directory fallback live in `er_game_base::log`, shared with
-/// every other per-run artifact so a run's evidence has ONE convention for where it goes; the
-/// fallback is the GAME directory rather than the CWD because me3 sets the process CWD to
+/// every other per-run artifact so a run's evidence has one convention for where it goes; the
+/// fallback is the game directory rather than the CWD because me3 sets the process CWD to
 /// arbitrary directories, which would scatter a run's evidence away from the rest of it.
 fn log_path() -> PathBuf {
     er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_LOADING_PORTRAIT_PATH", LOG_FILE_NAME)
 }
 
-/// Same for the crash log, which gets its OWN knob rather than following the run log's: the smoke
+/// Same for the crash log, which gets its own knob rather than following the run log's: the smoke
 /// reads the two files for different verdicts -- the run log for attach/Present, the crash log for
 /// "did anything fault" -- and one knob for both would silently leave whichever file the launcher
 /// did not name in the single-slot game directory.
@@ -188,7 +188,7 @@ fn append_compositor_log(args: std::fmt::Arguments<'_>) {
 
 /// Fresh per process, per file: the first line a run writes to `path` truncates it (rotating
 /// the previous run's aside as `<name>.prev`), later lines append. The one-shot is keyed by
-/// PATH, so the run log and the crash log each get their own clean start.
+/// path, so the run log and the crash log each get their own clean start.
 fn append_named_log(path: &std::path::Path, args: std::fmt::Arguments<'_>) {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -217,7 +217,7 @@ fn gate_on() -> bool {
 }
 
 /// Install the standalone host seam: log sink -> this DLL's own log file, the portrait
-/// gates ON (this shell exists to show the portrait+stats overlay), everything else the
+/// gates on (this shell exists to show the portrait+stats overlay), everything else the
 /// crate's neutral defaults (no product slot resolution / repro harness / save picker).
 fn install_standalone_host() {
     let installed =
@@ -444,7 +444,7 @@ mod tests {
     /// square must land red pixels on the otherwise-black canvas, and clearing the
     /// bridge must return the provider to "nothing to draw".
     ///
-    /// The fixture used to be a FULLY OPAQUE 8x8 red square, and the mask gate added on
+    /// The fixture used to be a fully opaque 8x8 red square, and the mask gate added on
     /// 2026-08-21 correctly refuses that: alpha 255 everywhere is precisely the unmasked
     /// buffer that put a character's scene background on the loading screen, and
     /// `portrait_onto` now declines to draw one from either host. So the source gained a

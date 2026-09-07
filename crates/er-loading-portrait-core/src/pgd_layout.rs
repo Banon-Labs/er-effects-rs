@@ -6,7 +6,7 @@ use eldenring::cs::{GameDataMan, PlayerGameData};
 
 /// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
 /// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
-/// at +0x08. CORRECTED 2026-06-17: the prior value 0x4588268 was the WRONG global (read garbage:
+/// at +0x08. Corrected 2026-06-17: the prior value 0x4588268 was the wrong global (read garbage:
 /// level=805829232, name="翿"). The real GameDataMan is 0x3d5df38 -- confirmed by fromsoftware-rs
 /// (`rva::game_data_man = 0x3d5df38`, `GameDataMan::main_player_game_data` at struct +0x08) and the
 /// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
@@ -17,14 +17,14 @@ use eldenring::cs::{GameDataMan, PlayerGameData};
 /// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
 pub const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
-/// `offset_of!` asks the COMPILER, and the compiler only knows what the sibling binding declares.
+/// `offset_of!` asks the compiler, and the compiler only knows what the sibling binding declares.
 /// That binding is a hand-written 1.16.2 model whose `unkNN` names have already been wrong once
 /// (`FD4StepTemplateBase::unk48` is at 0x50, and back-solving off it put
 /// `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` at 0x40 for its whole life), so the value is also pinned
 /// to a number the game's own instructions produce: `CS::GameDataMan::~GameDataMan` (1.16.2
-/// 0x140254d40, 1.17 0x140254d10, 1103 bytes) aligns 359/359 with 0x8 among its HELD offsets, and
+/// 0x140254d40, 1.17 0x140254d10, 1103 bytes) aligns 359/359 with 0x8 among its held offsets, and
 /// Ghidra's 1.16.2 type names it `mainPlayerGameData` there. This is the sibling of PlayerGameData
-/// that `check-object-field-offsets-1170.py`'s `offset_of!` guard does NOT cover, because that
+/// that `check-object-field-offsets-1170.py`'s `offset_of!` guard does not cover, because that
 /// guard matches on `PlayerGameData` alone.
 const _: () = assert!(GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET == 0x08);
 
@@ -47,7 +47,7 @@ pub use er_game_base::pgd::{PGD_NAME_9C_OFFSET, PGD_NAME_LEN_U16};
 
 pub const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 
-/// `matching_weapon_level` -- the character's HIGHEST weapon upgrade level, maintained by the game
+/// `matching_weapon_level` -- the character's highest weapon upgrade level, maintained by the game
 /// for multiplayer matchmaking. Raw `+0..=+25`, NOT a matchmaking bucket: `CS::ChrIns::
 /// CheckWeaponLevelMismatch` (1.16.2 `0x14068fd30`) guards it with `< 0x1a` and clamps to `0x19`,
 /// then feeds it to the `GetMatchingWeaponLevelUpper*` param lookups that do the bucketing.

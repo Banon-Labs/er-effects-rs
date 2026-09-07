@@ -107,13 +107,13 @@ pub fn encode_payload(character_json: &str) -> String {
 /// Kept as its own function because it is the piece with an exact counterpart on the site;
 /// anything that drifts from `zc` drifts here, and this is where it is checked.
 pub fn planner_encode(text: &str) -> String {
-    // THIS SUBSTITUTION IS A NO-OP HERE, AND IT IS STILL NOT OPTIONAL.
+    // This substitution is a no-OP here, and it is still not optional.
     //
     // `?i=` always reaches this function as base64, which has no braces or brackets, so none of
     // the three sequences can occur and the scan changes nothing. But that is a property of the
-    // INPUT, not of the transform -- and `planner_encode` is public, so the input is not this
+    // input, not of the transform -- and `planner_encode` is public, so the input is not this
     // crate's to guarantee. Eliding the stage would produce a function that happens to work for
-    // one caller instead of one that IS the site's `zc`, and the first caller to hand it raw JSON
+    // one caller instead of one that is the site's `zc`, and the first caller to hand it raw JSON
     // would get a payload the planner cannot decode, silently and only at the far end.
     //
     // See [`substitute_json_tokens`] for the three pairs and for why the reverse direction is

@@ -2,7 +2,7 @@
 """Turn an `er-invasion-warp.log` into a live-top-up verdict.
 
 The question a world-map run answers is narrow: did a legacy dungeon's real invasion points reach
-the map WITHOUT a world re-entry? That is a specific ORDERING in the log -- a `TOP-UP claimed` line
+the map without a world re-entry? That is a specific ordering in the log -- a `TOP-UP claimed` line
 falling between two `WorldMapViewModel ctor` lines, rather than one explained by a ctor. Reading
 that ordering by eye out of a 30k-line log is how earlier runs got mis-summarised (a run was
 reported as "no top-up fired" when the interesting question was which gate refused), so the
@@ -44,7 +44,7 @@ EVENTS: list[tuple[str, re.Pattern[str]]] = [
     ("harvest", re.compile(r"read (\d+) newly resident map\(s\)")),
     ("merge", re.compile(r"(\d+) legacy invasion point\(s\) across (\d+) map\(s\) -> (\d+) separable")),
     # Matches both wordings: the line said "fresh block(s)" before the count was corrected to be
-    # per-POINT. A matcher pinned to one wording made this tool report "NO top-up claimed anything"
+    # per-point. A matcher pinned to one wording made this tool report "NO top-up claimed anything"
     # on a run whose log said it claimed 9 of 9 -- the tool lying is worse than no tool.
     ("claimed", re.compile(r"TOP-UP claimed (\d+) of (\d+) fresh (?:block|POINT)")),
     ("declined", re.compile(r"top-up declined -- (.*)$")),
@@ -53,7 +53,7 @@ EVENTS: list[tuple[str, re.Pattern[str]]] = [
     # The evidence for the four-descriptor icon fix: how many repainted rows' own param disagreed
     # with the icon written, plus a handful of (entity_id, block, wanted, found) samples.
     ("icon_mismatch", re.compile(r"(\d+) of the repainted rows' own BonfireWarpParam")),
-    # Whether the re-colour reached the rows a live top-up claimed. Those live in the DORMANT span,
+    # Whether the re-colour reached the rows a live top-up claimed. Those live in the dormant span,
     # and walking only the injected span is why marking a harvested dungeon repainted exactly one
     # row -- the whole-dungeon marker the top-up had already hidden -- and nothing visible.
     ("dormant_walk", re.compile(r"(\d+) claimed dormant row\(s\) were walked")),
@@ -73,10 +73,10 @@ EVENTS: list[tuple[str, re.Pattern[str]]] = [
 
 
 def classify(line: str) -> list[tuple[str, str]]:
-    """EVERY pattern that matches, not just the first.
+    """Every pattern that matches, not just the first.
 
-    One log line carries several facts. The restyle summary states the repaint counts AND how many
-    claimed dormant rows were walked AND the param-disagreement count. Returning only the first
+    One log line carries several facts. The restyle summary states the repaint counts and how many
+    claimed dormant rows were walked and the param-disagreement count. Returning only the first
     match meant `restyled` swallowed the line and the dormant-coverage check silently saw nothing --
     so the tool reported "this log predates the fix" about a log that contained the fix's own
     output. A reader that can only see one fact per line is a reader that invents absences.
@@ -138,7 +138,7 @@ def selftest() -> int:
         ("claim between entries", [entered, claimed, entered], "WITHOUT A WORLD RE-ENTRY"),
         ("claim after last entry", [entered, claimed], "no later entry"),
     ]
-    # A single line carrying several facts must yield ALL of them.
+    # A single line carrying several facts must yield all of them.
     multi = (
         "er-invasion-warp: map-inject: restyled LIVE pins -- 10 of 476 repainted at generation "
         "12, 0 of 476 span row(s) REFUSED ... 9 claimed dormant row(s) were walked alongside the "
@@ -163,7 +163,7 @@ def selftest() -> int:
         if expected not in got:
             print(f"FAIL {name}: expected {expected!r} in:\n{got}")
             failures += 1
-    # A claim explained by its own world entry must NOT read as the feature working.
+    # A claim explained by its own world entry must not read as the feature working.
     got = "\n".join(verdict_lines(timeline_of([claimed, entered])))
     if "suspicious" not in got:
         print(f"FAIL claim-before-any-entry: expected 'suspicious' in:\n{got}")
@@ -191,8 +191,8 @@ def main(argv: list[str]) -> int:
     for line in verdict_lines(events):
         print(line)
 
-    # A repaint whose count repeats the previous pass, on rows whose tier did NOT change, is the
-    # signature of a write the engine ignores. A repaint that follows a mark and is NOT repeated is
+    # A repaint whose count repeats the previous pass, on rows whose tier did not change, is the
+    # signature of a write the engine ignores. A repaint that follows a mark and is not repeated is
     # the feature working.
     repaints = [text for _, kind, text in events if kind == "restyled"]
     marks = [text for _, kind, text in events if kind == "marked"]
@@ -232,13 +232,13 @@ def main(argv: list[str]) -> int:
         print(f"  dormant coverage: {walks[-1]}")
         claims = [text for _, kind, text in events if kind == "claimed"]
         if all(w.startswith("0 ") for w in walks) and marks and claims:
-            # NOT a fault on its own. A top-up paints each row's tier at CLAIM time from the
-            # config as it stands then, so rows claimed AFTER a mark are already correct and have
+            # Not a fault on its own. A top-up paints each row's tier at claim time from the
+            # config as it stands then, so rows claimed after a mark are already correct and have
             # nothing to repaint. Zero coverage only matters when a mark lands after the claim --
             # which shows up as a repaint pass that walked zero while claims already existed.
             # A claim only survives until the next world entry: the constructor rebuilds the row
             # list and resets the claim counter. So the question is never "did any claim precede
-            # this mark" -- it is "was a claim still LIVE in the current ViewModel". Comparing
+            # this mark" -- it is "was a claim still live in the current ViewModel". Comparing
             # against the first claim in the whole run reports a miss for the ordinary case of
             # marking after travelling, which is what most marks are.
             def claims_live_at(position: int) -> bool:

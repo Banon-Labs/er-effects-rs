@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Corroborate a predicted 1.16.2 -> 1.17 DATA address by the CONTENT it holds.
+"""Corroborate a predicted 1.16.2 -> 1.17 data address by the content it holds.
 
 The premise of `scripts/map-data-rvas-1162-to-1170.py` is that "a global has no content: at
 rest it is eight zero bytes like every other global".  That is true of a runtime global and
-FALSE of an initialised one.  A de-Arxan'd image is a file, so `.rdata` strings, `.data`
+false of an initialised one.  A de-Arxan'd image is a file, so `.rdata` strings, `.data`
 pointer tables and literal tables all carry their initial bytes, and those bytes are an
 identity the address itself does not have.
 
 Three checks, strongest first:
 
-  bytes    the two ranges are byte-identical AND that byte string occurs exactly once in each
+  bytes    the two ranges are byte-identical and that byte string occurs exactly once in each
            image.  A name that occurs once per image beats any number of agreeing displacements
            -- the same argument the vtable/RTTI path already makes.
   pointers the range is a table of image VAs.  Map each entry through the established function
@@ -18,7 +18,7 @@ Three checks, strongest first:
   literals the range is neither, but the two ranges are byte-identical -- weaker, because a run
            of small integers repeats, so it is reported with its occurrence count.
 
-This does NOT propose an address.  It takes one -- from the bracket, from the vote, from
+This does not propose an address.  It takes one -- from the bracket, from the vote, from
 --shape-search -- and tries to falsify it.  A candidate that fails here is not carried.
 """
 

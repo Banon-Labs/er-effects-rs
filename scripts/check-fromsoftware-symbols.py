@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fail when this repo names a `fromsoftware-rs` item the CI-pinned revision does not have.
 
-WHY THIS IS A GATE AND NOT A NOTE
+Why this is a gate and not a NOTE
 ---------------------------------
-The workspace uses `../fromsoftware-rs` PATH dependencies, and CI clones that sibling at one
+The workspace uses `../fromsoftware-rs` path dependencies, and CI clones that sibling at one
 exact revision (`FROMSOFTWARE_RS_REV` in `.github/workflows/check.yml`). A developer's sibling
 is whatever they have checked out -- frequently a fork branch carrying types upstream has not
 merged. Nothing reconciles the two, so `scripts/check.sh` compiles against the fork, goes green,
@@ -17,7 +17,7 @@ full cross-compile. This is the cheap 99%: extract every `fromsoftware-rs` item 
 by path, and confirm the pinned revision defines it. Pure text against `git show`, no checkout,
 no compile, no network.
 
-WHAT IT CANNOT SEE
+What it cannot see
 ------------------
 Type-level drift -- a field that moved, a signature that changed, a trait that lost a method.
 Only a real build catches those. This gate is about the failure that actually happened twice:
@@ -27,7 +27,7 @@ Usage:
     python3 scripts/check-fromsoftware-symbols.py
     python3 scripts/check-fromsoftware-symbols.py --selftest
 
-SKIPS (exit 0) when the sibling clone is absent or does not contain the pinned revision -- a
+Skips (exit 0) when the sibling clone is absent or does not contain the pinned revision -- a
 machine without it cannot answer the question, and a gate that fails on absence would just be
 noise. CI always has it.
 """
@@ -122,8 +122,8 @@ def defines(pinned_text: str, name: str) -> bool:
 
     Deliberately generous. Upstream declares param tables through a macro table
     (`(Magic, MAGIC_PARAM_ST, 14)`), so a `struct|enum|trait` search alone reports real types as
-    missing -- the first version of this check did exactly that for `Magic`. A false PASS is a
-    build error someone still sees; a false FAIL blocks a correct change, which is worse.
+    missing -- the first version of this check did exactly that for `Magic`. A false pass is a
+    build error someone still sees; a false fail blocks a correct change, which is worse.
     """
     return re.search(rf"\b{re.escape(name)}\b", pinned_text) is not None
 

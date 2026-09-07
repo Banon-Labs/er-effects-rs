@@ -9,7 +9,7 @@
 //!
 //! The planner has two share formats and only one of them is a server record. `?b=<id>` is an id
 //! for a build stored on the API; creating one needs an account, which would mean minting a user
-//! per player per link on one person's free hobby service. `?i=<payload>` carries the WHOLE build
+//! per player per link on one person's free hobby service. `?i=<payload>` carries the whole build
 //! in the URL -- LZUTF8 over base64 over JSON -- and is decoded entirely in the player's browser.
 //! This row emits the second. There is no request, no account, and no way for it to fail because
 //! someone else's server is down.
@@ -131,7 +131,7 @@ fn sinks() -> Sinks {
 
 /// Handle a confirmed press of the Generate Build Link row.
 ///
-/// A press that finds a busy latch it cannot prove is live CLEARS it and proceeds. That direction
+/// A press that finds a busy latch it cannot prove is live clears it and proceeds. That direction
 /// is deliberate: the worst case of being wrong this way is a second browser tab, and the worst
 /// case of the other way is a row that never works again for the rest of the session. The link
 /// field next door went dead for three consecutive presses on exactly that failure.
@@ -163,7 +163,7 @@ pub fn system_quit_start_build_export() -> GenerateLinkPress {
         }
         Err(err) => {
             SYSTEM_QUIT_GENERATE_BUILD_LINK_REFUSED_COUNT.fetch_add(1, Ordering::SeqCst);
-            // Only reachable when the latch was PROVEN live, since a stale one was cleared above.
+            // Only reachable when the latch was proven live, since a stale one was cleared above.
             append_autoload_debug(format_args!(
                 "system-quit-generate-link: press refused -- {err} ({})",
                 export::export_latch_state()
@@ -213,7 +213,7 @@ fn drain_build_export_outcome() {
     }
 }
 
-/// The row's help line after a completed export. The clipboard is mentioned FIRST because it is the
+/// The row's help line after a completed export. The clipboard is mentioned first because it is the
 /// half the player can act on if the browser did not appear.
 fn row_help_for(report: &ExportReport) -> String {
     match (report.clipboard, report.opened) {

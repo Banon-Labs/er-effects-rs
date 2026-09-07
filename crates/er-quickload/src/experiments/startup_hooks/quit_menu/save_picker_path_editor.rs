@@ -14,7 +14,7 @@ const SOFTWARE_KEYBOARD_SET_INITIAL_RVA: u32 = 0xe709f0;
 const SOFTWARE_KEYBOARD_SET_MAX_RVA: u32 = 0x2416ee0;
 
 // The `*_SIG` prologue for each RVA above -- plus `GAME_HEAP_ALLOC_SIG` for the allocator thunk
-// at `GAME_HEAP_ALLOC_RVA` -- is ASSEMBLED from named instructions by this crate's `build.rs`,
+// at `GAME_HEAP_ALLOC_RVA` -- is assembled from named instructions by this crate's `build.rs`,
 // which also compares them against `eldenring-deobf.bin` when a copy is present.
 include!(concat!(
     env!("OUT_DIR"),
@@ -43,10 +43,10 @@ const PATH_EDITOR_WINDOW_STALE_PROFILE_TICKS: usize = 3;
 /// text-input resource.
 pub(crate) const TEXT_INPUT_RESOURCE_NAME: &str = "02_990_TextInput_PathEditor";
 
-/// ONE MOVIE, TWO CACHE KEYS, TWO DERIVATIONS.
+/// One movie, two cache keys, two DERIVATIONS.
 ///
 /// The build-url field used to pass the path editor's key, which meant it also got the path
-/// editor's DERIVED movie -- and that derivation alpha-zeroes the movie's backing plate and both
+/// editor's derived movie -- and that derivation alpha-zeroes the movie's backing plate and both
 /// frame placements, because over ProfileSelect the picker's own `CurrentPath` button supplies the
 /// frame. Nothing on the Quit tab supplies one, so the link field rendered as a bare text run in
 /// the top-left corner of the screen (user report 2026-08-23). Scaleform caches by this string, so
@@ -69,8 +69,8 @@ const fn utf16_resource<const N: usize>(name: &str) -> [u16; N] {
     out
 }
 
-// `static`, NOT `const`, and that distinction is load-bearing. The job constructor copies the
-// `SoftwareKeyboardConfig` struct BY VALUE into the job (`MOVUPS XMM0,[RSI]; MOVUPS
+// `static`, not `const`, and that distinction is load-bearing. The job constructor copies the
+// `SoftwareKeyboardConfig` struct by value into the job (`MOVUPS XMM0,[RSI]; MOVUPS
 // [R14+0x150],XMM0` at `0x14081bec2`) -- pointer included -- and the movie is not loaded then. It is
 // loaded later, from the job's own first step: `FUN_14081cd70` reads the copied config back out of
 // `job+0x150` and takes `config.resource` as the `CSScaleformLoadInfo::filename` it hands to
@@ -132,15 +132,15 @@ static SAVE_PICKER_PATH_EDITOR_OUTCOME: OnceLock<Mutex<Option<PathEditorOutcome>
     OnceLock::new();
 
 // ---------------------------------------------------------------------------------------------
-// TWO EDITORS, ONE PAIR OF DETOURS.
+// Two editors, one pair of DETOURS.
 //
 // The Quit tab's "Load Build from URL" row needs the same native `CS::SoftwareKeyboard` this file
-// already drives for save paths. It must NOT install its own hooks on 0x81d3d0 / 0x81d220: two
+// already drives for save paths. It must not install its own hooks on 0x81d3d0 / 0x81d220: two
 // MinHook detours on one prologue overwrite each other's trampolines, which is the exact corruption
 // `scripts/me3-dll-conflicts.toml` exists to keep out of a profile -- and it would be worse here,
 // inside one DLL, where no profile check could see it.
 //
-// So the detours stay single and gain an OWNER. Each purpose has its own active-job slot and its
+// So the detours stay single and gain an owner. Each purpose has its own active-job slot and its
 // own outcome mailbox; a dispatched job belongs to whichever slot holds it, and a job in neither is
 // forwarded untouched (the game opens this keyboard for character names too).
 // ---------------------------------------------------------------------------------------------
@@ -158,7 +158,7 @@ static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
 
 /// Menu-pump passes since the DLL loaded, counted by [`build_url_menu_pump_tick`].
 ///
-/// NOT `PROFILE_SELECT_WINDOW_RUN_TICKS`, which the first version of this watchdog used and which
+/// Not `PROFILE_SELECT_WINDOW_RUN_TICKS`, which the first version of this watchdog used and which
 /// made it inert: that counter is incremented only by the `05_010_ProfileSelect` branch of the run
 /// post-hook, so on the System>Quit tab -- where the link field actually lives -- it never advances
 /// at all. `now - last` stayed 0 forever and no latch was ever judged abandoned (measured
@@ -166,7 +166,7 @@ static BUILD_URL_EDITOR_ACTIVE_JOB: AtomicUsize = AtomicUsize::new(0);
 /// it reads, and this one now reads a clock that ticks where the field is.
 static BUILD_URL_MENU_PUMP_TICKS: AtomicUsize = AtomicUsize::new(0);
 
-/// The [`BUILD_URL_MENU_PUMP_TICKS`] value when the link field's window was last seen RUNNING.
+/// The [`BUILD_URL_MENU_PUMP_TICKS`] value when the link field's window was last seen running.
 ///
 /// A closed 02_990 window is not reported terminal to us -- it simply stops being run, so the
 /// live->terminal transition an earlier fix watched for never arrives. Absence is the only signal
@@ -202,11 +202,11 @@ pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> b
     }
     if BUILD_URL_EDITOR_WINDOW.load(Ordering::SeqCst) == window {
         BUILD_URL_EDITOR_WINDOW.store(0, Ordering::SeqCst);
-        // THE WINDOW GOING TERMINAL IS THE ONLY RELIABLE "THE FIELD CLOSED" SIGNAL WE GET.
+        // The window going terminal is the only reliable "THE FIELD CLOSED" signal we get.
         //
         // The back action was supposed to arrive at the `0x81d3d0` result gate, which would record
         // `Cancelled` and clear the active-job slot. It does not: a live session opened three link
-        // fields, the player closed each with B, and that detour fired ZERO times (runtime log
+        // fields, the player closed each with B, and that detour fired zero times (runtime log
         // `dll:8dca09bb`, 2026-08-23). Neither did the `0x81d220` terminal callback. Those two RVAs
         // are on the `SoftwareKeyboardJob` path, and this field is served by the SCALEFORM 02_990
         // fallback instead -- so a cancel there never reaches them, the job slot stays set forever,
@@ -216,7 +216,7 @@ pub(crate) fn build_url_note_editor_window_state(window: usize, state: i32) -> b
         // The window is the participant that actually knows. It runs while the field is up and goes
         // terminal when it closes -- the game's own verdict, read from the state it hands the run
         // post-hook every frame, not a timeout and not an inference from silence. Releasing here
-        // covers the cancel AND any other close that skips those detours; an accept still reaches
+        // covers the cancel and any other close that skips those detours; an accept still reaches
         // the terminal callback first and leaves nothing for this to do.
         release_build_url_keyboard_on_window_close(window);
     }
@@ -266,7 +266,7 @@ fn release_build_url_keyboard_on_window_close(window: usize) {
     if job == 0 {
         return;
     }
-    // The LATCH is released; OWNERSHIP is not. This job still carries the empty `std::function` we
+    // The latch is released; Ownership is not. This job still carries the empty `std::function` we
     // handed the engine, so the detours must keep claiming it until it actually finishes.
     remember_released_keyboard_job(job, KeyboardPurpose::BuildUrl);
     let mut slot = keyboard_outcome_slot(KeyboardPurpose::BuildUrl)
@@ -309,11 +309,11 @@ fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
     {
         return Some(purpose);
     }
-    // A job whose LATCH we already released is still OURS, and the detours must still claim it.
+    // A job whose latch we already released is still ours, and the detours must still claim it.
     //
     // This is what crashed the game (`dll:a71aa552`, 2026-08-23, `0xe06d7363` ->
     // `ThrowBadFunctionCallException` from inside `FUN_14081d220+0xf8`, then
-    // `NtTerminateProcess(0xc0000005)`). The job is constructed with an INTENTIONALLY EMPTY
+    // `NtTerminateProcess(0xc0000005)`). The job is constructed with an intentionally empty
     // `std::function` as its completion callback, which is only safe because the `0x81d220` detour
     // recognises the job and never lets the native side invoke it. The abandoned-latch watchdog
     // cleared the active-job slot while the job was still alive, so when that job later terminated
@@ -321,7 +321,7 @@ fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
     // engine called an empty `std::function` -- `std::bad_function_call`, straight through the
     // game's stack.
     //
-    // Ownership therefore outlives the latch: releasing the latch is about the ROW being pressable
+    // Ownership therefore outlives the latch: releasing the latch is about the row being pressable
     // again, and says nothing about who is responsible for the job. Only the job actually finishing
     // ends that responsibility.
     RELEASED_KEYBOARD_JOBS
@@ -335,7 +335,7 @@ fn keyboard_owner_of(job: usize) -> Option<KeyboardPurpose> {
 ///
 /// Bounded: a released job is dropped as soon as its detour fires, and the list is cleared whenever
 /// an editor resets. The cap is a backstop so a pathological session cannot grow it without limit --
-/// dropping the OLDEST is right, because the newest released job is the one most likely still alive.
+/// dropping the oldest is right, because the newest released job is the one most likely still alive.
 static RELEASED_KEYBOARD_JOBS: Mutex<Vec<(usize, KeyboardPurpose)>> = Mutex::new(Vec::new());
 
 /// Most recently released jobs kept claimable at once.
@@ -391,7 +391,7 @@ pub(crate) fn save_picker_path_editor_active() -> bool {
 /// Called only from the owned 02_990 MenuWindowJob::Run post-hook. A terminal MenuWindow result
 /// means its SceneObjProxy teardown has begun: never write another transform through that proxy.
 ///
-/// Shared with the build-url field, which loads the SAME movie and needs the same answer -- one
+/// Shared with the build-url field, which loads the same movie and needs the same answer -- one
 /// rule, so the two editors cannot drift into disagreeing about when a window is safe to touch.
 pub(crate) fn text_input_02_990_window_is_live(state: i32) -> bool {
     // A newly-created MenuWindow begins at zero before its first controller update. Continue is 1;
@@ -568,8 +568,8 @@ unsafe fn software_keyboard_result_state(job: usize) -> Option<i32> {
     unsafe { safe_read_i32(controller + SOFTWARE_KEYBOARD_CONTROLLER_RESULT_78_OFFSET) }
 }
 
-// THE 02_990 CONTROLLER SUBSTITUTES SOME PUNCTUATION ON THE WAY OUT, AND THE PLACEHOLDERS ARE
-// CIRCLED NUMBERS.
+// The 02_990 controller substitutes some punctuation on the way out, and the PLACEHOLDERS are
+// circled numbers.
 //
 // What comes back from `controller + 0x80` is not always what was typed. The backslash case was
 // found first (a `Z:\...` path returned with U+3254 where each `\` had been) and decoded as a
@@ -578,13 +578,13 @@ unsafe fn software_keyboard_result_state(job: usize) -> Option<i32> {
 // build id" and the field refused a link that was correct (runtime-captured 2026-08-23,
 // `dll:6808d66f`, on `https://er-build-planner.nyasu.business/?b=bc2a932db14675`).
 //
-// The two placeholders name themselves once looked up: U+2473 is CIRCLED NUMBER TWENTY and U+3254
-// is CIRCLED NUMBER TWENTY-FOUR. The controller is emitting an INDEX into some table of substituted
+// The two placeholders name themselves once looked up: U+2473 is circled number twenty and U+3254
+// is circled number twenty-four. The controller is emitting an index into some table of substituted
 // characters, drawn as a circled numeral -- `?` is #20 and `\` is #24. Two points do not give the
 // rest of that table, and it is not a contiguous u16 array anywhere in the image (both constants
 // were searched for; their only co-location is inside high-entropy data).
 //
-// So this table holds what has been MEASURED, and anything else non-ASCII is reported rather than
+// So this table holds what has been measured, and anything else non-ASCII is reported rather than
 // guessed at -- see `native_field_text_sentinel_report`. The next unknown placeholder arrives in the
 // log as its own code point and becomes a one-line addition here with evidence behind it, instead
 // of another silent "that link is invalid".
@@ -592,7 +592,7 @@ const NATIVE_FIELD_SENTINELS: [(char, char); 2] = [('\u{2473}', '?'), ('\u{3254}
 
 /// Decode every measured transport placeholder back to the character the player actually typed.
 ///
-/// Applied to BOTH editors now. Scoping it to paths was the mistake that shipped the bug: a URL has
+/// Applied to both editors now. Scoping it to paths was the mistake that shipped the bug: a URL has
 /// no backslashes, so the build-url field skipped the decode entirely -- and then lost its `?`.
 fn decode_native_field_text(text: String) -> String {
     let mut out = text;
@@ -665,7 +665,7 @@ unsafe extern "system" fn software_keyboard_result_gate_hook(
     let ret = unsafe { original(job, result, time) };
     let result_state = unsafe { safe_read_i32(result) }.unwrap_or(0);
     if result_state == MENU_JOB_STATE_FAILED {
-        // THE BACK ACTION LANDS HERE. `FUN_14081d3d0` reads the controller's result code
+        // The back action lands here. `FUN_14081d3d0` reads the controller's result code
         // (`+0x78`) once the keyboard has closed and reports Failed for anything but 2, so a
         // cancel is a native verdict rather than something inferred from absence. Recording it as
         // `Cancelled` is what lets the build-url editor tell "the player backed out" apart from
@@ -700,7 +700,7 @@ unsafe extern "system" fn software_keyboard_terminal_callback_hook(
 
     let outcome = match unsafe { software_keyboard_text(job) } {
         Some(raw_text) => {
-            // BOTH purposes decode. The first version only decoded for paths, on the reasoning
+            // Both purposes decode. The first version only decoded for paths, on the reasoning
             // that "a URL has no backslashes" -- true, and beside the point: the controller also
             // substitutes `?`, so the build-url field silently lost the one character that makes a
             // link importable.
@@ -846,7 +846,7 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
     submitted
 }
 
-/// Build and submit ONE native `CS::SoftwareKeyboardJob` on `dialog`'s own MenuJobQueue, prefilled
+/// Build and submit one native `CS::SoftwareKeyboardJob` on `dialog`'s own MenuJobQueue, prefilled
 /// with `initial` (NUL-terminated UTF-16).
 ///
 /// Owner-agnostic on purpose: the save picker and the System>Quit build-url row differ only in what
@@ -854,25 +854,25 @@ unsafe fn submit_path_editor(dialog: usize) -> PathEditorSubmit {
 /// allocation/ctor/submit sequence to keep in step with the native one -- and, worse, a second pair
 /// of detours on the same two prologues.
 ///
-/// # WHICH ARGUMENTS THE NATIVE SIDE KEEPS, AND FOR HOW LONG
+/// # which arguments the native side keeps, and for how long
 ///
 /// Every pointer below is handed to code that outlives this call, so "does it copy?" is settled
 /// here from the 1.16.2 dump rather than re-litigated each time the field misbehaves. It has been
 /// blamed for a stale field twice, and it was not the cause either time.
 ///
-/// * `initial` is COPIED THREE TIMES over, and none of the copies keeps the pointer.
+/// * `initial` is copied three times over, and none of the copies keeps the pointer.
 ///   `enter_name` (`0xe70c00`) and `set_initial` (`0xe709f0`) both run it through
 ///   `DLTX::DLString::CopyFromU16Array` into a stack `DLString` and then assign that into the
 ///   validator with `0x142416ef0` (a `DLString::substr(dst, src, 0, -1)`). The ctor takes it a third
 ///   time as its 5th argument and calls `DLTX::DLString<wchar_t>::FromU16Array(job+0xe8, initial,
 ///   GetMenuHeapAllocator())` -- which measures the string, allocates on the menu heap and copies.
 ///   The live log is the independent confirmation: a field left open for 36 seconds returned
-///   EXACTLY the 43 code units it was opened with.
-/// * `validator` is DEEP-COPIED into `job+0x60` by `0x1407f3eb0`, which runs `DLString::Copy` over
+///   exactly the 43 code units it was opened with.
+/// * `validator` is deep-copied into `job+0x60` by `0x1407f3eb0`, which runs `DLString::Copy` over
 ///   both of its strings. That is why destroying the stack validator immediately after the ctor is
 ///   correct and not a use-after-free.
-/// * `config` is copied BY VALUE into `job+0x150` (16 bytes, one `MOVUPS` pair). The struct's
-///   `resource` POINTER is copied with it and dereferenced much later -- see
+/// * `config` is copied by value into `job+0x150` (16 bytes, one `MOVUPS` pair). The struct's
+///   `resource` pointer is copied with it and dereferenced much later -- see
 ///   [`TEXT_INPUT_RESOURCE`], which is a `static` for exactly that reason.
 /// * `empty_callback` is consumed during the ctor: it reads slot 7 (the MSVC `std::function`
 ///   pointer), and ours is zeroed, so nothing is cloned and `job+0x1a0` stays null. That null is
@@ -891,7 +891,7 @@ unsafe fn submit_software_keyboard(
     if keyboard_active_job_slot(purpose).load(Ordering::SeqCst) != 0 {
         return PathEditorSubmit::RetryWhenQueueReady;
     }
-    // One keyboard at a time across BOTH purposes. The queue is per dialog, but the native
+    // One keyboard at a time across both purposes. The queue is per dialog, but the native
     // keyboard is a single on-screen surface driven by one controller, so a second job submitted
     // while the first is up would leave two owners waiting on one answer.
     let other_editor_busy = [KeyboardPurpose::SavePath, KeyboardPurpose::BuildUrl]
@@ -1157,15 +1157,15 @@ pub(crate) unsafe fn save_picker_menu_pump_path_editor() {
 mod tests {
     use super::*;
 
-    /// SHARED PROCESS STATICS, RACED BY PARALLEL TEST THREADS.
+    /// Shared process STATICS, raced by parallel test threads.
     ///
     /// The BuildUrl/SavePath keyboard-purpose slots below (`keyboard_active_job_slot`,
     /// `keyboard_outcome_slot`, `BUILD_URL_EDITOR_WINDOW`, `BUILD_URL_EDITOR_WINDOW_LAST_TICK`,
     /// `BUILD_URL_MENU_PUMP_TICKS`, `RELEASED_KEYBOARD_JOBS`) are process-wide `static`s with no
     /// synchronization of their own, and `cargo test` runs every test in this module on its own
-    /// thread by default. Left unguarded, one test's setup races another's assertion on the SAME
+    /// thread by default. Left unguarded, one test's setup races another's assertion on the same
     /// static: measured by running the full suite repeatedly (`cargo xwin test --lib`) on the base
-    /// commit -- the failure always has the shape "112 passed; 1 failed", but WHICH of the tests
+    /// commit -- the failure always has the shape "112 passed; 1 failed", but which of the tests
     /// below fails changes from run to run
     /// (`a_window_close_after_an_accept_does_not_clobber_the_accepted_text` one run,
     /// `a_link_field_window_closing_releases_a_latch_no_detour_cleared` the next), always landing on
@@ -1186,7 +1186,7 @@ mod tests {
         );
     }
 
-    /// THE TWO CACHE KEYS MUST NOT COLLIDE, AND EACH MUST BE NUL-TERMINATED.
+    /// The two cache keys must not collide, and each must be NUL-terminated.
     ///
     /// Sharing one key is what shipped the unstyled link field: Scaleform handed the Quit tab the
     /// save picker's derived movie, whose chrome is deliberately hidden. If these two strings ever
@@ -1220,11 +1220,11 @@ mod tests {
         );
     }
 
-    /// THE EXACT BUG, AS THE GAME PRODUCED IT. Captured 2026-08-23 from `dll:6808d66f`: a correct
+    /// The exact bug, as the game produced it. Captured 2026-08-23 from `dll:6808d66f`: a correct
     /// build link was typed into the System>Quit field and came back with U+2473 where its `?` had
     /// been, so the gate reported "that link has no ?b= build id" and refused it eight times.
     ///
-    /// The decode must restore the `?` AND the restored text must satisfy the same validator the
+    /// The decode must restore the `?` and the restored text must satisfy the same validator the
     /// field runs -- decoding it into something the gate still rejects would fix nothing.
     #[test]
     fn the_question_mark_sentinel_decodes_and_the_link_then_validates() {
@@ -1255,7 +1255,7 @@ mod tests {
         assert_eq!(native_field_text_sentinel_report(clean), None);
     }
 
-    /// An UNKNOWN placeholder must be NAMED, not swallowed. That is what makes the next one cost a
+    /// An unknown placeholder must be named, not swallowed. That is what makes the next one cost a
     /// line of code instead of an investigation.
     #[test]
     fn an_undecoded_placeholder_is_reported_by_code_point() {
@@ -1268,7 +1268,7 @@ mod tests {
         assert_eq!(native_field_text_sentinel_report(&decoded), None);
     }
 
-    /// The detour pair is shared by two editors and by the game itself, so the ONE thing that must
+    /// The detour pair is shared by two editors and by the game itself, so the one thing that must
     /// never break is that a dispatched job is attributed to exactly the purpose that submitted it.
     /// A job owned by neither is the game's own keyboard (character naming) and must stay untouched.
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
             assert!(SOFTWARE_KEYBOARD_MAX_PATH_UNITS <= 1024);
         }
     }
-    /// PRESSING B CLOSED THE FIELD AND KILLED THE ROW FOR THE REST OF THE SESSION.
+    /// Pressing B closed the field and killed the row for the rest of the session.
     ///
     /// Live session `dll:8dca09bb`, 2026-08-23: three link fields opened, each closed with the back
     /// action, and the `0x81d3d0` cancel gate fired zero times -- so the active-job slot stayed set
@@ -1364,7 +1364,7 @@ mod tests {
         );
     }
 
-    /// ...but an ACCEPT must survive it. The terminal callback records the text, and the window goes
+    /// ...but an accept must survive it. The terminal callback records the text, and the window goes
     /// terminal a frame or two later; overwriting that with `Cancelled` would drop every link the
     /// player successfully entered.
     #[test]
@@ -1395,12 +1395,12 @@ mod tests {
             "the accepted text must outlive its window"
         );
     }
-    /// A CLOSED 02_990 WINDOW IS NEVER REPORTED TERMINAL -- IT JUST STOPS BEING RUN.
+    /// A closed 02_990 window is never reported terminal -- It just stops being run.
     ///
     /// `dll:9caf1a27`, 2026-08-23: four link fields opened and closed with B, and the
     /// live->terminal release fired zero times, because the transition never reaches us. Absence is
     /// the only evidence a closed field leaves, so the latch has to be released from the window
-    /// going UNSEEN, measured in the game's own window-run ticks.
+    /// going unseen, measured in the game's own window-run ticks.
     #[test]
     fn a_link_field_window_that_stops_running_abandons_its_latch() {
         let _guard = KEYBOARD_STATE_TEST_LOCK
@@ -1408,12 +1408,12 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         keyboard_active_job_slot(KeyboardPurpose::BuildUrl).store(0x7777_0000, Ordering::SeqCst);
         // The counter starts at 0 off the game thread, and every case here reasons about ticks
-        // BEFORE `now`; give it a base so those subtractions describe a real elapsed window instead
+        // before `now`; give it a base so those subtractions describe a real elapsed window instead
         // of underflowing.
         let now = 1_000;
         BUILD_URL_MENU_PUMP_TICKS.store(now, Ordering::SeqCst);
 
-        // Seen this very tick: a field that is genuinely up must NEVER be judged abandoned.
+        // Seen this very tick: a field that is genuinely up must never be judged abandoned.
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(now, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
 
@@ -1451,9 +1451,9 @@ mod tests {
         BUILD_URL_EDITOR_WINDOW_LAST_TICK.store(1, Ordering::SeqCst);
         assert!(!build_url_keyboard_latch_is_abandoned());
     }
-    /// THE WATCHDOG IS ONLY AS GOOD AS THE CLOCK IT READS.
+    /// The watchdog is only as good as the clock it reads.
     ///
-    /// Its first version read `PROFILE_SELECT_WINDOW_RUN_TICKS`, which is incremented ONLY by the
+    /// Its first version read `PROFILE_SELECT_WINDOW_RUN_TICKS`, which is incremented only by the
     /// `05_010_ProfileSelect` branch of the run post-hook. The link field lives on the System>Quit
     /// tab, where that window never runs, so the counter was frozen, `now - last` was always 0, and
     /// no latch could ever be judged abandoned -- an inert watchdog that shipped and tested green
@@ -1475,11 +1475,11 @@ mod tests {
             "and keep advancing, or an abandoned latch is never noticed"
         );
     }
-    /// RELEASING THE LATCH MUST NOT DISOWN THE JOB -- THAT CRASHED THE GAME.
+    /// Releasing the latch must not DISOWN the job -- That crashed the game.
     ///
     /// `dll:a71aa552`, 2026-08-23: `0xe06d7363` -> `ThrowBadFunctionCallException` inside
     /// `FUN_14081d220+0xf8`, then `NtTerminateProcess(0xc0000005)`. The job carries an
-    /// INTENTIONALLY EMPTY `std::function`, safe only because our detour claims the job and never
+    /// intentionally empty `std::function`, safe only because our detour claims the job and never
     /// lets the engine invoke it. The abandoned-latch watchdog cleared the active-job slot while
     /// the job was still alive, `keyboard_owner_of` stopped recognising it, the detour forwarded,
     /// and the engine called an empty function.
@@ -1514,7 +1514,7 @@ mod tests {
     }
 
     /// The released list is a safety net, not a leak: it cannot grow without bound, and it keeps
-    /// the NEWEST entries, which are the ones most likely still alive.
+    /// the newest entries, which are the ones most likely still alive.
     #[test]
     fn the_released_job_list_is_bounded_and_keeps_the_newest() {
         let _guard = KEYBOARD_STATE_TEST_LOCK

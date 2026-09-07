@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print the UTF-16 literal each RIP-relative `lea` inside a function points at.
 
-WHY THIS IS EVIDENCE
+Why this is evidence
 --------------------
 A masked whole-body signature has to wildcard RIP-relative displacements, because the data those
 `lea`s point at moved when the image was relaid out. That is exactly the wrong thing to throw away
@@ -14,7 +14,7 @@ So: after a masked match pairs two addresses, run this on both and check the str
 1.17 candidate's `lea` lands on a different literal, the match is an impostor no matter how many
 instructions verified.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/riprel-string-targets.py 1162:0x140d0fda0 1170:0x140d11470
 """
 

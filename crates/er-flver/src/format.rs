@@ -13,7 +13,7 @@
 //!    `Sint16x*`; the shader divides by the FLVER `uvFactor` (2048 for ER ≥ `0x2000F`).
 //!    wgpu has no scaled-int vertex format ([`Norm::UvFactor`]).
 //! 3. biased-byte normals/tangents (`0x10`/`0x12`/`0x13`/`0x2F`) bind as `Uint8x4`
-//!    (NOT `Snorm8x4`/`Unorm8x4`) so the shader applies the exact `(b-127)/127` — both
+//!    (not `Snorm8x4`/`Unorm8x4`) so the shader applies the exact `(b-127)/127` — both
 //!    hardware `Snorm8` (`b/127` as i8) and `Unorm8*2-1` (127.5) are off by the bias.
 
 use crate::semantic::Semantic;
@@ -51,7 +51,7 @@ pub enum Norm {
     Unorm,
     /// Signed-normalized `x / max` (the GPU does it for `Snorm*` formats).
     Snorm,
-    /// FromSoft's biased byte: `(u8 - 127) / 127`. NOT a hardware norm — bound raw as
+    /// FromSoft's biased byte: `(u8 - 127) / 127`. Not a hardware norm — bound raw as
     /// `Uint8x4`, the shader applies the bias (matches the compiled `.vpo`).
     BiasedByte127,
     /// uv-factor-scaled short: `i16 / uvFactor` (2048 for ER). Bound raw as `Sint16x*`,
@@ -138,7 +138,7 @@ pub fn map_format(format_code: u32, semantic: Semantic) -> FormatInfo {
             _ if normal_like => FormatInfo::new(Uint8x4, 4, 4, BiasedByte127).sem_dep(),
             _ => FormatInfo::new(Unorm8x4, 4, 4, Unorm).sem_dep(),
         },
-        // True hardware snorm bytes (this one IS bit-exact, unlike 0x10/0x13).
+        // True hardware snorm bytes (this one is bit-exact, unlike 0x10/0x13).
         0x14 => FormatInfo::new(Snorm8x4, 4, 4, Snorm),
         // Dominant ER UV: 2 scaled shorts.
         0x15 => FormatInfo::new(Sint16x2, 4, 2, UvFactor).uv(),
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn common_normal_is_biased_byte_not_snorm() {
         // 0x13 Normal is the most common ER normal: must be raw Uint8x4 + (b-127)/127,
-        // NOT Snorm8x4 (off by the 127-vs-128 bias).
+        // not Snorm8x4 (off by the 127-vs-128 bias).
         let f = map_format(0x13, S::Normal);
         assert_eq!(f.vertex_format, Uint8x4);
         assert_eq!(f.normalization, BiasedByte127);

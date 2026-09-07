@@ -1,6 +1,6 @@
 //! The System>Quit link field's own derivation of `win/02_990_textinput.gfx`.
 //!
-//! Reads the vanilla movie out of the local extraction corpus and SKIPS when it is absent; no
+//! Reads the vanilla movie out of the local extraction corpus and skips when it is absent; no
 //! game-derived bytes are versioned here.
 
 mod common;
@@ -57,7 +57,7 @@ fn the_link_field_keeps_the_movies_own_chrome_and_is_wide_enough_for_a_planner_l
     assert_eq!(fnv1a64(&out), CENTERED_FNV1A64);
     let movie = Movie::parse(&out).expect("derived movie parses");
 
-    // THE REGRESSION THIS FILE EXISTS FOR. The field reached the screen unstyled because it was
+    // The regression this file exists for. The field reached the screen unstyled because it was
     // serving the save picker's derivation, which alpha-zeroes all three chrome placements. Here
     // they must survive at full opacity: one backing plate, two frame-art placements.
     let children = sprite_children(&movie);
@@ -201,7 +201,7 @@ fn the_window_translate_centres_the_box_on_the_stage() {
     assert_eq!((window_x, window_y), (556.0, 422.0));
 }
 
-/// The two derivations of ONE movie must not collide: the save picker's is proven and in use, and
+/// The two derivations of one movie must not collide: the save picker's is proven and in use, and
 /// its output has to stay exactly what it was.
 #[test]
 fn the_save_pickers_derivation_is_untouched_by_this_one() {

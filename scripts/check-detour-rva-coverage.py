@@ -1,82 +1,82 @@
 #!/usr/bin/env python3
-"""Fail when the product installs a DETOUR on an address with no detour-safe 1.17 mapping.
+"""Fail when the product installs a detour on an address with no detour-safe 1.17 mapping.
 
-WHY THIS EXISTS
+Why this exists
 ===============
 On 2026-08-30 a user launched the game and played for seven minutes with the mod's
 loading-screen cover pasted over live gameplay. The cause was not a logic bug: it was
-`LOADING_SCREEN_GFX_FADEOUT_RVA` (1.16.2 `0x90a0a0`). That address is in the CALL map, so
+`LOADING_SCREEN_GFX_FADEOUT_RVA` (1.16.2 `0x90a0a0`). That address is in the call map, so
 `game_rva` happily translated it to `0x90b240` and the code proceeded to `MhHook::new` -- which
-consults the STRICTER detour map, found nothing, and refused. Correctly. Loudly. 8,430 times,
+consults the stricter detour map, found nothing, and refused. Correctly. Loudly. 8,430 times,
 once per retry, for the whole session.
 
 `oracle_loading_screen_gfx_fadeout_hook_installed = 0` in the telemetry. `HOOK REFUSED` in the
-log. And NOTHING in the build or the check pipeline noticed, because the only place the refusal
+log. And nothing in the build or the check pipeline noticed, because the only place the refusal
 existed was a 412 MB runtime log that somebody had to launch the game to produce.
 
 That is the gap. Two facts were both already in the tree the whole time -- "this source line
 installs a detour on RVA X" and "X is not in DETOUR_SAFE_1162_TO_1170" -- and no gate put them
 next to each other.
 
-WHAT IT IS NOT
+What it is not
 ==============
 * `audit-1170-readiness.py` / `check-stale-rva-calls.py` gate addresses that reach the game
-  WITHOUT the version gate. Every address here goes THROUGH the gate; the gate is what refuses
+  without the version gate. Every address here goes through the gate; the gate is what refuses
   them. Opposite class.
 * `audit-1170-coverage-inventory.py --report` already prints a `detour_licence_only` table, and
-  that table is where this idea came from. It is a REPORT, its detour attribution is a +/-30-line
+  that table is where this idea came from. It is a report, its detour attribution is a +/-30-line
   proximity heuristic, and nothing runs it in `check.sh` with a non-zero exit. A report nobody
   fails on is how seven minutes of covered gameplay happens.
-* It says nothing about whether a MAPPED destination is the right function. That is
+* It says nothing about whether a mapped destination is the right function. That is
   `verify-rva-map-1170.py` and `audit-1170-hook-targets.py`.
 
-THE VOCABULARY IS DERIVED, NEVER TRANSCRIBED
+The vocabulary is derived, never transcribed
 ============================================
 Every verdict string, entry-evidence word, instruction floor, TSV path and column index this
-script uses is PARSED OUT OF `crates/er-game-base/build.rs` at runtime -- see
+script uses is PARSED out of `crates/er-game-base/build.rs` at runtime -- see
 `read_build_vocabulary`. Not one of them is spelled in this file.
 
 That is not tidiness, it is the difference between a gate and a decoration. Nine audits in this
-repo have reported a confident ZERO because they transcribed a literal that later drifted:
+repo have reported a confident zero because they transcribed a literal that later drifted:
 `verified_rvas()` filtered on `"IDENTICAL"` and matched 0 of 99 rows; `check-rva-alias-drift.py`
-had the same bug and then `assert bad == 0` PASSED OVER AN EMPTY SET. A gate that reads its
+had the same bug and then `assert bad == 0` passed over an empty set. A gate that reads its
 vocabulary from the source of truth tracks a rename for free, and `--selftest` refuses to run at
-all if the parse comes back empty -- an unparsable `build.rs` must fail LOUDLY, never quietly
+all if the parse comes back empty -- an unparsable `build.rs` must fail loudly, never quietly
 license every detour in the tree.
 
-THE INSTALLER LIST IS DERIVED TOO
+The INSTALLER list is derived too
 =================================
 Which functions actually consult the detour map is read out of `crates/er-hook/src/lib.rs` by
 call-graph closure over `resolve_target` / `resolve_detour_address` -- so a new entry point, or a
 rename, is picked up without an edit here. The `*_runtime_derived` variants fall out of the
-closure on their own, because they genuinely do not consult the table (they audit the RUNNING
+closure on their own, because they genuinely do not consult the table (they audit the running
 image's `.pdata` instead), and they are listed rather than silently dropped.
 
-ADDRESSES ARE RESOLVED BY VALUE, NOT BY SPELLING
+Addresses are resolved by value, not by spelling
 ================================================
 Almost no call site passes a constant. It passes a local:
 
     let Ok(addr) = game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32) else { ... };
     MhHook::new(addr as *mut c_void, hook as *mut c_void)
 
-so a regex for `MhHook::new(.*_RVA` finds ONE of the 114 sites in this tree. This walks the
+so a regex for `MhHook::new(.*_RVA` finds one of the 114 sites in this tree. This walks the
 binding backwards inside the enclosing function -- `let`, `let ... else`, `if let`, `match` arms,
 `for` tuple destructuring, plain assignment, and function parameters followed to their callers --
 and resolves the names it lands on through `scripts/rva_symbols.py`, which evaluates
-declarations to NUMBERS and so sees enum discriminants and derived constants that no regex for
+declarations to numbers and so sees enum discriminants and derived constants that no regex for
 `_RVA` would.
 
-MEASURED, 2026-08-30, WHICH IS THE ONLY REASON TO BELIEVE ANY OF THE ABOVE
+Measured, 2026-08-30, which is the only reason to believe any of the above
 =========================================================================
-Run against the recon ledger AS COMMITTED at the time this was written -- before the three rows
+Run against the recon ledger as committed at the time this was written -- before the three rows
 were repointed in the working tree -- the gate flags exactly three addresses, and they are the
 three the session went wrong on:
 
-    0x25f8e0  CALL-MAPPED, DETOUR REFUSED  .../quit_menu/profile_rows_system_quit_menu.rs:41
-    0x90a0a0  CALL-MAPPED, DETOUR REFUSED  .../er-loading-portrait-core/dlstring_lookat_math.rs:681
-    0x90a0c0  CALL-MAPPED, DETOUR REFUSED  .../er-loading-portrait-core/stats_loading_text.rs:551
+    0x25f8e0  call-mapped, detour refused  .../quit_menu/profile_rows_system_quit_menu.rs:41
+    0x90a0a0  call-mapped, detour refused  .../er-loading-portrait-core/dlstring_lookat_math.rs:681
+    0x90a0c0  call-mapped, detour refused  .../er-loading-portrait-core/stats_loading_text.rs:551
 
-All three were `IDENTICAL-SHORT` at HEAD -- a verdict `build.rs` admits to the CALL map and
+All three were `IDENTICAL-SHORT` at head -- a verdict `build.rs` admits to the call map and
 refuses the detour map -- and are `IDENTICAL-LEAF` in the working tree, which is what makes the
 gate green today. It is the same tree, the same scan and a three-row ledger diff, so the gate is
 reading the ledger and not agreeing with itself.
@@ -88,7 +88,7 @@ The third of those, `0x90a0a0`, is the one worth pointing at. Its install site i
 in `function_bodies`, the `for`-pattern binding, the built-table miner and `rva_symbols`' value
 resolution, all four. Without any one of them the gate reports two of three and looks fine.
 
-USAGE
+Usage
     python3 scripts/check-detour-rva-coverage.py            # the gate
     python3 scripts/check-detour-rva-coverage.py --list     # every site it found
     python3 scripts/check-detour-rva-coverage.py --selftest
@@ -112,10 +112,10 @@ sys.path.insert(0, SCRIPTS)
 import rva_symbols  # noqa: E402  (path set above)
 
 # ---------------------------------------------------------------------------------------------
-# FLOORS. A matcher that goes blind reports zero findings, which is indistinguishable from a
+# Floors. A matcher that goes blind reports zero findings, which is indistinguishable from a
 # clean tree -- and that is the failure mode that put nine audits in this repo at a confident
 # zero. These are the counts measured on 2026-08-30; they are a lower bound on what the scan must
-# still SEE, not a target. Deleting hooks legitimately lowers them, and lowering them is a
+# still see, not a target. Deleting hooks legitimately lowers them, and lowering them is a
 # reviewable one-line diff. A refactor that makes the scan blind cannot do it silently.
 MIN_DETOUR_SITES = 100
 MIN_RESOLVED_SITES = 82
@@ -144,10 +144,10 @@ MAX_CALLERS_FOLLOWED = 12
 
 
 def blank_comments(text):
-    """`text` with comments blanked to spaces, STRING BODIES LEFT INTACT, offsets preserved.
+    """`text` with comments blanked to spaces, string bodies left intact, offsets preserved.
 
     `rva_symbols.code_only` blanks both, which is right for its question and wrong for this one:
-    the verdict vocabulary this script must read IS a set of string literals
+    the verdict vocabulary this script must read is a set of string literals
     (`["BYTE-IDENTICAL", ...]`), and blanking them would hand back an empty vocabulary that
     licenses every detour in the tree. Comments still have to go, because `build.rs`'s doc
     paragraphs name every verdict in prose.
@@ -208,7 +208,7 @@ def read(path):
 
 
 # ---------------------------------------------------------------------------------------------
-# THE VOCABULARY, read out of er-game-base/build.rs
+# The vocabulary, read out of er-game-base/build.rs
 # ---------------------------------------------------------------------------------------------
 
 STR_ARRAY = re.compile(
@@ -242,7 +242,7 @@ class Vocabulary:
         detour_fn = self._body("detourable_pairs")
         refuted_fn = self._body("refuted_sources")
 
-        # WHICH ARRAYS ARE WHICH is decided by how `detourable_pairs` USES them, not by their
+        # Which arrays are which is decided by how `detourable_pairs` uses them, not by their
         # names. `EXHAUSTIVE_VERDICTS` could be renamed tomorrow; what cannot change without the
         # rule itself changing is that the detour filter consults it.
         self.detour_verdicts = set()
@@ -269,7 +269,7 @@ class Vocabulary:
         found = IMAGE_BASE_EXPR.search(detour_fn) or IMAGE_BASE_EXPR.search(refuted_fn)
         self.image_base = int(found.group(1).replace("_", ""), 16) if found else None
 
-        # The TSV inputs, by the FUNCTION each is passed to inside `emit_address_map`: the verdict
+        # The TSV inputs, by the function each is passed to inside `emit_address_map`: the verdict
         # tables that feed the detour set, the ones whose DIVERGES rows are subtracted, and the
         # quarantine. Reading them by name would be the transcription this whole module refuses.
         emit = self._body("emit_address_map")
@@ -278,10 +278,10 @@ class Vocabulary:
         self.quarantine = strings.get(
             self._name(self._body("quarantined"), r"join\(([A-Z][A-Z0-9_]*)\)")
         )
-        # Every table `emit_address_map` actually READS, which is the CALL map's population. The
+        # Every table `emit_address_map` actually reads, which is the call map's population. The
         # `let _ = NAME;` form is excluded because that is precisely how build.rs marks a table it
         # keeps for reference and deliberately does not use (`AUDITED_DETOURS`); counting it would
-        # label a finding CALL-MAPPED on the strength of a row the build ignores.
+        # label a finding call-mapped on the strength of a row the build ignores.
         parked = set(re.findall(r"\blet\s+_\s*=\s*([A-Z][A-Z0-9_]*)\s*;", emit))
         self.pair_tables = sorted(
             {
@@ -341,9 +341,9 @@ class Vocabulary:
     def _tables_reaching(emit, strings, function):
         """Path constants handed to `function(...)` inside `emit_address_map`.
 
-        ONE HOP THROUGH A LOCAL, because build.rs takes it: the verified table is bound as
+        One hop through a local, because build.rs takes it: the verified table is bound as
         `let verified_path = Path::new(root_dir).join(VERIFIED_MAP);` and only then handed to
-        `detourable_pairs(&verified_path)`. Reading the call argument alone found ONE of the two
+        `detourable_pairs(&verified_path)`. Reading the call argument alone found one of the two
         detour tables and silently dropped every row of the other -- which turns 27 proved,
         hand-verified hook targets into findings and buries the real ones.
         """
@@ -473,7 +473,7 @@ def load_maps(vocab, root=ROOT):
         source = vocab.rva(fields[0]) if fields else None
         if source is not None:
             held.add(source)
-    # The CALL map is only used to LABEL a finding ("this one translates, and the detour is what
+    # The call map is only used to label a finding ("this one translates, and the detour is what
     # refuses it" is a different work item from "nobody knows where this went"), so every pair
     # table counts, without the detour filter.
     for relative in vocab.pair_tables:
@@ -511,15 +511,15 @@ def function_bodies(code):
     out = []
     for match in FN_HEAD.finditer(code):
         args_end = _matching(code, match.end() - 1, "(", ")")
-        # WHICH COMES FIRST AT DEPTH ZERO, `{` or `;`. A plain `code.find(";")` reads the `;`
-        # inside an ARRAY RETURN TYPE -- `fn observer_hooks() -> [ObserverHook; 5] {` -- decides
+        # Which comes first at depth zero, `{` or `;`. A plain `code.find(";")` reads the `;`
+        # inside an array return type -- `fn observer_hooks() -> [ObserverHook; 5] {` -- decides
         # the function is a bodyless declaration, and drops it. That one miss cost the whole
         # loading-screen observer table: five detours, including the address that put an opaque
         # cover over seven minutes of live gameplay.
         # Only `(` and `[` are counted. Angle brackets are NOT: `->` is a `>` with no `<`, so
         # counting them drives the depth negative on every function that returns anything, and the
         # array `;` then reads at depth 0 again -- the same miss wearing a different mask.
-        depth, i, brace = 0, args_end + 1, -1  # PAST the closing `)`, or it counts as a `)`
+        depth, i, brace = 0, args_end + 1, -1  # Past the closing `)`, or it counts as a `)`
         while i < len(code):
             c = code[i]
             if c in "([":
@@ -539,17 +539,17 @@ def function_bodies(code):
 
 
 def installer_spellings(source=None, path=HOOK_RS):
-    """`(translating, runtime_derived)` -- how a caller SPELLS each er-hook detour entry point.
+    """`(translating, runtime_derived)` -- how a caller spells each er-hook detour entry point.
 
     Derived by call-graph closure over the functions that consult the detour map, so a renamed or
     newly added entry point is picked up without editing this file. `MhHook::new` comes back with
     its type prefix because that is how the 90 call sites in this tree write it.
 
-    # The closure propagates through FREE FUNCTIONS ONLY, and that is not a detail
+    # The closure propagates through free functions only, and that is not a detail
 
     A method name is not a call graph edge. Propagating through one made `new` a token, a
     word-boundary call pattern on it matches `Vec::new(`, and the closure swallowed nineteen -- including both
-    `*_runtime_derived` entry points, whose whole purpose is to NOT consult the map. Reporting
+    `*_runtime_derived` entry points, whose whole purpose is to not consult the map. Reporting
     those as translating installers would flag the two GFx tag-parse hooks that a runtime AOB scan
     gets right on 1.17, which is the exact false refusal `register_union_hook_runtime_derived` was
     added to undo.
@@ -646,9 +646,9 @@ class Scanner:
         self._mentions = {}
         # `(?![\w])` after each name is what keeps `MhHook::new` from also matching
         # `MhHook::new_runtime_derived` -- the exempt entry point whose entire reason to exist is
-        # that it does NOT go through the map. Longest-first, because alternation is leftmost-first
+        # that it does not go through the map. Longest-first, because alternation is leftmost-first
         # and `register_shared_hook` would otherwise shadow `register_shared_hook_with_budget`.
-        # `(?<![\w.])`, NOT `(?<![\w:.])`. Half this tree calls through the module path --
+        # `(?<![\w.])`, not `(?<![\w:.])`. Half this tree calls through the module path --
         # `er_hook::register_shared_hook(base + FILE_OPEN_RVA, ..)` is er-armament-icons' only
         # shared hook -- and refusing a `::` prefix silently dropped it. Caught by the frozen
         # control below, which is the entire reason a frozen control is worth writing down.
@@ -670,7 +670,7 @@ class Scanner:
         """Files whose code text contains `name` at all -- a cheap gate before any regex.
 
         Following a wrapper's callers used to run a compiled pattern over every file in the tree
-        ONCE PER CALL, 81,000 whole-file regex scans in a run, and that alone was 29 of the gate's
+        once per call, 81,000 whole-file regex scans in a run, and that alone was 29 of the gate's
         34 seconds. A substring test done once per callee name replaces all of it.
         """
         if name not in self._mentions:
@@ -695,7 +695,7 @@ class Scanner:
     def sites(self, paths=None):
         out = []
         for path in self.sources() if paths is None else paths:
-            # er-hook DEFINES these functions; its own bodies are not install sites.
+            # er-hook defines these functions; its own bodies are not install sites.
             if os.path.relpath(path, self.root).split(os.sep)[0] == "er-hook":
                 continue
             code = self.text_of(path)
@@ -736,13 +736,13 @@ class Scanner:
             value = int(match.group(0).replace("_", ""), 16)
             # A bare literal is only an address when it is not page-aligned: `base + 0x0800_0000`
             # is a range bound on a runtime pointer, and it entered an earlier inventory as a game
-            # address. A NAMED constant gets no such test -- the name is evidence a literal lacks.
+            # address. A named constant gets no such test -- the name is evidence a literal lacks.
             if MIN_PLAUSIBLE_RVA <= value <= MAX_PLAUSIBLE_RVA and value & 0xFFF:
                 out.add(value)
         for match in rva_symbols.IDENTIFIER.finditer(expr):
             name = match.group(0).replace(" ", "")
-            # KEYED BY (name, limit), NOT BY NAME. `if let Some(addr) = addr` rebinds a name to
-            # ITSELF, which is idiomatic and extremely common in this tree; a name-only guard sees
+            # KEYED by (name, limit), not by name. `if let Some(addr) = addr` rebinds a name to
+            # itself, which is idiomatic and extremely common in this tree; a name-only guard sees
             # the second `addr`, calls it already-visited, and abandons a chain that had one hop
             # left. The pair is still a sound cycle guard -- `limit` strictly decreases on the way
             # back through the bindings.
@@ -771,7 +771,7 @@ class Scanner:
     RVA_FIELD = re.compile(r"\b\w*rva\s*:\s*([^,\n}]+)", re.I)
 
     def _rva_fields(self, text, path):
-        """Every address a `rva: <expr>` FIELD carries, literal or named.
+        """Every address a `rva: <expr>` field carries, literal or named.
 
         Both spellings are live and neither is optional. er-invasion-warp writes
         `MapSeam { rva: 0x088_55b0, .. }`; er-loading-portrait-core writes
@@ -794,7 +794,7 @@ class Scanner:
         return out
 
     def _table_fn_rvas(self, name, path):
-        """`fn observer_hooks() -> [ObserverHook; 5] { [ .. ] }` -- a table BUILT, not declared.
+        """`fn observer_hooks() -> [ObserverHook; 5] { [ .. ] }` -- a table built, not declared.
 
         The five loading-screen observer detours moved into exactly this shape, and it defeats
         every declaration-based resolver at once: the records are not a `const`, so
@@ -813,18 +813,18 @@ class Scanner:
     def _record_rvas(self, name, path):
         """Addresses carried by a STRUCT constant -- `MapSeam { rva: 0x08855b0, .. }`.
 
-        `rva_symbols` evaluates INTEGER declarations; a struct literal is outside that universe by
+        `rva_symbols` evaluates integer declarations; a struct literal is outside that universe by
         design, so `verify_seam(&WORLDMAP_VIEWMODEL_CTOR)` resolved to nothing and seven of
         er-invasion-warp's union hooks went unnamed. The address is right there in the tree with no
         constant name of its own -- exactly the fourth declaration form
         `audit-1170-coverage-inventory.py` had to grow, and the shape er-reload-trace's 39
         addresses use.
 
-        Only a field NAMED as an address counts, and a blind hex sweep of the record is
+        Only a field named as an address counts, and a blind hex sweep of the record is
         deliberately not the fallback. The first cut had one, and it promptly invented a detour on
         `0x1a58` -- a struct offset sitting in an unrelated record, reported against
         er-scaleform-hooks and er-enemynpc-effects. An address mined out of a literal has no name
-        vouching for it, so the FIELD name has to do that job or nothing does.
+        vouching for it, so the field name has to do that job or nothing does.
         """
         last = name.split("::")[-1]
         pool = self.index.by_simple.get(last, [])
@@ -840,7 +840,7 @@ class Scanner:
         _fn, head, start, end = enclosing
         body = code[start:end]
         out, notes = set(), []
-        # NEAREST BINDING FIRST, and stop at the first one that yields an address. That is what a
+        # Nearest binding first, and stop at the first one that yields an address. That is what a
         # Rust reader does -- the last binding before the use is the one in scope -- and it is why
         # the earlier bindings are a FALLBACK rather than a union: see `_visible`.
         for at, expr in self._visible(self._bindings(name, body), limit):
@@ -852,7 +852,7 @@ class Scanner:
                 break
         if out:
             return out, ""
-        # A PARAMETER, not a local: follow the callers. `create_absolute_hook(target: *mut
+        # A parameter, not a local: follow the callers. `create_absolute_hook(target: *mut
         # c_void)` and `er_effects_union_register(target: usize)` are both real wrappers in this
         # tree, and stopping at the parameter would silently drop every site behind them.
         params = code[head : start + 1]
@@ -867,16 +867,16 @@ class Scanner:
 
     @staticmethod
     def _visible(bindings, limit):
-        """Bindings that can reach `limit`, NEAREST FIRST -- the order a Rust reader resolves in.
+        """Bindings that can reach `limit`, nearest first -- the order a Rust reader resolves in.
 
         Shadowing is why this matters and not a refinement. `install_now_loading_helper_observer_
         hooks` binds `addr` FIVE times, once per `if let Some(addr) = <a different address>`, and
         taking every binding of the name as a union attributed all five addresses to all five
         hooks. Nothing was wrongly flagged there -- each address really is detoured somewhere in
         that function -- but the same over-reach in a function that binds `addr` once for a hook
-        and once for a READ manufactures a finding out of an address nobody detours.
+        and once for a read manufactures a finding out of an address nobody detours.
 
-        Bindings AFTER the use are dropped outright; a later `let` cannot flow backwards.
+        Bindings after the use are dropped outright; a later `let` cannot flow backwards.
         """
         if limit is None:
             return list(reversed(bindings))
@@ -896,7 +896,7 @@ class Scanner:
                 pattern = head[: split.start()]
                 if not token.search(pattern):
                     continue
-                # `_rhs`, not "up to the matching brace": the iterable ENDS at the `{` that opens
+                # `_rhs`, not "up to the matching brace": the iterable ends at the `{` that opens
                 # the loop body. Taking the body too left the trailing `}` on the expression, and
                 # the tuple slice then read one column of a malformed table -- the second row of a
                 # two-row hook table went missing, silently.
@@ -976,7 +976,7 @@ class Scanner:
 
     @staticmethod
     def _tuple_slice(pattern, name, rhs):
-        """For `for (a, TARGET, c) in [ (..), (..) ]`, only the TARGET column of each row.
+        """For `for (a, TARGET, c) in [ (..), (..) ]`, only the target column of each row.
 
         Taking the whole table would pull a row's handler pointers and slot references in beside
         its address -- harmless for a name that resolves to nothing, and a false finding the day
@@ -1070,10 +1070,10 @@ def _load(name, filename):
 
 
 class ForeignFilter:
-    """Is this RVA declared inside a `mod ersc { .. }` block -- i.e. NOT an eldenring.exe address?
+    """Is this RVA declared inside a `mod ersc { .. }` block -- i.e. Not an eldenring.exe address?
 
-    An address is a GAME address because of the BASE it is added to. `er-invasion-warp` resolves
-    Seamless Co-op with `GetModuleHandleA("ersc.dll")` and detours four RVAs on THAT base; those
+    An address is a game address because of the base it is added to. `er-invasion-warp` resolves
+    Seamless Co-op with `GetModuleHandleA("ersc.dll")` and detours four RVAs on that base; those
     are not 1.17 migration work, and reporting them as unmapped game addresses is how a
     translation gets proposed that would land five bytes of jmp in an unrelated game function.
 
@@ -1084,10 +1084,10 @@ class ForeignFilter:
         self.inventory = _load("coverage_inventory", "audit-1170-coverage-inventory.py")
         self.index = index
         self.spans = {}
-        # ONE pass over the resolved declarations, not `Index.claims()` per address. `claims()`
+        # One pass over the resolved declarations, not `Index.claims()` per address. `claims()`
         # additionally runs `uses_of` -- a whole-tree regex scan per claimed symbol -- and calling
         # it 140 times took longer than the entire rest of the gate. Nothing here needs the use
-        # sites; it needs where the address is DECLARED.
+        # sites; it needs where the address is declared.
         self.holders = {}
         for decl in index.decls:
             for value in decl.value or ():
@@ -1190,27 +1190,27 @@ def report(result, out=sys.stdout, show_sites=False):
     return result
 
 
-# A `.data` SINGLETON POINTER IS NOT A DETOUR TARGET, and this gate's own resolver cannot tell one
+# A `.data` singleton pointer is not a detour target, and this gate's own resolver cannot tell one
 # from a function -- see "ADDRESSES ARE RESOLVED BY VALUE, NOT BY SPELLING" above. Its backward walk
 # is deliberately generous: at a wrapper whose parameter is a bare `rva: usize` it follows callers,
 # and where the callers themselves take the address from a table field it collects every RVA the
 # crate declares. Measured 2026-09-06 on `crates/er-input-harness/src/pad_inject.rs:665`
 # (`install_one`): 48 addresses attributed to a site whose six real callers pass six constants
 # (0x240e70, 0x241130, 0x26634a0, 0xe34fb0, 0xe35040, 0xe35080). One of the 42 spurious ones was
-# `GAME_DATA_MAN_GLOBAL_RVA` = 0x3d5df38, which is CALL-MAPPED but detour-REFUSED, so the gate
+# `GAME_DATA_MAN_GLOBAL_RVA` = 0x3d5df38, which is call-mapped but detour-refused, so the gate
 # failed on a hook nobody installs. Both crates that name it only ever pass it to a
 # `deref_singleton` read.
 #
-# The rule is the SIBLING GATE'S, not a new invention: `scripts/check-shared-hook-rvas.py` carries
+# The rule is the sibling gate'S, not a new invention: `scripts/check-shared-hook-rvas.py` carries
 # `READ_ONLY = GLOBAL|SINGLETON|VTABLE|_DATA_|REPOSITORY` for exactly this, and documents that
 # without it "the gate reported 14 collisions of which 13 were harmless, and a gate that cries wolf
 # gets muted".
 #
-# It is deliberately ALL-or-nothing across declarations: an address is dropped only when EVERY name
+# It is deliberately all-or-nothing across declarations: an address is dropped only when every name
 # declaring it says data. One function-shaped name is enough to keep it, so a real detour target
 # that merely shares a value with a data alias still fails.
 # `STATE_ROOT` is this gate's one addition to the sibling's list, and it is not a guess:
-# `MOUNT_GUARD_STATE_ROOT_RVA` is a role alias for the SAME GameDataMan singleton, and its own
+# `MOUNT_GUARD_STATE_ROOT_RVA` is a role alias for the same GameDataMan singleton, and its own
 # declaration says so -- "The 'mount guard state root' IS `GameDataMan` (1.16.2 Ghidra, 734 xrefs)".
 # All three names resolving to 0x3d5df38 (that one, `GAME_DATA_MAN_GLOBAL_RVA` and
 # `CONTINUE_MANAGER_GLOBAL_RVA`) are role aliases of one `.data` pointer.
@@ -1221,7 +1221,7 @@ def is_data_only_address(rva, index):
     """True when every symbol declaring `rva` names a data object rather than a function."""
     # `decl.value` is the number the index already resolved for that declaration, so this reads the
     # same resolution the findings were built from rather than a second opinion.
-    # `decl.value` is a SET (a name can resolve to more than one number through a band or an enum),
+    # `decl.value` is a set (a name can resolve to more than one number through a band or an enum),
     # so membership is the test -- `== rva` silently matched nothing and read as "no declaration
     # names this", which would have turned the exclusion into a no-op that still looked implemented.
     names = {
@@ -1285,10 +1285,10 @@ def verdict(result, out=sys.stdout):
 # Selftest
 # ---------------------------------------------------------------------------------------------
 
-# THE POSITIVE CONTROL, FROZEN AS A LITERAL AND NOT COMPOSED FROM THE MATCHER.
+# The positive control, frozen as a literal and not composed from the MATCHER.
 #
 # `er-armament-icons` installs a shared-union detour on the Scaleform file-open wrapper, spelled
-# `base + FILE_OPEN_RVA`, and that address IS detour-safe today. The scan must find it, name that
+# `base + FILE_OPEN_RVA`, and that address is detour-safe today. The scan must find it, name that
 # address, and clear it. Every value below is written out by hand: a control assembled from
 # `Scanner`'s own regexes widens exactly when they widen, and then "the scan sees this" quietly
 # becomes "the scan sees whatever it sees", which is not a claim at all. That is how
@@ -1296,24 +1296,24 @@ def verdict(result, out=sys.stdout):
 CONTROL_SITE = "crates/er-armament-icons/src/gfx_equip_hook.rs"
 CONTROL_INSTALLER = "register_shared_hook"
 CONTROL_RVA = 0x11CED80
-# ...and a control for the INDIRECT shape, which is the one a naive matcher fails: the address is
+# ...and a control for the indirect shape, which is the one a naive matcher fails: the address is
 # never written next to the installer. `game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32)` binds a
 # local ten lines above the `MhHook::new(addr as *mut c_void, ...)` that consumes it.
 CONTROL_INDIRECT_SITE = "crates/er-quickload/src/experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
 CONTROL_INDIRECT_RVA = 0x25F8E0
-# ...and the THIRD control, which is the one the seven-minute failure is about.
+# ...and the third control, which is the one the seven-minute failure is about.
 # `LOADING_SCREEN_GFX_FADEOUT_RVA` reaches its `MhHook::new` through four separate mechanisms --
-# a `fn observer_hooks() -> [ObserverHook; 5]` whose ARRAY RETURN TYPE breaks a naive body scan, a
+# a `fn observer_hooks() -> [ObserverHook; 5]` whose array return type breaks a naive body scan, a
 # `for hook in &hooks` binding, an `rva: <NAME> as u32` record field, and `rva_symbols`' value
 # resolution of that name. A regression audit on 2026-08-30 mutated each of those in turn and the
-# selftest stayed GREEN for two of them, so this control was added: it is the only assertion that
+# selftest stayed green for two of them, so this control was added: it is the only assertion that
 # fails when the built-table path goes blind, and going blind there loses exactly the address that
 # covered a user's screen.
 CONTROL_TABLE_SITE = "crates/er-loading-portrait-core/src/dlstring_lookat_math.rs"
 CONTROL_TABLE_RVA = 0x90A0A0
 # The matcher this gate replaces, frozen verbatim: a literal address written beside the installer.
 # Kept so the controls above can prove each widening is load-bearing -- a control the naive
-# pattern ALSO catches would pass on a broken gate and prove nothing.
+# pattern also catches would pass on a broken gate and prove nothing.
 NAIVE = re.compile(r"MhHook::new\s*\(\s*(?:base\s*\+\s*)?0x[0-9a-fA-F]+")
 
 FIXTURE = {
@@ -1368,7 +1368,7 @@ def selftest():
         if got != want:
             failures.append(f"{name}: got {got!r}, want {want!r}")
 
-    # -- the vocabulary comes from build.rs, and an unreadable build.rs is FATAL ---------------
+    # -- the vocabulary comes from build.rs, and an unreadable build.rs is fatal ---------------
     vocab = read_build_vocabulary()
     check("build.rs yields detour verdicts", bool(vocab.detour_verdicts), True)
     check("build.rs yields entry evidence", bool(vocab.entry_evidence), True)
@@ -1382,7 +1382,7 @@ def selftest():
                 bool(re.fullmatch(r"[A-Z][A-Z0-9\-]+", word)),
                 True,
             )
-    # An empty build.rs must RAISE, not hand back a permissive default.
+    # An empty build.rs must raise, not hand back a permissive default.
     try:
         Vocabulary("fn main() {}")
         failures.append("a build.rs with no rules did not raise VocabularyError")
@@ -1398,15 +1398,15 @@ def selftest():
     except VocabularyError:
         pass
 
-    # -- the reproduction of build.rs's rule agrees with an INDEPENDENT one --------------------
-    # `audit-1170-coverage-inventory.py` reproduces the same tables from TRANSCRIBED constants.
+    # -- the reproduction of build.rs's rule agrees with an independent one --------------------
+    # `audit-1170-coverage-inventory.py` reproduces the same tables from transcribed constants.
     # Two reproductions from different sources agreeing is the check; a disagreement means one of
     # them drifted, and that is exactly the event worth failing on.
     maps = load_maps(vocab)
     try:
         inventory = _load("coverage_inventory", "audit-1170-coverage-inventory.py")
         theirs = inventory.load_maps()["detour"]
-        # Compared as a SIZE plus a sample of the difference, not as two raw sets: printing 380
+        # Compared as a size plus a sample of the difference, not as two raw sets: printing 380
         # integers on failure buries the one fact a reader needs, which is which side moved.
         drift = sorted(maps["detour"] ^ theirs)
         check(
@@ -1439,7 +1439,7 @@ def selftest():
         [],
     )
     check("...and they are listed as exempt rather than dropped", bool(derived), True)
-    # THE CLOSURE ITSELF, on a synthetic er-hook. A propagation rule that walked METHOD names
+    # The closure itself, on a synthetic er-hook. A propagation rule that walked method names
     # dragged both `*_runtime_derived` entry points into the translating set via `Vec::new(`; this
     # is the fixture that says so, and it needs no edit here when the real file moves.
     synthetic = """
@@ -1501,8 +1501,8 @@ def selftest():
         any(s.installer == "register_union_hook" and 0x111000 in s.rvas for s in found),
         True,
     )
-    # NON-VACUITY OF THE FIXTURE ITSELF. The naive matcher -- a literal address written beside the
-    # installer -- finds exactly ONE of these nine sites. It is not a dead pattern (it does match
+    # Non-VACUITY of the fixture itself. The naive matcher -- a literal address written beside the
+    # installer -- finds exactly one of these nine sites. It is not a dead pattern (it does match
     # the `literal()` shape, which is what makes the other eight misses evidence rather than a
     # broken regex), and it is not a useful one (eight real detours are invisible to it).
     check(
@@ -1516,7 +1516,7 @@ def selftest():
         9,
     )
 
-    # -- THE REAL TREE. A scanner that only ever runs on its own fixture is a fixture. ----------
+    # -- The real tree. A scanner that only ever runs on its own fixture is a fixture. ----------
     result = audit()
     check("the real scan finds detour sites", len(result["sites"]) >= MIN_DETOUR_SITES, True)
     check("...and resolves most of them", len(result["resolved"]) >= MIN_RESOLVED_SITES, True)

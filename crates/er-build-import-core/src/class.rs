@@ -1,4 +1,4 @@
-//! Starting classes, in the order the GAME stores them.
+//! Starting classes, in the order the game stores them.
 //!
 //! `PlayerGameData::archetype` is one byte and `ArchetypeToInitParamId` is literally
 //! `archetype + 3000`, so the byte is an index into `CharaInitParam` rows starting at 3000 and
@@ -6,7 +6,7 @@
 //!
 //! # The order was wrong, and it was wrong in a way that reads as plausible
 //!
-//! Both halves of this repository carried the planner's DISPLAY order, in which Samurai comes
+//! Both halves of this repository carried the planner's display order, in which Samurai comes
 //! sixth. In `CharaInitParam` it is Confessor. So a Confessor exported as `Samurai`, and a build
 //! saying `Samurai` imported as a Confessor -- two names swapped in a list of ten, which no smoke
 //! test notices and which is exactly what was reported.
@@ -39,7 +39,7 @@
 //! the previous revision of this file said outright: Prophet and Idus Knight are both level 7 with
 //! 10 vigour. The full eight-attribute run still is unique, so that is what the tests below pin.
 //!
-//! # How each NAME is bound to its row
+//! # How each name is bound to its row
 //!
 //! `BaseChrSelectMenuParam` -- the class-select list -- links the two tables explicitly. Its class
 //! rows (32-byte stride, s32 fields) carry the `CharaInitParam` row id in field 2 and the
@@ -95,7 +95,7 @@ pub const STARTING_CLASS_COUNT: usize = STARTING_CLASSES.len();
 /// `CharaInitParam` row id of the first starting class.
 pub const FIRST_CHARA_INIT_PARAM_ROW: u32 = 3000;
 
-/// `GR_MenuText` message id of the first starting class's NAME.
+/// `GR_MenuText` message id of the first starting class's name.
 ///
 /// `BaseChrSelectMenuParam` pairs every class row's `CharaInitParam` id with a message id that is
 /// this constant plus the archetype; see the module docs for the rows that show it.
@@ -158,7 +158,7 @@ pub fn chara_init_param_row(archetype: u8) -> u32 {
     FIRST_CHARA_INIT_PARAM_ROW + u32::from(archetype)
 }
 
-/// The `GR_MenuText` id holding an archetype's class NAME.
+/// The `GR_MenuText` id holding an archetype's class name.
 ///
 /// ```
 /// use er_build_import_core::class::class_name_message_id;
@@ -173,9 +173,9 @@ pub fn class_name_message_id(archetype: u8) -> u32 {
 /// Starting level and the eight base attributes, keyed by the archetype byte: bytes 192 and
 /// 194..=201 of `CharaInitParam` rows 3000.. , read out of the installed `regulation.bin`.
 ///
-/// # These are FLOORS, which is why this is no longer test-only
+/// # These are floors, which is why this is no longer test-only
 ///
-/// It sat inside `#[cfg(test)]` for as long as its only job was to pin the ORDER of
+/// It sat inside `#[cfg(test)]` for as long as its only job was to pin the order of
 /// [`STARTING_CLASSES`] -- two independent sources agreeing about which row is Confessor and which
 /// is Samurai. It is now also product data, because a class's base attributes are the **floor**
 /// under its character: character creation deals you these numbers, and the level-up dialog reads
@@ -215,7 +215,7 @@ pub const STARTING_STATS: &[(u8, [u8; 8])] = &[
 /// The planner's key for each attribute, in the order [`STARTING_STATS`] holds them.
 ///
 /// **One array, one order.** The clamp in [`crate::stats::normalise`] reads a payload key and the
-/// class base at the SAME index, so a floor applied under the wrong name is a real and silent
+/// class base at the same index, so a floor applied under the wrong name is a real and silent
 /// failure mode -- Vagabond's strength base held against the build's faith. Writing the key list
 /// beside the table it indexes, rather than in the consumer, is what makes that unrepresentable;
 /// `the_planner_keys_line_up_with_the_param_row` states it as an assertion too.
@@ -246,7 +246,7 @@ pub fn starting_attributes(archetype: u8) -> Option<[u8; 8]> {
 /// The base attributes for a class name, however the build spelled it.
 ///
 /// `None` covers both "the build named no class this table knows" and "the name is not a class at
-/// all". The caller has to tell those apart from an ABSENT name, which is why this takes a `&str`
+/// all". The caller has to tell those apart from an absent name, which is why this takes a `&str`
 /// and not an `Option<&str>` -- see [`crate::stats::Floor`].
 ///
 /// ```
@@ -278,9 +278,9 @@ mod tests {
     use super::*;
     use crate::stats::CLASS_INVARIANT;
 
-    /// Starting level and vigour as the PLANNER publishes them, keyed by NAME.
+    /// Starting level and vigour as the planner publishes them, keyed by name.
     ///
-    /// This table's whole value is that it does NOT come from `regulation.bin`. Two sources
+    /// This table's whole value is that it does not come from `regulation.bin`. Two sources
     /// agreeing is the order being right; two copies of one source agreeing is nothing. So it
     /// stays exactly as it was -- (level, vigour), the figures the planner states -- rather than
     /// being widened with attribute runs copied out of the param, which would have quietly turned
@@ -310,13 +310,13 @@ mod tests {
 
     #[test]
     fn each_archetype_names_the_class_whose_starting_stats_that_row_holds() {
-        // The param says what the ROW holds; the planner says what the NAME holds. Walking the
+        // The param says what the row holds; the planner says what the name holds. Walking the
         // archetypes and requiring the two to meet is what pins the order -- and it is why the
         // planner side must stay planner-sourced.
         //
         // On 1.17 the (level, vigour) pair alone can no longer separate every class: Prophet and
         // Idus Knight share (7, 10). That costs this test nothing, because it looks the class up
-        // by NAME rather than by pair, and Idus Knight is not in the planner table at all. The
+        // by name rather than by pair, and Idus Knight is not in the planner table at all. The
         // property that a class is identifiable at all now rests on the full attribute run, which
         // `every_class_has_a_distinct_attribute_run` states and checks explicitly.
         for (archetype, (level, attributes)) in STARTING_STATS.iter().copied().enumerate() {
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn every_class_has_a_distinct_attribute_run() {
-        // On 1.16.2 the (level, vigour) PAIR was unique and the old tests leaned on that. 1.17
+        // On 1.16.2 the (level, vigour) pair was unique and the old tests leaned on that. 1.17
         // broke it -- Prophet and Idus Knight are both level 7 with 10 vigour -- so the property
         // the tables actually rely on is stated and checked rather than assumed.
         for (a, (_, left)) in STARTING_STATS.iter().enumerate() {

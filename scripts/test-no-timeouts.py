@@ -71,7 +71,7 @@ def main() -> int:
         # subprocess.Popen takes no timeout= kwarg (timeout belongs on .communicate()/.wait()).
         ("good-popen.py", "import subprocess\np = subprocess.Popen(['x'], stdout=subprocess.PIPE)\n", set()),
         # The bounded helpers are the sanctioned wait; a bare `yield_now()` per attempt is not.
-        # MEASURED 2026-08-29: two `loop { yield_now() }` threads saturated the wineserver and the
+        # Measured 2026-08-29: two `loop { yield_now() }` threads saturated the wineserver and the
         # game managed 104 CPU ticks in three minutes with no window and no crash record.
         (
             "good-rust.rs",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Low-quality screenshot of ONLY the Elden Ring window for a specific probe event.
+"""Low-quality screenshot of only the Elden Ring window for a specific probe event.
 
 Captures only an exact-class (steam_app_1245620), mapped, unhidden window with sane geometry.
 This helper is focus-independent: it switches to the window's workspace and raises the exact ER
@@ -112,7 +112,7 @@ def main() -> int:
         note.write_text(f"capture failed: grim rc={rc.returncode} stderr={rc.stderr.strip()}\n")
         return 0
 
-    # Downscale to a LOW-QUALITY jpg (small artifact); keep the png if no imagemagick.
+    # Downscale to a low-quality jpg (small artifact); keep the png if no imagemagick.
     magick = shutil.which("magick") or shutil.which("convert")
     target = png
     if magick:

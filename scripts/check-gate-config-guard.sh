@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# THE GATE MUST NOT DAMAGE THE THING IT GATES, AND ON 2026-08-31 IT DID -- TWICE.
+# The gate must not damage the thing it gates, and on 2026-08-31 it did -- Twice.
 #
 # Route, end to end (bd hooks-selftest-under-git-hook-blanks-the-live-config-2026-08-31): a push
-# FROM A LINKED WORKTREE runs the gate suite from its pre-push hook, and git exports GIT_DIR to a
+# from a linked WORKTREE runs the gate suite from its pre-push hook, and git exports GIT_DIR to a
 # linked worktree's hooks -- measured on git 2.55 by scripts/measure-git-hook-env.sh, which also
-# measures that a MAIN checkout's hooks get no GIT_DIR at all, which is why this looked unreachable
-# for a day. `git -C <fixture>` does NOT override GIT_DIR, so every fixture command in a downstream
-# gate lands on the SHARED config instead: `git init` saw a git dir not named `.git`, wrote
+# measures that a main checkout's hooks get no GIT_DIR at all, which is why this looked unreachable
+# for a day. `git -C <fixture>` does not override GIT_DIR, so every fixture command in a downstream
+# gate lands on the shared config instead: `git init` saw a git dir not named `.git`, wrote
 # core.bare = true, and every later `git status` in the main checkout died with "fatal: this
 # operation must be run in a work tree"; `git config --unset core.hooksPath` disarmed the hooks for
 # ninety minutes and a push reached origin ungated.
@@ -15,8 +15,8 @@
 # that was caught. This closes the CLASS: any gate, today's or tomorrow's, that builds a git
 # fixture without scrubbing gets caught here instead of in the next person's checkout.
 #
-# WHY A SOURCED FILE RATHER THAN LINES INSIDE check.sh: scripts/test-check-config-guard.sh drives
-# this logic against fixture repositories, and it must drive the REAL text, not a copy that can
+# Why a sourced file rather than lines inside check.sh: scripts/test-check-config-guard.sh drives
+# this logic against fixture repositories, and it must drive the real text, not a copy that can
 # drift. A file both of them read is the only shape where that is structurally true. It used to be
 # the opening trap of scripts/ci-local-check.sh, which was deleted on 2026-09-03 when the pre-push
 # hook moved to parity with CI (both now run scripts/check.sh).

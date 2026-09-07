@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""No `IDENTICAL-LEAF` row may sit INSIDE a function the image already declares.
+"""No `IDENTICAL-LEAF` row may sit inside a function the image already declares.
 
-WHAT THIS GUARDS, AND WHY IT IS NOT THE CHECK ALREADY IN THE VERIFIER.
+What this guards, and why it is not the check already in the VERIFIER.
 `IDENTICAL-LEAF` is the one verdict that issues its own detour licence: a leaf has no `.pdata`
 entry, so it reaches `DETOURABLE_ENTRY_EVIDENCE` in `crates/er-game-base/build.rs` through the
 `NEITHER-ENTRY` clause, which makes no claim about the entry at all. Everything that keeps that
 safe rests on one premise -- that the address really is a whole function the linker chose not to
-describe, rather than a point in the MIDDLE of one it did.
+describe, rather than a point in the middle of one it did.
 
-`add_leaf_extents` in `scripts/verify-rva-map-1170.py` tests a WEAKER premise than the one the
-verdict rests on. It skips a VA when `rva in extents`, i.e. when a `.pdata` entry BEGINS there.
+`add_leaf_extents` in `scripts/verify-rva-map-1170.py` tests a weaker premise than the one the
+verdict rests on. It skips a VA when `rva in extents`, i.e. when a `.pdata` entry begins there.
 An address 0x10 bytes into a declared function begins nothing, so it is not in `extents`, so a
 leaf extent gets decoded for it, so it can reach `IDENTICAL-LEAF` and carry a detour into the
 middle of a function. That is the precise shape of the failure the 1.17 migration keeps paying
-for: a confident WRONG address reads as a live value and corrupts silently, where a missing one
+for: a confident wrong address reads as a live value and corrupts silently, where a missing one
 merely turns a feature off.
 
-MEASURED 2026-08-30: zero rows in any current map are affected -- every derived extent belongs to
+Measured 2026-08-30: zero rows in any current map are affected -- every derived extent belongs to
 an address no `.pdata` entry covers in either image. So this is a latent hole, not a live bug, and
-this file exists to keep it that way. Coverage is computed over the RAW `.pdata` table including
+this file exists to keep it that way. Coverage is computed over the raw `.pdata` table including
 `UNW_FLAG_CHAININFO` continuation chunks, because a continuation is still the interior of a
-function even though `function_regions` deliberately drops it as a function START.
+function even though `function_regions` deliberately drops it as a function start.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/check-leaf-extent-pdata-coverage.py
     uv run --with capstone python3 scripts/check-leaf-extent-pdata-coverage.py --verbose
 
@@ -59,7 +59,7 @@ def verifier():
 
 
 def coverage(module, image):
-    """Sorted `(begin, end)` of EVERY `.pdata` region, continuation chunks included.
+    """Sorted `(begin, end)` of every `.pdata` region, continuation chunks included.
 
     `function_regions` merges chunk runs and drops continuations from the start set, which is
     right for "does a function begin here" and wrong for "is this address inside one". A chained
@@ -100,12 +100,12 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="print per-map counts")
     args = parser.parse_args()
 
-    # RE-EXEC UNDER uv IF capstone IS ABSENT (2026-08-31), the same bootstrap
+    # RE-EXEC under uv if capstone is absent (2026-08-31), the same bootstrap
     # `verify-thunk-rva-1170.py` and `verify-hook-address.py` already carry. There is no system
     # pip here, so `verifier()` -- which loads `verify-rva-map-1170.py`, which imports capstone --
     # died with a bare ImportError at exit 1. That is indistinguishable from a real finding, which
     # is why this gate could not be wired into check.sh. uv provisions capstone from its cache in
-    # milliseconds. Doing it HERE rather than making check.sh spell `uv run --with capstone` keeps
+    # milliseconds. Doing it here rather than making check.sh spell `uv run --with capstone` keeps
     # the step recognisable to check.sh's own `python3 ...` step-pattern accounting, which does not
     # match a `uv` command and would silently drop this gate from the summary table and the total.
     try:
@@ -114,7 +114,7 @@ def main():
         try:
             os.execvp("uv", ["uv", "run", "--with", "capstone", "python3", *sys.argv])
         except OSError:
-            # No capstone AND no uv: say so and skip rather than traceback. A checkout that cannot
+            # No capstone and no uv: say so and skip rather than traceback. A checkout that cannot
             # decode instructions cannot answer this question either way.
             print("skipped: capstone unavailable and `uv` is not on PATH")
             return 0
@@ -132,7 +132,7 @@ def main():
 
     failures = []
 
-    # 1. Every extent the verifier WOULD derive, over every map that feeds it.
+    # 1. Every extent the verifier would derive, over every map that feeds it.
     for path in MAPS:
         if not os.path.exists(path):
             continue
@@ -166,7 +166,7 @@ def main():
                 f"{[(hex(b + module.BASE), hex(e + module.BASE)) for b, e in regions]}"
             )
 
-    # 2. Every row a verdict table has already WRITTEN as IDENTICAL-LEAF. Independent of the
+    # 2. Every row a verdict table has already written as identical-leaf. Independent of the
     #    maps above, because a hand-added row reaches build.rs without passing through them.
     for path in MAPS:
         for old_va, new_va in leaf_rows(path):

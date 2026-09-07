@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Keep the field offsets NOBODY CAN ATTRIBUTE visible, and shrink that set on purpose.
+"""Keep the field offsets nobody can attribute visible, and shrink that set on purpose.
 
-THE PROBLEM THIS IS THE RESIDUAL OF
+The problem this is the residual of
 -----------------------------------
 A struct field offset is the only completely silent failure class in the 1.16.2 -> 1.17
-migration. A stale detour target is REFUSED by `er-hook` and logged. An unmapped data RVA
+migration. A stale detour target is refused by `er-hook` and logged. An unmapped data RVA
 resolves to 0 and the caller says so. A moved field returns a plausible number of the right width,
 forever, with no fault and no log line.
 
@@ -12,24 +12,24 @@ Two gates already measure that class, and both bottom out in the same place:
 
   * `scripts/check-object-field-offsets-1170.py` re-measures 31 frozen witness rows across six
     objects: `CS::PlayerGameData` and `CS::PlayerIns`, the two the migration actually took apart;
-    `FD4::FD4PadDevice` / `FD4::FD4PadManager`, where the question was WHICH OBJECT a write lands
-    in; and `CS::CSSystemStep`, where the question was whether an offset had EVER been a field
+    `FD4::FD4PadDevice` / `FD4::FD4PadManager`, where the question was which object a write lands
+    in; and `CS::CSSystemStep`, where the question was whether an offset had ever been a field
     (`CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` said 0x40 against a field at 0x48, in both builds).
   * `scripts/check-singleton-field-offsets.py` clears any offset whose owner is one of the seven
     singleton-rooted classes it can reach through a global.
 
 Everything else is UNATTRIBUTED, and an offset whose owning object cannot be named cannot be
-measured at all: joining a repo constant to a drift row on the NUMBER is worthless in both
+measured at all: joining a repo constant to a drift row on the number is worthless in both
 directions, because `0x50`, `0x88`, `0x90` and `0xb0c` are field offsets in dozens of unrelated
 structures. `0xb0c` moved in 1.17 -- in `MoWwiseManImp`, the Wwise audio manager -- while
 `DIALOG_SLOT_CURSOR_B0C_OFFSET` is a title dialog at the same number and is unaffected.
 
 So the unattributed set is not a to-do list that can be closed by measuring harder. It is closed
 one constant at a time, by reading the reverse engineering recorded beside each one and putting
-its owner in the shared table. This file's job is to make sure that set is KNOWN, that it can
+its owner in the shared table. This file's job is to make sure that set is known, that it can
 only shrink, and that a new unattributed constant has to be justified rather than merely added.
 
-WHAT COUNTS AS ATTRIBUTED
+What counts as attributed
 -------------------------
 Exactly what the two existing gates already consult, imported rather than copied:
 
@@ -41,36 +41,36 @@ Exactly what the two existing gates already consult, imported rather than copied
   3. an entry in that same file's `NAMED_WITNESS`, for an object with no vtable of its own --
      a stack buffer, a leaf, a singleton reached through a global. The owner there is a named
      consumer function plus the register that provably holds the object inside it, which is
-     weaker than RTTI and is reported as CLEARED-BY-NAMED-WITNESS rather than CLEARED, but it is
+     weaker than RTTI and is reported as cleared-by-named-witness rather than cleared, but it is
      still an owner and the offset is still measurable.
 
-Naming an owner is NOT a clearance. `CS::CSMenuProfModelRend + 0x756` is attributed and still
-returns STILL-UNKNOWN from `scripts/clear-fields-by-object.py`. Attribution is what makes the
+Naming an owner is not a clearance. `CS::CSMenuProfModelRend + 0x756` is attributed and still
+returns still-unknown from `scripts/clear-fields-by-object.py`. Attribution is what makes the
 offset measurable; the measurement is a separate step and is reported separately.
 
-WHAT THIS FILE ASSERTS
+What this file asserts
 ----------------------
-  RATCHET (always runs, reads only repo source).  Every unattributed constant is listed in
+  Ratchet (always runs, reads only repo source).  Every unattributed constant is listed in
       `docs/recon/unattributed-field-offsets.txt`. A constant that is unattributed today and is
-      NOT in that file fails the gate. Rows may disappear; they may not appear.
+      not in that file fails the gate. Rows may disappear; they may not appear.
 
-  BLINDNESS FLOORS.  Nine "audits" in this repo have reported zero findings from a matcher that
+  Blindness floors.  Nine "audits" in this repo have reported zero findings from a matcher that
       had gone blind, because `assert bad == 0` passes over an empty set. A shrinking unattributed
-      list is exactly what a blinded inventory or a lost OWNERS import produces, and it would read
+      list is exactly what a blinded inventory or a lost owners import produces, and it would read
       as progress. So the population size and the attributed count carry floors: if either falls
       through the floor the gate goes red and says the matcher went blind, not that the set got
       smaller.
 
-  WITNESSES (runs when the two de-Arxan'd images are present, SKIPs loudly when they are not).
+  Witnesses (runs when the two de-Arxan'd images are present, SKIPs loudly when they are not).
       Frozen function-pair alignments re-measured from the images on every run, in the shape
       `scripts/check-object-field-offsets-1170.py` established: a row that cannot be measured is a
-      FAILURE, not a pass.
+      failure, not a pass.
 
-USAGE
+Usage
     scripts/attribute-field-offset-owners.py                  # the gate
     scripts/attribute-field-offset-owners.py --refresh        # rewrite the ratchet doc
     scripts/attribute-field-offset-owners.py --list           # the unattributed set, by crate
-    scripts/attribute-field-offset-owners.py --prose NAME     # the RE prose that names its owner
+    scripts/attribute-field-offset-owners.py --prose name     # the RE prose that names its owner
     scripts/attribute-field-offset-owners.py --triage TSV [--verdicts V] [--written]
                                                               # bulk prose digest for a triage run
     scripts/attribute-field-offset-owners.py --selftest
@@ -94,34 +94,34 @@ MATCHER = REPO / "scripts" / "pair-object-field-drift.py"
 IMAGE_BASE = 0x140000000
 
 # ---------------------------------------------------------------------------------------------
-# BLINDNESS FLOORS.
+# Blindness floors.
 #
 # Measured 2026-08-31: 813 included game-struct-field offset sites, 370 of them attributed. Both
-# numbers move whenever repo source lands, so they are FLOORS WITH HEADROOM rather than exact
+# numbers move whenever repo source lands, so they are floors with HEADROOM rather than exact
 # pins -- a ratchet that goes red because somebody deleted a constant is a ratchet people route
 # around (the same reasoning as MIN_CLEARED_CONSTANTS in check-singleton-field-offsets.py).
 #
 # They exist for one failure only, and it is the one that matters here: the unattributed list
-# SHRINKING because the inventory went blind or the OWNERS import silently returned nothing.
+# shrinking because the inventory went blind or the owners import silently returned nothing.
 # Either would look like progress. Neither can get past these.
 # ---------------------------------------------------------------------------------------------
 MIN_INCLUDED_SITES = 700
 MIN_ATTRIBUTED = 320
 
 # ---------------------------------------------------------------------------------------------
-# FROZEN WITNESSES.
+# Frozen witnesses.
 #
 # Each row: (object, label, offset_1162, offset_1170, witness, how). The witness is a pair of
 # function bodies that align instruction-for-instruction across the two images, so instruction k
-# on each side is the SAME access to the SAME field and a displacement difference is that field
+# on each side is the same access to the same field and a displacement difference is that field
 # moving, by exactly that much. `bases` restricts what is counted to registers that provably hold
 # the object -- never left empty. An empty base filter means "count every register base", which is
-# how foreign objects leak in as false HELD witnesses; it produced spurious "held" readings at
+# how foreign objects leak in as false held witnesses; it produced spurious "held" readings at
 # PlayerIns 0x480/0x508/0x530, all inside a band that had demonstrably moved.
 # ---------------------------------------------------------------------------------------------
 
 # `CS::CSMenuProfModelRend::CSMenuProfModelRend`. `mov %rcx,%r14` in the prologue and then
-# `lea 0x142b80128(%rip),%rax ; mov %rax,(%r14)` -- it stores THIS CLASS'S OWN VTABLE at
+# `lea 0x142b80128(%rip),%rax ; mov %rax,(%r14)` -- it stores this class'S own VTABLE at
 # `[r14+0]`, so r14 is `this` and the object identity does not rest on the function map at all.
 # The 1.17 body stores 0x142b831d8 at the corresponding instruction, which is exactly the 1.17
 # vtable `scripts/rtti-classmap-both.py` pairs to the same mangled class name. 64/64 instructions
@@ -271,7 +271,7 @@ def owners() -> dict:
 
     Imported rather than copied -- a copied ownership table is a second claim about the same fact
     that drifts silently. A failure to import is a hard error, not a shrug: a gate that quietly
-    loses its ownership table reports MORE unattributed constants, which this ratchet would then
+    loses its ownership table reports more unattributed constants, which this ratchet would then
     refuse -- but it would refuse them with a nonsense reason, so say the real one.
     """
     if "own" not in _CACHE:
@@ -517,7 +517,7 @@ def witnessed_constant_findings(unattributed_by_name, attributed_by_name, read_t
                     f"{name} = {found:#x} at {path.relative_to(REPO)}, but the images witness "
                     f"{obj} + {value:#x} unchanged in 1.17"
                 )
-        # ANY unattributed site is a finding, not "no site at all". The same constant name is
+        # Any unattributed site is a finding, not "no site at all". The same constant name is
         # frequently redeclared per crate: `DLUID_INPUT_ACTIVE_FLAG_OFFSET` exists four times, and
         # one of them resolves through an `offset_of!` layout while the other three are bare
         # literals. Asking "is the NAME attributed anywhere" would have reported that as owned.
@@ -625,7 +625,7 @@ def comment_block_above(lines: list[str], index: int) -> list[str]:
 def section_prose(lines: list[str], index: int, limit: int = 60) -> list[str]:
     """The nearest banner comment above the constant, when its own block says nothing.
 
-    Reverse-engineered offsets here are usually recorded once per BLOCK ("All offsets are BYTE
+    Reverse-engineered offsets here are usually recorded once per block ("All offsets are byte
     offsets from the renderer (CSMenuProfModelRend) base."), with each constant carrying only its
     own field's meaning. Printed with a different marker so the two are never confused.
     """
@@ -741,28 +741,28 @@ def selftest() -> int:
     real_rows = inventory_module().inventory()
     baseline = {ratchet_key(row) for row in unattributed}
 
-    # 0. The gate is green on the tree as it stands. Everything below asserts it CAN go red, which
+    # 0. The gate is green on the tree as it stands. Everything below asserts it can go red, which
     #    means nothing unless it is green now.
     buf = io.StringIO()
     check(run(out=buf, ratchet=baseline) == 0, f"gate is not green as it stands:\n{buf.getvalue()}")
 
-    # 1. GROWTH IS REFUSED. Drop one row from the baseline and the gate must name it.
+    # 1. Growth is refused. Drop one row from the baseline and the gate must name it.
     if baseline:
         victim = sorted(baseline)[0]
         red, note = _red("growth", ratchet=baseline - {victim})
         check(red, f"removing {victim!r} from the baseline did not go red ({note})")
 
-    # 2. A LOST OWNER TABLE. If OWNERS silently returns nothing, more constants become
-    #    unattributed -- growth -- AND the attributed floor is breached. Both must fire.
+    # 2. A lost owner table. If owners silently returns nothing, more constants become
+    #    unattributed -- growth -- And the attributed floor is breached. Both must fire.
     red, note = _red("empty OWNERS", owner_table={}, ratchet=baseline)
     check(red, f"an empty OWNERS table did not go red ({note})")
 
-    # 3. A BLIND INVENTORY. An empty scan makes the unattributed list SHRINK, which is exactly
+    # 3. A blind inventory. An empty scan makes the unattributed list shrink, which is exactly
     #    what progress looks like. The population floor is the only thing standing in the way.
     red, note = _red("blind inventory", rows=[], ratchet=baseline)
     check(red, f"an empty inventory did not go red ({note})")
 
-    # 4. A CHANGED CONSTANT. If a witnessed constant's literal is edited on disk, say so.
+    # 4. A changed constant. If a witnessed constant's literal is edited on disk, say so.
     target = "PROFILE_CAM_YAW_OFFSET"
     def mutate(path):
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -770,8 +770,8 @@ def selftest() -> int:
     red, note = _red("edited constant", read_text=mutate, ratchet=baseline)
     check(red, f"editing {target} to a wrong literal did not go red ({note})")
 
-    # 5. THE IMAGE HALF, and the frozen negatives that go with it. Every witness row above is a
-    #    HELD row, so perturbing its 1.17 value to old+8 is precisely the mutant a matcher that
+    # 5. The image half, and the frozen negatives that go with it. Every witness row above is a
+    #    held row, so perturbing its 1.17 value to old+8 is precisely the mutant a matcher that
     #    blanket-reported "+8 above the insertion" would be. Each must go red on its own.
     if images_present():
         matcher = load_matcher()

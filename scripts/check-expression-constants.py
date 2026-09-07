@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
-"""Every constant whose value is an EXPRESSION must evaluate, or be listed here with a reason.
+"""Every constant whose value is an expression must evaluate, or be listed here with a reason.
 
-WHY. Two audits on 2026-08-31 hit the same wall from opposite directions, and it is the same
-defect both times: a constant whose initialiser is not a bare literal is INVISIBLE to the tool that
+Why. Two audits on 2026-08-31 hit the same wall from opposite directions, and it is the same
+defect both times: a constant whose initialiser is not a bare literal is invisible to the tool that
 is supposed to check it, and invisible reads exactly like checked.
 
-  * ADDRESS SIDE. `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000` was
+  * Address side. `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000` was
     harvested by a regex that captures the first hex literal, so the recorded value was the
     MINUEND -- an absolute VA, not the RVA the constant holds. It matched nothing in an RVA-keyed
     map, landed in `missing`, and was neither checked nor reported as unchecked. It is a real
-    `.text` function (`FD4::FD4FileCap::AddDefaultFileLoadProcess`) and it MOVED on 1.17.
-  * OFFSET SIDE. The field-offset inventory filed an initialiser it could not read as
+    `.text` function (`FD4::FD4FileCap::AddDefaultFileLoadProcess`) and it moved on 1.17.
+  * Offset side. The field-offset inventory filed an initialiser it could not read as
     `kind="expr", resolved=None` and stopped there. 41 of 813 live game-struct-field offsets were
     in that state -- dropped from the census without appearing in the unattributed ratchet either.
 
 `scripts/const_fold.py` folds the restricted grammar both tools need. This gate is what stops the
-class coming back: a constant that no inventory can evaluate FAILS, naming the constant and its
+class coming back: a constant that no inventory can evaluate fails, naming the constant and its
 definition site, unless it is in `UNRESOLVABLE` below.
 
-THE LIST AND THE DETECTOR CHECK EACH OTHER, in both directions, the same shape as
+The list and the detector check each other, in both directions, the same shape as
 `rva_role.NOT_AN_ADDRESS`:
 
-  * an unresolvable constant that is NOT listed fails -- that is the invisibility this closes;
-  * a LISTED constant that now resolves fails too. A stale entry is worse than a missing one: it
+  * an unresolvable constant that is not listed fails -- that is the invisibility this closes;
+  * a listed constant that now resolves fails too. A stale entry is worse than a missing one: it
     silently excuses a value the tree has since learned how to compute, so the number goes
     unchecked while the list claims that is deliberate.
 
-TO WIRE IT INTO scripts/check.sh (not done here: that file's commit is held by other work):
+To wire it into scripts/check.sh (not done here: that file's commit is held by other work):
 
     python3 "$repo_root/scripts/check-expression-constants.py" --selftest
     python3 "$repo_root/scripts/check-expression-constants.py"
@@ -51,15 +51,15 @@ import rva_usage  # noqa: E402
 
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 
-# THE COVERAGE FLOOR. Both populations are DERIVED -- one from a name filter plus the resolver call
+# The coverage floor. Both populations are derived -- one from a name filter plus the resolver call
 # sites, the other from the field-offset inventory's own classifier -- so a constant leaves them by
 # being edited somewhere else entirely, and until this file existed it left in silence. Only the 24
-# names in `UNRESOLVABLE` had any departure check at all, and the population TOTAL cannot stand in
+# names in `UNRESOLVABLE` had any departure check at all, and the population total cannot stand in
 # for one: measured across the 22 minutes between d130b4ee and 4b4a9722 on 2026-08-31, 28 names left
 # the address population and 30 arrived, so the total moved by +2 and hid 28 departures behind 30
 # arrivals. (All 28 were the `er-build-import-runtime` rename to `*_RVA`, so nothing actually lost
 # coverage -- but nothing said so either, and a rename that dropped the `_RVA` instead would have
-# read exactly the same.) ARRIVALS ARE FREE, only departures are gated: more coverage never needs
+# read exactly the same.) arrivals are free, only departures are gated: more coverage never needs
 # permission, so a new constant does not touch this file and the churn is bounded to real removals.
 FLOOR = Path(__file__).resolve().parent / "expression-constants.floor.txt"
 FLOOR_HEADER = """\
@@ -77,14 +77,14 @@ FLOOR_HEADER = """\
 # Regenerate wholesale: python3 scripts/check-expression-constants.py --refresh-floor
 """
 
-# THE DOCUMENTED EXCEPTIONS. Every entry is a constant in one of the two gated populations whose
+# The documented exceptions. Every entry is a constant in one of the two gated populations whose
 # value genuinely cannot be established from the sources this repo has, with the reason. Nothing
 # here is "we did not get to it": each is a specific missing capability, and each is re-checked
 # against the tree on every run so it cannot rot into a silent excuse.
 #
 # The dominant class is `offset_of!` on a type declared in the sibling `fromsoftware-rs` bindings
 # using enums, generics or nested game types that `detect-struct-field-drift.py`'s `repr(C)`
-# modeller does not lay out. Those constants ARE checked, by the compiler, on every build -- the
+# modeller does not lay out. Those constants are checked, by the compiler, on every build -- the
 # value is whatever `rustc` computes -- so what is missing here is only this repo's ability to
 # print the number, not the number's correctness.
 UNRESOLVABLE: dict[str, str] = {
@@ -113,7 +113,7 @@ UNRESOLVABLE: dict[str, str] = {
         "a `{ use ...; offset_of!(..) }` block expression; the grammar is deliberately"
         " statement-free, because a folder that ran blocks would be an interpreter"
     ),
-    # NOT actually offsets. Both are `static ... : AtomicUsize = AtomicUsize::new(0)` telemetry
+    # Not actually offsets. Both are `static ... : AtomicUsize = AtomicUsize::new(0)` telemetry
     # counters that the inventory's name filter (`*OFFSET*`) sweeps up and its exclusion table does
     # not name. Listed rather than reclassified because widening `EXCLUSIONS` moves the population
     # floor that `attribute-field-offset-owners.py` ratchets on, and that is a separate change.
@@ -155,14 +155,14 @@ def unresolved(repo: Path) -> tuple[list[tuple[str, str, str]], dict[str, str], 
     """`(failures, resolvable_names, pin_valued_names, population)`.
 
     `failures` is one row per constant with no value: `(name, site, why)`. `resolvable_names` is
-    every gated constant that DID evaluate, which is what makes the reverse direction possible --
+    every gated constant that did evaluate, which is what makes the reverse direction possible --
     a name in `UNRESOLVABLE` that appears there is a stale entry.
 
-    `pin_valued_names` IS THE THIRD STATE, and it is returned rather than dropped because dropping
+    `pin_valued_names` is the third state, and it is returned rather than dropped because dropping
     it is what this gate went red on, 2026-08-31. A row the field-offset inventory resolves from a
     `const _: () = assert!(NAME == 0xNN)` pin, or from hex read out of the constant's own name, is
-    deliberately NOT `resolvable` (see the comment at the branch below) -- but it is not a
-    `failure` either, because a number IS known. Returning only two of the three buckets meant
+    deliberately not `resolvable` (see the comment at the branch below) -- but it is not a
+    `failure` either, because a number is known. Returning only two of the three buckets meant
     every consumer had to infer the third from an absence, and `report()` inferred it as "the
     constant left the population": five live `CHR_ASM_*` offsets grew disassembly-derived pins and
     the gate demanded their (correct, still-accurate) `UNRESOLVABLE` entries be deleted. Deleting
@@ -195,7 +195,7 @@ def unresolved(repo: Path) -> tuple[list[tuple[str, str, str]], dict[str, str], 
         elif "name-hint" not in row["kind"] and "pinned" not in row["kind"]:
             resolvable[row["name"]] = f"{row['resolved']:#x}"
         else:
-            # A name-hint or a pin is NOT an evaluation -- one reads the constant's own name and
+            # A name-hint or a pin is not an evaluation -- one reads the constant's own name and
             # the other reads a hand-written assertion. Counting them as resolvable would let a
             # listed exception look fixed because somebody renamed it. They are named here instead
             # of vanishing, so that "in the population" stays answerable without an inference.
@@ -213,7 +213,7 @@ def gated_names(
 def read_floor(path: Path | None = None) -> tuple[set[str], str | None]:
     """The coverage floor, or `(empty, why)` if it cannot be read.
 
-    Missing is a PROBLEM, not a skip: a departure check that quietly does not run is the same
+    Missing is a problem, not a skip: a departure check that quietly does not run is the same
     invisibility the rest of this gate exists to end.
     """
     path = path or FLOOR
@@ -293,7 +293,7 @@ def refresh_floor(repo: Path) -> int:
 
 
 # ------------------------------------------------------------------------------------------------
-# selftest: mutants that must go RED, including a blinding of the folder itself
+# selftest: mutants that must go red, including a blinding of the folder itself
 # ------------------------------------------------------------------------------------------------
 FIXTURE_UNFOLDABLE = """
 pub const PLANTED_MUTANT_RVA: usize = some_extern_crate::TABLE.lookup();
@@ -302,7 +302,7 @@ pub const PLANTED_MUTANT_RVA: usize = some_extern_crate::TABLE.lookup();
 FIXTURE_FOLDABLE = """
 pub const PLANTED_CONTROL_RVA: usize = 0x142658c60 - 0x140000000;
 """
-# THE THIRD STATE, planted: an `offset_of!` on a type the layout modeller does not carry, whose only
+# The third state, planted: an `offset_of!` on a type the layout modeller does not carry, whose only
 # number comes from a `const _: () = assert!` pin. The field-offset inventory files it
 # `offset_of(pinned)`, which is neither an evaluation nor a failure -- the shape that took this gate
 # red on 2026-08-31.
@@ -315,11 +315,11 @@ const _: () = assert!(PLANTED_PIN_MUTANT_OFFSET == 0x40);
 def _sweep_orphaned_mutants(where: "Path") -> None:
     """Delete `_expr_mutant_<pid>.rs` files whose planting process is gone.
 
-    The mutants below are planted into a REAL crate under try/finally, which covers an
-    exception but NOT a kill: SIGTERM is not catchable by default, so `timeout 28 python3
+    The mutants below are planted into a real crate under try/finally, which covers an
+    exception but not a kill: SIGTERM is not catchable by default, so `timeout 28 python3
     scripts/check-expression-constants.py --selftest` -- this gate's selftest is 9.5s and the
     vacuity auditor runs it twice, so a 30s-capped agent shell hits that -- leaves the mutant
-    behind. Measured 2026-08-31: one orphan wedged BOTH halves of this gate red for every agent
+    behind. Measured 2026-08-31: one orphan wedged both halves of this gate red for every agent
     in the shared tree, reporting `PLANTED_MUTANT_RVA ... has no value`, which reads as a real
     finding about somebody's uncommitted work rather than as this tool's own litter.
 
@@ -357,7 +357,7 @@ def selftest(repo: Path) -> int:
         got = constants.fold(init)
         if got.value != expect:
             failures.append(f"{name}: folded {got.value} != {expect} ({got.reason})")
-    # PRECEDENCE IS THE ONE THING A HAND-ROLLED PARSER GETS WRONG SILENTLY, and getting it wrong
+    # Precedence is the one thing a hand-rolled PARSER gets wrong silently, and getting it wrong
     # produces a plausible address rather than an error, so both associativity cases are pinned.
     if constants.fold("0x100 - 0x10 - 0x1").value != 0xEF:
         failures.append("subtraction is not left-associative")
@@ -373,7 +373,7 @@ def selftest(repo: Path) -> int:
         got = constants.fold(init)
         if got.value is not None or expect_in not in got.reason:
             failures.append(f"{init!r} should refuse with {expect_in!r}, got {got}")
-    # `#[cfg(test)]` must stay invisible. `FREELIST_SHUTDOWN_ASSERT_RVA` is a SUM whose value is
+    # `#[cfg(test)]` must stay invisible. `FREELIST_SHUTDOWN_ASSERT_RVA` is a sum whose value is
     # 0x90 bytes inside a live function; its doc comment says it is spelled that way so no scanner
     # selects it. Folding sums without honouring the attribute would turn that into a detour
     # licence -- the folder making things worse than the regex it replaced.
@@ -390,12 +390,12 @@ def selftest(repo: Path) -> int:
             "0x142658c60 means the first-literal read is back"
         )
 
-    # --- the gate must be GREEN on the tree as it stands, or every mutant below proves nothing
+    # --- the gate must be green on the tree as it stands, or every mutant below proves nothing
     standing = report(repo, verbose=False)
     if standing:
         failures += [f"the unmutated gate is not green: {p}" for p in standing[:3]]
 
-    # --- MUTANT A: plant an unfoldable expression constant that is not listed -> RED
+    # --- Mutant a: plant an unfoldable expression constant that is not listed -> red
     planted = ROOT / "crates" / "er-game-base" / "src" / f"_expr_mutant_{os.getpid()}.rs"
     try:
         planted.write_text(FIXTURE_UNFOLDABLE, encoding="utf-8")
@@ -405,7 +405,7 @@ def selftest(repo: Path) -> int:
     finally:
         planted.unlink(missing_ok=True)
 
-    # --- MUTANT B: a stale exception -- list a constant that DOES fold -> RED
+    # --- Mutant B: a stale exception -- list a constant that does fold -> red
     try:
         planted.write_text(FIXTURE_FOLDABLE, encoding="utf-8")
         UNRESOLVABLE["PLANTED_CONTROL_RVA"] = "planted"
@@ -416,7 +416,7 @@ def selftest(repo: Path) -> int:
         UNRESOLVABLE.pop("PLANTED_CONTROL_RVA", None)
         planted.unlink(missing_ok=True)
 
-    # --- MUTANT C: an entry describing nothing at all -> RED
+    # --- Mutant C: an entry describing nothing at all -> red
     UNRESOLVABLE["NO_SUCH_CONSTANT_ANYWHERE_OFFSET"] = "planted"
     try:
         problems = report(repo, verbose=False)
@@ -425,7 +425,7 @@ def selftest(repo: Path) -> int:
     finally:
         UNRESOLVABLE.pop("NO_SUCH_CONSTANT_ANYWHERE_OFFSET", None)
 
-    # --- MUTANT E: THE THIRD STATE MUST NOT READ AS A DEPARTURE. A constant the field-offset
+    # --- Mutant E: The third state must not read as a departure. A constant the field-offset
     # inventory can only value from a pin is deliberately not `resolvable`, and it is not a
     # `failure` either; inferring "it left the population" from that double absence is what made
     # this gate demand the deletion of five accurate `CHR_ASM_*` exceptions on 2026-08-31, the day
@@ -450,7 +450,7 @@ def selftest(repo: Path) -> int:
         UNRESOLVABLE.pop("PLANTED_PIN_MUTANT_OFFSET", None)
         planted.unlink(missing_ok=True)
 
-    # --- MUTANT F: A DEPARTURE FROM THE COVERAGE FLOOR -> RED, and a name still gated -> not.
+    # --- Mutant F: A departure from the coverage floor -> red, and a name still gated -> not.
     # `tempfile` rather than a planted file: a fixture that lands in the repo becomes another
     # gate's finding when this process is killed, which is exactly what `_sweep_orphaned_mutants`
     # exists to undo.
@@ -482,7 +482,7 @@ def selftest(repo: Path) -> int:
                 "must be a problem, not a skip"
             )
 
-    # --- MUTANT D: BLIND THE FOLDER. This is the non-vacuity proof: with the evaluator refusing
+    # --- Mutant D: Blind the folder. This is the non-vacuity proof: with the evaluator refusing
     # everything, the gate must go red on constants it currently passes -- if it stays green, it is
     # not the folding that makes it green.
     keep = const_fold._Eval.run
@@ -518,7 +518,7 @@ def main() -> int:
         help="re-record the coverage floor from this tree (run it on a CLEAN tree)",
     )
     args = ap.parse_args()
-    # Before EITHER half reads the tree. The live gate never enters selftest(), and an orphan
+    # Before either half reads the tree. The live gate never enters selftest(), and an orphan
     # makes it red too -- naming a constant that is this tool's own litter as a finding about
     # somebody's crate.
     _sweep_orphaned_mutants(ROOT / "crates" / "er-game-base" / "src")

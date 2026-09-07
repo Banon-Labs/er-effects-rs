@@ -1,65 +1,65 @@
 #!/usr/bin/env python3
-"""Prove the prologue sweep SEES every `PrologueSpec`, and measure how much each pin discriminates.
+"""Prove the prologue sweep sees every `PrologueSpec`, and measure how much each pin discriminates.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `docs/er-1.17-migration.md` claimed "all 36 specs swept against the 1.17 image".  There is no set
 of 36 specs.  The workspace declares **42** `PrologueSpec`s across five `build.rs` files, and the
 generator emits **two** constants per spec (a pin and a `_MASK`), so the numbers in circulation --
-36, 84, "48 never swept" -- came from comparing a CONSTANT count against a SPEC count:
+36, 84, "48 never swept" -- came from comparing a constant count against a SPEC count:
 
     42 specs x 2 constants = 84        18 er-quickload specs x 2 = 36        84 - 36 = 48
 
 Every one of the 42 was in fact already swept: `verify-aob-patterns-1170.py` globs
 `crates/*/build.rs`, not one crate.  The defect was never an unswept spec -- it was that a
-DOCUMENT asserted a coverage number that nothing computed.  A count in prose cannot go red.
+document asserted a coverage number that nothing computed.  A count in prose cannot go red.
 
 So this gate computes the number instead of asserting it, and fails when the sweep's enumerator
 cannot reach a spec that exists.  Two sections:
 
-  coverage    Walk the WHOLE repository for `PrologueSpec` declarations and compare that set
+  coverage    Walk the whole repository for `PrologueSpec` declarations and compare that set
               against what `verify-aob-patterns-1170.py` can actually enumerate.  A spec-bearing
               file the sweep cannot see is a hard failure.  This is the half that would have
               caught the original defect, and it is the half that is not currently covered:
-              `_build_scripts()` globs `crates/*/build.rs`, which is exactly ONE directory level
+              `_build_scripts()` globs `crates/*/build.rs`, which is exactly one directory level
               deep.  A crate whose build script moves to `crates/foo/dll/build.rs` -- and sibling
               worktrees are actively renaming crates to `*-dll` right now -- becomes invisible to
-              the sweep while still shipping live prologue gates.  It would not appear as a SKIP
+              the sweep while still shipping live prologue gates.  It would not appear as a skip
               or a gap; it would not appear at all, and the sweep would keep printing a green
               total that silently shrank.
 
-  uniqueness  For each spec, count how many places in the 1.17 image the pin matches UNDER ITS
-              OWN MASK, and say whether the mapped address is one of them.
+  uniqueness  For each spec, count how many places in the 1.17 image the pin matches under its
+              own mask, and say whether the mapped address is one of them.
 
-WHAT `uniqueness` DOES AND DOES NOT CLAIM
+What `uniqueness` does and does not claim
 -----------------------------------------
 Read this before quoting a number out of it.
 
 A prologue gate is not a scanner.  The DLL takes its address from the 1.17 ledger and compares
-bytes AT that address; it never searches.  So a pin that also matches elsewhere does NOT mean the
+bytes at that address; it never searches.  So a pin that also matches elsewhere does not mean the
 hook lands in the wrong place -- the address did not come from the pattern.
 
-What multiplicity measures is the gate's DISCRIMINATING POWER: whether the byte check could tell
+What multiplicity measures is the gate's discriminating POWER: whether the byte check could tell
 that a mis-translated address is wrong.  A 7-byte MSVC opening like `40 53 57 48 83 ec 68` occurs
 in thousands of functions, so it will accept essentially any function entry handed to it.  That
 is not a bug in the pin -- it is what the function's first bytes are -- but it does bound what an
-ARMS verdict is worth, and that bound has never been written down.  bd
+arms verdict is worth, and that bound has never been written down.  bd
 `stale-aob-that-still-matches-is-worse-than-no-match-calibrate-on-the-old-image-2026-08-30` is
 about precisely this failure shape: agreement that is confident and uninformative.
 
 Verdicts:
-  UNIQUE      one match in the whole image, at the mapped address.  ARMS is decisive here.
-  AMBIGUOUS   matches at the mapped address AND elsewhere.  ARMS is correct but weak: the pin
-              would have accepted N other addresses just as happily.  NOT a defect by itself.
-  MISPLACED   matches somewhere, but NOT at the mapped address.  The spec is right about the
+  Unique      one match in the whole image, at the mapped address.  Arms is decisive here.
+  Ambiguous   matches at the mapped address and elsewhere.  Arms is correct but weak: the pin
+              would have accepted N other addresses just as happily.  Not a defect by itself.
+  Misplaced   matches somewhere, but not at the mapped address.  The spec is right about the
               bytes and the ledger is wrong about where they went.
-  ABSENT      matches nowhere in 1.17.  The function changed.
+  Absent      matches nowhere in 1.17.  The function changed.
 
 `n1162` is the same count taken on the 1.16.2 image, which is the calibration the bd memory asks
 for: a pin that was already non-unique on the build it was authored against never had the power
 being claimed for it, and its 1.17 multiplicity is not a regression.
 
-USAGE
+Usage
     python3 scripts/verify-prologue-coverage-1170.py                 # both sections
     python3 scripts/verify-prologue-coverage-1170.py --selftest      # no images, no build needed
     python3 scripts/verify-prologue-coverage-1170.py --section coverage
@@ -68,7 +68,7 @@ USAGE
 
 Exit 0 = the sweep can enumerate every declared spec.  Exit non-zero = a count of problems.
 
-`uniqueness` is REPORTING, not a gate: it never contributes to the exit code, because a low-power
+`uniqueness` is reporting, not a gate: it never contributes to the exit code, because a low-power
 pin is a fact about the game's code and not something a commit can be blocked on.  Only
 `coverage` fails the build.
 """
@@ -104,7 +104,7 @@ def _load(name: str, filename: str):
     return module
 
 
-# The sweep whose coverage is being audited. Imported, never re-implemented: a COPIED enumeration
+# The sweep whose coverage is being audited. Imported, never re-implemented: a copied enumeration
 # rule is how the two halves would drift apart again, which is the whole defect this file exists
 # to close.
 AOB = _load("verify_aob_patterns_1170", "verify-aob-patterns-1170.py")
@@ -120,7 +120,7 @@ def repo_spec_files() -> dict[Path, int]:
     found: dict[Path, int] = {}
     # `iter_rust_sources` is the shared full walk (scripts/repo_source_scan.py). It prunes the
     # non-source directories during the descent rather than reading and discarding them, which
-    # does NOT weaken the "full walk, not the sweep's glob" property above: every path the old
+    # does not weaken the "full walk, not the sweep's glob" property above: every path the old
     # post-filtered form kept is still reached.
     for path in iter_rust_sources(ROOT, EXTRA_SKIP_DIRS):
         try:
@@ -140,7 +140,7 @@ def swept_spec_files() -> set[Path]:
 
 def run_coverage() -> tuple[int, dict]:
     declared = repo_spec_files()
-    # `build-support/prologue_build.rs` DEFINES the struct; it declares no instances of it.
+    # `build-support/prologue_build.rs` defines the struct; it declares no instances of it.
     declared = {p: n for p, n in declared.items() if p.name != "prologue_build.rs"}
     swept = swept_spec_files()
     enumerated = AOB.prologue_specs()
@@ -165,7 +165,7 @@ def run_coverage() -> tuple[int, dict]:
     print(f"\n  {len(declared)} file(s) declare {declared_total} spec(s); "
           f"the sweep enumerated {len(enumerated)}.")
 
-    # A spec inside a VISIBLE file that the parser silently drops is the other half of the same
+    # A spec inside a visible file that the parser silently drops is the other half of the same
     # defect, and `prologue_spec_gaps()` already models it. Surfaced here so one command answers
     # "is anything unaccounted for", rather than two.
     for crate, name in gaps:
@@ -298,10 +298,10 @@ def run_uniqueness(require_images: bool, dump: dict) -> int:
         if row["verdict"] == "MISPLACED" and row["others"]:
             extra = f"  found instead at {', '.join(row['others'])}"
         elif row["verdict"] == "NO-ROW" and row["n"] == 1:
-            # A NO-ROW whose signature is UNIQUE on 1.17 is not a dead end: the byte match IS the
+            # A no-row whose signature is unique on 1.17 is not a dead end: the byte match is the
             # 1.17 address, derived without a ledger. `FREELIST_SHUTDOWN_ASSERT_WINDOW` is the
-            # standing case -- a mid-function BYTE-PATCH site, which a ledger of function ENTRIES
-            # can never carry by construction, so its NO-ROW is an artifact of asking a
+            # standing case -- a mid-function byte-patch site, which a ledger of function entries
+            # can never carry by construction, so its no-row is an artifact of asking a
             # function-entry table about a non-entry rather than a defect. er-seamless-bugfixes
             # resolves it as enclosing-function + 0x90, and the unique match printed here confirms
             # that arithmetic independently.
@@ -346,7 +346,7 @@ def selftest() -> int:
     check("unmasked is exact", bool(exact.match(bytes([0x48, 0x8B, 0x05, 0, 0, 0, 0]))), False)
 
     # A pin containing regex metacharacters is escaped, not interpreted. `0x2e` is `.`, `0x2a`
-    # is `*`: an unescaped pin would match anything, and report every gate as AMBIGUOUS.
+    # is `*`: an unescaped pin would match anything, and report every gate as ambiguous.
     meta = bytes([0x2E, 0x2A, 0x5B])
     mrx = masked_regex(meta, bytes([COMPARED]) * 3)
     check("metachars escaped", bool(mrx.match(bytes([0x41, 0x42, 0x43]))), False)
@@ -361,11 +361,11 @@ def selftest() -> int:
 
     # The coverage walk must not read other agents' worktrees, and must find the real files.
     #
-    # Asked RELATIVE TO THE REPO ROOT, not as a substring of the absolute path. This control used
-    # to be `any(".claude" in str(p))`, which is a false positive on every checkout that LIVES
+    # Asked relative to the REPO root, not as a substring of the absolute path. This control used
+    # to be `any(".claude" in str(p))`, which is a false positive on every checkout that lives
     # under `.claude/worktrees/<agent>/` -- i.e. on every worktree-isolated agent session, where
     # each of the repo's own legitimate files has `.claude` in its absolute path. The walk itself
-    # was always right (it prunes NOT_REPO_SOURCE by directory NAME during the descent, and a
+    # was always right (it prunes NOT_REPO_SOURCE by directory name during the descent, and a
     # worktree root has no child so named); only the assertion about it was reading the wrong
     # string. A path genuinely inside a nested `.claude`/`.worktrees`/`target` still trips it.
     declared = {p for p in repo_spec_files() if p.name != "prologue_build.rs"}

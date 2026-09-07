@@ -1,42 +1,42 @@
 #!/usr/bin/env python3
 """Generate the shipped `er-npc-possess` moveset table from the unpacked corpus.
 
-The table is INTEGERS ONLY -- chr id, animation ids, bucket, rank, reach band and a
+The table is integers only -- chr id, animation ids, bucket, rank, reach band and a
 denial-reason code. No game bytes, no asset payloads, no strings lifted out of the
 game: everything here is a decision *about* an integer id, and the ids themselves are
 already public knowledge (they are BND entry filenames). That is what makes it
 committable under the repo's no-game-derived-binaries rule.
 
-FIVE OFFLINE SOURCES, joined per creature:
+Five offline sources, joined per creature:
 
-  behavior graph   <chr>.behbnd.dcx (Havok TAG0)  fireable EVENT NAME -> state -> clip
+  behavior graph   <chr>.behbnd.dcx (Havok TAG0)  fireable event name -> state -> clip
   TimeAct          <chr>.tae                      ability events + event times
   regulation.bin   NpcParam -> BehaviorParam      judge id -> AtkParam_Npc / Bullet
   regulation.bin   AtkParam_Npc                   damage, hit-capsule radii, throwTypeId
   regulation.bin   ThrowParam                     throwTypeId -> victim chr id + range
 
-A GRAB IS AN ORDINARY ATTACK WITH ONE COLUMN SET. It is not a 4000-band animation and it
+A grab is an ordinary attack with one column set. It is not a 4000-band animation and it
 is not TAE event 304. `CS::ChrDamageModule::ApplyDamage` looks up the landed hit's
 `AtkParam` row, reads `throwTypeId`, and -- before any damage is calculated -- calls
 `CSChrThrowModule::InitThrow(attackerThrowModule, victimChrIns, throwTypeId)`.
 `CSThrowNode::ValidateAttemptAndReturnParamId` then scans `ThrowParam` for a row matching
-(attacker npcId, victim npcId, throwTypeId); on a hit, the throw system drives BOTH parties
+(attacker npcId, victim npcId, throwTypeId); on a hit, the throw system drives both parties
 into that row's `atkAnimId`/`defAnimId`. Those are the 4000-band clips, which is exactly why
 no event name reaches them: they are downstream of a throw that has already been accepted.
 
 So the fireable thing is the INITIATOR, and it was already in this table as a plain attack.
-Swept over the corpus: 153 fireable initiator ANIMATIONS across 78 creatures (169 counting
-(animation, throwTypeId) pairs), EVERY ONE in the 3000 band, against 108 TAE-304 clips of
-which ZERO are fireable.
+Swept over the corpus: 153 fireable initiator animations across 78 creatures (169 counting
+(animation, throwTypeId) pairs), every one in the 3000 band, against 108 TAE-304 clips of
+which zero are fireable.
 
-WHY THE GRAPH AND NOT THE TAE DECIDES WHAT SHIPS: the graph is a strict superset (c2120
+Why the graph and not the TAE decides what SHIPS: the graph is a strict superset (c2120
 has 41 fireable attack events against 36 TAE attacks, c3200 30 against 10) and every TAE
-attack animation has a graph event. So the graph says what can be FIRED and the TAE says
+attack animation has a graph event. So the graph says what can be fired and the TAE says
 which of those opens a damage window.
 
-FIREABILITY IS THE WHOLE POINT OF THIS SCRIPT. Declared != fireable: median 1366 declared
+FIREABILITY is the whole point of this script. Declared != fireable: median 1366 declared
 event names per chr against median 580 that a `hkbStateMachine::TransitionInfo` actually
-consumes. Firing a declared-but-unconsumed name resolves fine and then SILENTLY NO-OPS --
+consumes. Firing a declared-but-unconsumed name resolves fine and then silently no-OPS --
 no error, no log, nothing on screen -- so the gate has to happen here, at generation time,
 where it can be checked, rather than at runtime where it cannot be observed.
 
@@ -88,26 +88,26 @@ BANDS = (ATTACK_BAND, GRAB_BAND, STEP_BAND)
 
 #: `CSChrEventModule::requestAnimationId` formats its event name as `W_Event%04d`
 #: unconditionally. That field write costs no game function address, so it is always the
-#: PREFERRED way to fire an animation -- but it is not a universal one.
+#: Preferred way to fire an animation -- but it is not a universal one.
 FIRE_PREFIX = 'W_Event'
 
-#: EVERY SPELLING AN ANIMATION ID CAN HAVE, in the order the generator prefers them.
+#: Every spelling an animation ID can have, in the order the generator prefers them.
 #:
 #: `W_Event` is a broad alias layer, not a total one: measured at 88.4% num==anim-id
 #: across the corpus, against 100% for `W_Step` in 6000-6023 and for the ride families.
-#: So dodges, goal actions and the ride sets have NO `W_Event` name, and the field write
+#: So dodges, goal actions and the ride sets have no `W_Event` name, and the field write
 #: cannot ask for them however fireable they are -- c2120's 6000/6001/6002/6003/6011
 #: resolve under `W_Step` and under nothing else.
 #:
 #: The order is the policy. `W_Event` first, because choosing it keeps the possession on
 #: the path that resolves no game function address. Everything after it costs one call to
 #: `PlayAnimationByBehaviorName`, so it is only chosen when `W_Event` cannot reach the id.
-#: The ride families sit LAST on purpose: `W_Ridden_Enemy_Step` is what a mount plays
+#: The ride families sit last on purpose: `W_Ridden_Enemy_Step` is what a mount plays
 #: while someone is riding it, and driving that into a free-standing creature is the kind
 #: of thing the runtime watchdog exists to catch. They are kept because they are 100%
 #: identity and are sometimes the only spelling that reaches an id at all.
 #:
-#: THE PREFIX IS RESOLVED PER CHR FROM THAT CHR'S OWN EVENT TABLE, never from the band.
+#: The prefix is resolved per CHR from that CHR'S own event table, never from the band.
 #: A band tells you what to try; only the chr's own `TransitionInfo` set says what works.
 PREFIXES = (
     'W_Event',
@@ -117,7 +117,7 @@ PREFIXES = (
     'W_GoalAction',
 )
 
-#: THE RIDE FAMILIES, SCANNED AND THEN DROPPED -- measured, not assumed.
+#: The ride families, scanned and then dropped -- measured, not assumed.
 #:
 #: `W_Ride_Attack_`, `W_RideStep`, `W_Ridden_Enemy_Attack`, `W_Ride_Enemy_Attack`,
 #: `W_Ridden_Enemy_Step` and `W_Ride_Enemy_Step` are all 100% num==anim-id, so they look
@@ -128,7 +128,7 @@ PREFIXES = (
 #: 224 KB.
 #:
 #: They are also semantically wrong for this mod even when they are the only spelling:
-#: `W_Ridden_Enemy_Step` is what a mount plays while somebody is RIDING it, and a
+#: `W_Ridden_Enemy_Step` is what a mount plays while somebody is riding it, and a
 #: possessed creature is not being ridden. Firing one is a softlock the watchdog would
 #: have to clean up.
 #:
@@ -146,21 +146,21 @@ RIDE_PREFIXES_MEASURED_USELESS = (
 
 #: TAE ability event type -> index into `TaeAnimEventParams::Args` holding the id it
 #: resolves. Decoded from both native dispatchers by `scripts/er-tae-dispatch-decode.py`.
-#: Type 5 is the odd one: it is a RAW absolute BehaviorParam row id with no
+#: Type 5 is the odd one: it is a raw absolute BehaviorParam row id with no
 #: `ResolveBehaviorId` call in front of it.
 ABILITY_ARG = {1: 2, 2: 2, 5: 1, 123: 1, 304: 1, 307: 2}
 RAW_BEHAVIOR_TYPES = {5}
-#: TAE event type 304 `ThrowAttackBehavior` MARKS THE THROW-RESULT CLIP, not the grab.
+#: TAE event type 304 `ThrowAttackBehavior` marks the throw-result clip, not the grab.
 #:
 #: This constant used to be called the grab carrier, and reading it that way is what made
 #: `allow_grabs` gate nothing. 304 is 573 sites across 90 chrs and 100% of the 4000 band --
-#: and swept over the whole corpus, ZERO of the 108 animations carrying it are fireable
+#: and swept over the whole corpus, zero of the 108 animations carrying it are fireable
 #: under any prefix. That is not a wall the graph puts up; it is that these clips are never
-#: addressed by id. `CSChrThrowModule::PlayThrowAnim` reaches them through the two BARE
+#: addressed by id. `CSChrThrowModule::PlayThrowAnim` reaches them through the two bare
 #: names `W_ThrowAtk` (attacker) and `W_ThrowDef` (defender), and which clip that lands on
 #: is `ThrowParam.atkAnimId` / `defAnimId` for the row the throw system already picked.
 #:
-#: THE GRAB ITSELF IS SOMEWHERE ELSE ENTIRELY -- see [`ATK_THROW_FIELD`].
+#: The grab itself is somewhere else entirely -- see [`ATK_THROW_FIELD`].
 GRAB_EVENT_TYPE = 304
 
 #: The chain window. TAE event type 0 is `ChrActionFlag` and its `params[0]` (`FlagType`)
@@ -168,10 +168,10 @@ GRAB_EVENT_TYPE = 304
 #: case that means "this attack may now be cancelled into another attack" is **86**, whose
 #: body is `actionRequest->taeCancels |= 0x20` -- the bit `CS::CSAiFunc::IsEnableCancelAttack`
 #: (`0x140300800` -> `0x1404075a0`, `taeCancels & 0x20 && !(taeCancels >> 0xb & 1)`) reads.
-#: That is the GAME's own per-animation answer to "may this swing be left yet", asked of a
+#: That is the game's own per-animation answer to "may this swing be left yet", asked of a
 #: creature rather than of the player, which is exactly the question a possessed creature has.
 #:
-#: **86 IS THE CREATURE ONE AND 4 IS THE PLAYER ONE, AND THEY ARE NOT INTERCHANGEABLE.**
+#: **86 is the creature one and 4 is the player one, and they are not interchangeable.**
 #: FlagType 4 (`CANCEL_R1_R2_LIGHT_KICK_HEAVY_KICK`) is the combo window everybody means when
 #: they say "TAE combo window", and it covers 78.8% of c0000's 5,322 attack animations -- but
 #: only 19 of the 6,419 non-player attack animations in this corpus, 0.3%. Building the window
@@ -196,21 +196,21 @@ REACH_UNKNOWN, REACH_CLOSE, REACH_MID, REACH_FAR = 0, 1, 2, 3
 REACH_CLOSE_MAX, REACH_MID_MAX = 3.0, 8.0
 
 #: Denial reasons. Every one of these is emitted into `er-npc-possess.derived.toml`
-#: at runtime WITH its reason -- nothing is withheld silently.
+#: at runtime with its reason -- nothing is withheld silently.
 DENY_NOT_FIREABLE = 1
 DENY_NO_CLIP = 2
 DENY_NO_DAMAGE_WINDOW = 3
 DENY_MISSING_ATK_ROW = 4
 DENY_SPEFFECT_ONLY = 5
 DENY_UNRESOLVED_BEHAVIOR = 6
-#: The animation the THROW SYSTEM plays once a grab has been accepted, reached by the bare
+#: The animation the throw system plays once a grab has been accepted, reached by the bare
 #: names `W_ThrowAtk`/`W_ThrowDef` rather than by id. There is nothing here to fire, which
 #: is a different and more useful thing to be told than `not-fireable`. See
 #: [`throw_result_clip`]; measured at 108 animations, all in the 4000 band, none fireable.
 DENY_THROW_RESULT_CLIP = 10
-#: RETIRED. Reason 7 was `prefix-unreachable`: reachable by the graph but not spellable by
+#: Retired. Reason 7 was `prefix-unreachable`: reachable by the graph but not spellable by
 #: the `W_Event%04d` field write. It existed for one commit and is gone because the class is
-#: gone -- those ids are now FIRED, through `PlayAnimationByBehaviorName` with a name built
+#: gone -- those ids are now fired, through `PlayAnimationByBehaviorName` with a name built
 #: from the prefix this generator resolved. An id that no prefix reaches is `not-fireable`,
 #: which it always was. The number is left unused rather than recycled so a table written
 #: before the fallback cannot be misread by a parser written after it.
@@ -261,7 +261,7 @@ def tae_paths_for(anibnd_dirs):
 def family_base(variation):
     """The chr id whose `.tae` describes a creature with this `behaviorVariationId`.
 
-    THE CHR-ID JOIN IS NOT THE ANIMATION JOIN, and assuming it was cost this table a third
+    The CHR-ID join is not the animation join, and assuming it was cost this table a third
     of its attacks. A creature like c4351 Godrick Knight owns a model, a skeleton and a
     behaviour graph that declares and can fire all 72 in-band ids -- and its `.anibnd`
     contains `skeleton.hkx` and nothing else. There is no `c4351.tae` because there are no
@@ -271,9 +271,9 @@ def family_base(variation):
 
     `NpcParam.behaviorVariationId` is what names that base -- `<family> * 100 + <variant>`,
     so 43500 is family 435 and its animations ship under `c4350`. Measured over the corpus:
-    270 creatures own their TimeAct (their own family base IS themselves, e.g. c4160 at
+    270 creatures own their TimeAct (their own family base is themselves, e.g. c4160 at
     variation 41600), 133 inherit it, and 5 have none under either id. Before this join
-    those 133 reached `classify_chr` with an EMPTY TimeAct dict, so every attack they can
+    those 133 reached `classify_chr` with an empty TimeAct dict, so every attack they can
     fire was denied `no-damage-window` and then trimmed out of existence by the in-span
     rule, leaving the twelve `W_Step` walk clips as the entire shipped moveset.
 
@@ -313,7 +313,7 @@ def fireable_animations(behbnd_dir):
     state's `hkbClipGenerator` really plays -- equal to `firedId` for everything except the
     systematic `W_Event3110 -> a000_003000` exception, which is why the table carries both
     rather than assuming identity. `prefixIndex` indexes [`PREFIXES`] and says which
-    spelling of the id has a transition behind it on THIS creature.
+    spelling of the id has a transition behind it on this creature.
 
     The prefix is resolved from the chr's own event table and never from the band. Bands
     are a FromSoft convention that tells you what to try; only a real `TransitionInfo`
@@ -321,7 +321,7 @@ def fireable_animations(behbnd_dir):
     c4500 declares `W_Step6000` through `W_Step6023` and can fire none of them, while
     c2120 fires five.
 
-    Also returns the set of in-band ids DECLARED under some prefix with no transition
+    Also returns the set of in-band ids declared under some prefix with no transition
     behind any spelling, so they are reported as denials instead of vanishing.
     """
     fireable = {}
@@ -422,7 +422,7 @@ def _earliest(left, right):
 
 ATK_DAMAGE_FIELDS = ('atkPhys', 'atkMag', 'atkFire', 'atkThun')
 ATK_RADIUS_FIELDS = ('hit0_Radius', 'hit1_Radius', 'hit2_Radius', 'hit3_Radius')
-#: THE COLUMN THAT MAKES AN ATTACK A GRAB. Non-zero means the hit, when it lands, is
+#: The column that makes an attack a grab. Non-zero means the hit, when it lands, is
 #: handed to the throw system instead of to the damage calculation -- see [`Regulation`].
 ATK_THROW_FIELD = 'throwTypeId'
 
@@ -452,7 +452,7 @@ class Regulation:
             )
             for row in atk
         }
-        # THE GRAB JOIN. `ApplyDamage` reads `AtkParam.throwTypeId` off the hit that landed
+        # The grab join. `ApplyDamage` reads `AtkParam.throwTypeId` off the hit that landed
         # and hands it to `CSChrThrowModule::InitThrow`; `ValidateAttemptAndReturnParamId`
         # then scans ThrowParam for a row matching (attacker npcId, victim npcId,
         # throwTypeId). No row, no throw -- so an attack whose `throwTypeId` names nothing
@@ -465,7 +465,7 @@ class Regulation:
                 continue                                 # the null/default row
             self.throw[(row['AtkChrId'], row['throwTypeId'])].append(
                 (row['DefChrId'], float(row['Dist'])))
-        # A projectile's reach is its OWN travel distance, not a hit capsule. Calling
+        # A projectile's reach is its own travel distance, not a hit capsule. Calling
         # every bullet "far" would send a 2-metre spit and a cross-arena breath to the
         # same distance band, and the short one whiffs every time the dispatcher picks
         # it at range.
@@ -481,7 +481,7 @@ class Regulation:
 
         Empty when `throw_type_id` is 0 (an ordinary hit) or when no `ThrowParam` row pairs
         this attacker with this throw type -- measured, 10 of the 179 non-zero
-        `throwTypeId`s on fireable attacks name nothing. Those are NOT grabs: the native
+        `throwTypeId`s on fireable attacks name nothing. Those are not grabs: the native
         scan in `CSThrowNode::ValidateAttemptAndReturnParamId` finds no row, returns -1,
         and `StartThrow` gives up. Calling them grabs would put a label on a swing that can
         never become one.
@@ -530,12 +530,12 @@ def reach_band(metres, is_bullet):
 
 
 def throw_result_clip(tae, anim_id):
-    """Is this animation the one the THROW SYSTEM plays, rather than one you can fire?
+    """Is this animation the one the throw system plays, rather than one you can fire?
 
     TAE event 304 `ThrowAttackBehavior` marks it. Measured over the whole corpus: 108
-    animations carry 304, ALL of them in the 4000 band, and NOT ONE of them is fireable
+    animations carry 304, all of them in the 4000 band, and not one of them is fireable
     under any prefix -- because they are never addressed by id at all.
-    `CSChrThrowModule::PlayThrowAnim` reaches them by the two BARE, un-numbered names
+    `CSChrThrowModule::PlayThrowAnim` reaches them by the two bare, un-numbered names
     `W_ThrowAtk` and `W_ThrowDef`, and which clip that resolves to is decided by the
     `ThrowParam` row the throw system already chose. So the right denial for one of these
     is not "the graph cannot reach it" -- it is "there is nothing here to fire".
@@ -549,13 +549,13 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
     entries: [(fired, played, bucket, rank, reach, throws, prefix)]
     denials: [(fired, reason)]
     """
-    # THE THROW-RESULT CLIPS ARE LISTED WHETHER OR NOT THE GRAPH DECLARES A NAME FOR THEM.
+    # The throw-result clips are listed whether or not the graph declares a name for them.
     #
     # `declared` comes from the graph's event-name table, and most 4000-band clips have no
     # event name at all -- so left to that set they would simply vanish, and the player who
     # knows Malenia's grab is a4100 would find nothing in the derived file saying why it is
     # not on offer. They are the single most-asked-about hole in a boss's moveset, so they
-    # get an entry with a reason that is TRUE of them rather than silence.
+    # get an entry with a reason that is true of them rather than silence.
     reasons = {a: DENY_NOT_FIREABLE for a in declared - set(fireable)}
     for anim_id in tae:
         if throw_result_clip(tae, anim_id) and anim_id not in fireable:
@@ -594,14 +594,14 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
                     missing_atk = True
                     continue
                 melee_any = True
-                # THE GRAB. A non-zero `throwTypeId` means this hit does not go to the
+                # The grab. A non-zero `throwTypeId` means this hit does not go to the
                 # damage calculation at all: `ApplyDamage` hands it to
-                # `CSChrThrowModule::InitThrow` FIRST and returns early when the throw is
+                # `CSChrThrowModule::InitThrow` first and returns early when the throw is
                 # accepted. Which is why most of these rows carry zero damage -- the damage
                 # arrives later, from the throw-result clip's own hitbox.
                 throws += regulation.throws_for(chr_num, row[2])
                 if row[0] > 0:
-                    # A ZERO-DAMAGE ROW IS A MARKER, NOT A HIT. c4500's judge 900 resolves
+                    # A zero-damage row is a marker, not a hit. c4500's judge 900 resolves
                     # to AtkParam_Npc 4500900: damage 0, capsule radius 9.0, and it is
                     # attached to nearly every one of the dragon's attacks. Counting its
                     # radius would report the whole moveset as long-reach.
@@ -627,7 +627,7 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
             else:
                 denials.append((fired, DENY_NO_DAMAGE_WINDOW))
             continue
-        # A ranged option is one that reaches through a bullet and NOT through a
+        # A ranged option is one that reaches through a bullet and not through a
         # damaging melee capsule; a breath attack that does both stays melee, because
         # its damage is delivered where the creature is standing.
         is_ranged = bullet and not melee_damaging
@@ -637,11 +637,11 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
                            reach_band(reach, is_ranged), tuple(throws), prefix,
                            chain_from))
 
-    # Light vs heavy by PER-CHR percentile of duration x damage, so a rat and a
+    # Light vs heavy by per-CHR percentile of duration x damage, so a rat and a
     # dragon are comparable: absolute damage would put every one of the rat's
     # attacks in "light" and every one of the dragon's in "heavy".
     #
-    # Split by INDEX, not by value. A value cutoff (`score >= median`) collapses
+    # Split by index, not by value. A value cutoff (`score >= median`) collapses
     # whenever scores tie -- and they tie constantly, because a chr's attacks share
     # AtkParam rows -- which sends the whole tied block into one bucket and leaves the
     # other nearly empty.
@@ -665,7 +665,7 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
             entries.append((fired, played, bucket, rank, reach, throws, prefix, chain))
     entries.sort()
 
-    # TRIM DENIALS TO THE SPAN THE CREATURE ACTUALLY USES.
+    # TRIM DENIALS to the span the creature actually uses.
     #
     # A denial earns its place by being a hole a player could notice: an id sitting among the
     # moves that work, which they might reasonably expect and which is missing. Outside that
@@ -673,7 +673,7 @@ def classify_chr(fireable, declared, tae, regulation, variation, chr_num):
     # creature, and there are a lot of those -- every chr's behbnd carries roughly the same
     # declared vocabulary whether or not this one has states for it.
     #
-    # MEASURED, both times this trim was widened. `not-fireable` alone was 62 KB, half the
+    # Measured, both times this trim was widened. `not-fireable` alone was 62 KB, half the
     # table, of 270 near-identical copies of one list. Widening the prefix set then produced
     # 9,298 `no-damage-window` rows, of which 791 are in-span and 8,507 are not -- ids past
     # everything the creature can do, reachable only because `W_Attack` spans 3000-4602 and
@@ -746,7 +746,7 @@ def format_table(per_chr):
         if not entries and not denials:
             continue
         if not entries:
-            # NOTHING USABLE. Almost always a D-class variant: it owns a model and a
+            # Nothing usable. Almost always a D-class variant: it owns a model and a
             # skeleton but no animations of its own, and its behbnd carries the shared
             # generic graph, so the same ~54 attack ids come back declared-but-stateless
             # for every one of them. Enumerating that identical list 130 times would be
@@ -762,7 +762,7 @@ def format_table(per_chr):
             # for the whole clip instead, which is the honest reading of "we do not know".
             if chain is not None:
                 head += f'w{int(round(chain * 100))}'
-            # The prefix column is OMITTED for `W_Event`, which is both the common case
+            # The prefix column is omitted for `W_Event`, which is both the common case
             # and the one that costs no game address -- so a four-field entry reads as
             # "fired by the field write" and a five-field one as "fired by name".
             tail = '' if prefix == 0 else f':{prefix}'
@@ -815,15 +815,15 @@ def generate(root, only=None, jobs=10, regulation_path=None):
         taes, _owner = tae_paths_for_chr(anibnds, chr_id, variation)
         work.append((chr_id, sorted(behbnds[chr_id])[0], taes, variation))
     per_chr, errors = {}, {}
-    # SERIAL when asked for one job, and the check gate asks for one. `multiprocessing`
+    # Serial when asked for one job, and the check gate asks for one. `multiprocessing`
     # cannot pickle `_one` when this file is loaded as a module by path rather than
     # imported by name, which is exactly how `scripts/check-moveset-table.py` uses it --
     # so the fast subset regeneration would die in the pool rather than in the work.
     results = map(_one, work) if jobs <= 1 else None
     with contextlib.ExitStack() as stack:
         if results is None:
-            # FORK, not the 3.14 default forkserver. A forkserver worker is a fresh
-            # interpreter that re-imports the module a task came from BY NAME, and this
+            # Fork, not the 3.14 default forkserver. A forkserver worker is a fresh
+            # interpreter that re-imports the module a task came from by name, and this
             # file's name has hyphens in it, so it is not importable by name at all --
             # every worker dies with ModuleNotFoundError the moment a task arrives.
             # `scripts/check-moveset-table.py` loads this module by path, which is when

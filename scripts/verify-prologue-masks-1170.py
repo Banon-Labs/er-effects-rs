@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Check the generated prologue MASKS, and re-run the 51 prologue gates under masked comparison.
+"""Check the generated prologue masks, and re-run the 51 prologue gates under masked comparison.
 
-WHAT THIS IS FOR
+What this is for
 ----------------
 Every detour in this workspace byte-checks its target's prologue before installing. Three of
 those pins open with `mov rax, [rip+disp32]`, and a rip-relative displacement is the delta from
 the end of the instruction to the global it names -- both ends move when the game is patched, so
-those four bytes are GUARANTEED to re-encode. Measured on ELDEN RING 1.17:
+those four bytes are guaranteed to re-encode. Measured on ELDEN RING 1.17:
 `SAVE_REQUEST_RETRACT_B72_SIG`, `..._B73_SIG` and `QUIT_PHASE_SETTLE_SIG` are the same
 instructions doing the same job at correctly translated addresses, and all three gates disarmed
 on nothing but that field. The features were silently off.
@@ -15,25 +15,25 @@ on nothing but that field. The features were silently off.
 0xff = compare and 0x00 = ignore, and only a RIP-relative displacement ever gets 0x00. This
 script is the offline gate on that:
 
-  masks      Every emitted `<NAME>_MASK` is re-derived INDEPENDENTLY, with capstone, through
+  masks      Every emitted `<NAME>_MASK` is re-derived independently, with capstone, through
              `scripts/map-rvas-1162-to-1170.py`'s `build_masked_pattern(..., rip_only=True)` --
-             the same function the address mapper uses, narrowed to the subset a GATE can
+             the same function the address mapper uses, narrowed to the subset a gate can
              justify -- and must agree byte for byte with what `iced-x86` emitted in the build
              script. Two decoders, one rule; a disagreement is a defect in one of them.
-  prologues  The 51 pins re-checked at their 1.17 addresses under the MASKED comparison, so the
+  prologues  The 51 pins re-checked at their 1.17 addresses under the masked comparison, so the
              verdict is the one the running DLL would reach rather than a plain `==`.
   negative   The fail-closed proof: take a real masked pin, mutate an OPCODE byte, and require
              the masked comparison to still reject it. Also proves `+0xb72` and `+0xb73` still
              refuse each other, since a mask that swallowed the register-base displacement would
              let each accept the other function.
 
-WHAT IT DOES NOT PROVE
+What it does not prove
 ----------------------
-A pin that ARMS proves the pin ACCEPTS the bytes at that address. It does not prove the hook
+A pin that arms proves the pin accepts the bytes at that address. It does not prove the hook
 installs, that the function still does the same job, or that the feature works. Nothing here
 runs against a live game.
 
-USAGE
+Usage
     python3 scripts/verify-prologue-masks-1170.py                # all three sections
     python3 scripts/verify-prologue-masks-1170.py --selftest     # no images, no build needed
     python3 scripts/verify-prologue-masks-1170.py --section masks
@@ -74,7 +74,7 @@ def _bootstrap_capstone() -> None:
     if os.environ.get("_ER_PROLOGUE_MASK_BOOTSTRAPPED"):
         print("capstone unavailable even under uv; install it or run with uv", file=sys.stderr)
         raise SystemExit(2)
-    # `os.execvp`, not a subprocess: this is a re-exec of THIS script under uv, so there is no
+    # `os.execvp`, not a subprocess: this is a re-exec of this script under uv, so there is no
     # parent left to supervise a child and nothing for a timeout to bound. Spawning it as a
     # subprocess would also have needed a <=30s cap that the real verification run can exceed,
     # which would have capped the work rather than the bootstrap. Same pattern the other
@@ -98,7 +98,7 @@ def _load(name: str, filename: str):
 # imported rather than re-implemented, and never modified: this script is the masked companion to
 # its `prologues` section, not a replacement for it.
 AOB = _load("verify_aob_patterns_1170", "verify-aob-patterns-1170.py")
-# The masking RULE lives in the address mapper. `rip_only=True` is the gate-safe subset.
+# The masking rule lives in the address mapper. `rip_only=True` is the gate-safe subset.
 MAPRVAS = _load("map_rvas_1162_to_1170", "map-rvas-1162-to-1170.py")
 
 
@@ -115,7 +115,7 @@ def generated_constants() -> dict[str, bytes]:
 
     OUT_DIR accumulates one directory per build-script fingerprint and stale ones are never
     deleted, so a file that predates the mask work still sits there. Reading newest-first and
-    keeping the first answer per name means the check describes the CURRENT build.
+    keeping the first answer per name means the check describes the current build.
     """
     files = sorted(
         ROOT.glob("target/*/*/build/*/out/generated_*.rs"),
@@ -294,7 +294,7 @@ def run_prologues(require_images: bool) -> int:
             last = crate
         print(f"    {verdict:<8s} {name:<{width}s}  {detail}")
     print("\n  totals: " + "  ".join(f"{k}={v}" for k, v in tally.items()) + f"  (of {len(specs)} specs)")
-    # A DISARMS is fail-closed and is reported, not failed. A BAD-PIN means this script and the
+    # A DISARMS is fail-closed and is reported, not failed. A bad-pin means this script and the
     # build script disagree about the image the spec names, which is a defect in one of them.
     return tally["BAD-PIN"]
 

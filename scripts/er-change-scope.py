@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""WHAT DOES THIS DIFF ACTUALLY REQUIRE US TO RE-CHECK?
+"""What does this diff actually require us to RE-check?
 
 `scripts/er-dll-closure.py` already answers "which ME3-loadable DLLs does this branch
-affect" for a RUNTIME question -- which cdylibs must be loaded for a launch to be testing
+affect" for a runtime question -- which cdylibs must be loaded for a launch to be testing
 them. This module asks the CI/pre-push question instead: which gate work is this diff
 capable of invalidating, and which is provably untouched by it.
 
-IT REUSES THAT TOOL'S WALK RATHER THAN COPYING IT. `path_dependents()`, `affected_packages()`,
+It REUSES that tool'S walk rather than copying it. `path_dependents()`, `affected_packages()`,
 `changed_paths()` and `resolve_base()` are imported from it, so the diff base
-(`merge-base(origin/main, HEAD)` -> WORKING TREE, plus untracked files) and the REVERSE
+(`merge-base(origin/main, HEAD)` -> working tree, plus untracked files) and the reverse
 dependency closure are the same in both tools by construction. A second implementation of the
 walk is the drift this repo keeps closing.
 
-WHAT IT DELIBERATELY DOES *NOT* REUSE, AND WHY
+What it deliberately does *not* reuse, and why
 ----------------------------------------------
 `er-dll-closure.py`'s `packages` output is post-processed by three rules that are about
-LOADING A PROCESS, and every one of them is wrong here:
+loading a process, and every one of them is wrong here:
 
-  * the CONFLICT table drops `er-loading-portrait` when the product is present, because two
+  * the conflict table drops `er-loading-portrait` when the product is present, because two
     Present hooks in one process corrupt the frame. Nothing is loaded here -- CI compiles.
     Honouring it would mean a change to that crate is never compiled.
   * `opt_in_only` withholds a gameplay mod nobody consented to. Consent is a launch concept;
@@ -29,20 +29,20 @@ LOADING A PROCESS, and every one of them is wrong here:
 So selection here reads `affected_crates` -- the raw reverse-dependency closure -- and
 intersects it with the shipped cdylib list from `scripts/me3-dll-list.py`. Nothing else.
 
-FAIL OPEN, ALWAYS, AND SAY SO
+Fail open, always, and say so
 -----------------------------
-Every uncertainty selects MORE work, never less, and names the reason:
+Every uncertainty selects more work, never less, and names the reason:
 
-  * no changed paths at all (a push to `main`, where merge-base == HEAD) -> EVERYTHING.
+  * no changed paths at all (a push to `main`, where merge-base == head) -> everything.
     This is the property that makes selective PR checking safe: every merge to main still
     runs the whole suite, so a crate nobody's PR touched cannot rot unobserved.
-  * a Rust build input that is NOT inside a single crate directory (root `Cargo.toml`,
-    `Cargo.lock`, `.cargo/`, `build-support/`, `data/`, `.github/`) -> EVERYTHING. Crate-local
+  * a Rust build input that is not inside a single crate directory (root `Cargo.toml`,
+    `Cargo.lock`, `.cargo/`, `build-support/`, `data/`, `.github/`) -> everything. Crate-local
     reasoning is only valid when every build-affecting path belongs to a crate.
-  * a git failure, an unresolvable base, `ER_SCOPE_ALL=1` -> EVERYTHING (the callers treat a
+  * a git failure, an unresolvable base, `ER_SCOPE_ALL=1` -> everything (the callers treat a
     non-zero exit as "run it all").
 
-THE ONE THING THAT CAN SUBTRACT WORK IS AN EXPLICIT LIST OF PATHS THAT CANNOT REACH CARGO,
+The one thing that can subtract work is an explicit list of paths that cannot reach cargo,
 and it is asserted rather than asserted-by-assumption: `--selftest` reads every build script in
 the tree, extracts the repo-relative paths they actually open, and fails if any of them falls
 inside the non-build set. `crates/er-game-base/build.rs` reading `docs/recon/*.tsv` is exactly
@@ -53,7 +53,7 @@ Usage:
     python3 scripts/er-change-scope.py --json
     python3 scripts/er-change-scope.py --matrix         # GitHub Actions matrix (all shells)
     python3 scripts/er-change-scope.py --summary-md     # markdown accounting table
-    python3 scripts/er-change-scope.py --check-sh-skips # line<TAB>reason for scripts/check.sh
+    python3 scripts/er-change-scope.py --check-sh-skips # line<tab>reason for scripts/check.sh
     python3 scripts/er-change-scope.py --rust-touched   # exit 0 if cargo work is required
     python3 scripts/er-change-scope.py --rev <sha>      # diff a pushed tip instead of the tree
     python3 scripts/er-change-scope.py --selftest
@@ -82,7 +82,7 @@ EXIT_OK = 0
 EXIT_FAIL_OPEN = 1
 EXIT_NO_CARGO_WORK = 3
 
-# Paths whose change cannot alter what cargo compiles. Kept SHORT on purpose: everything not
+# Paths whose change cannot alter what cargo compiles. Kept short on purpose: everything not
 # named here is treated as build-affecting, so a new directory nobody classified fails safe.
 # `--selftest` proves no build script reads anything under these.
 NON_BUILD_PREFIXES = (
@@ -97,32 +97,32 @@ NON_BUILD_PREFIXES = (
     "vendor-archive/",
 )
 # ...and the holes in them. `crates/er-game-base/build.rs` opens four TSVs under `docs/recon/`
-# (VERIFIED_MAP, QUARANTINE, FUNCTION_MAP, DATA_MAP) and generates `address_map_1170.rs` from
+# (VERIFIED_MAP, quarantine, FUNCTION_MAP, DATA_MAP) and generates `address_map_1170.rs` from
 # them, so `docs/` as a blanket exemption would let an address-map edit skip every compile.
 BUILD_INPUT_EXCEPTIONS = ("docs/recon/",)
 # A markdown file anywhere is prose. No build script reads one; `--selftest` re-proves it.
 NON_BUILD_SUFFIXES = (".md",)
 
-# `.github/` is deliberately ABSENT from the non-build set even though cargo never reads it:
+# `.github/` is deliberately absent from the non-build set even though cargo never reads it:
 # `.github/workflows/check.yml` carries FROMSOFTWARE_RS_REV, the sibling-checkout pin that
 # decides which game builds the DLLs survive. A change there changes what CI compiles against,
 # so it must select everything.
 
-# THE GATES THAT SHELL OUT TO THE RUST TOOLCHAIN. A step running one of these is skipped only
-# when NOTHING that can reach cargo changed -- never on a per-package basis, because each of
+# The gates that shell out to the Rust TOOLCHAIN. A step running one of these is skipped only
+# when nothing that can reach cargo changed -- never on a per-package basis, because each of
 # them is whole-workspace by construction:
 #
-#   check-rust-build.sh          links all 26 me3 shells AND re-attests their provenance
+#   check-rust-build.sh          links all 26 me3 shells and re-attests their provenance
 #                                sidecars. A partial relink with a full re-attestation would
 #                                make `er-dll-provenance.py verify` claim bytes it did not
 #                                build, and the launchers gate on that -- so it is all or
 #                                nothing, and the only safe subset is the empty one.
-#   check-committed-compiles.sh  clippies the COMMITTED tree in a temp worktree; its subject is
+#   check-committed-compiles.sh  clippies the committed tree in a temp worktree; its subject is
 #                                the commit, not a package.
 #   check-save-disable-warnings.py  runs the compiler per crate to read its warning set.
 #
 # The list is small and explicit, and `--selftest` keeps it from falling behind: it scans every
-# script `check.sh` invokes for a real toolchain invocation and FAILS on one that is not
+# script `check.sh` invokes for a real toolchain invocation and fails on one that is not
 # declared here. A gate that quietly grew a compile step becomes a red gate, not a silent skip.
 RUST_TOOLCHAIN_GATES = {
     "check-rust-build.sh": "links every me3 shell and re-attests provenance; all-or-nothing",
@@ -139,14 +139,14 @@ GIT_TIMEOUT_SECONDS = 25
 
 
 class ScopeError(RuntimeError):
-    """Something the caller must answer by running EVERYTHING."""
+    """Something the caller must answer by running everything."""
 
 
 def _load(path: Path, name: str):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: `ci-gate-portability.py` defines a @dataclass, and dataclasses
+    # Registered before exec: `ci-gate-portability.py` defines a @dataclass, and dataclasses
     # resolves annotations through `sys.modules[cls.__module__]`. Without this line that lookup
     # returns None and the import dies in the decorator, nowhere near the real cause.
     sys.modules[name] = module
@@ -183,17 +183,17 @@ def crate_of(path: str) -> str | None:
 def compute(base_ref: str = "origin/main", fetch: bool = False, revs: tuple[str, ...] = ()) -> dict:
     """The whole answer. Raises ScopeError when the caller must fail open.
 
-    `fetch` defaults to FALSE, unlike er-dll-closure.py, and that is a deliberate difference:
+    `fetch` defaults to false, unlike er-dll-closure.py, and that is a deliberate difference:
     this runs on every push and inside check.sh, where a network round trip is a cost nobody
     asked for. A stale `origin/main` widens the diff (an older base has more changed paths),
-    which selects MORE work -- the safe direction. CI does not need it either: actions/checkout
+    which selects more work -- the safe direction. CI does not need it either: actions/checkout
     with fetch-depth 0 has already fetched.
     """
     dll = closure_module()
     merge_base, head = dll.resolve_base(base_ref, fetch)
 
     if revs:
-        # THE PRE-PUSH SHAPE: ask about the commits being pushed, not about the working tree.
+        # The pre-push SHAPE: ask about the commits being pushed, not about the working tree.
         # A dirty tree is not what reaches origin, and the hook's question is about what does.
         changed: set[str] = set()
         for rev in revs:
@@ -375,12 +375,12 @@ def summary_md(scope: dict) -> str:
 
 
 def matrix(scope: dict) -> dict:
-    """A GitHub Actions matrix carrying EVERY shipped shell, selected or not.
+    """A GitHub Actions matrix carrying every shipped shell, selected or not.
 
     The row count is constant, on purpose. A matrix computed down to the winners makes an
     absent DLL indistinguishable from a DLL that does not exist -- the same defect check.sh's
-    NOT RUN state exists to refuse. `matrix` is not available in `jobs.<id>.if` (GitHub's
-    context table), but it IS available in `jobs.<id>.name`, so the verdict goes in the name
+    not run state exists to refuse. `matrix` is not available in `jobs.<id>.if` (GitHub's
+    context table), but it is available in `jobs.<id>.name`, so the verdict goes in the name
     and the heavy steps carry `if: matrix.selected == 'yes'`.
     """
     include = []
@@ -468,7 +468,7 @@ def selftest() -> int:
     check(not is_build_input("docs/plans/whatever.md"), "a doc is not a build input")
     check(not is_build_input("README.md"), "a root markdown file is not a build input")
 
-    # --- ANTI-DRIFT 1: no build script reads anything the predicate waves through ----------
+    # --- Anti-drift 1: no build script reads anything the predicate waves through ----------
     literals = _build_script_paths()
     check(len(literals) >= 4, f"build scripts name {len(literals)} real repo path(s) to audit")
     leaks = sorted({rel for _, rel in literals if not is_build_input(rel)})
@@ -482,7 +482,7 @@ def selftest() -> int:
         "the docs/recon exception is load-bearing, not decorative (a build script reads it)",
     )
 
-    # --- ANTI-DRIFT 2: every compile-invoking gate in check.sh is declared ------------------
+    # --- Anti-drift 2: every compile-invoking gate in check.sh is declared ------------------
     portability = _load(PORTABILITY, "ci_gate_portability")
     undeclared = []
     seen_declared = set()
@@ -603,7 +603,7 @@ def main() -> int:
 
     try:
         scope = compute(args.base, fetch=args.fetch, revs=tuple(args.revs))
-    except Exception as err:  # noqa: BLE001 -- every failure has the SAME answer: run everything
+    except Exception as err:  # noqa: BLE001 -- every failure has the same answer: run everything
         print(
             f"er-change-scope: cannot determine scope ({type(err).__name__}: {err}).\n"
             "Failing OPEN: the caller must run everything.",

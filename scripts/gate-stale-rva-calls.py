@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Route `transmute(base + SOME_RVA)` call sites through the 1.17 address gate, in bulk.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `scripts/check-stale-rva-calls.py` counts the sites and refuses new ones. Converting them is the
 other half, and on 2026-08-29 there were 210 of them across the workspace -- too many to edit by
@@ -14,64 +14,64 @@ hand, and each edit is the same shape:
         None => <bail>,
     }) };
 
-WHAT IT REFUSES TO TOUCH
+What it refuses to touch
 ------------------------
 The bail is the whole risk, so this only rewrites a site whose bail is unambiguous:
 
-  * NEVER inside an `extern "system"` function. Those are detours, and a detour that returns early
+  * Never inside an `extern "system"` function. Those are detours, and a detour that returns early
     never calls its original -- which silently deletes the game's own behaviour instead of adding
     ours. Measured: `hud_weapon_update_hook` needed `return ret`, not `return`.
-  * ONLY where the enclosing function's return type maps to an obvious "did nothing" value:
+  * Only where the enclosing function's return type maps to an obvious "did nothing" value:
     `()`, `bool`, an integer, `f32`. Anything else (a struct, a tuple, `Option<...>` where `None`
     might mean something specific) is printed for a human instead of guessed at.
 
 Everything it skips is listed, so the remainder is a work-list rather than a silence.
 
-IT USED TO REWRITE ENGLISH SENTENCES, AND ON 2026-08-30 THAT WAS ALL IT DID
+It used to rewrite English sentences, and on 2026-08-30 that was all it did
 --------------------------------------------------------------------------
-The matcher ran over RAW file text. Run over this workspace on 2026-08-30 it reported
-`gated 1 / 2 site(s)` -- and BOTH of those "call sites" were PROSE:
+The matcher ran over raw file text. Run over this workspace on 2026-08-30 it reported
+`gated 1 / 2 site(s)` -- and both of those "call sites" were PROSE:
 
     crates/er-invasion-warp-core/src/lib.rs:51   /// ... used to be a bare `transmute(base + SOME_RVA)`.
-    crates/er-game-base/src/game_build.rs:284    // ... equally reachable as a CALL (`transmute(base + RVA)`)
+    crates/er-game-base/src/game_build.rs:284    // ... equally reachable as a call (`transmute(base + RVA)`)
 
-The first is the one it counted as GATED, which means a non-dry run would have rewritten a doc
+The first is the one it counted as gated, which means a non-dry run would have rewritten a doc
 comment into `transmute(helper(SOME_RVA, "SOME_RVA"))` -- a sentence about the hazard turned into
 code that describes nothing, in the header of the crate that documents it. Those are the same two
-paragraphs that contaminated `check-stale-rva-calls.py`'s baseline; for a COUNTER that was an
+paragraphs that contaminated `check-stale-rva-calls.py`'s baseline; for a counter that was an
 inflated number, and for a REWRITER it is a corrupted file. Comments and string bodies are now
 blanked before matching -- through the shared `rva_symbols.code_only`, so there is one dialect
-rather than a fourth -- and the replacement is spliced into the ORIGINAL text at the offsets that
+rather than a fourth -- and the replacement is spliced into the original text at the offsets that
 reader reports, which it can do because the blanking preserves offsets exactly.
 
-AND IT TRUSTED THE CONSTANT'S NAME, ITS SHAPE, AND THE BASE'S SPELLING
+And it trusted the constant'S name, its shape, and the base'S spelling
 ---------------------------------------------------------------------
 `[A-Z0-9_]*RVA[A-Z0-9_]*` is a naming convention, not evidence. What makes a site a stale call is
-the ARITHMETIC -- a module base plus a compile-time constant, transmuted and called -- and the
+the arithmetic -- a module base plus a compile-time constant, transmuted and called -- and the
 arithmetic does not care what the constant is spelled. Three spellings defeated the old pattern
 outright, each of them measured standing in live code while the sibling gate reported zero:
 
-  NO SUFFIX      `er-build-import-runtime` calls `GET_MAIN_PLAYER_STATS` and thirty-nine more by
+  No suffix      `er-build-import-runtime` calls `GET_MAIN_PLAYER_STATS` and thirty-nine more by
                  those names; `use ...::FOO_RVA as FOO;` strips the suffix at the import, which
                  is exactly where this tool looks.
-  A MACRO BASE   `own_stepper_idx10_fallbacks!` receives the module base as a metavariable, so its
+  A macro base   `own_stepper_idx10_fallbacks!` receives the module base as a metavariable, so its
                  body reads `transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA)` -- a function
                  that moved 0x749b20 -> 0x74a970, leaving the 1.16.2 address mid-instruction.
-  AN ENUM        `er-title-flow` keeps its addresses in C-like enums:
+  An ENUM        `er-title-flow` keeps its addresses in C-like enums:
                  `transmute(base + ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize)` called
                  1.16.2's 0x9a5f20 on a build where it lives at 0x9a70c0.
 
 A TURBOFISH also hid sites: `transmute::<usize, F>(base + MENU_RVA)` is the same call.
 
-THE VALUE GATE
+The value gate
 --------------
 Dropping the name filter admits `base + PE_DOS_LFANEW_OFFSET` -- the DOS header's `0x3c` field,
-fixed by the PE format and unable to move between builds. Those are excluded by VALUE, below
-`.text`'s 0x1000, and never by name: an exclusion has to rest on what the thing IS. A constant
-whose value cannot be resolved is KEPT, because "I could not read it" must not be spelled the same
+fixed by the PE format and unable to move between builds. Those are excluded by value, below
+`.text`'s 0x1000, and never by name: an exclusion has to rest on what the thing is. A constant
+whose value cannot be resolved is kept, because "I could not read it" must not be spelled the same
 way as "I read it and it is safe".
 
-USAGE
+Usage
     python3 scripts/gate-stale-rva-calls.py --helper title_fn crates/er-title-flow/src/*.rs
     python3 scripts/gate-stale-rva-calls.py --helper 'crate::gated' --dry-run <paths...>
     python3 scripts/gate-stale-rva-calls.py --selftest
@@ -85,9 +85,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. `code_only` lives in `scripts/rva_symbols.py` so this rewriter, its
+# One dialect, not four. `code_only` lives in `scripts/rva_symbols.py` so this rewriter, its
 # read-site sibling and both gates blank comments and string bodies the same way. A tool that
-# EDITS source must never match inside prose; this one was measured doing exactly that.
+# edits source must never match inside prose; this one was measured doing exactly that.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
     from rva_symbols import code_only
     import rva_symbols
@@ -115,7 +115,7 @@ BAIL_FOR_RETURN = {
     "i32": "return 0",
     "f32": "return 0.0",
 }
-# ANY `Option<T>`: `None` is that function's own "I could not produce a value", which is exactly
+# Any `Option<T>`: `None` is that function's own "I could not produce a value", which is exactly
 # what a refused address means. It gets the `?` form rather than a match -- see `rewrite`. An
 # earlier version listed only two concrete `Option<..>` types and hand-refused the rest, which was
 # caution with no reasoning behind it: `Option<Vec<u8>>` means no different from `Option<usize>`.
@@ -130,7 +130,7 @@ SIGNATURE = re.compile(
 #
 # `\$?` on the base, a turbofish, a path qualifier and a non-`RVA` constant name are all here for
 # the reasons the module doc gives: each hid live sites from this tool's sibling gate. `const` is
-# the LAST path segment, which is what the log label should say and what a rewritten `use` cannot
+# the last path segment, which is what the log label should say and what a rewritten `use` cannot
 # churn.
 CALL_SITE = re.compile(
     r"transmute(?:::\s*<[^>]*>)?\(\s*"
@@ -140,11 +140,11 @@ CALL_SITE = re.compile(
     re.S,
 )
 
-# THE MATCHER THIS REPLACED, frozen as a LITERAL. The controls in `--selftest` have to prove each
+# The MATCHER this replaced, frozen as a literal. The controls in `--selftest` have to prove each
 # widening is load-bearing, and a control the old pattern also catches would pass on the broken
 # tool and prove nothing.
 #
-# SPELLED OUT, NOT COMPOSED FROM `CALL_SITE`'s pieces. A frozen control assembled from the live
+# Spelled out, not composed from `CALL_SITE`'s pieces. A frozen control assembled from the live
 # pattern is not frozen: it widens whenever the live one does, so "the old pattern misses this"
 # silently becomes "the new pattern misses this", which is the opposite claim. That is exactly how
 # `check-stale-rva-calls.py`'s controls nearly stopped proving anything.
@@ -176,7 +176,7 @@ def constant_values() -> dict:
 
 
 def is_finding(constant: str, values: dict) -> bool:
-    """Is `base + constant` a stale-address CALL? Unresolvable means YES -- see the module doc."""
+    """Is `base + constant` a stale-address call? Unresolvable means yes -- see the module doc."""
     value = values.get(constant)
     return value is None or value >= PE_HEADER_LIMIT
 
@@ -205,7 +205,7 @@ def rewrite(
     """`(rewritten, seen, needs-a-human, excluded-by-value)`.
 
     Matching runs over the comment/string-blanked view; the replacement is spliced into the
-    ORIGINAL text at the same offsets, which `code_only` guarantees are the same offsets. The
+    original text at the same offsets, which `code_only` guarantees are the same offsets. The
     enclosing-function scan still reads the real lines, because a signature is code either way.
     """
     values = {} if values is None else values
@@ -235,7 +235,7 @@ def rewrite(
         constant_name = match.group("const")
         if not is_finding(constant_name, values):
             # A PE header field, fixed by the file format. Routing it through the game map gets a
-            # refusal and a zero, which for a CALL is fatal rather than merely wrong.
+            # refusal and a zero, which for a call is fatal rather than merely wrong.
             excluded.append(
                 f"{os.path.relpath(path)}:{index + 1}: {constant_name} = "
                 f"0x{values[constant_name]:x} is below .text, so it is a PE header offset the "
@@ -257,7 +257,7 @@ def rewrite(
         # Keep any `as usize`: the constant may be a u32 and dropping the cast is a type error.
         constant = match.group("prefix") + constant_name + (match.group("cast") or "")
         call = f'{helper}({constant}, "{constant_name}")'
-        # `match x { Some(a) => a, None => return None }` IS `x?`, and clippy rejects the long
+        # `match x { Some(a) => a, None => return None }` is `x?`, and clippy rejects the long
         # form. Emit what a reader (and the linter) actually wants.
         resolved = (
             f"{call}?"
@@ -310,9 +310,9 @@ def selftest() -> int:
     check("CALL_SITE matched a trampoline transmute, which must be left alone",
           not CALL_SITE.search("transmute(orig)"))
 
-    # ---------------------------------------------------------------- POSITIVE CONTROLS
+    # ---------------------------------------------------------------- Positive controls
     # Each is a spelling that stood in live code while this tool's sibling gate reported zero.
-    # Each is asserted VISIBLE to the current pattern and INVISIBLE to the frozen legacy one -- a
+    # Each is asserted visible to the current pattern and invisible to the frozen legacy one -- a
     # control both catch would pass on the broken tool and prove nothing.
 
     # 1 -- a constant that never carried the `_RVA` suffix. Forty of these live in
@@ -323,7 +323,7 @@ def selftest() -> int:
     check("...control is vacuous unless the OLD name-filtered pattern misses it",
           LEGACY_CALL_SITE.findall(unsuffixed) == [])
 
-    # 2 -- a MACRO BODY. `transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA)` was a live 1.17
+    # 2 -- a macro body. `transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA)` was a live 1.17
     # crash (0x749b20 -> 0x74a970, the old address mid-instruction) that one `$` hid.
     macro_body = "let f: F = unsafe { transmute($base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };"
     check("must see a call written against a macro metavariable base",
@@ -332,7 +332,7 @@ def selftest() -> int:
     check("...control is vacuous unless the OLD `$`-blind pattern misses it",
           LEGACY_CALL_SITE.findall(macro_body) == [])
 
-    # 3 -- an ENUM VARIANT, which is how er-title-flow spells most of its addresses.
+    # 3 -- an ENUM variant, which is how er-title-flow spells most of its addresses.
     enum_variant = (
         "let f: F = unsafe { core::mem::transmute("
         "base + ProfileLoadMenuRva::ProfileLoadSelectSaveSlot as usize) };"
@@ -352,9 +352,9 @@ def selftest() -> int:
     check("...control is vacuous unless the OLD turbofish-blind pattern misses it",
           LEGACY_CALL_SITE.findall(turbofish) == [])
 
-    # ---------------------------------------------------------------- PROSE
-    # THE DEFECT THIS TOOL SHIPPED WITH, verbatim from the two files it hit on 2026-08-30. This
-    # control runs the other way round from the four above: the OLD matcher CATCHES both lines
+    # ---------------------------------------------------------------- Prose
+    # the defect this tool shipped with, verbatim from the two files it hit on 2026-08-30. This
+    # control runs the other way round from the four above: the old matcher catches both lines
     # (and counted them `gated 1 / 2`), and the current one must not -- because a false positive
     # in a REWRITER is a corrupted source file, not an inflated count.
     import tempfile
@@ -389,7 +389,7 @@ def selftest() -> int:
         check("a quoted example is not code", 'transmute(base + QUOTED_RVA)"' in after)
         check("the real site was actually converted", 'gate(REAL_SITE_RVA, "REAL_SITE_RVA")' in after)
 
-    # ---------------------------------------------------------------- THE VALUE GATE
+    # ---------------------------------------------------------------- The value gate
     values = {"PE_DOS_LFANEW_OFFSET": 0x3C, "CSDLC_SINGLETON_RVA": 0x3D86BD8, "AMBIGUOUS": None}
     check("a PE header offset is not a game address", not is_finding("PE_DOS_LFANEW_OFFSET", values))
     check("a real .data RVA is a finding", is_finding("CSDLC_SINGLETON_RVA", values))
@@ -404,9 +404,9 @@ def selftest() -> int:
               (gated, seen) == (0, 1) and len(excluded) == 1)
         check("...and the file is untouched", open(target, encoding="utf-8").read() == header)
 
-    # ---------------------------------------------------------------- NON-VACUITY, of the INPUTS
+    # ---------------------------------------------------------------- Non-VACUITY, of the inputs
     # Every set this tool reasons from is asserted non-empty and of the right order of magnitude
-    # BEFORE anything is concluded from it. `gated 0 / 0` is the goal state of a migration and a
+    # before anything is concluded from it. `gated 0 / 0` is the goal state of a migration and a
     # bug in a walk, and only one of those is good news.
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sources = []
@@ -416,10 +416,10 @@ def selftest() -> int:
     check(f"only {len(sources)} .rs files under crates/; the walk is broken", len(sources) > 200)
     declared = constant_values()
     check(f"only {len(declared)} constants resolved; the value gate is unfounded", len(declared) > 500)
-    # The tree's own count, both ways. It is REPORTED, never asserted to be non-zero: reaching
-    # zero real sites is the POINT of this migration, and asserting on the findings would conflate
+    # The tree's own count, both ways. It is reported, never asserted to be non-zero: reaching
+    # zero real sites is the point of this migration, and asserting on the findings would conflate
     # "the matcher works" with "the tree still has work". The controls above settle the first
-    # without depending on the tree at all. What IS asserted is that the prose the old matcher
+    # without depending on the tree at all. What is asserted is that the prose the old matcher
     # counted has stopped being counted.
     live, prose_hits = 0, 0
     for source in sources:

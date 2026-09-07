@@ -18,13 +18,13 @@
 //! # Version pinning, and the order it has to happen in
 //!
 //! Guard and patch addresses are 1.16.2 RVAs, and the shipped game has been 1.17 since
-//! 2026-08-27. So every address is first RESOLVED for the running build -- through
+//! 2026-08-27. So every address is first resolved for the running build -- through
 //! [`er_game_base::game_build`] -- and only then re-checked against the live image's bytes.
 //!
 //! That order is the whole of this section, because it was the other way round and the cost is
 //! measured. The byte check ran at a raw `base + rva`, which on 1.17 is unrelated code: all three
 //! guards and the one patch failed the comparison and disarmed, reporting `byte mismatch` --
-//! wording that reads as a stale SIGNATURE when the fault was an untranslated ADDRESS. The
+//! wording that reads as a stale signature when the fault was an untranslated address. The
 //! `LoadBalancerParam` guard was among them, and on 2026-08-30 the exact crash it exists to stop
 //! killed a session that had it "installed": `install complete: 0/3 guard(s) armed` at attach,
 //! `DLPanic` at `FD4Singleton.h:180` twenty-five hours later.
@@ -118,9 +118,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-seamless-bugfixes", log_message);
         er_hook::set_hook_logger(log_message);
@@ -143,7 +143,7 @@ fn spawn_install_task() {
         .name("er-seamless-bugfixes".to_owned())
         .spawn(|| {
             let mut attempts = 0_u64;
-            // BOUNDED (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
+            // Bounded (2026-08-29): an unbounded `loop { yield_now() }` in two other shells starved the
             // wineserver and hung a whole boot -- see er_game_base::wait. Same shape, same fix.
             let found =
                 er_game_base::wait::poll_until(|| match er_game_base::mem::game_module_base() {
@@ -189,7 +189,7 @@ enum Outcome {
 
 /// The name of a guard in `guard`'s own group that has no address on the running build.
 ///
-/// A group exists because its members are only safe armed TOGETHER. `null_special_effect` guards
+/// A group exists because its members are only safe armed together. `null_special_effect` guards
 /// the query and the apply for one reason: guarding the query alone makes the caller's
 /// `if !has { apply }` pass, and the apply path faults on the same null field one RVA later. So a
 /// group that cannot be found whole is not a group to half-arm; it is a group to skip.
@@ -214,8 +214,8 @@ fn unmapped_group_member(resolved: &[Option<usize>], guard: &Guard) -> Option<&'
 
 /// Confirm the live bytes at `address` still match what an RVA was verified against.
 ///
-/// `address` is expected to have been RESOLVED for the running build already. That is what makes
-/// this check mean what it says: a mismatch here is now evidence about the BYTES, because the
+/// `address` is expected to have been resolved for the running build already. That is what makes
+/// this check mean what it says: a mismatch here is now evidence about the bytes, because the
 /// address question was answered first and separately.
 ///
 /// Fail-closed either way, and the log line names the bytes actually found so the reader does not
@@ -286,16 +286,16 @@ fn install_guards(base: usize) {
         }
     }
 
-    // PASS ONE: where does each guarded function live on the RUNNING build?
+    // Pass ONE: where does each guarded function live on the running build?
     //
-    // Every guard is resolved before ANY of them is installed, for two reasons. The byte check
+    // Every guard is resolved before any of them is installed, for two reasons. The byte check
     // needs a real address to read (that is the bug this ordering fixes), and one guard's answer
     // decides whether another may arm at all -- `unmapped_group_member` cannot be asked until all
     // the answers are in.
     //
     // `resolve_detour_address`, not `resolve_game_address`: MinHook is about to write five bytes
-    // at each of these, and a row good enough to CALL a function says nothing about whether its
-    // 1.17 destination is a function ENTRY with a relocatable prologue.
+    // at each of these, and a row good enough to call a function says nothing about whether its
+    // 1.17 destination is a function entry with a relocatable prologue.
     let resolved: Vec<Option<usize>> = REGISTRY
         .iter()
         .map(|guard| er_game_base::game_build::resolve_detour_address(base + guard.rva, guard.name))
@@ -325,8 +325,8 @@ fn install_guards(base: usize) {
 
 /// Install one guard, and report which of the three things happened to it.
 ///
-/// PER GUARD on purpose. Every exit from here is one row's outcome and the caller's loop carries
-/// on, because a refused address is the EXPECTED case during a version migration and losing the
+/// Per guard on purpose. Every exit from here is one row's outcome and the caller's loop carries
+/// on, because a refused address is the expected case during a version migration and losing the
 /// unrelated guards with it is a choice -- a bad one when one of them is the guard that stops a
 /// `DLPanic`. See bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
 #[cfg(windows)]
@@ -408,19 +408,19 @@ fn install_patches(base: usize) {
 /// Resolve the window, verify it, write the one byte, and read it back.
 #[cfg(windows)]
 fn apply_patch(patch: &Patch, base: usize) -> Outcome {
-    // `resolve_call_site_rva`, NOT `resolve_detour_address`. The detour resolver answers "may
-    // MinHook overwrite five bytes at this function ENTRY", and this address is not an entry and
+    // `resolve_call_site_rva`, not `resolve_detour_address`. The detour resolver answers "may
+    // MinHook overwrite five bytes at this function entry", and this address is not an entry and
     // is not being detoured: it is a single byte inside a function, read and then written.
     //
-    // WHY IT RESOLVES THE FUNCTION AND ADDS THE OFFSET AFTERWARDS. The maps are keyed on `.pdata`
+    // Why it resolves the function and adds the offset afterwards. The maps are keyed on `.pdata`
     // function starts, so the window's own address (1.16.2 `0xc57670`) can never appear in one and
-    // `docs/recon/rva-map-1162-to-1170.verified.tsv` records that refusal. What IS mappable is the
+    // `docs/recon/rva-map-1162-to-1170.verified.tsv` records that refusal. What is mappable is the
     // enclosing function, `0xc575e0 -> 0xc58cb0`, already carried by `functions.tsv` and selected
-    // into the CALL map -- and the window sits `0x90` bytes into it in BOTH builds. Adding that
+    // into the call map -- and the window sits `0x90` bytes into it in both builds. Adding that
     // offset in Rust, after resolution, is what `resolve_call_site_rva` exists for; the offset
     // never enters a table, so nothing can read it as a licence to detour a mid-function address.
     //
-    // A refusal is still possible and is still the honest answer: it means the CONTAINING function
+    // A refusal is still possible and is still the honest answer: it means the containing function
     // has no row on the running build.
     let Some(window) = er_game_base::game_build::resolve_call_site_rva(
         patch.function_rva,
@@ -502,7 +502,7 @@ fn apply_patch(patch: &Patch, base: usize) -> Outcome {
     Outcome::Armed
 }
 
-/// Report any guard GROUP that came up partly armed.
+/// Report any guard group that came up partly armed.
 ///
 /// A half-armed group is not a safe state: for `null_special_effect`, the query guard alone sends
 /// the crashing caller into the apply path that faults on the same field. Scoping this by group
@@ -559,7 +559,7 @@ fn install_guard(guard: &Guard, address: usize) -> bool {
             return false;
         }
     };
-    // Publish the trampoline BEFORE enabling. The stub's pass-through path tail-jumps through this
+    // Publish the trampoline before enabling. The stub's pass-through path tail-jumps through this
     // slot, and the first call can land the instant the hook goes live.
     guard
         .original
@@ -641,7 +641,7 @@ mod tests {
         }
     }
 
-    /// Resolution has to be able to answer NO per guard, and the answer has to be a group
+    /// Resolution has to be able to answer no per guard, and the answer has to be a group
     /// property. On 1.17 exactly one member of `null_special_effect` has a detour row, and arming
     /// that half alone is the failure that module's header exists to describe.
     #[test]

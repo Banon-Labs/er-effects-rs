@@ -1,22 +1,22 @@
-// THE BIRTH OF THE WEDGE, timestamped -- and the host clock that lets the stamp be read against
+// The birth of the wedge, timestamped -- and the host clock that lets the stamp be read against
 // the rest of a run's evidence.
 //
 // `include!`d into `lib.rs` like the blocks around it, and split out of it because the
 // first-occurrence instrument is a different question from the observers that feed it.
 // `save_orphan_drain.rs` names the dead state; `save_state_witness.rs` names the frame that creates
-// it at the two `saveState` WRAPPERS; this file names the first frame the wedge is VISIBLE FROM THE
-// DISPATCH, which is the only vantage point that keeps working once the wrappers stop being called.
+// it at the two `saveState` WRAPPERS; this file names the first frame the wedge is visible from the
+// dispatch, which is the only vantage point that keeps working once the wrappers stop being called.
 //
-// WHY FIRST AND NOT LAST. `DECLINE_SLOT` / `DECLINE_SAVE_STATE` in `lib.rs` are last-writer-wins.
+// Why first and not last. `DECLINE_SLOT` / `DECLINE_SAVE_STATE` in `lib.rs` are last-writer-wins.
 // On the 2026-08-31 run that meant the published sample was taken on decline 8,638 of 8,638 -- four
 // minutes after the state it describes came into being, and byte-identical to the 8,637 before it,
 // because a declining lane touches nothing and so nothing in that loop can change the device. A
-// sample of a fixpoint says what the fixpoint IS; it cannot say when or with what it started.
+// sample of a fixpoint says what the fixpoint is; it cannot say when or with what it started.
 //
-// NO NEW HOOK. Every value here comes from the sample `observe_dispatch` already takes on a
+// No new hook. Every value here comes from the sample `observe_dispatch` already takes on a
 // decline; the only change is which occurrence is kept.
 
-/// Signature of the clock sink: milliseconds since the HOST's own log epoch.
+/// Signature of the clock sink: milliseconds since the host's own log epoch.
 ///
 /// A third sink rather than `Instant::now()` inside this crate, for one reason: a timestamp is
 /// only useful if it can be lined up against the other evidence a run produces. The host's epoch
@@ -34,7 +34,7 @@ pub fn set_clock_sink(sink: ClockSinkFn) {
     CLOCK_SINK.store(sink as usize, Ordering::Release);
 }
 
-/// Sentinel for a stamp taken with no clock sink wired -- NOT a moment in time.
+/// Sentinel for a stamp taken with no clock sink wired -- Not a moment in time.
 pub const ELAPSED_MS_UNAVAILABLE: u64 = u64::MAX;
 
 /// Milliseconds since the host's log epoch, or [`ELAPSED_MS_UNAVAILABLE`] when no sink is wired.
@@ -48,22 +48,22 @@ fn elapsed_ms() -> u64 {
     sink()
 }
 
-// ---- THE BIRTH OF THE WEDGE, timestamped -------------------------------------------------
+// ---- The birth of the wedge, timestamped -------------------------------------------------
 //
-// `DECLINE_SLOT` / `DECLINE_SAVE_STATE` above are LAST-writer-wins. On the 2026-08-31 run that
+// `DECLINE_SLOT` / `DECLINE_SAVE_STATE` above are last-writer-wins. On the 2026-08-31 run that
 // meant the published sample was taken on decline 8,638 of 8,638 -- four minutes after the state
 // it describes came into being, and byte-identical to the 8,637 before it because nothing in that
 // loop can change the device. A sample of a fixpoint says what the fixpoint is; it cannot say when
 // or with what it started.
 //
-// These are FIRST-writer-wins over exactly the condition that defines the wedge, so they name the
+// These are first-writer-wins over exactly the condition that defines the wedge, so they name the
 // moment instead of the plateau. Comparing the captured `+0x10` against the accept records in
 // `er-quickload-continue-trace.log` (which log the `SLSaveContent` the accepting lane built) says
-// outright WHICH submit is the one still on the device -- the reload's own SetState5 autosave, or
+// outright which submit is the one still on the device -- the reload's own SetState5 autosave, or
 // something later -- and the stamp shares the host's log epoch, so it lands between two named
 // lines of the debug log rather than in the abstract.
 //
-// NO NEW HOOK. This is the same `observe_dispatch` sample the decline path already takes, recorded
+// No new hook. This is the same `observe_dispatch` sample the decline path already takes, recorded
 // on first occurrence instead of last.
 
 /// Declines whose sample showed a save latched on a device the game thinks is idle.
@@ -86,17 +86,17 @@ static DISPATCH_FIRST_LATCHED_CALL: AtomicU64 = AtomicU64::new(0);
 /// `SAVE_LANE_*` of that first wedged sample.
 static DISPATCH_FIRST_LATCHED_LANE: AtomicUsize = AtomicUsize::new(SAVE_LANE_NONE);
 
-/// Does this dispatch sample show a SAVE the game has stopped believing in?
+/// Does this dispatch sample show a save the game has stopped believing in?
 ///
 /// `iodev+0x10 != 0` with `saveState == 0`: the device holds save content, and the mutex that
 /// would make anything poll it is free. Every submit path sets `saveState = 1` at its commit tail
 /// and only `FUN_140e6f200` clears `+0x10`, so the pair cannot occur in a healthy transaction --
 /// it is the wedge, seen from the dispatch that the wedge is refusing.
 ///
-/// DELIBERATELY LOOSER THAN [`save_request_is_orphaned`], and the difference is not an oversight.
-/// That predicate gates a call INTO the engine, so it additionally demands `load_content == 0` and
+/// Deliberately LOOSER than [`save_request_is_orphaned`], and the difference is not an oversight.
+/// That predicate gates a call into the engine, so it additionally demands `load_content == 0` and
 /// `file_cap == 0` -- release the device while the load side or a deferred build also owns it and
-/// `FUN_140e6f200` frees THEIR objects too. This one gates a counter and a log line, so narrowing
+/// `FUN_140e6f200` frees their objects too. This one gates a counter and a log line, so narrowing
 /// it the same way would make the instrument blind to precisely the compound states hardest to
 /// reason about, for a safety margin nothing here needs.
 ///
@@ -113,13 +113,13 @@ pub fn dispatch_sample_is_wedged(slot: Option<SlRequestSlot>, save_state: Option
 /// Dispatch declines whose sample matched [`dispatch_sample_is_wedged`].
 ///
 /// Read it against [`dispatch_declines`]. Zero, with declines recorded, says every refusal that run
-/// happened with the device NOT holding an abandoned save -- which rules the wedge out as their
+/// happened with the device not holding an abandoned save -- which rules the wedge out as their
 /// cause rather than leaving it open.
 pub fn dispatch_latched_declines() -> u64 {
     DISPATCH_LATCHED_DECLINES.load(Ordering::SeqCst)
 }
 
-/// The device at the FIRST wedged dispatch sample, or `None` when none was ever seen.
+/// The device at the first wedged dispatch sample, or `None` when none was ever seen.
 ///
 /// `save_content` (`iodev+0x10`) is the `SLSaveContent` of the submit that is still on the device.
 /// Compare it against the accept records to name which submit wedged; `job` (`iodev+0x20`) says
@@ -131,7 +131,7 @@ pub fn dispatch_first_latched_slot() -> Option<SlRequestSlot> {
 }
 
 /// Host-epoch milliseconds at that first wedged sample, or [`ELAPSED_MS_UNAVAILABLE`] when it was
-/// never seen OR no clock sink was wired. Read [`dispatch_first_latched_slot`] to tell those apart.
+/// never seen or no clock sink was wired. Read [`dispatch_first_latched_slot`] to tell those apart.
 pub fn dispatch_first_latched_ms() -> u64 {
     DISPATCH_FIRST_LATCHED_MS.load(Ordering::SeqCst)
 }
@@ -146,7 +146,7 @@ pub fn dispatch_first_latched_lane() -> usize {
     DISPATCH_FIRST_LATCHED_LANE.load(Ordering::SeqCst)
 }
 
-/// Record one wedged dispatch sample, latching the FIRST one.
+/// Record one wedged dispatch sample, latching the first one.
 ///
 /// Cold code the hot path only jumps to, like `note_abandoning_write`. The log line is emitted on
 /// the first occurrence alone: the state is a fixpoint, so every later frame would repeat it
@@ -158,11 +158,11 @@ fn note_wedged_dispatch(slot: Option<SlRequestSlot>, lane: usize, call: u64) {
         return;
     }
     let stamp = elapsed_ms();
-    // Freeze the writer counters at the SAME first occurrence. Read against them, the birth stops
+    // Freeze the writer counters at the same first occurrence. Read against them, the birth stops
     // being "a wedge exists" and becomes "a wedge exists and N witnessed writes had taken saveState
     // off 1 by then" -- which at N = 0 is a verdict about the whole writer set.
     snapshot_writers_at_wedge();
-    // ...and attribute the CONTENT the device is holding to the submit that put it there. Same
+    // ...and attribute the content the device is holding to the submit that put it there. Same
     // first-wins sample, no extra read: `save_submit_latch.rs` answers "which submit latched this,
     // and did its lane accept", which is the one question a writer counter cannot ask.
     if let Some(sample) = slot {
@@ -191,7 +191,7 @@ fn note_wedged_dispatch(slot: Option<SlRequestSlot>, lane: usize, call: u64) {
 mod save_wedge_birth_tests {
     use super::*;
 
-    /// The rule that decides what counts as the BIRTH of the wedge, and every way of not crying
+    /// The rule that decides what counts as the birth of the wedge, and every way of not crying
     /// wolf about it. It is the one thing in the first-occurrence instrument that can be wrong
     /// without a game attached, so it is checked without one.
     #[test]
@@ -204,7 +204,7 @@ mod save_wedge_birth_tests {
             ..clear
         };
 
-        // THE EVENT: content on the device, mutex free, so nothing will ever poll it.
+        // The EVENT: content on the device, mutex free, so nothing will ever poll it.
         assert!(dispatch_sample_is_wedged(
             Some(latched),
             Some(GAME_MAN_SAVE_STATE_IDLE)
@@ -233,9 +233,9 @@ mod save_wedge_birth_tests {
         assert!(!dispatch_sample_is_wedged(None, Some(GAME_MAN_SAVE_STATE_IDLE)));
         assert!(!dispatch_sample_is_wedged(Some(latched), None));
 
-        // DELIBERATELY LOOSER THAN THE DRAIN'S PREDICATE. `save_request_is_orphaned` gates a call
+        // Deliberately LOOSER than the drain'S PREDICATE. `save_request_is_orphaned` gates a call
         // into the engine and so refuses a device the load side or a deferred build also owns;
-        // this one gates a counter, and must still SEE those compound states.
+        // this one gates a counter, and must still see those compound states.
         let compound = SlRequestSlot {
             load_content: 0xdead,
             file_cap: 0xbeef,
@@ -249,7 +249,7 @@ mod save_wedge_birth_tests {
             Some(compound),
             Some(GAME_MAN_SAVE_STATE_IDLE)
         ));
-        // Where the drain WILL act, the observer must have reported it first -- otherwise a
+        // Where the drain will act, the observer must have reported it first -- otherwise a
         // repaired state could exist that was never attributed to a frame.
         assert!(save_request_is_orphaned(
             Some(latched),

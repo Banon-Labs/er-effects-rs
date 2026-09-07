@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Which scripts/check.sh gates can run on a machine that holds no game-derived input.
 
-WHY THIS EXISTS. `.github/workflows/check.yml` ran nine gates while `scripts/check.sh` ran 224, and
-the gap was invisible because the workflow's step list is written BY HAND. A hand-written list of
+Why this exists. `.github/workflows/check.yml` ran nine gates while `scripts/check.sh` ran 224, and
+the gap was invisible because the workflow's step list is written by hand. A hand-written list of
 gate names drifts the moment somebody adds a gate, and nothing says it drifted -- the same disease
 that left `scripts/opa-query.sh` silently unlinted by check.sh's hand-written shellcheck list. So
-the CI set is DERIVED: this module reads the step list back out of check.sh -- using check.sh's OWN
+the CI set is DERIVED: this module reads the step list back out of check.sh -- using check.sh's own
 `_check_step_pattern`, never a second copy of it -- and joins it against a ledger that says, for
 each gate, what external input it needs.
 
-THE LEDGER IS MEASURED, NOT GUESSED. `docs/ci-gate-portability.tsv` was produced by running every
+The ledger is measured, not guessed. `docs/ci-gate-portability.tsv` was produced by running every
 step twice: once in the developer tree, once in a `git worktree` of the same commit, which holds
 tracked files only and is therefore exactly what `actions/checkout` puts on a runner. A static scan
 for `eldenring-deobf` was tried first and was wrong in both directions -- 18 gates that name the
@@ -20,19 +20,19 @@ image ran fine without it, and gates that never name it failed -- so the scan wa
   blocked   could not run at all; the input it needs cannot exist on a runner
 
 `--check` is the anti-drift gate, and it is the whole point: a step added to check.sh with no
-ledger row is RED, so the classification cannot silently fall behind the suite the way check.yml's
+ledger row is red, so the classification cannot silently fall behind the suite the way check.yml's
 step list did. Rows are keyed by script name plus flags, never by line number, so the ledger
 survives ordinary edits to check.sh.
 
-WHAT IS NOT LEDGERED, ON PURPOSE. Steps that invoke a TOOL rather than a repo script -- `cargo`,
+What is not LEDGERED, on purpose. Steps that invoke a tool rather than a repo script -- `cargo`,
 `shellcheck`, `rustfmt`, `opa`, `cupcake` -- have a uniform answer ("is the tool installed") that
 check.sh answers at run time in `_check_tool_skip`, with no list to maintain. Giving them ledger
 rows would add ~60 rows that all say the same thing and could go stale.
 
   python3 scripts/ci-gate-portability.py --check        # ledger covers every step (the gate)
   python3 scripts/ci-gate-portability.py --list         # every step with its bucket
-  python3 scripts/ci-gate-portability.py --probe        # what is available HERE, and what that costs
-  python3 scripts/ci-gate-portability.py --skip-lines   # what check.sh must skip HERE
+  python3 scripts/ci-gate-portability.py --probe        # what is available here, and what that costs
+  python3 scripts/ci-gate-portability.py --skip-lines   # what check.sh must skip here
   python3 scripts/ci-gate-portability.py --selftest     # positive controls for --check
   python3 scripts/ci-gate-portability.py --run --root D # re-measure: run every step under root D
 """
@@ -67,25 +67,25 @@ REF_PROBE_TIMEOUT_SECONDS = 10.0
 BUCKETS = ("portable", "partial", "blocked")
 
 # Every external input a gate can need that a GitHub runner cannot have. The probe below is what
-# decides whether it exists HERE; nothing in this file assumes a machine.
+# decides whether it exists here; nothing in this file assumes a machine.
 DEP_PROBES = {
     # The de-Arxan'd game images. Gitignored, ~100 MB, derived from the user's install.
     "image-1162": lambda root: (root / "eldenring-deobf.bin").exists(),
     "image-1170": lambda root: (root / "eldenring-deobf-1.17.bin").exists(),
-    # The whole-image .pdata alignment (128,602 pairs) derived FROM those images. Gitignored at
+    # The whole-image .pdata alignment (128,602 pairs) derived from those images. Gitignored at
     # .gitignore:82 because it is 128k rows of game-derived addresses.
     "rva-map-tsv": lambda root: (root / "docs/recon/rva-map-1162-to-1170.functions.tsv").exists(),
     # A compiled DLL under target/. Present on a developer's machine, and on a runner only after
-    # the Rust steps have run -- which are LATER in check.sh than the gates that read it.
+    # the Rust steps have run -- which are later in check.sh than the gates that read it.
     "build-artifact": lambda root: any(
         (root / "target/x86_64-pc-windows-msvc/release").glob("*.dll")
     ),
-    # THE ONE ARTIFACT A GATE NAMES BY FILE, and it needs its own probe because
-    # `build-artifact` is an ANY-dll test and that is not the same question.
+    # The one artifact a gate names by file, and it needs its own probe because
+    # `build-artifact` is an any-dll test and that is not the same question.
     # `er-dll-freshness.sh --selftest` attests er_crash_logging.dll specifically (the smallest
     # forward closure of the shipped shells, so the cheapest source hash to recompute), and it
     # exits 1 with "no built DLL at ..." when that file is absent. Measured 2026-09-01 in a fresh
-    # worktree: check.sh linked 25 shells LATER in the file than this gate runs, some other run
+    # worktree: check.sh linked 25 shells later in the file than this gate runs, some other run
     # had left other DLLs behind, so `build-artifact` was true, the gate ran, and it went red
     # about a missing build rather than about a stale attestation. A gate that cannot run should
     # be skipped by the ledger, not fail with build advice.
@@ -93,7 +93,7 @@ DEP_PROBES = {
         root / "target/x86_64-pc-windows-msvc/release/er_crash_logging.dll"
     ).exists(),
     # er-game-base's build.rs output, `address_map_1170.rs`, under target/**/out/. Any `cargo
-    # check` of the workspace produces it; a bare checkout has it nowhere. This is DISTINCT from
+    # check` of the workspace produces it; a bare checkout has it nowhere. This is distinct from
     # build-artifact (a linked release .dll): a `cargo check` makes the first and not the second.
     "generated-address-map": lambda root: any(
         (root / "target").glob("*/*/build/er-game-base-*/out/address_map_1170.rs")
@@ -132,9 +132,9 @@ DEP_PROBES = {
     "ghidra-8767": lambda root: _port_open(8767),
     # capstone's provisioner. No system pip exists here on purpose.
     "uv": lambda root: shutil.which("uv") is not None,
-    # A USABLE `origin/main` BASELINE -- the ref AND a merge base with HEAD. Both halves are load
+    # A usable `origin/main` baseline -- the ref and a merge base with head. Both halves are load
     # bearing and were learned the hard way: fetching the ref alone left `git merge-base
-    # origin/main HEAD` still failing on a shallow clone, and er-dll-closure.py --selftest then
+    # origin/main head` still failing on a shallow clone, and er-dll-closure.py --selftest then
     # reported three FAILs instead of skipping. actions/checkout needs fetch-depth: 0 for this.
     "git-baseline": lambda root: _git_ref(root, "refs/remotes/origin/main")
     and _git_ok(root, ["git", "merge-base", "origin/main", "HEAD"]),
@@ -195,7 +195,7 @@ def step_pattern(check_sh: Path) -> re.Pattern[str]:
     return re.compile(match.group(1).replace("[[:space:]]", r"[ \t]"))
 
 
-# Only these two INTERPRET a repo script. `shellcheck "$repo_root/scripts/foo.sh"` names a script
+# Only these two interpret a repo script. `shellcheck "$repo_root/scripts/foo.sh"` names a script
 # too, but it is linting the file, not running the gate -- and keying on it would collide with the
 # `bash` step that runs the same file (check-no-local-main-commits.sh appears as both).
 GATE_INTERPRETERS = ("python3", "bash")
@@ -239,7 +239,7 @@ def read_ledger(path: Path = LEDGER) -> dict[str, tuple[str, list[str], str]]:
 
 
 def fatal_deps(bucket: str, deps: list[str]) -> list[str]:
-    """The dependencies whose absence stops the gate DEAD, as opposed to costing it a half.
+    """The dependencies whose absence stops the gate dead, as opposed to costing it a half.
 
     A `blocked` row is dead without any of its inputs. A `partial` row degrades gracefully for
     most of them -- and then there is `uv`, which three gates re-exec themselves through to get
@@ -296,7 +296,7 @@ def probe(root: Path) -> dict[str, bool]:
 def skip_lines(root: Path) -> list[tuple[int, str]]:
     """(line, reason) for every check.sh step that cannot run under `root` right now.
 
-    A step is skipped when a FATAL dependency of its is missing (see `fatal_deps`). A `partial`
+    A step is skipped when a fatal dependency of its is missing (see `fatal_deps`). A `partial`
     step whose merely-degrading input is absent is left to RUN: the half it can still do is real
     coverage, and its own stdout is what says which half it lost.
     """
@@ -372,13 +372,13 @@ def selftest() -> int:
         )
         expect("a fully-ledgered suite is clean", check(sh, led), [])
 
-        # A NEW GATE WITH NO ROW. This is the drift that produced the gap in check.yml.
+        # A new gate with no row. This is the drift that produced the gap in check.yml.
         led.write_text("portable\t-\talpha.py --selftest\tsource only\n", encoding="utf-8")
         problems = check(sh, led)
         expect("an unclassified step is caught", len(problems), 1)
         expect("...and it is named", "beta.py" in problems[0], True)
 
-        # A GATE DELETED FROM check.sh, ROW LEFT BEHIND.
+        # A gate deleted from check.sh, row left behind.
         led.write_text(
             "portable\t-\talpha.py --selftest\tsource only\n"
             "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n"
@@ -389,7 +389,7 @@ def selftest() -> int:
         expect("an orphan row is caught", len(problems), 1)
         expect("...and it is named", "gamma.py" in problems[0], True)
 
-        # FLAGS ARE PART OF THE KEY: the selftest half and the live half classify separately.
+        # Flags are part of the KEY: the selftest half and the live half classify separately.
         led.write_text(
             "portable\t-\talpha.py\tsource only\n"
             "blocked\timage-1162\tbeta.py\tneeds the 1.16.2 image\n",
@@ -414,7 +414,7 @@ def selftest() -> int:
         )
         expect("an unprobeable dependency is caught", len(check(sh, led)), 1)
 
-        # THE `!` MARKER, which decides whether a partial gate is run or skipped.
+        # The `!` marker, which decides whether a partial gate is run or skipped.
         expect("a partial row degrades on a plain dep", fatal_deps("partial", ["image-1162"]), [])
         expect(
             "...and dies on a !-marked one",

@@ -142,7 +142,7 @@ impl RestartBackoff {
 mod tests {
     use super::*;
 
-    /// THE NORMAL PATH MUST BE UNTOUCHED. A no-match cycle runs ~15s; it must never be delayed,
+    /// The normal path must be untouched. A no-match cycle runs ~15s; it must never be delayed,
     /// no matter how many of them happen, or this would slow down the ordinary hunt it is meant
     /// to leave alone.
     #[test]
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(backoff.consecutive(), 0);
     }
 
-    /// THE MEASURED FAILURE. The live spin ran a whole cycle in ~200ms; the delay must escalate.
+    /// The measured failure. The live spin ran a whole cycle in ~200ms; the delay must escalate.
     #[test]
     fn consecutive_fast_failures_escalate_the_delay() {
         let mut backoff = RestartBackoff::new();
@@ -199,7 +199,7 @@ mod tests {
         };
     }
 
-    /// ONE GOOD ATTEMPT CLEARS THE PENALTY. The live condition lasted ~40s and then cleared on its
+    /// One good attempt clears the penalty. The live condition lasted ~40s and then cleared on its
     /// own; the loop must return to full speed immediately, not stay throttled for the session.
     #[test]
     fn progress_wipes_the_accumulated_delay() {

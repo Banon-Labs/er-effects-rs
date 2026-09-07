@@ -4,13 +4,13 @@
 //! shared boot-view rasterizer) directly out of the er-quickload flat namespace. Those
 //! reads now go through function pointers installed once at DLL attach via
 //! [`install_host`] (the same pattern as `er_d3d12_compositor::set_frame_provider`).
-//! Crate-internal wrapper fns keep the EXACT original names/signatures, so the moved code
+//! Crate-internal wrapper fns keep the exact original names/signatures, so the moved code
 //! compiles unchanged. Until a host installs, every seam answers a neutral default
 //! (logging is a no-op, all gates are off, slot lookups report "nothing loaded"), so the
 //! crate is inert rather than wrong.
 // The `pub(crate)` seam wrappers at the bottom of this file exist for the feature modules,
 // every one of which is `#[cfg(windows)]`. On a host build those modules are compiled out, so
-// the wrappers are unused BY CONSTRUCTION rather than by neglect -- deleting them would delete
+// the wrappers are unused by construction rather than by neglect -- deleting them would delete
 // the seam. This is scoped to `not(windows)` deliberately: the shipping target
 // (x86_64-pc-windows-msvc) keeps full dead-code enforcement over this file.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -45,7 +45,7 @@ pub struct PortraitHost {
     pub portrait_overlay_enabled: fn() -> bool,
     /// Product gate: render-thread offscreen drive (the keepalive keystone).
     pub portrait_render_drive_enabled: fn() -> bool,
-    /// Product gate: read back REAL pixels from the profile RT.
+    /// Product gate: read back real pixels from the profile RT.
     pub portrait_real_pixels_enabled: fn() -> bool,
     /// Product gate: the self-driving System->Quit repro harness owns the run.
     pub system_quit_repro_enabled: fn() -> bool,
@@ -53,15 +53,15 @@ pub struct PortraitHost {
     pub renderdoc_active: fn() -> bool,
     /// The loaded character's save slot (collapsed form; 0 when unknown).
     pub portrait_loaded_slot: fn() -> i32,
-    /// The loaded slot ONLY when a real source names it; `None` otherwise.
+    /// The loaded slot only when a real source names it; `None` otherwise.
     pub portrait_loaded_slot_confirmed: fn() -> Option<i32>,
-    /// The slot the loading-screen pipeline should TARGET (selection-aware).
+    /// The slot the loading-screen pipeline should target (selection-aware).
     pub portrait_target_slot: fn() -> i32,
     /// Torn-readback score (0..255) over the masked head region of an RGBA frame.
     pub portrait_tear_score: fn(&[u8], usize, usize) -> usize,
     /// Count of profile-table renderers currently holding a live character model.
     pub count_live_profile_models: unsafe fn(usize) -> usize,
-    /// `CSNowLoadingHelperImp::load_done` latch (load-COMPLETE, not "screen visible").
+    /// `CSNowLoadingHelperImp::load_done` latch (load-complete, not "screen visible").
     pub now_loading_active: unsafe fn(usize) -> bool,
     /// True while the portrait pipeline must idle (active gameplay, menus own portraits).
     pub portrait_pipeline_idle_in_gameplay: unsafe fn(usize) -> bool,
@@ -71,14 +71,14 @@ pub struct PortraitHost {
     pub boot_view_epoch_ms: fn() -> u64,
     /// Highest-level real save slot, or -1 (`OWN_STEPPER_SLOT_NONE`) when none.
     pub best_active_slot: unsafe fn() -> i32,
-    /// The slot this boot is CONFIGURED to autoload (`er-quickload.toml` / its per-run sidecar),
+    /// The slot this boot is configured to autoload (`er-quickload.toml` / its per-run sidecar),
     /// or `None` when nothing configured one. A hint, never an observation -- the portrait window
-    /// deliberately refuses it (bd b1d6). The STATS panel takes it only ahead of
+    /// deliberately refuses it (bd b1d6). The stats panel takes it only ahead of
     /// `best_active_slot`, whose answer is the highest-level slot and is unrelated to the load.
     pub configured_autoload_slot: fn() -> Option<i32>,
     /// Populate the per-slot stats cache from the on-disk `.sl2` (once per session).
     pub ensure_profile_slot_stats_cached: unsafe fn(usize) -> bool,
-    /// The NAME of the character in save `slot` as decoded from the container's slot BODY, or
+    /// The name of the character in save `slot` as decoded from the container's slot body, or
     /// `None`. Body-derived on purpose: the live record is filled from the container's
     /// `USER_DATA010` table, which can name a different character than the body that loads
     /// (bd er-effects-rs-ccud). Same cache as the attributes below.
@@ -88,7 +88,7 @@ pub struct PortraitHost {
     pub profile_slot_level: fn(i32) -> Option<i32>,
     /// The eight attributes of the character in save `slot`, or `None`.
     pub profile_slot_attributes: fn(i32) -> Option<[i32; STATS_ATTR_COUNT]>,
-    /// The STORED effective max vitals `[hp, fp, stamina]` of the character in save
+    /// The stored effective max vitals `[hp, fp, stamina]` of the character in save
     /// `slot` (the save's `MaxHealth`/`MaxFP`/`MaxSP` == runtime `current_max_*`),
     /// or `None` when the slot is empty/unreadable. Same `.sl2` cache as the
     /// attributes; values are read, never derived (bd er-effects-rs-qic7).
@@ -221,7 +221,7 @@ impl Default for PortraitHost {
 static DEFAULT_HOST: PortraitHost = PortraitHost::defaults();
 static HOST: OnceLock<PortraitHost> = OnceLock::new();
 
-/// Install the host seam ONCE, at DLL attach, BEFORE any hook install or task spawn can
+/// Install the host seam once, at DLL attach, before any hook install or task spawn can
 /// run moved code. Returns false (and changes nothing) if a host was already installed.
 pub fn install_host(host: PortraitHost) -> bool {
     HOST.set(host).is_ok()
@@ -231,7 +231,7 @@ fn host() -> &'static PortraitHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names/signatures ------
+// --- crate-internal wrappers bearing the exact original product names/signatures ------
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     (host().append_autoload_debug)(args)

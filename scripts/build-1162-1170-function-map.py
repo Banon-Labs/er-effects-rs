@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Align every function in the 1.16.2 image with its 1.17 counterpart.
 
-WHY A WHOLE-IMAGE MAP
+Why a whole-image map
 ---------------------
 `scripts/map-rvas-1162-to-1170.py` answers one address at a time by searching a
 window around it, and on a trial of five it resolved two.  That is fine for a
@@ -17,7 +17,7 @@ RUNTIME_FUNCTION records, one per function with unwind data, and that is very
 nearly every function in the binary.  So instead of searching per address, walk
 both tables once and match functions by content.
 
-HOW THE MATCHING WORKS
+How the matching works
 ----------------------
 A function's bytes cannot be compared literally across versions, because every
 rip-relative displacement and every call target moved.  So each function gets a
@@ -25,12 +25,12 @@ SIGNATURE: its opening instructions with those operand bytes zeroed out, which
 leaves opcodes, registers and immediates -- the parts that only change when the
 code itself changes.
 
-A signature that is unique on BOTH sides identifies one function on each, so the
+A signature that is unique on both sides identifies one function on each, so the
 pair is unambiguous.  Signatures shared by several functions (thunks, tiny
 forwarders, `jmp` stubs) are left unpaired rather than guessed at; this tool's
 value is entirely in not being wrong.
 
-WHAT MAKES THE RESULT TRUSTWORTHY
+What makes the result trustworthy
 ---------------------------------
 Not the method -- the calibration.  123 pairs are known independently: the 96
 RVAs the sibling's own `binary-mapper` resolved on both versions (62 of them
@@ -126,7 +126,7 @@ def signature(image: Image, start: int, end: int, md) -> bytes | None:
         i_off, i_size = insn.imm_offset, insn.imm_size
         # A 4-byte displacement or immediate is where an address hides; smaller
         # ones are genuine structure offsets and constants, which are part of
-        # what the function IS and must stay in the signature.
+        # what the function is and must stay in the signature.
         if d_size == 4:
             raw[pos + d_off : pos + d_off + 4] = b"\0\0\0\0"
         if i_size == 4 and insn.mnemonic in ("call", "jmp", "je", "jne", "jz", "jnz"):
@@ -156,10 +156,10 @@ MAX_INTERPOLATED_GAP = 24
 def pair(old_table, new_table) -> dict[int, int]:
     """Pair functions by signature.
 
-    A signature unique on BOTH sides identifies one function on each, so the pair is
+    A signature unique on both sides identifies one function on each, so the pair is
     unambiguous and needs no further argument.
 
-    A signature shared by exactly the same SMALL number of functions on both sides is
+    A signature shared by exactly the same small number of functions on both sides is
     paired by address order. The justification is narrow and worth stating: these are
     near-identical siblings -- generated accessors, one-line forwarders, `jmp` thunks --
     and the compiler emits them in a stable relative order, so the k-th on one side is
@@ -168,7 +168,7 @@ def pair(old_table, new_table) -> dict[int, int]:
     calibration below: 41 pairs are known independently, and if ordered pairing invented
     a wrong one the selftest says so.
 
-    Groups whose counts DIFFER are dropped entirely. A differing count means functions
+    Groups whose counts differ are dropped entirely. A differing count means functions
     were added or removed, which is precisely when position stops meaning anything.
     """
     mapping = {}
@@ -185,7 +185,7 @@ def pair(old_table, new_table) -> dict[int, int]:
 
 
 def interpolate(mapping, old_starts, new_starts):
-    """Fill gaps BETWEEN two confirmed anchors when both sides have the same count.
+    """Fill gaps between two confirmed anchors when both sides have the same count.
 
     Signature pairing leaves holes: a function whose opening bytes are shared with several
     siblings, or which changed between the builds, has nothing unique to match on. 86 of the
@@ -199,7 +199,7 @@ def interpolate(mapping, old_starts, new_starts):
     order-preserving argument the small same-signature groups already use, applied between
     anchors instead of within a signature.
 
-    A gap whose counts DIFFER is skipped entirely, and so is one wider than
+    A gap whose counts differ is skipped entirely, and so is one wider than
     MAX_INTERPOLATED_GAP: a differing count means functions were added or removed, which is
     exactly when position stops carrying information, and a long run of unanchored guesses is
     how a plausible wrong address gets manufactured.
@@ -281,7 +281,7 @@ def main() -> int:
     old_table, new_table = build(md, old_img), build(md, new_img)
     mapping = pair(old_table, new_table)
     signature_pairs = len(mapping)
-    # OFF BY DEFAULT, and the default was chosen by a game rather than by taste.
+    # Off by default, and the default was chosen by a game rather than by taste.
     #
     # Interpolation adds 62,863 pairs and keeps the calibration clean -- 45 known pairs, zero
     # disagreements -- which is exactly as reassuring as it sounds and no more: the calibration

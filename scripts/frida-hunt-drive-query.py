@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Drive ONE lobby query through the game's own Steam vtable, to see whether hunt narrows it.
+"""Drive one lobby query through the game's own Steam vtable, to see whether hunt narrows it.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `oracle_invasion_warp_hunt_hooked` says the detour is installed on
-`ISteamMatchmaking::RequestLobbyList` (vtable slot 4, inside `steamclient64.dll`). It does NOT say
+`ISteamMatchmaking::RequestLobbyList` (vtable slot 4, inside `steamclient64.dll`). It does not say
 the detour ever ran, and it cannot: the hook only fires when somebody searches. Waiting for the
 player to start an invasion means the decisive fact -- does our filter actually reach the wire --
 is hostage to a menu action, and a run can end having proven only that a hook was installed.
 
-So this calls slot 4 itself. That is the SAME slot ersc calls (measured 2026-08-06: ersc's own
+So this calls slot 4 itself. That is the same slot ersc calls (measured 2026-08-06: ersc's own
 query returned 13 lobbies through this interface), so the call exercises the identical path: our
 detour runs, `hunt_target` picks a location, `AddRequestLobbyListStringFilter` goes on, and the
-original body sends it. What it does NOT prove is that ersc triggers a query -- that was already
+original body sends it. What it does not prove is that ersc triggers a query -- that was already
 measured and is not in question here.
 
-WHAT IT TOUCHES
+What it touches
 ---------------
 One outgoing lobby query, which is a read: it asks Steam for a list. Nothing is published, no
 session is started, no game state is written, no other player is affected. Seamless issues these
 continuously while searching, so one more is ordinary traffic.
 
-The one real hazard, and why the timing is deliberate: `RequestLobbyList` CONSUMES whatever filters
+The one real hazard, and why the timing is deliberate: `RequestLobbyList` consumes whatever filters
 have been accumulated on the interface. Calling it while ersc has staged filters but not yet sent
 would eat them, and ersc's own next query would go out wider than it intended. ersc stages and
 sends in one burst, so the window is small -- but it is not zero, which is why this is a one-shot
@@ -41,7 +41,7 @@ import sys
 import time
 
 GADGET = "127.0.0.1:27042"
-#: Steam's own accessor for the versioned matchmaking interface. NOT a process-wide singleton, as
+#: Steam's own accessor for the versioned matchmaking interface. Not a process-wide singleton, as
 #: this once claimed: on 2026-08-06 it returned four different pointers in one session
 #: (0x4604fbf0, 0x45d027a0, 0x45f8afe0, 0x460367e0). The vtable behind them is shared, which is why
 #: slot calls still work, but nothing here may assume the object is stable across calls.
@@ -50,7 +50,7 @@ SLOT_REQUEST_LOBBY_LIST = 4
 SLOT_GET_LOBBY_BY_INDEX = 12
 SLOT_GET_LOBBY_DATA = 19
 
-#: The key our filter narrows on. A result set attributable to OUR filtered query must carry it on
+#: The key our filter narrows on. A result set attributable to our filtered query must carry it on
 #: every member; see `attribution` below for why that check is not optional.
 LOBBY_MAP_KEY = "er_invasion_warp_map"
 
@@ -177,8 +177,8 @@ def attribution(driven: dict) -> dict:
     `er_invasion_warp_map` cannot contain a lobby that does not carry that key. So if any returned
     lobby lacks it, the set is somebody else's query and says nothing about ours.
 
-    Measured 2026-08-06: six lobbies came back, NONE carried the key, and the verdict still read
-    FILTERED-AND-MATCHED twice. Both were withdrawn. This is the check that was missing.
+    Measured 2026-08-06: six lobbies came back, none carried the key, and the verdict still read
+    filtered-and-matched twice. Both were withdrawn. This is the check that was missing.
     """
     results = driven.get("results") or 0
     carrying = driven.get("carrying_map_key") or []
@@ -280,7 +280,7 @@ def _selftest() -> int:
         "a query that never went out is not a finding about filtering",
     )
 
-    # THE TRAP: a query that returns nothing while the detour DECLINED to filter looks exactly
+    # The TRAP: a query that returns nothing while the detour declined to filter looks exactly
     # like a working filter finding nobody. Only the counter delta separates them, and calling
     # the first case proof would be inventing a result.
     v = verdict({"ok": True, "results": 0}, counters(True, 4), counters(True, 4))
@@ -300,8 +300,8 @@ def _selftest() -> int:
     check(v["verdict"] == "FILTERED-AND-MATCHED",
           "a filtered query whose every returned lobby carries our key is the end-to-end result")
 
-    # THE DEFECT THIS FIXES, measured 2026-08-06: six lobbies came back, NONE carried the key, and
-    # the verdict read FILTERED-AND-MATCHED twice. The result set was somebody else's query -- the
+    # The defect this fixes, measured 2026-08-06: six lobbies came back, none carried the key, and
+    # the verdict read filtered-and-matched twice. The result set was somebody else's query -- the
     # poll reads a shared slot -- and timing alone can never tell those apart.
     v = verdict(matched(6, 0), counters(True, 0), counters(True, 1))
     check(v["verdict"] == "FILTERED-RESULTS-NOT-OURS",
@@ -351,12 +351,12 @@ def wait_for_republish(path: str, before: dict) -> dict:
     This replaced a flat `time.sleep(2.0)` whose comment was "give it one tick before sampling".
     That is synchronisation by guessing: 2s is simultaneously too long when the DLL republishes
     immediately and too short whenever a frame hitches, and a sample taken too early reads the
-    PREVIOUS counters and reports "the detour declined to filter" for a query that filtered fine.
+    previous counters and reports "the detour declined to filter" for a query that filtered fine.
 
     The DLL rewrites the document edge-triggered, when a location-matchmaking counter moves, so
     the readiness condition is simply "the document is no longer what it was". Return as soon as
     that is true. The deadline exists only so a run where nothing ever changes still finishes, and
-    returning the last read on expiry is correct: no change IS the observation in that case.
+    returning the last read on expiry is correct: no change is the observation in that case.
     """
     deadline = time.monotonic() + REPUBLISH_DEADLINE_SECONDS
     latest = before

@@ -1,29 +1,29 @@
-//! One table of key names, carrying BOTH codes Elden Ring can be read through.
+//! One table of key names, carrying both codes Elden Ring can be read through.
 //!
 //! # Why one table and not two
 //!
 //! A key reaches this process by two different routes and is numbered differently on each. A
-//! `GetAsyncKeyState` poll speaks Win32 VIRTUAL KEYS (`VK_F7 == 0x76`); the game's own keyboard
+//! `GetAsyncKeyState` poll speaks Win32 virtual keys (`VK_F7 == 0x76`); the game's own keyboard
 //! read -- `IDirectInputDevice8::GetDeviceState` -- fills a 256-byte table indexed by DIRECTINPUT
 //! SCANCODE (`DIK_F7 == 0x41`). The two numbering schemes agree nowhere, and a DLL that suppresses
-//! a key from the game's buffer while ALSO polling it needs both numbers for the same key.
+//! a key from the game's buffer while also polling it needs both numbers for the same key.
 //!
 //! Before this crate each DLL kept whichever half it happened to need, so `er-enemynpc-effects` knew
 //! `"f7"` as a scancode and `er-invasion-warp-core` knew `"F7"` as a virtual key, with different
 //! spellings for the numeric keypad and no way to ask one table a question in the other's terms.
-//! [`NAMED_KEYS`] carries both codes per row, so a config file has ONE vocabulary regardless of
+//! [`NAMED_KEYS`] carries both codes per row, so a config file has one vocabulary regardless of
 //! which route the DLL reading it uses.
 //!
 //! # Why names and not numbers
 //!
-//! Keys used to be hard-coded (`VK_INSERT`, `VK_F7`). A 60% keyboard -- the common compact EN-US
+//! Keys used to be hard-coded (`VK_INSERT`, `VK_F7`). A 60% keyboard -- the common compact en-us
 //! layout -- has no Insert and no function row, which locks whole features out for anyone using
 //! one, and two mods that both picked F7 fight over it with no way for the player to separate
 //! them. Asking players to write `0x76` in a config file swaps one barrier for another: nobody
 //! knows the virtual-key code for the key under their finger.
 //!
-//! So the config takes a NAME (`"Insert"`, `"F7"`, `"KP_Plus"`, `"]"`), and a raw `0x2d`-style code
-//! is accepted too for anyone who does know. An unrecognised name is an ERROR that names the key it
+//! So the config takes a name (`"Insert"`, `"F7"`, `"KP_Plus"`, `"]"`), and a raw `0x2d`-style code
+//! is accepted too for anyone who does know. An unrecognised name is an error that names the key it
 //! could not parse -- see [`crate::binding`] for what a caller does with that error, which is to
 //! keep the key that was already working rather than end up with no key at all.
 //!
@@ -101,8 +101,8 @@ const fn key(
 
 /// Every key a config file may name.
 ///
-/// ORDER IS LOAD-BEARING for the reverse lookup only: [`vk_name`] and [`scancode_name`] return the
-/// FIRST row carrying a code, and two rows can share one. `Enter` precedes `KP_Enter` because both
+/// Order is load-bearing for the reverse lookup only: [`vk_name`] and [`scancode_name`] return the
+/// first row carrying a code, and two rows can share one. `Enter` precedes `KP_Enter` because both
 /// are `VK_RETURN`, so a config echoed back says `Enter` rather than the keypad's name for it.
 pub const NAMED_KEYS: &[NamedKey] = &[
     // Editing / navigation cluster.
@@ -305,7 +305,7 @@ fn function_key_index(lower: &str) -> Option<u8> {
 
 /// Is this value a raw code rather than a key name?
 ///
-/// A single character is always a NAME (`"7"` is the digit key, not code 7), so the length check
+/// A single character is always a name (`"7"` is the digit key, not code 7), so the length check
 /// is what keeps the alphanumerics out of the raw path.
 fn is_raw_number(value: &str) -> bool {
     let lower = value.trim().to_ascii_lowercase();
@@ -336,7 +336,7 @@ fn raw_code(lower: &str) -> Option<Result<VirtualKey, KeyParseError>> {
 /// Turn a config value into a Win32 virtual-key code.
 ///
 /// Accepts, in order: a single letter or digit (`"K"`, `"7"`), a function key (`"F1"`..`"F24"`), a
-/// name or symbol from [`NAMED_KEYS`], or a raw code (`"0x2d"`, `"45"`). The raw form is tried LAST
+/// name or symbol from [`NAMED_KEYS`], or a raw code (`"0x2d"`, `"45"`). The raw form is tried last
 /// so a name is never misread as a number -- `"F7"` is a key, not hex `0xF7`.
 ///
 /// # Errors
@@ -475,8 +475,8 @@ impl Chord {
     /// A chord with no modifiers, from a virtual key. `dik` is filled in when the table knows one,
     /// so a caller that later needs the scancode does not have to re-parse the name.
     ///
-    /// LOSSY IN ONE PLACE: `VK_RETURN` is both Enter keys, and this returns the main keyboard's
-    /// scancode. Parse the NAME (`"KP_Enter"`) if the keypad's is what you meant.
+    /// LOSSY in one PLACE: `VK_RETURN` is both Enter keys, and this returns the main keyboard's
+    /// scancode. Parse the name (`"KP_Enter"`) if the keypad's is what you meant.
     #[must_use]
     pub fn from_virtual_key(vk: VirtualKey) -> Self {
         Self {
@@ -522,7 +522,7 @@ fn modifier_bit(token: &str) -> Option<u8> {
     }
 }
 
-/// Split a chord on `+` without eating a `+` that is part of a KEY NAME.
+/// Split a chord on `+` without eating a `+` that is part of a key name.
 ///
 /// `"numpad_+"` is a real spelling of the keypad's plus key and appears in shipped config files.
 /// A plain `split('+')` turns it into `["numpad_", ""]` and then reports `unknown key "numpad_"`,
@@ -532,7 +532,7 @@ fn modifier_bit(token: &str) -> Option<u8> {
 /// alone when it is a modifier (`"ctrl++"` is Ctrl plus the `+` key).
 fn chord_tokens(raw: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
-    // Set after an empty segment has been consumed as a literal `+`, so the NEXT empty segment --
+    // Set after an empty segment has been consumed as a literal `+`, so the next empty segment --
     // the other half of the same `++` -- is not counted twice.
     let mut consumed_literal = false;
     for (index, part) in raw.split('+').enumerate() {
@@ -602,7 +602,7 @@ pub fn parse_chord(raw: &str) -> Result<Chord, KeyParseError> {
 
 /// Parse a chord for a DLL that reads the game's own DirectInput buffer.
 ///
-/// Differs from [`parse_chord`] in exactly one way that matters: the trigger MUST have a scancode,
+/// Differs from [`parse_chord`] in exactly one way that matters: the trigger must have a scancode,
 /// because a key with none can never appear in the buffer this caller reads. Refusing at parse time
 /// turns a binding that would silently never fire into a line in the log.
 ///
@@ -611,7 +611,7 @@ pub fn parse_chord(raw: &str) -> Result<Chord, KeyParseError> {
 pub fn parse_scancode_chord(raw: &str) -> Result<Chord, KeyParseError> {
     let (modifiers, trigger) = split_chord(raw)?;
     let dik = parse_scancode(&trigger)?;
-    // The virtual key comes from the NAME, never from a raw number: `"45"` is scancode 0x2d
+    // The virtual key comes from the name, never from a raw number: `"45"` is scancode 0x2d
     // (DIK_X) to the parser above and virtual key 0x2d (VK_INSERT) to the other one, so inferring
     // one from the other would silently name a different physical key. A raw scancode simply has
     // no virtual key, and says so with 0.
@@ -738,7 +738,7 @@ mod tests {
         assert_ne!(parse_virtual_key("F7"), Ok(0xf7));
     }
 
-    /// THE FAILURE THAT MATTERS. A typo must say so, and name the key it could not read.
+    /// The failure that matters. A typo must say so, and name the key it could not read.
     #[test]
     fn an_unknown_name_is_an_error_that_names_the_offending_key() {
         let error = parse_virtual_key("Winkey").expect_err("not a key this crate knows");
@@ -764,7 +764,7 @@ mod tests {
         );
     }
 
-    /// Every alias in the table round-trips, in BOTH numbering schemes. A typo'd row would
+    /// Every alias in the table round-trips, in both numbering schemes. A typo'd row would
     /// otherwise be a key nobody can select, or -- worse -- one that resolves to the wrong code.
     #[test]
     fn every_named_key_parses_to_its_own_codes() {
@@ -789,7 +789,7 @@ mod tests {
     /// The two schemes must agree about which physical key a name means. This is the check that a
     /// row cannot carry `VK_F7` next to `DIK_F8`, which nothing else in the crate would notice.
     ///
-    /// Rows whose virtual key an EARLIER row already claims are skipped, because recovering a
+    /// Rows whose virtual key an earlier row already claims are skipped, because recovering a
     /// scancode from a virtual key is lossy exactly where Win32 is: see
     /// [`the_two_enter_keys_share_one_virtual_key`].
     #[test]
@@ -863,7 +863,7 @@ mod tests {
         );
     }
 
-    /// Win32 gives the main Enter and the keypad's Enter ONE virtual key and tells them apart by
+    /// Win32 gives the main Enter and the keypad's Enter one virtual key and tells them apart by
     /// an extended-key flag `GetAsyncKeyState` does not expose. So the name -> code direction is
     /// exact for both, and the code -> scancode direction can only answer with the main one. A
     /// config file naming `"KP_Enter"` still gets the keypad's scancode; only a caller starting
@@ -905,7 +905,7 @@ mod tests {
         assert_eq!(parsed.dik, Some(0x43));
     }
 
-    /// A key whose NAME ends in `+`. A plain split on the separator turns `"numpad_+"` into
+    /// A key whose name ends in `+`. A plain split on the separator turns `"numpad_+"` into
     /// `unknown key "numpad_"`, which rejects a spelling this workspace's own config comments
     /// hand the player.
     #[test]

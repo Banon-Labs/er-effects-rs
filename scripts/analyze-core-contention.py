@@ -4,7 +4,7 @@
 Reads er-telemetry-timeseries.jsonl (needs the per-core CPU fields oracle_core_max_busy /
 oracle_cores_saturated / oracle_proc_cpu_cores added 2026-07-22). Splits samples by the flip
 regime -- fixed_spf 0.0167 (60fps target, load complete) vs 0.05 (20fps loading cap engaged) --
-and reports the CPU picture in each. The decisive question: during the CAPPED (0.05) periods,
+and reports the CPU picture in each. The decisive question: during the capped (0.05) periods,
 is a core pinned ~100% (=> H-B contention starving the single-threaded asset load) or is no core
 saturated while the load still stalls (=> H-A real completion bug)?
 

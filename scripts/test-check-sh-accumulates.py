@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
-"""Gate: `scripts/check.sh` must COLLECT failures, not stop at the first one.
+"""Gate: `scripts/check.sh` must collect failures, not stop at the first one.
 
-WHY THIS IS A GATE AND NOT A COMMENT
+Why this is a gate and not a comment
 ------------------------------------
 check.sh ran under `set -e` until 2026-08-31, and the cost was measured twice in one day: it went
 red at line 46 on a gate whose subject was mid-edit by another agent, and the ~130 gate invocations
-after it produced NO VERDICT AT ALL -- not pass, not fail, nothing. That is precisely the failure
-mode the suite exists to refuse, one level up: A GATE THAT NEVER EXECUTED IS INDISTINGUISHABLE FROM
-A GATE THAT PASSED. Agents read "red at X" and reported their own work as green on the strength of
+after it produced no verdict at all -- not pass, not fail, nothing. That is precisely the failure
+mode the suite exists to refuse, one level up: A gate that never executed is indistinguishable from
+a gate that passed. Agents read "red at X" and reported their own work as green on the strength of
 running a handful of checks by hand.
 
-`set -e` also made POSITION into authority -- the same check is load-bearing at line 46 and
+`set -e` also made position into authority -- the same check is load-bearing at line 46 and
 decorative at line 900 -- so nothing about a gate's classification is stable while it holds.
 
 A note asking the next person not to re-add `set -e` is exactly the advisory that gets missed. So
 the property is tested: the real preamble is lifted out of the real check.sh and driven over
 synthetic suites, because testing a copy of it would prove nothing about the file that runs.
 
-WHAT IT CHECKS
+What it checks
 --------------
-1. a failing step does not stop the suite -- later steps still run, and the LAST one runs;
+1. a failing step does not stop the suite -- later steps still run, and the last one runs;
 2. every failure is reported at the end, with its line, and the exit code is non-zero;
 3. a clean suite exits 0 and says so;
 4. an explicit fail-fast guard (the justified exception, e.g. `command -v cupcake || exit 127`)
-   reports the remaining steps as NOT RUN, loudly, and NAMES them one table row each -- silence
+   reports the remaining steps as not run, loudly, and names them one table row each -- silence
    there is the whole defect, and a bare count is not an answer anyone can act on;
-5. `command -v <missing> && cmd` is NOT recorded as a failure, which is what `set -e` did too;
-6. a KILLED step (`timeout`'s 124, or death by signal) is INCONCLUSIVE -- a third state, neither
-   pass nor fail, because the step reached no verdict. Scoring it FAILED would let a check that
+5. `command -v <missing> && cmd` is not recorded as a failure, which is what `set -e` did too;
+6. a killed step (`timeout`'s 124, or death by signal) is inconclusive -- a third state, neither
+   pass nor fail, because the step reached no verdict. Scoring it failed would let a check that
    never completed look sensitive to the tree;
-7. NOT RUN alone, with nothing failing, still exits non-zero;
-8. NON-VACUITY: with the ERR trap deleted from the lifted preamble, case 2 must FAIL. Without
+7. Not run alone, with nothing failing, still exits non-zero;
+8. Non-VACUITY: with the ERR trap deleted from the lifted preamble, case 2 must fail. Without
    this, a preamble that had quietly stopped recording would still pass every case above.
 """
 from __future__ import annotations
@@ -88,18 +88,18 @@ MARKER = 'python3 -c "print(\'LAST_STEP_RAN\')"'
 FAILING = 'python3 -c "raise SystemExit(1)"'
 PASSING = 'python3 -c "pass"'
 # Exit 143 = SIGTERM, which is how a harness/`timeout` reclaims a long-running step. The preamble
-# must call that INCONCLUSIVE rather than FAILED: the step reached no verdict.
+# must call that inconclusive rather than FAILED: the step reached no verdict.
 KILLED = 'python3 -c "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"'
 END = "\n_check_reached_end=1\n"
 
 
 def marker_printed(out: str) -> bool:
-    """Did the marker step actually EXECUTE, as opposed to merely being quoted back?
+    """Did the marker step actually execute, as opposed to merely being quoted back?
 
     A plain `"LAST_STEP_RAN" in out` was the oracle until the summary grew a per-step table, which
-    prints each step's SOURCE TEXT beside its state -- so a step reported `NOT RUN` puts the marker
+    prints each step's source text beside its state -- so a step reported `NOT RUN` puts the marker
     string on screen without ever having run, and the substring test called that a pass. The
-    execution evidence is the marker on a line of its OWN, which is what `print()` produces and what
+    execution evidence is the marker on a line of its own, which is what `print()` produces and what
     a table row (indented, prefixed by its state) never does.
     """
     return re.search(r"^LAST_STEP_RAN$", out, re.M) is not None
@@ -140,7 +140,7 @@ def main() -> int:
         re.search(r"NOT RUN\s+: [1-9]", out) is not None,
         "the steps that did not run are COUNTED -- silence there is the whole defect",
     )
-    # ...and NAMED. A count says how much has no verdict; only the per-step table says WHICH,
+    # ...and named. A count says how much has no verdict; only the per-step table says which,
     # and "which" is the only form of that answer anyone can act on.
     check(
         len(re.findall(r"^  NOT RUN\s+line \d+", out, re.M)) == 3,
@@ -154,8 +154,8 @@ def main() -> int:
     )
     check(rc == 0, "`missing-cmd && cmd` is not recorded as a failure (matches the old set -e)")
 
-    # 6: A KILLED STEP IS A THIRD STATE. `timeout`'s 124 and death-by-signal (143 here) mean the
-    # step never reached a verdict. Scoring that FAILED makes a check that never completed look
+    # 6: A killed step is a third state. `timeout`'s 124 and death-by-signal (143 here) mean the
+    # step never reached a verdict. Scoring that failed makes a check that never completed look
     # sensitive to the tree; scoring it passed is the defect this file exists to refuse. Two real
     # steps sit near this environment's 30s per-command cap, so the state is reachable in practice.
     rc, out = run_fixture(f"{PASSING}\n{KILLED}\n{MARKER}\n{END}")
@@ -164,7 +164,7 @@ def main() -> int:
     check("FAILED        : 0" in out, "a killed step is NOT counted as a failure")
     check(rc != 0, "INCONCLUSIVE is not a pass: the suite still exits non-zero")
 
-    # 7: NOT RUN alone, with nothing failing, must still be non-zero -- otherwise a suite that
+    # 7: Not run alone, with nothing failing, must still be non-zero -- otherwise a suite that
     # skipped work reports success, which is the exact confusion this file was rewritten to end.
     rc, out = run_fixture(
         "command -v definitely-not-a-real-binary >/dev/null 2>&1 || { echo 'missing'; exit 127; }\n"
@@ -175,7 +175,7 @@ def main() -> int:
         "a suite whose only defect is NOT RUN still exits non-zero",
     )
 
-    # 8: NON-VACUITY. Delete the ERR trap from the lifted preamble; case 2 must now break.
+    # 8: Non-VACUITY. Delete the ERR trap from the lifted preamble; case 2 must now break.
     blinded = re.sub(r"^trap '_check_note_failure.*$", "", preamble(), flags=re.M)
     rc, out = run_fixture(f"{PASSING}\n{FAILING}\n{MARKER}\n{END}", head=blinded)
     check(
@@ -184,13 +184,13 @@ def main() -> int:
         "watching the trap rather than passing on their own",
     )
 
-    # 9: THE LOCK MUST NOT REFUSE THIS SUITE'S OWN STEPS. The preamble takes a machine-wide flock
+    # 9: The lock must not refuse this suite'S own steps. The preamble takes a machine-wide flock
     # so two runs cannot corrupt each other's verdict -- and this gate re-enters that preamble
     # thirteen times while the run invoking it holds the lock. Without a re-entrancy marker every
     # fixture above exits 2 before printing anything, and all thirteen cases fail for a reason
     # that has nothing to do with accumulation. Measured in CI on 2026-09-02: exactly that.
     #
-    # The lock is taken HERE rather than in a helper subprocess, so there is no sleep and no race:
+    # The lock is taken here rather than in a helper subprocess, so there is no sleep and no race:
     # if this process cannot take it, the parent check.sh already holds it, which is the condition
     # under test either way.
     if shutil.which("flock"):

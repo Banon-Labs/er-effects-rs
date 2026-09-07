@@ -1,15 +1,15 @@
-//! Corpus proof for the `.aip` decoder against the REAL shipped auto-invade-point data.
+//! Corpus proof for the `.aip` decoder against the real shipped auto-invade-point data.
 //!
 //! Game-derived bytes are never versioned in this repo, so this test reads the local
 //! extraction corpus and SKIPs when it is absent (same contract as
-//! `crates/er-gfx/tests/common/mod.rs`). What it proves when the corpus IS present is that
+//! `crates/er-gfx/tests/common/mod.rs`). What it proves when the corpus is present is that
 //! `er_invasion_warp_core::aip` decodes every one of the 365 shipped `.aip` files -- 7073 points --
 //! exactly, and that the fingerprints compiled into the crate still describe those bytes.
 //!
 //! Roots (both overridable, because an extraction path embeds its own timestamp):
 //! * `ER_AIP_CORPUS_ROOT`    -- the directory holding the UNPACKED `autoinvadepoint*-aipbnd-dcx`
 //!   entry directories (a WitchyBND recursive unpack of `other/`).
-//! * `ER_AIP_CONTAINER_ROOT` -- the directory holding the COMPRESSED `.aipbnd.dcx` containers.
+//! * `ER_AIP_CONTAINER_ROOT` -- the directory holding the compressed `.aipbnd.dcx` containers.
 //!
 //! Producing the corpus is offline asset work, not a game run: WitchyBND (which needs a PTY
 //! and its bundled Oodle library, because these containers are DCX/KRAK) unpacks
@@ -40,7 +40,7 @@ fn entry_dir(corpus_root: &Path, container_name: &str) -> PathBuf {
     corpus_root.join(container_name.replace('.', "-"))
 }
 
-/// `name -> bytes` for every `.aip` in an unpacked container directory, or `None` to SKIP.
+/// `name -> bytes` for every `.aip` in an unpacked container directory, or `None` to skip.
 fn read_entries(dir: &Path) -> Option<BTreeMap<String, Vec<u8>>> {
     if !dir.is_dir() {
         eprintln!("SKIP: aip corpus {} not present", dir.display());

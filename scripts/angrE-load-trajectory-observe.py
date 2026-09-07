@@ -4,18 +4,18 @@ mms_step, return-title-chain waits, and log growth. Pure observation, no teardow
 
 Usage: python3 scripts/angrE-load-trajectory-observe.py [cap_seconds=200]
 
-WHICH FILES THIS READS, AND WHY THAT IS NOT A CONSTANT ANY MORE
+Which files this reads, and why that is not a constant any more
 --------------------------------------------------------------
-Every launcher in this repo now redirects the DLL's per-run artifacts OUT of the game directory
+Every launcher in this repo now redirects the DLL's per-run artifacts out of the game directory
 (`ER_QUICKLOAD_TELEMETRY_PATH`, `ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH`, ...), because a game-directory
-log is SINGLE-SLOT: the DLL rotates `<name>` to `<name>.prev` on its first write, so the next launch
+log is single-SLOT: the DLL rotates `<name>` to `<name>.prev` on its first write, so the next launch
 destroys the run before last. So the game directory is now the FALLBACK, not the source of truth --
 point this observer at the run's artifact dir with `ER_ARTIFACT_DIR=<dir>` (or set the two
 `ER_QUICKLOAD_*_PATH` variables the launcher used), and it reads that run instead of whatever
 happens to be lying next to the executable.
 
 `ER_GAME_DIR` / `ME3_STEAM_DIR` override the fallback. The literal that used to sit here,
-`/mnt/c/SteamLibrary/...`, belonged to the retired WSL2 setup and resolves to NOTHING on this
+`/mnt/c/SteamLibrary/...`, belonged to the retired WSL2 setup and resolves to nothing on this
 machine -- which reads as "the run wrote no telemetry" rather than "you looked in the wrong place".
 """
 import json, os, re, subprocess, sys, threading, time
@@ -56,9 +56,9 @@ def bounded_poll_wait(seconds: float) -> None:
 def alive():
     """True while an `eldenring.exe` is running, read straight out of /proc.
 
-    NOT `tasklist.exe` (this machine is a native Linux Steam install; that binary does not exist
+    Not `tasklist.exe` (this machine is a native Linux Steam install; that binary does not exist
     here, so the old form returned False forever and the observer stopped on its first poll) and
-    NOT `pgrep`, which this repo's guard blocks and which false-negatives on the Proton stack.
+    not `pgrep`, which this repo's guard blocks and which false-negatives on the Proton stack.
     Mirrors `scripts/er_run_lib.py::find_game_pids`.
     """
     for entry in os.scandir("/proc"):

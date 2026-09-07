@@ -3,7 +3,7 @@
 //! # Why this exists
 //!
 //! Every game address in this workspace is a 1.16.2 RVA. On 2026-08-27 the game shipped 1.17,
-//! which moved code, and a detour installed at a 1.16.2 RVA landed in the MIDDLE of a different
+//! which moved code, and a detour installed at a 1.16.2 RVA landed in the middle of a different
 //! 1.17 function: `0x1407ada40` is a real prologue in 1.16.2 (`push rbp; push rsi; push rdi`) and
 //! `xor r15d, r15d` in 1.17. The result was an access violation ~3.5s into boot with a fabricated
 //! `image_base | 0x64` pointer in `rcx` -- a crash whose backtrace points into game code and gives
@@ -13,12 +13,12 @@
 //! site; the address itself is meaningless. So the useful thing to know, before any detour goes
 //! in, is simply *which build is this* -- and the image says so itself.
 //!
-//! # What it does NOT do
+//! # What it does not do
 //!
-//! It does not gate `er-hook`'s `write_code_byte`, which takes an ABSOLUTE address its caller
+//! It does not gate `er-hook`'s `write_code_byte`, which takes an absolute address its caller
 //! discovered by scanning rather than a 1.16.2 RVA -- there is nothing to translate, so a gate here
 //! could only refuse work that is already version-agnostic. Its motivating caller was
-//! `er-ersc-sigshim`, patching a FOREIGN module on builds this one calls unsupported; that crate
+//! `er-ersc-sigshim`, patching a foreign module on builds this one calls unsupported; that crate
 //! was retired on 2026-09-03 when the mod dropped support for old Seamless builds. The reasoning
 //! outlives it: a scanned absolute address is not this module's business either way.
 //!
@@ -27,7 +27,7 @@
 //! and now go through [`resolve_game_address`] like everything else.
 
 // Reading the running image's own PE headers is a Windows-only operation, and these externs are
-// undefined at LINK time on the host -- which host-unit-tested crates hit through `describe_build`.
+// undefined at link time on the host -- which host-unit-tested crates hit through `describe_build`.
 #[cfg(windows)]
 use crate::mem::{game_module_base, read_bytes};
 
@@ -92,7 +92,7 @@ const RESOURCE_NAME_IS_STRING_FLAG: u32 = 0x8000_0000;
 ///
 /// A host build has no running game image, so it answers `None` -- the same answer, for the same
 /// reason, as a Windows build whose headers are unreadable. It is a separate function body rather
-/// than an early return because the Win32 externs below are undefined at LINK time on the host,
+/// than an early return because the Win32 externs below are undefined at link time on the host,
 /// and crates that are host-unit-tested (`er-save-loader`) reach this through `describe_build`.
 #[cfg(not(windows))]
 pub fn game_file_version() -> Option<FileVersion> {
@@ -217,7 +217,7 @@ fn resource_entry(
 /// This is what separates "an address from a previous patch" from "an address that has nothing to
 /// do with the game build". A detour on `user32!CreateWindowExW` or `kernel32!ExitProcess` is
 /// resolved through `GetProcAddress` at runtime and is equally correct on every ELDEN RING
-/// version; only addresses INSIDE this range carry a version assumption.
+/// version; only addresses inside this range carry a version assumption.
 #[cfg(windows)]
 pub fn game_image_range() -> Option<(usize, usize)> {
     let base = game_module_base().ok()?;
@@ -276,14 +276,14 @@ pub fn describe_build() -> String {
 }
 
 // ============================================================================
-// ADDRESS RESOLUTION ACROSS BUILDS.
+// address resolution across builds.
 //
 // `is_supported_build` above answers "is this the build our RVAs were written against". This
 // section answers the question that follows from a NO: where, if anywhere, did that address go.
 //
 // It lives here rather than in `er-hook` because the danger is not specific to detours. A detour
 // on a stale address is caught by the hook path, but a stale address is equally reachable as a
-// CALL (`transmute(base + RVA)`) and as a data pointer, and neither goes anywhere near MinHook.
+// call (`transmute(base + RVA)`) and as a data pointer, and neither goes anywhere near MinHook.
 // A call through a stale address is in fact the worse of the two: it transfers control into
 // whatever now occupies those bytes, which on a patched build is routinely the middle of an
 // unrelated function -- an execute-fault with no unwind information and no exception record
@@ -302,13 +302,13 @@ static ADDRESS_LOGGER: core::sync::atomic::AtomicUsize = core::sync::atomic::Ato
 use core::sync::atomic::{AtomicU64, Ordering};
 
 // ============================================================================
-// ONE TRANSLATION LINE PER ADDRESS, NOT PER RESOLUTION.
+// one translation line per address, not per resolution.
 //
-// `ADDRESS TRANSLATED` states a fact about an ADDRESS -- this 1.16.2 constant was carried to 1.17
+// `ADDRESS TRANSLATED` states a fact about an address -- this 1.16.2 constant was carried to 1.17
 // and the pair was verified as the same function. That fact does not change between two calls, so
 // emitting it per call says nothing new and costs a formatted file append every time.
 //
-// MEASURED on the 2026-08-30 session's `er-quickload-autoload-debug.log`: 1.955 GB from a single
+// Measured on the 2026-08-30 session's `er-quickload-autoload-debug.log`: 1.955 GB from a single
 // run, of which a 40 MB sample taken at five points across the file was **99.03%** this one
 // message (145,006 of 146,434 lines). The largest single contributor is
 // `GX_RESERVE_CMD_QUEUE_SLOT_RVA (cmd-queue producer attribution band)` at ~18,500 lines per 8 MB
@@ -318,14 +318,14 @@ use core::sync::atomic::{AtomicU64, Ordering};
 //
 // The second cost is the one that actually blocked work: the log became unreadable. A scan of the
 // last 8 MB for `ADDRESS REFUSED`, `HOOK REFUSED`, `catalog: N named`, `GRANTED:`, `EQUIP LEDGER`,
-// `loading-bar:`, `backstop` and `icon_id=` returned ZERO hits on all eight, because the tail is
+// `loading-bar:`, `backstop` and `icon_id=` returned zero hits on all eight, because the tail is
 // effectively 100% this message. The acceptance evidence for several landed fixes was in there
 // somewhere and could not be found.
 //
-// So the line is emitted the FIRST time each row translates, and suppressed after. REFUSALS are
+// So the line is emitted the first time each row translates, and suppressed after. REFUSALS are
 // bounded separately and much more loosely -- see the refusal ledger below. They are a different
 // kind of fact and must never be reduced to one line per address, because a refusal is attributed
-// to its CALLER (`mem::game_rva` puts the asking `file:line` in the label) and two callers
+// to its caller (`mem::game_rva` puts the asking `file:line` in the label) and two callers
 // refusing the same address are two different dead features.
 // ============================================================================
 
@@ -349,7 +349,7 @@ static DETOUR_TRANSLATION_ANNOUNCED: [AtomicU64;
 /// CALL/READ translations performed, whether or not they were logged.
 static CALL_TRANSLATIONS: AtomicU64 = AtomicU64::new(0);
 
-/// DETOUR translations performed, whether or not they were logged.
+/// Detour translations performed, whether or not they were logged.
 static DETOUR_TRANSLATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Claim the right to announce `row`'s translation: `true` for exactly one caller, ever.
@@ -364,7 +364,7 @@ static DETOUR_TRANSLATIONS: AtomicU64 = AtomicU64::new(0);
 /// arrays, so each whole set is one `u64` per 64 rows of static storage -- under ten words apiece
 /// at the tables' current sizes -- with no allocation, no hashing and no lock.
 ///
-/// The steady state -- every call after the first for a given row -- is a single RELAXED load and
+/// The steady state -- every call after the first for a given row -- is a single relaxed load and
 /// a bit test, with no bus-locked read-modify-write at all. The `fetch_or` runs at most once per
 /// row per process. `Relaxed` is the right ordering because no data is published through this
 /// flag: it orders nothing, it only has to be atomic, and `fetch_or` returning the previous value
@@ -388,35 +388,35 @@ fn announce_translation_once(announced: &[AtomicU64], row: usize) -> bool {
 }
 
 // ============================================================================
-// A REFUSAL IS A FAILURE SIGNAL. BOUND ITS REPETITION; NEVER SILENCE IT.
+// a refusal is a failure signal. Bound its repetition; Never silence it.
 //
-// The governing asymmetry of this whole migration is that a MISSING address must cost a feature
-// loudly while a WRONG one corrupts silently. So the translation gate above -- one line per
+// The governing asymmetry of this whole migration is that a missing address must cost a feature
+// loudly while a wrong one corrupts silently. So the translation gate above -- one line per
 // address, ever -- is exactly the wrong shape for a refusal, and the ledger here is deliberately
 // far looser than it.
 //
-// WHY ANY BOUND AT ALL. The refusal path emits a formatted file append per call at whatever rate
+// Why any bound at all. The refusal path emits a formatted file append per call at whatever rate
 // its caller runs. Measured twice:
 //
 //   * 339,764 lines of `ADDRESS REFUSED (game_rva): 0x140000000` in one 25-hour session, from
 //     `delay_delete_pending` resolving RVA 0 on the 4 Hz telemetry write purely to obtain the
 //     module base. Root-caused and gated by `scripts/check-no-rva-zero.py`.
 //   * 628 lines of `ADDRESS REFUSED (CS_MSB_POINT_CTOR_RVA): 0x140cf9300` in the 2026-08-30 21:16
-//     session's `er-invasion-warp.log`. That one is NOT a bug: `docs/recon/rva-map-1162-to-1170
+//     session's `er-invasion-warp.log`. That one is not a bug: `docs/recon/rva-map-1162-to-1170
 //     .verified.tsv` records the row as deliberately absent (its 1.17 pair is correct by 16 caller
 //     votes but verifies DIVERGES 0.09 on an Arxan entry-jmp, and writing the row would drop the
-//     constructor from the CALL map too). The address is genuinely unmapped on 1.17, the feature
+//     constructor from the call map too). The address is genuinely unmapped on 1.17, the feature
 //     is genuinely unavailable, and the map-point reader asked again on every map open.
 //
-// The second one is the point: fixing individual callers does not close this, because the NEXT
+// The second one is the point: fixing individual callers does not close this, because the next
 // unmapped address does it again. The bound belongs here, once.
 //
-// WHAT IS BOUNDED, AND WHAT IS NOT.
+// What is bounded, and what is not.
 //
 //   * The first [`REFUSALS_LOGGED_PER_ADDRESS`] refusals of an address are logged in full,
 //     unconditionally. The cap is 12 rather than 1 precisely because of the caller attribution
 //     above: several distinct callers refusing the same address all get their own line.
-//   * Refusal `REFUSALS_LOGGED_PER_ADDRESS + 1` logs a WENT-QUIET marker, so a reader can tell
+//   * Refusal `REFUSALS_LOGGED_PER_ADDRESS + 1` logs a went-quiet marker, so a reader can tell
 //     "it stopped happening" from "it stopped being written down".
 //   * After that the address logs again at each power of ten -- 100, 1,000, 10,000, ... -- each
 //     line stating the running count. Growth is therefore logarithmic in the number of refusals
@@ -425,7 +425,7 @@ fn announce_translation_once(announced: &[AtomicU64], row: usize) -> bool {
 //     million, and the magnitude is what says how hot the dead path is.
 //
 // Every one of those lines keeps the `ADDRESS REFUSED (<label>): 0x<addr>` prefix, so
-// `scripts/record-1170-refusals.py` -- which harvests the DISTINCT addresses a real run asked for
+// `scripts/record-1170-refusals.py` -- which harvests the distinct addresses a real run asked for
 // and was refused -- sees exactly what it saw before. It de-duplicates into a set, so fewer
 // repeats of an address it already has cannot change its output.
 // ============================================================================
@@ -433,7 +433,7 @@ fn announce_translation_once(announced: &[AtomicU64], row: usize) -> bool {
 /// Refusals of one address logged in full before it goes quiet.
 ///
 /// 12 matches `er_hook::detour_site::MAX_REFUSAL_LINES`, the existing in-repo precedent for this
-/// shape. It is deliberately not 1: a refusal names its CALLER, and one address is refused by
+/// shape. It is deliberately not 1: a refusal names its caller, and one address is refused by
 /// several callers whose labels differ, so a cap of 1 would report one dead feature and hide the
 /// rest. `what` is `core::fmt::Arguments` and cannot be keyed on without formatting it into a
 /// `String` on the failure path, so a loose per-address cap is how caller diversity survives.
@@ -441,9 +441,9 @@ const REFUSALS_LOGGED_PER_ADDRESS: u64 = 12;
 
 /// Slots in each refusal ledger.
 ///
-/// SIZED BY MEASUREMENT, not by taste. The worst case actually observed is the 2026-08-29 boot:
-/// 54 distinct addresses refused on the CALL path and 72 more behind the `FOR DETOUR` wording,
-/// 126 together -- and each path has its own ledger, so 126 in ONE is already double the real
+/// Sized by measurement, not by taste. The worst case actually observed is the 2026-08-29 boot:
+/// 54 distinct addresses refused on the call path and 72 more behind the `FOR DETOUR` wording,
+/// 126 together -- and each path has its own ledger, so 126 in one is already double the real
 /// load. Replaying the verified map's own source addresses (real RVAs, 896 of 950 of them 16-byte
 /// aligned, so their clustering is the clustering that matters) through this exact placement:
 ///
@@ -503,7 +503,7 @@ static DETOUR_REFUSAL_OVERFLOW: AtomicU64 = AtomicU64::new(0);
 /// Per-address refusal counts for the CALL/READ path.
 static CALL_REFUSALS: [AtomicU64; REFUSAL_SLOTS] = [const { AtomicU64::new(0) }; REFUSAL_SLOTS];
 
-/// Per-address refusal counts for the DETOUR path. A SEPARATE ledger from the CALL one, for the
+/// Per-address refusal counts for the detour path. A separate ledger from the call one, for the
 /// same reason the announcement bitsets are separate: the two refusals make different claims
 /// about the same address and answer to different tables, so neither may quieten the other.
 static DETOUR_REFUSALS: [AtomicU64; REFUSAL_SLOTS] = [const { AtomicU64::new(0) }; REFUSAL_SLOTS];
@@ -522,7 +522,7 @@ enum RefusalLine {
     Suppressed,
 }
 
-/// The bound, as a pure function of the occurrence number so it can be tested for its VALUES
+/// The bound, as a pure function of the occurrence number so it can be tested for its values
 /// rather than for the shape of the code that calls it.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn refusal_line_for(occurrence: u64) -> RefusalLine {
@@ -551,8 +551,8 @@ fn refusal_slot(rva: u32, slots: usize) -> usize {
 ///
 /// # Cost
 ///
-/// Steady state, for an address already in the ledger: a multiply-shift, one RELAXED load, a
-/// compare, one RELAXED `fetch_add`, and the compare in [`refusal_line_for`]. No lock, no
+/// Steady state, for an address already in the ledger: a multiply-shift, one relaxed load, a
+/// compare, one relaxed `fetch_add`, and the compare in [`refusal_line_for`]. No lock, no
 /// allocation, no string hashing, and nothing at all on the success path -- this is only reached
 /// where the code was already about to format a message and append it to a file.
 ///
@@ -619,7 +619,7 @@ fn refusal_totals(slots: &[AtomicU64], overflow: &AtomicU64) -> (u64, u32) {
 
 /// How much address translation has happened, and how much of it the log shows.
 ///
-/// The `*_addresses` counts are what a reader of the log SEES -- one `ADDRESS TRANSLATED` line
+/// The `*_addresses` counts are what a reader of the log sees -- one `ADDRESS TRANSLATED` line
 /// each. The `*_resolutions` counts are what actually happened, and they are the reason this
 /// struct exists: suppressing the repeats would otherwise destroy the only evidence that one
 /// address was resolved four and a half million times, which is the fact that made the log
@@ -630,17 +630,17 @@ pub struct AddressTranslationStats {
     pub call_addresses: u32,
     /// CALL/READ translations performed.
     pub call_resolutions: u64,
-    /// Distinct DETOUR addresses announced.
+    /// Distinct detour addresses announced.
     pub detour_addresses: u32,
-    /// DETOUR translations performed.
+    /// Detour translations performed.
     pub detour_resolutions: u64,
     /// Distinct CALL/READ addresses refused that hold a ledger slot.
     pub call_refused_addresses: u32,
     /// CALL/READ refusals, including the ones the bound did not write down.
     pub call_refusals: u64,
-    /// Distinct DETOUR addresses refused that hold a ledger slot.
+    /// Distinct detour addresses refused that hold a ledger slot.
     pub detour_refused_addresses: u32,
-    /// DETOUR refusals, including the ones the bound did not write down.
+    /// Detour refusals, including the ones the bound did not write down.
     pub detour_refusals: u64,
 }
 
@@ -694,7 +694,7 @@ fn address_log(args: core::fmt::Arguments<'_>) {
     }
 }
 
-/// Where `address` lives on the RUNNING build, or `None` if that is not known.
+/// Where `address` lives on the running build, or `None` if that is not known.
 ///
 /// * `Some(address)` unchanged -- the address is outside the game image (an import resolved by
 ///   `GetProcAddress` means the same thing on every patch), or the running build is the one the
@@ -716,7 +716,7 @@ pub fn resolve_game_address(address: usize, what: &str) -> Option<usize> {
 /// [`resolve_game_address`], with the label built by the caller's own `format_args!`.
 ///
 /// The label is the only thing a reader of a refusal line has to go on, and the useful ones are
-/// composite -- `er_game_base::mem::game_rva` wants to print the constant's name AND the source
+/// composite -- `er_game_base::mem::game_rva` wants to print the constant's name and the source
 /// line that asked for it. Taking `Arguments` rather than `&str` lets it do that without a
 /// `format!` allocation on every resolution, including the overwhelming majority that succeed.
 pub fn resolve_game_address_fmt(address: usize, what: core::fmt::Arguments<'_>) -> Option<usize> {
@@ -742,21 +742,21 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
-    // ALREADY TRANSLATED. Resolution is not naturally idempotent: the table is keyed by 1.16.2 RVA
+    // Already translated. Resolution is not naturally idempotent: the table is keyed by 1.16.2 RVA
     // and its values are 1.17 RVAs, so asking it where a 1.17 address moved to finds no entry and
-    // the honest answer is to refuse -- which is how a correctly translated address got REFUSED on
+    // the honest answer is to refuse -- which is how a correctly translated address got refused on
     // its second pass through, costing `er-armament-icons` its file-open observer at 0x1411ced80.
     // The shortcut makes that second pass hand the address back instead of refusing it.
     //
-    // IT DOES NOT MAKE A DOUBLE RESOLVE SAFE, and nothing in this function can. The shortcut
+    // It does not make a double resolve safe, and nothing in this function can. The shortcut
     // declines on exactly the addresses where a double resolve goes WRONG: an address that is both
-    // a 1.17 destination and the 1.16.2 source of a DIFFERENT row is a source, so translation wins
+    // a 1.17 destination and the 1.16.2 source of a different row is a source, so translation wins
     // (it must -- see `already_translated_in`), and resolving it a second time returns a third,
     // unrelated function with no error, no refusal and no log line. That is not hypothetical: it
     // is what happened to 0x7ac890 -> 0x7ad710 -> 0x7ae590 on 2026-08-30.
     //
     // So the invariant this depends on is "resolve exactly once", which spans six crates and a
-    // `GetProcAddress` boundary. It is a CONVENTION -- there is no type here that distinguishes a
+    // `GetProcAddress` boundary. It is a convention -- there is no type here that distinguishes a
     // 1.16.2 RVA from a 1.17 one, and no test in this file establishes it. The machine check is
     // `scripts/check-1170-translation-collisions.py`, run from `scripts/check.sh`, which fails on
     // any collision not recorded in `scripts/1170-translation-collisions.baseline.tsv` (three at
@@ -768,12 +768,12 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
         TableAnswer::MovedTo { row, to } => {
             let translated = base + to as usize;
             CALL_TRANSLATIONS.fetch_add(1, Ordering::Relaxed);
-            // Once per ROW -- per ADDRESS -- not once per call and not once per `what`. The fact
+            // Once per row -- per address -- not once per call and not once per `what`. The fact
             // stated is about the address and is identical for every caller, so `what` is neither
-            // needed nor usable as the key. MEASURED over the same 40 MB sample: 145,006
+            // needed nor usable as the key. Measured over the same 40 MB sample: 145,006
             // translated lines carried 195 distinct source addresses and 215 distinct labels; 29
             // addresses carried more than one label, and -- decisively -- 2 labels covered more
-            // than one ADDRESS (`game_rva @ crates/er-save-suppress/src/lib.rs:1595` resolves 9
+            // than one address (`game_rva @ crates/er-save-suppress/src/lib.rs:1595` resolves 9
             // different addresses from one loop). A `what` key would therefore suppress 8 of
             // those 9, which is a wrong answer rather than a quieter one. It would also cost a
             // `String` per resolution on this path, because `what` is `Arguments` and cannot be
@@ -791,7 +791,7 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
         }
         TableAnswer::Unmapped => {}
     }
-    // BOUNDED, NOT SILENCED -- see the refusal ledger. The first 12 are written in full, then a
+    // Bounded, not silenced -- see the refusal ledger. The first 12 are written in full, then a
     // went-quiet marker, then a restatement at each power of ten carrying the running count. Every
     // line keeps the harvestable `ADDRESS REFUSED (<label>): 0x<addr>` prefix.
     let occurrence = note_refusal(&CALL_REFUSALS, &CALL_REFUSAL_OVERFLOW, rva);
@@ -816,11 +816,11 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
     None
 }
 
-/// Is `rva` a 1.17 destination of this table that must NOT be translated again?
+/// Is `rva` a 1.17 destination of this table that must not be translated again?
 ///
-/// TRANSLATION WINS OVER THE SHORTCUT, and the order is the whole point. The shortcut exists so a
+/// Translation wins over the shortcut, and the order is the whole point. The shortcut exists so a
 /// second pass over an already-translated address hands it back instead of refusing -- the bug
-/// that cost er-armament-icons its file-open observer. But at 329 rows an address can be BOTH a
+/// that cost er-armament-icons its file-open observer. But at 329 rows an address can be both a
 /// destination of one row and the source of a different one, and if the shortcut answered first
 /// it would swallow that second row's translation silently.
 ///
@@ -828,7 +828,7 @@ fn resolve_on_running_build(address: usize, what: core::fmt::Arguments<'_>) -> O
 /// destinations that are not sources of some other row, plus the rows that did not move, where
 /// both answers are the same address anyway.
 ///
-/// Both tables need this rule and they need the SAME rule. The detour table used to ask a looser
+/// Both tables need this rule and they need the same rule. The detour table used to ask a looser
 /// question -- is this address any row's destination -- which at 27 rows was safe by accident:
 /// nothing was both. At 216 rows two addresses are (`0x6156c0` and `0x7ad710`), and the loose
 /// form would hand back a stale 1.16.2 source untranslated on the grounds that some other row
@@ -875,7 +875,7 @@ enum TableAnswer {
 ///
 /// The order is the whole point and is asserted by
 /// `translation_wins_over_the_shortcut_on_a_collision`: an address that is both a destination and
-/// a source is answered as a SOURCE, because the shortcut declines on it.
+/// a source is answered as a source, because the shortcut declines on it.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn table_answer(table: &[(u32, u32)], rva: u32) -> TableAnswer {
     if already_translated_in(table, rva) {
@@ -890,18 +890,18 @@ fn table_answer(table: &[(u32, u32)], rva: u32) -> TableAnswer {
     }
 }
 
-/// The address to DETOUR for `address` on the running build, or `None`.
+/// The address to detour for `address` on the running build, or `None`.
 ///
 /// # Why this is not [`resolve_game_address`]
 ///
 /// Being the right address and being a safe place to write five bytes are different claims, and
 /// only one of them is established by matching a function's signature. `resolve_game_address`
 /// answers the first: it will happily return a pair carried by the whole-image `.pdata` map or
-/// by counting code references, which is exactly what a CALL or a READ needs. A detour needs the
-/// second as well -- that the destination is a real function ENTRY with a relocatable five-byte
+/// by counting code references, which is exactly what a call or a read needs. A detour needs the
+/// second as well -- that the destination is a real function entry with a relocatable five-byte
 /// prologue -- and nothing in a signature match speaks to that.
 ///
-/// MEASURED, 2026-08-29. When the weaker rows were allowed to carry detours, er-armament-icons
+/// Measured, 2026-08-29. When the weaker rows were allowed to carry detours, er-armament-icons
 /// installed five of them and the game died ~2.0s in, at the first overlay draw. Bisected over
 /// eighteen DLLs: adding that one DLL to an otherwise-surviving set was the difference. Before
 /// those rows existed the same five hooks were refused as unmapped and the game lived, so the
@@ -915,14 +915,14 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     }
     let base = crate::mem::game_module_base().ok()?;
     let rva = (address - base) as u32;
-    // Same rule, same order, same function as the CALL path above -- including the part it cannot
+    // Same rule, same order, same function as the call path above -- including the part it cannot
     // establish. See the comment there.
     match table_answer(&DETOUR_SAFE_1162_TO_1170, rva) {
         TableAnswer::AlreadyTranslated => return Some(address),
         TableAnswer::MovedTo { row, to } => {
             let translated = base + to as usize;
             DETOUR_TRANSLATIONS.fetch_add(1, Ordering::Relaxed);
-            // A SEPARATE bitset from the CALL path's, indexed into a DIFFERENT table. The two
+            // A separate bitset from the call path's, indexed into a different table. The two
             // lines make different claims about the same address -- "verified same function"
             // versus "and audited as somewhere MinHook may write five bytes" -- so one must not
             // suppress the other. Sharing a key would mean whichever resolver ran first silences
@@ -939,12 +939,12 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
         }
         TableAnswer::Unmapped => {}
     }
-    // Say WHICH refusal this is. There are three of them and they send a reader to three
+    // Say which refusal this is. There are three of them and they send a reader to three
     // different places, so reporting them as one wasted a day: 65 addresses were investigated as
     // missing map coverage when they were already-translated addresses arriving for a second
     // opinion, and the map that produced them was sitting right there.
     //
-    // Bounded by its OWN ledger, separate from the CALL path's -- the two refusals answer to
+    // Bounded by its own ledger, separate from the call path's -- the two refusals answer to
     // different tables and neither may quieten the other. The diagnosis below costs a whole-table
     // scan and up to one `String`, so it is computed only when a line is actually emitted;
     // previously it ran on every refusal, including the 616 of the 628 that a bound now drops.
@@ -961,7 +961,7 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
                 describe_build(),
                 match (arrived_translated, call_only) {
                     // A caller resolved this through `game_rva` before asking to hook it, so the
-                    // address is right and the question is only whether its ROW may carry a detour.
+                    // address is right and the question is only whether its row may carry a detour.
                     (Some(source), _) => format!(
                         "this is already the translation of 1.16.2 0x{:x}, whose row is not \
                          detour-safe: the pair is not verified identical over the body, or the two \
@@ -1000,14 +1000,14 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
     Some(address)
 }
 
-/// The RVA of a CALL SITE on the running build, or `None` when it cannot be placed.
+/// The RVA of a call site on the running build, or `None` when it cannot be placed.
 ///
 /// # The class of bug this closes
 ///
-/// A call site is a RETURN ADDRESS: a byte in the middle of a function, captured off the live
+/// A call site is a return ADDRESS: a byte in the middle of a function, captured off the live
 /// stack by `RtlCaptureStackBackTrace` and compared -- as `frame - module_base` -- against a
 /// 1.16.2 constant. Nine such comparisons existed in this workspace on 2026-08-30, and every one
-/// of them failed in PERFECT SILENCE on 1.17: no hook is installed, no address is resolved, so
+/// of them failed in perfect silence on 1.17: no hook is installed, no address is resolved, so
 /// there is no `HOOK REFUSED` and no `ADDRESS REFUSED`. The comparison simply never matches and
 /// the feature behind it never runs. Two user-visible features were dead this way -- the three
 /// cloned rows on the System>Quit tab, and the title FadeIn suppression -- with nothing in any
@@ -1015,11 +1015,11 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
 ///
 /// # Why it takes a function and an offset rather than one address
 ///
-/// The address map is keyed on `.pdata` function STARTS, because that is what a masked signature
+/// The address map is keyed on `.pdata` function starts, because that is what a masked signature
 /// can identify and what the linker records. A mid-function address is not a function start, so
 /// it can never appear in the map -- `scripts/select-needed-1170-rows.py` cannot even see it.
 ///
-/// What a call site DOES have is a stable identity: it is the return of the Nth `call` in a named
+/// What a call site does have is a stable identity: it is the return of the Nth `call` in a named
 /// function, and the offset of that call within its function survives the move whenever the body
 /// is unchanged. So the mappable half is the containing function, and the offset rides along.
 /// `scripts/derive-callsite-1170.py` prints the evidence for a given site: the `.pdata` record
@@ -1030,9 +1030,9 @@ pub fn resolve_detour_address(address: usize, what: &str) -> Option<usize> {
 ///
 /// It resolves through [`resolve_game_address`], which reads the CALL/READ table. A detour needs
 /// `resolve_detour_address` and its separate, stricter table. That separation is the whole point:
-/// putting a mid-function address in a verdict table would license it as a DETOUR target --
+/// putting a mid-function address in a verdict table would license it as a detour target --
 /// `DETOURABLE_ENTRY_EVIDENCE` accepts `NEITHER-ENTRY` -- and MinHook would then write five bytes
-/// into the middle of a live function. The offset here is added in Rust, AFTER resolution, and
+/// into the middle of a live function. The offset here is added in Rust, after resolution, and
 /// never enters a table at all.
 ///
 /// `what` names the caller in the refusal line, so a reader can tell which comparison went inert.
@@ -1058,10 +1058,10 @@ pub fn resolve_call_site_rva(
     None
 }
 
-/// [`resolve_call_site_rva`] for a call-site BAND anchored on one function.
+/// [`resolve_call_site_rva`] for a call-site band anchored on one function.
 ///
 /// A band whose endpoints sit at fixed offsets from a single named function translates exactly
-/// when that function does. A band spanning MANY functions does NOT: between 2.6.2.0 and 2.7.0.0
+/// when that function does. A band spanning many functions does NOT: between 2.6.2.0 and 2.7.0.0
 /// neighbouring functions moved by different deltas (+0xdf0, +0xe20, +0xe30, +0xe40, +0xe80,
 /// +0xe90 and +0x1560 all occur inside `0x7a3000..0x7a4000` alone), so its width is not preserved
 /// and no anchor can carry it. Such a band has to be refused, not translated -- see the caller in
@@ -1085,7 +1085,7 @@ pub fn resolve_call_site_band(
     (start < end).then_some(start..end)
 }
 
-/// Does `rva` have ANY mapping? Used only to word a refusal accurately; logs nothing.
+/// Does `rva` have any mapping? Used only to word a refusal accurately; logs nothing.
 #[cfg(windows)]
 fn resolve_on_running_build_quiet(rva: u32) -> Option<u32> {
     VERIFIED_1162_TO_1170
@@ -1126,7 +1126,7 @@ mod tests {
     /// wanted) never trips it.
     const MIN_EXPECTED_ROWS: usize = 100;
 
-    /// A hook and a call on the SAME function must reach the same address.
+    /// A hook and a call on the same function must reach the same address.
     ///
     /// The two tables are generated from different files and nothing about their construction
     /// forces them to agree. If they ever disagree, a feature that both calls a function and
@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(before, seen.len(), "the detour table names a source twice");
     }
 
-    /// THE RULE, on a table this test builds itself. The one test here that no ledger edit can
+    /// The rule, on a table this test builds itself. The one test here that no ledger edit can
     /// make vacuous.
     ///
     /// `0xb` below is both the destination of the first row and the source of the second -- the
@@ -1185,7 +1185,7 @@ mod tests {
             (0xb, 0xc),
             // A row that did not move, and that nothing else points at.
             (0x20, 0x20),
-            // A row that did not move but IS another row's destination. Both answers are `0x30`,
+            // A row that did not move but is another row's destination. Both answers are `0x30`,
             // so the shortcut claiming it is harmless -- the one case where it may.
             (0x30, 0x30),
             (0x31, 0x30),
@@ -1231,13 +1231,13 @@ mod tests {
         );
     }
 
-    /// Every row must resolve to its OWN destination -- on the call table.
+    /// Every row must resolve to its own destination -- on the call table.
     ///
-    /// WHAT THIS REPLACED. `verified_map_is_idempotent` filtered to rows where `from != moved` and
+    /// What this replaced. `verified_map_is_idempotent` filtered to rows where `from != moved` and
     /// then asked `already_translated(from)`, whose second conjunct is
     /// `!is_source_of_a_move(rva)` -- false for every row the filter kept. The set it asserted
     /// over was empty by construction and the test could not fail. Its name promised more than it
-    /// checked as well: resolution is NOT idempotent on this data, because
+    /// checked as well: resolution is not idempotent on this data, because
     /// `resolve(resolve(0x614870))` is `0x616510`, a different function.
     ///
     /// What is left is the property the old doc actually described: no row is swallowed by the
@@ -1249,7 +1249,7 @@ mod tests {
         assert_every_row_resolves_to_itself(&VERIFIED_1162_TO_1170, "VERIFIED_1162_TO_1170");
     }
 
-    /// The same rule on the DETOUR table, which is generated from a different file and used by a
+    /// The same rule on the detour table, which is generated from a different file and used by a
     /// different resolver. Replaces `detour_table_translation_wins_over_the_shortcut`, which
     /// carried the same contradiction between its filter and its predicate.
     #[test]
@@ -1257,10 +1257,10 @@ mod tests {
         assert_every_row_resolves_to_itself(&DETOUR_SAFE_1162_TO_1170, "DETOUR_SAFE_1162_TO_1170");
     }
 
-    /// EVERY destination that nothing else claims as a source is recognised, so a double resolve
+    /// Every destination that nothing else claims as a source is recognised, so a double resolve
     /// of one is handed back rather than refused -- the reason the shortcut exists at all.
     ///
-    /// The predecessor took the FIRST such row with `find` and then wrapped its assertion in
+    /// The predecessor took the first such row with `find` and then wrapped its assertion in
     /// `if let Some(..)`, so a table with no pure destination -- or an empty one -- passed in
     /// silence. This walks all of them and says how many it expected.
     #[test]
@@ -1322,10 +1322,10 @@ mod tests {
         }
     }
 
-    /// ONE LINE PER ADDRESS, and the arithmetic that decides which bit.
+    /// One line per address, and the arithmetic that decides which bit.
     ///
     /// The gate this covers stands between the log and the message that was 99% of a 1.955 GB
-    /// file, so the failure that matters is the OPPOSITE one: an off-by-one in the word/bit split
+    /// file, so the failure that matters is the opposite one: an off-by-one in the word/bit split
     /// that silences a row which was never announced. Every row of a three-word bitset is claimed
     /// exactly once and then refused forever, and no row's claim disturbs another's -- which is
     /// what a shared word would do if the mask were built from the row rather than from the row
@@ -1365,7 +1365,7 @@ mod tests {
         );
     }
 
-    /// A row index past the end of its bitset LOGS rather than goes quiet.
+    /// A row index past the end of its bitset logs rather than goes quiet.
     ///
     /// It cannot happen -- the index comes from a lookup in the table the bitset is sized from --
     /// but the arm has to be pinned to the side that reports, because the alternative is a state
@@ -1379,12 +1379,12 @@ mod tests {
         );
     }
 
-    /// The once-per-address TRANSLATION gate must never reach a refusal. The refusals are bounded
+    /// The once-per-address translation gate must never reach a refusal. The refusals are bounded
     /// by their own, far looser rule; being folded into the translation gate would cut them to one
     /// line per address forever, which is the one bound this file must not have.
     ///
     /// A source-level assertion, because the refusals are emitted from `#[cfg(windows)]` bodies
-    /// that cannot run on the host. It reads only the code ABOVE this test module, so the pattern
+    /// that cannot run on the host. It reads only the code above this test module, so the pattern
     /// strings in the test itself are not counted as occurrences of the thing they look for.
     #[test]
     fn refusals_never_use_the_once_per_address_translation_gate() {
@@ -1398,7 +1398,7 @@ mod tests {
             );
         }
 
-        // ...and the translations, which ARE gated by it, prove the search can see the gate at
+        // ...and the translations, which are gated by it, prove the search can see the gate at
         // all. Without this the test passes just as well on a file where the gate does not exist,
         // or where it was renamed and `GATE` now matches nothing anywhere.
         assert_eq!(
@@ -1414,8 +1414,8 @@ mod tests {
 
     /// Every refusal line keeps the prefix `scripts/record-1170-refusals.py` harvests.
     ///
-    /// That script reads the DISTINCT addresses a real run asked for and was refused, and feeds
-    /// them to `select-needed-1170-rows.py` -- which is how an address whose CONSTANT the name
+    /// That script reads the distinct addresses a real run asked for and was refused, and feeds
+    /// them to `select-needed-1170-rows.py` -- which is how an address whose constant the name
     /// scan cannot see (42 of 54 in one boot) gets carried at all. Its pattern is
     /// `ADDRESS REFUSED(?: FOR DETOUR)? \([^)]*\): (0x14[0-9a-f]+)`, so bounding the repeats is
     /// harmless to it (it de-duplicates into a set) but re-wording a line is not.
@@ -1445,9 +1445,9 @@ mod tests {
 
     /// Each `address_log(format_args!(...))` statement that emits a refusal.
     ///
-    /// The count is asserted HERE rather than in one caller, and that placement is the fix for a
+    /// The count is asserted here rather than in one caller, and that placement is the fix for a
     /// blinded-and-passed test: a reworded line stops matching `ADDRESS REFUSED`, so it silently
-    /// drops out of this list, and every caller that only inspects what the list CONTAINS then
+    /// drops out of this list, and every caller that only inspects what the list contains then
     /// agrees the survivors are fine. Asserting the population where the population is built
     /// means a line cannot leave the search by being renamed out of it.
     fn refusal_literals() -> Vec<&'static str> {
@@ -1483,9 +1483,9 @@ mod tests {
         found
     }
 
-    /// THE FIRST REFUSAL OF AN ADDRESS IS ALWAYS WRITTEN, whichever address it is.
+    /// The first refusal of an address is always written, whichever address it is.
     ///
-    /// This is the load-bearing half of the bound. The refusal recorder harvests DISTINCT
+    /// This is the load-bearing half of the bound. The refusal recorder harvests distinct
     /// addresses, and a feature that goes inert has to cost a line the first time; a bound that
     /// could swallow a first occurrence would convert a loud failure into a silent one, which is
     /// the exact inversion this whole migration is built to prevent.
@@ -1515,24 +1515,24 @@ mod tests {
         );
     }
 
-    /// The ledger holds the WORST CASE ACTUALLY MEASURED without spilling to the shared counter.
+    /// The ledger holds the worst case actually measured without spilling to the shared counter.
     ///
-    /// That case is the 2026-08-29 boot: 54 distinct addresses refused on the CALL path and 72
+    /// That case is the 2026-08-29 boot: 54 distinct addresses refused on the call path and 72
     /// more behind the `FOR DETOUR` wording, 126 together -- and the two paths have a ledger each,
-    /// so 126 in ONE is already double the real load. A spilled address keeps its first line but
+    /// so 126 in one is already double the real load. A spilled address keeps its first line but
     /// loses its own count, and the count is what carries the magnitude.
     ///
-    /// THE ADDRESSES ARE REAL ONES, taken from the verified map's own sources, and that is the
+    /// The addresses are real ones, taken from the verified map's own sources, and that is the
     /// whole load-bearing choice here. Synthetic RVAs at a fixed stride do not exercise the hash:
-    /// a first draft of this test walked `0x400000 + n * 0x10` and stayed GREEN with the slot
-    /// index built from the LOW bits, because uniformly spaced keys land one per probe run
+    /// a first draft of this test walked `0x400000 + n * 0x10` and stayed green with the slot
+    /// index built from the low bits, because uniformly spaced keys land one per probe run
     /// whatever mixing is applied. Real game addresses are not uniform -- 896 of the map's 950
     /// sources are 16-byte aligned -- so the low-bit index collapses 126 of them onto 16 home
     /// slots (measured) and the ledger spills. Hence both assertions below: the spread is what
     /// makes the fit mean something.
     #[test]
     fn the_measured_worst_case_of_real_addresses_fits_without_spilling() {
-        /// 2026-08-29: 54 CALL refusals plus 72 behind the `FOR DETOUR` wording.
+        /// 2026-08-29: 54 call refusals plus 72 behind the `FOR DETOUR` wording.
         const MEASURED_WORST_CASE: usize = 126;
         /// Twice that, because a ledger sized exactly to the last bad day has no headroom for the
         /// next one -- and the first draft of this ledger (256 slots, 8 probes) spilled on
@@ -1634,7 +1634,7 @@ mod tests {
     /// Two addresses that hash to the same slot keep separate counts.
     ///
     /// Collisions are not hypothetical at 256 slots, and a ledger that folded two addresses
-    /// together would silence the second one's FIRST refusal -- reporting one dead feature and
+    /// together would silence the second one's first refusal -- reporting one dead feature and
     /// hiding another, which is worse than the spam it replaced.
     #[test]
     fn colliding_addresses_keep_separate_counts() {
@@ -1660,7 +1660,7 @@ mod tests {
         assert_eq!((total, addresses), (5, 2));
     }
 
-    /// An address that finds no slot is still REPORTED, and still bounded.
+    /// An address that finds no slot is still reported, and still bounded.
     ///
     /// Both halves matter and they pull opposite ways: falling to silence would hide a refusal,
     /// and falling to unconditional logging would restore the unbounded write this exists to
@@ -1690,7 +1690,7 @@ mod tests {
     /// The count cannot carry into the key bits and rename an address.
     ///
     /// Pathological, and cheap to make impossible: the alternative is a slot that silently starts
-    /// counting a DIFFERENT address's refusals, which is a wrong answer rather than a loud one.
+    /// counting a different address's refusals, which is a wrong answer rather than a loud one.
     #[test]
     fn a_saturated_count_never_corrupts_the_address_it_belongs_to() {
         let rva = 0xcf_9300u32;
@@ -1727,7 +1727,7 @@ mod tests {
             .iter()
             .map(|&(from, moved)| (from, moved, table_answer(table, from)))
             .filter(|&(from, moved, answer)| match answer {
-                // The shortcut may claim a source only when the address it hands back IS what the
+                // The shortcut may claim a source only when the address it hands back is what the
                 // row would have returned. That is the rows that did not move, and only them.
                 TableAnswer::AlreadyTranslated => from != moved,
                 TableAnswer::MovedTo { row, to } => to != moved || table[row].0 != from,

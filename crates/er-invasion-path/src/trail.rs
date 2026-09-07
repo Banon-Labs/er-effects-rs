@@ -1,4 +1,4 @@
-//! The run of world markers laid along a route, and the rule for when it is a NEW run.
+//! The run of world markers laid along a route, and the rule for when it is a new run.
 //!
 //! Ungated so `cargo test` compiles it: the pile-up this exists to prevent was a logic bug, not a
 //! game-memory one, and a windows-gated module is never built by the host test run.
@@ -7,7 +7,7 @@ use crate::geometry;
 
 /// One placed marker: where it is, and (on Windows) the handle that removes it.
 ///
-/// The handle is `#[cfg(windows)]` and the POSITION is not, so the pruning arithmetic -- which is
+/// The handle is `#[cfg(windows)]` and the position is not, so the pruning arithmetic -- which is
 /// the part that can be wrong without crashing anything -- stays host-testable.
 #[derive(Default)]
 pub(crate) struct Placed {
@@ -25,7 +25,7 @@ pub(crate) struct Placed {
 /// up, because each pass laid a fresh set on top of the last, and the whole trail appeared at once
 /// for a route the player had already started walking away from.
 ///
-/// A trail is now laid a few markers per pass, from your feet outwards, and it STOPS the moment
+/// A trail is now laid a few markers per pass, from your feet outwards, and it stops the moment
 /// the route changes -- the far end of a route to somebody who is moving was never going to be
 /// where they are by the time you got there.
 #[derive(Default)]
@@ -41,7 +41,7 @@ pub(crate) struct Trail {
 impl Trail {
     /// Point this trail at a new route, if it is actually a different one.
     ///
-    /// Returns whether the trail was restarted. An unchanged route must NOT restart: the markers
+    /// Returns whether the trail was restarted. An unchanged route must not restart: the markers
     /// for it are already in the world, and re-laying them is precisely what made them accumulate.
     pub(crate) fn retarget(&mut self, spots: Vec<[f32; 3]>) -> bool {
         if same_route(&self.spots, &spots) {
@@ -57,7 +57,7 @@ impl Trail {
         self.placed.len()
     }
 
-    /// Which placed markers are far enough BEHIND `player` to be clutter.
+    /// Which placed markers are far enough behind `player` to be clutter.
     ///
     /// "Behind" is by trail order, not by angle: the markers were laid from the player outwards,
     /// so anything before the nearest one is ground already covered. Using distance alone would
@@ -241,7 +241,7 @@ mod tests {
         assert!(!trail.retarget(jittered));
     }
 
-    /// A route that genuinely moved restarts, and restarting STOPS the old laying immediately --
+    /// A route that genuinely moved restarts, and restarting stops the old laying immediately --
     /// which is the point: the far end of a route to somebody who is moving is already wrong.
     #[test]
     fn a_moved_route_restarts_and_abandons_the_rest_of_the_old_one() {
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(trail.laid, 0, "laying restarts from the player's feet");
     }
 
-    /// A different NUMBER of markers is a different route even if the shared prefix matches.
+    /// A different number of markers is a different route even if the shared prefix matches.
     #[test]
     fn a_shorter_or_longer_route_is_a_new_route() {
         let mut trail = Trail::default();
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(trail.batch_bounds(3), (7, 7));
     }
 
-    /// Markers you have walked past are clutter. "Behind" is decided by TRAIL ORDER, not by
+    /// Markers you have walked past are clutter. "Behind" is decided by trail order, not by
     /// distance: a route that doubles back past you -- which a corkscrew does on every turn --
     /// would otherwise have its far end torn down as "near", and that is the half you need.
     #[test]
@@ -316,7 +316,7 @@ mod tests {
     #[test]
     fn a_route_that_doubles_back_does_not_lose_its_far_end() {
         let mut trail = Trail::default();
-        // Out along X, then back to near the start: the LAST marker is closest to the player.
+        // Out along X, then back to near the start: the last marker is closest to the player.
         let spiral = [
             [0.0, 0.0, 0.0],
             [4.0, 0.0, 0.0],
@@ -332,7 +332,7 @@ mod tests {
                 handle: None,
             });
         }
-        // The player is at the START. The nearest marker is index 0, so nothing is behind.
+        // The player is at the start. The nearest marker is index 0, so nothing is behind.
         assert_eq!(trail.stale_prefix([0.0, 0.0, 0.0], 0.0), 0);
         assert_eq!(trail.placed_count(), 5, "the descent survives");
     }

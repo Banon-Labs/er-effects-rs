@@ -4,7 +4,7 @@
 //! resolution, logging, hook installers, the own-stepper drivers) directly out of the
 //! er-quickload flat namespace. Those calls now go through function pointers installed
 //! once at DLL attach via [`install_host`] (the er-loading-portrait-core `PortraitHost`
-//! precedent). Crate-internal wrapper fns keep the EXACT original names/signatures, so
+//! precedent). Crate-internal wrapper fns keep the exact original names/signatures, so
 //! the moved code compiles unchanged. Until a host installs, every seam answers a
 //! neutral default (logging is a no-op, all gates are off, lookups report "nothing"),
 //! so the crate is inert rather than wrong.
@@ -71,11 +71,11 @@ pub struct TitleFlowHost {
     /// native Continue row has something real to load. Idempotent and self-throttling: safe to
     /// call every autoload tick. Returns true once the summary describes the picked container.
     pub refresh_direct_source_profile_summary: fn() -> bool,
-    /// Does the slot the direct-file source will load fingerprint as a REAL character in the live
+    /// Does the slot the direct-file source will load fingerprint as a real character in the live
     /// `CS::ProfileSummary` (level >= 1 + non-empty name)? This is `profile_slot_fingerprint`, not
     /// `saveSlotsStates` -- the occupancy flag says nothing about the record's contents.
     pub direct_source_slot_summary_real: fn() -> bool,
-    /// The same fingerprint WITHOUT the direct-source gate, for the default boot save.
+    /// The same fingerprint without the direct-source gate, for the default boot save.
     pub boot_slot_summary_real: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
@@ -107,7 +107,7 @@ pub struct TitleFlowHost {
     pub now_loading_active: unsafe fn(usize) -> bool,
     pub force_profile_render_tick: unsafe fn(usize, i32),
     pub system_quit_save_swap_recommit_after_return_title_save: fn(),
-    // --- detours whose ADDRESSES the moved hook installers take ----------------------
+    // --- detours whose addresses the moved hook installers take ----------------------
     pub title_update_detour: unsafe extern "system" fn(usize, f32, usize),
     pub pab_node_update_detour: unsafe extern "system" fn(usize, usize, usize, usize) -> usize,
 }
@@ -280,7 +280,7 @@ impl Default for TitleFlowHost {
 static DEFAULT_HOST: TitleFlowHost = TitleFlowHost::defaults();
 static HOST: OnceLock<TitleFlowHost> = OnceLock::new();
 
-/// Install the host seam ONCE, at DLL attach, BEFORE any hook install or task spawn can
+/// Install the host seam once, at DLL attach, before any hook install or task spawn can
 /// run moved code. Returns false (and changes nothing) if a host was already installed.
 pub fn install_host(host: TitleFlowHost) -> bool {
     HOST.set(host).is_ok()
@@ -290,7 +290,7 @@ fn host() -> &'static TitleFlowHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names/signatures ------
+// --- crate-internal wrappers bearing the exact original product names/signatures ------
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     (host().append_autoload_debug)(args)
@@ -314,7 +314,7 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 // autoload/title-flow slice moved their definitions into this crate
 // (`constants_return_title.rs`), so `title_load_step_hooks.rs` / `title_tick_cover.rs` now call
 // the real i32 -> &str tables directly and the wrappers that used to stand here were dead code.
-// The two `TitleFlowHost` FIELDS are deliberately still declared and still installed: the root
+// The two `TitleFlowHost` fields are deliberately still declared and still installed: the root
 // crate's `lib_parts/dll_entry_parts/bootstrap.rs` sets them by name, and this branch does not
 // edit that file. They point at the very functions above (via the root's `constants` re-export
 // shim), so nothing changed behaviourally -- the field is simply no longer read.

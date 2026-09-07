@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Capture the filters ersc attaches to an invasion query, and the keys the matching lobbies carry.
 
-WHY
+Why
 ---
-Every claim in this repo about "which lobbies an invader can reach" traces back to ONE capture of
-ersc's filter set, whose VALUES were then treated as constants:
+Every claim in this repo about "which lobbies an invader can reach" traces back to one capture of
+ersc's filter set, whose values were then treated as constants:
 
     lobby_breakin_lobby_ykssr_199_6      == "true"
     matchmaking_breakin_lobby_ykssr_199_6 == "4_3"
@@ -18,26 +18,26 @@ host opening to wanderers. A lobby the model calls unreachable was reached. Two 
 had already been seen varying (`4_3` vs `5_3`, `1` vs `0`) and were explained away as bracket/DLC
 while `breakin` kept its constant status on no better evidence.
 
-So stop inferring the semantics and MEASURE both halves at once:
+So stop inferring the semantics and measure both halves at once:
 
-  * what the query DEMANDS -- every key, value and comparison operator ersc attaches, and
-  * what the lobbies that PASSED actually carry.
+  * what the query demands -- every key, value and comparison operator ersc attaches, and
+  * what the lobbies that passed actually carry.
 
 A returned lobby whose value contradicts a recorded filter means the model of that filter is wrong
 -- most likely the comparison operator, which was never captured before and was assumed to be
 equality. `ELobbyComparison` also has NotEqual (3) and the four ordering forms, and a NotEqual
 filter reads exactly backwards from an equality one.
 
-WHAT IT HOOKS, AND WHAT IT DELIBERATELY DOES NOT
+What it hooks, and what it deliberately does not
 ------------------------------------------------
 Attaches to vtable slots 5 (string filter), 6 (numerical filter) and 12 (GetLobbyByIndex) only.
 
-It does NOT attach to slot 4 (`RequestLobbyList`) or slot 20 (`SetLobbyData`): the product DLL
+It does not attach to slot 4 (`RequestLobbyList`) or slot 20 (`SetLobbyData`): the product DLL
 already ilhook-detours both, and stacking a Frida trampoline on a live detour of a function this
 path calls constantly is a crash risk taken for no information -- the query's firing is inferred
 from the filter burst that always precedes it.
 
-READ ONLY. Filters are logged, never added or altered; lobby keys are read with `GetLobbyData`.
+Read only. Filters are logged, never added or altered; lobby keys are read with `GetLobbyData`.
 Nothing is published, no session is started, no other player is affected.
 
     uv run --with frida python3 scripts/frida-invader-filter-capture.py
@@ -85,12 +85,12 @@ BASE_KEYS = (
 LOBBY_MAP_KEY = "er_invasion_warp_map"
 
 #: A key no lobby publishes, used to answer the one question hunt's whole mechanism rests on: does
-#: Steam EXCLUDE a lobby that lacks a filtered key? Namespaced so it cannot collide with a real key
+#: Steam exclude a lobby that lacks a filtered key? Namespaced so it cannot collide with a real key
 #: and is obvious in a capture.
 PROBE_KEY = "er_quickload_probe_absent_key"
 PROBE_VALUE = "1"
 
-#: The filter ersc attaches LAST. Injection rides its return, so the probe filter joins the same
+#: The filter ersc attaches last. Injection rides its return, so the probe filter joins the same
 #: accumulated set that the imminent RequestLobbyList consumes -- without hooking RequestLobbyList,
 #: which the product DLL already ilhook-detours.
 LAST_FILTER_KEY = "lobby_key"
@@ -408,9 +408,9 @@ def analyse(filters: list[dict], lobbies: list[dict]) -> dict:
 
 
 def exclusion_verdict(queries: list[dict]) -> dict:
-    """Does Steam EXCLUDE a lobby that lacks a filtered key?
+    """Does Steam exclude a lobby that lacks a filtered key?
 
-    Hunt's entire mechanism rests on yes. If a missing key instead PASSED, an equality filter on a
+    Hunt's entire mechanism rests on yes. If a missing key instead passed, an equality filter on a
     block id would match every vanilla host, and the feature would look like it worked while
     narrowing nothing.
 
@@ -472,7 +472,7 @@ def _selftest() -> int:
     # filter would match every vanilla host and the whole design would silently invert.
     check(satisfies(eq, {}) is False, "a missing key fails an equality filter, it does not pass")
 
-    # THE ASSUMPTION THAT WAS NEVER CHECKED. The old model read every captured key/value pair as
+    # The assumption that was never checked. The old model read every captured key/value pair as
     # equality; NotEqual reverses which lobbies match, which alone could explain a 'false' host
     # being reachable.
     ne = dict(eq, comparison=3)
@@ -516,7 +516,7 @@ def _selftest() -> int:
     check(exclusion_verdict([q(1, False)])["verdict"] == "no-filtered-query",
           "with no injected query nothing was tested")
 
-    # THE TRAP: filtered zero against an empty baseline is 'nobody online'. Reporting it as
+    # The TRAP: filtered zero against an empty baseline is 'nobody online'. Reporting it as
     # confirmation would ship hunt on no evidence at all.
     v = exclusion_verdict([q(0, False), q(0, True)])
     check(v["verdict"] == "inconclusive-empty-baseline",

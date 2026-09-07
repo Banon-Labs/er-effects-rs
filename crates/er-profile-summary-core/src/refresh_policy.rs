@@ -31,7 +31,7 @@ pub enum RefreshStep {
 
 /// Decide this tick from the tick counter and the attempts already spent.
 ///
-/// `tick` is the value BEFORE the increment (the `fetch_add` result), matching the caller.
+/// `tick` is the value before the increment (the `fetch_add` result), matching the caller.
 #[must_use]
 pub fn refresh_step(tick: usize, attempts: usize) -> RefreshStep {
     if !tick.is_multiple_of(REFRESH_ATTEMPT_INTERVAL_TICKS) {
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn an_exhausted_budget_still_costs_nothing_off_the_boundary() {
-        // Order matters: the throttle is checked FIRST, so a spent budget on a non-boundary
+        // Order matters: the throttle is checked first, so a spent budget on a non-boundary
         // tick reports Wait. Both outcomes do nothing; the test pins the branch order so a
         // later reshuffle cannot start reading the file on every frame.
         assert_eq!(refresh_step(1, REFRESH_MAX_ATTEMPTS), RefreshStep::Wait);

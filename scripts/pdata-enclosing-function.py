@@ -2,12 +2,12 @@
 """Ask each ELDEN RING image's own .pdata where the function containing an address begins.
 
 Why this exists: `verify-rva-map-1170.py` reports a pair's entry evidence as a single word
-(BOTH-ENTRIES / NEITHER-ENTRY) and stops there. When a pair comes back NEITHER-ENTRY the next
+(both-entries / neither-entry) and stops there. When a pair comes back neither-entry the next
 question is always the same -- is the real entry a few bytes earlier, is the address in a
-.pdata GAP (a hand-written thunk the linker emitted no unwind record for), or did the two
+.pdata gap (a hand-written thunk the linker emitted no unwind record for), or did the two
 builds disagree about where the function begins? That is what this prints.
 
-USAGE
+Usage
     python3 scripts/pdata-enclosing-function.py 1162:0x141158940 1170:0x14115a740
     python3 scripts/pdata-enclosing-function.py --context 6 1170:0x1408d32b0
 """

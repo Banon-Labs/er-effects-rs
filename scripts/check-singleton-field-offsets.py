@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Prove every repo STRUCT-FIELD OFFSET that a singleton reaches is still a field on 1.17.
+"""Prove every repo STRUCT-field offset that a singleton reaches is still a field on 1.17.
 
-WHY THIS EXISTS -- THE ONE SILENT FAILURE CLASS
+Why this exists -- The one silent failure class
 -----------------------------------------------
 The 1.16.2 -> 1.17 migration has three ways to be wrong about an address, and only two of them
 say anything:
 
-  * a stale DETOUR target        -> `er-hook` refuses the address and logs `HOOK REFUSED`;
+  * a stale detour target        -> `er-hook` refuses the address and logs `HOOK REFUSED`;
   * an unmapped CALL/data RVA    -> the resolver returns 0 and the caller reports it;
-  * a stale STRUCT FIELD OFFSET  -> `*(this + 0xNN)` returns the NEIGHBOURING field.
+  * a stale STRUCT field offset  -> `*(this + 0xNN)` returns the neighbouring field.
 
 The third one has no refusal, no fault and no log line. It returns a plausible number of the
 right width, forever. `crates/er-reload-trace/src/lib.rs` already records the shape in miniature:
-the DLUID global moved 0x485dc18 -> 0x4861d28 and the read against the OLD slot still
+the DLUID global moved 0x485dc18 -> 0x4861d28 and the read against the old slot still
 "succeeded" -- it returned a byte from whatever now lives there.
 
 Nothing in this repo checked field offsets against 1.17 until the 2026-08-30 audit, and the audit
 found the cheapest possible oracle sitting unused.
 
-THE MECHANISM (no dataflow, no RTTI pairing, no heuristics)
+The mechanism (no dataflow, no RTTI pairing, no heuristics)
 -----------------------------------------------------------
-Find `mov r64, [rip+disp32]` whose target is a KNOWN SINGLETON GLOBAL, then take any
+Find `mov r64, [rip+disp32]` whose target is a known singleton global, then take any
 `[reg + 0xNN]` in the next few instructions, before that register is written again. The base
 register PROVABLY holds that singleton -- the instruction two lines up loaded it. So the
 displacement is an object-level ground truth: it is a real field offset of whatever class lives
@@ -31,7 +31,7 @@ object, the set of field offsets 1.16.2 reads and the set 1.17 reads. An offset 
 reads and the new one never reads is a field that moved or vanished -- which is exactly the
 silent failure, made loud.
 
-Measured on the tracked objects today: NOT ONE of the 312 field offsets 1.16.2 reads through
+Measured on the tracked objects today: Not one of the 312 field offsets 1.16.2 reads through
 these globals has disappeared in 1.17 (GameMan 159, GameDataMan 53, CSMenuManImp 44,
 WorldChrManImp 18, SessionManager 16, CSFlipperImp 7, PlayerGameData 15 -- every one of them read
 in both images), and neither image reads one the other does not. So the null result is a real
@@ -39,49 +39,49 @@ null result, measured, not an empty set: see FROZEN_FIELD_COUNTS for why it cann
 become one.
 
 This paragraph used to read "314 ... GameMan 160 ... SessionManager gains one field in 1.17", and
-that extra field was NOT A FIELD. `_follow` walked five instructions past the end of the function
-holding the singleton load and collected whatever the NEXT function did with the register; the
+that extra field was not a field. `_follow` walked five instructions past the end of the function
+holding the singleton load and collected whatever the next function did with the register; the
 1.17 SessionManager "+0x18" was a `lea edx, [rax + 0x18]` six bytes over the boundary. See
 `_follow` for the three artefacts and for why the correct bound is the function extent, never a
 byte or instruction count.
 
-WHAT IT STILL DOES NOT COVER, SAID PLAINLY. Only 65 of the workspace's ~900 named offset constants
+What it still does not cover, said plainly. Only 65 of the workspace's ~900 named offset constants
 are cleared here. 713 have no owner this can establish, 112 have an owner no singleton reaches
 (CS::ChrIns, the dialog layouts, Scaleform::MemoryFile, the FileCap family), and 13 belong to a
 scanned object but are never read through the singleton in either image -- including
 PLAYER_GAME_DATA_IS_MAIN_PLAYER_OFFSET 0x8f0, which the constructor and vtable routes used for
-the pins in crates/er-game-base/src/pgd.rs DO witness. All of those are UNKNOWN. They are printed
-as UNKNOWN, counted as UNKNOWN, and never rolled into the clean number.
+the pins in crates/er-game-base/src/pgd.rs do witness. All of those are unknown. They are printed
+as unknown, counted as unknown, and never rolled into the clean number.
 
-ONE CHAIN HOP
+One chain hop
 -------------
 `CS::PlayerGameData` is not in a global of its own -- it hangs off `GameDataMan + 0x8`
 (`main_player_game_data`), which is the route 20+ live sites in this repo already take and the
 one the sibling `fromsoftware-rs` binding declares. So a chain may carry hops: the scan follows
-`mov r64,[rip+GameDataMan]; mov r64,[r64+0x8]` and then collects `[reg+0xNN]` off the RESULT.
-A hop is only admissible when the hop offset is itself witnessed on the parent object in BOTH
+`mov r64,[rip+GameDataMan]; mov r64,[r64+0x8]` and then collects `[reg+0xNN]` off the result.
+A hop is only admissible when the hop offset is itself witnessed on the parent object in both
 images -- otherwise the hop is exactly the kind of unverified assumption this gate exists to
 refuse -- and that admission is re-derived on every run, never asserted.
 
-WHAT THIS GATE REPORTS, AND WHY IT REPORTS COVERAGE
+What this gate reports, and why it reports coverage
 ----------------------------------------------------
 Nine "audits" in this repo have reported zero findings while real findings stood, because a
 matcher that goes blind produces an empty set and `assert bad == 0` passes over an empty set.
-So this prints THREE numbers, not a verdict:
+So this prints three numbers, not a verdict:
 
-  * how many repo constants it CLEARED (offset witnessed on its owner in both images);
-  * how many it could NOT attribute (no owner, or an owner no singleton reaches) -- these are
-    UNKNOWN, never "fine";
+  * how many repo constants it cleared (offset witnessed on its owner in both images);
+  * how many it could not attribute (no owner, or an owner no singleton reaches) -- these are
+    unknown, never "fine";
   * how many field offsets each scanned object contributed, per image.
 
-The per-object field counts depend ONLY on the two frozen images and this matcher, so they are
-frozen EXACTLY (`FROZEN_FIELD_COUNTS`): a change to the matcher that blinds it moves them and
+The per-object field counts depend only on the two frozen images and this matcher, so they are
+frozen exactly (`FROZEN_FIELD_COUNTS`): a change to the matcher that blinds it moves them and
 this gate goes red instead of reporting a smaller clean set. The cleared-constant floor
 (`MIN_CLEARED_CONSTANTS`) carries headroom instead, because it also depends on repo source that
 lands continuously, and a ratchet that goes red when somebody deletes a constant is a ratchet
 people learn to ignore.
 
-USAGE
+Usage
   python3 scripts/check-singleton-field-offsets.py                  # the gate
   python3 scripts/check-singleton-field-offsets.py --census         # per-object field census
   python3 scripts/check-singleton-field-offsets.py --pgd-offsets    # PGD witnesses (three routes),
@@ -108,7 +108,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import function_extent  # noqa: E402 - repo-local, and the sys.path line above is what makes it work
 
 # --- capstone bootstrap via uv (no persistent install needed) ------------------------------
-# capstone is provisioned at runtime by `uv run --with capstone`; it is NOT in the base
+# capstone is provisioned at runtime by `uv run --with capstone`; it is not in the base
 # interpreter Pyright resolves against, so probe with find_spec (a bare import would be an
 # unresolved-import error) and the `from capstone` imports below carry a documented ignore.
 if importlib.util.find_spec("capstone") is None:
@@ -131,7 +131,7 @@ NEW_IMAGE = os.path.join(REPO, "eldenring-deobf-1.17.bin")
 DATA_MAP = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.data.tsv")
 
 # How many instructions after the singleton load may still be reading through it. The
-# register-clobber, branch and FUNCTION-END stops in `_follow` are what actually bound the window;
+# register-clobber, branch and function-end stops in `_follow` are what actually bound the window;
 # this is the belt. Swept against both images, with the function-end stop in place:
 #
 #   window |  fields witnessed per object          | asymmetric offsets (in one image only)
@@ -141,15 +141,15 @@ DATA_MAP = os.path.join(REPO, "docs", "recon", "rva-map-1162-to-1170.data.tsv")
 #     8    | 161/55/45/18/16/7/16                   | none
 #    12    | 161/55/45/18/16/7/17                   | none
 #
-# READ THAT LAST COLUMN AGAINST THE ONE THIS TABLE USED TO CARRY. Before the function-end stop
+# Read that last column against the one this table used to carry. Before the function-end stop
 # landed (2026-08-31) the sweep reported `GameMan +0x0` lost at 3, and `CSMenuManImp +0x3b` /
-# `SessionManager +0x73` gained at 8, and the tuning note blamed those on a branch JOIN -- an
+# `SessionManager +0x73` gained at 8, and the tuning note blamed those on a branch join -- an
 # address reached from elsewhere with a different value in the register. They were not joins.
-# They were the NEXT FUNCTION: every one of them decoded past a `ret`, out of the de-Arxan'd
+# They were the next FUNCTION: every one of them decoded past a `ret`, out of the de-Arxan'd
 # image's leftover gap bytes, where the "register" holds whatever its real owner put there.
-# `GameMan +0x0`, the "vftable slot" that made 3 look too tight, is a phantom in BOTH images --
+# `GameMan +0x0`, the "vftable slot" that made 3 look too tight, is a phantom in both images --
 # 1.17's two witnesses for it decode as `sar dword ptr [rax], 0x6f` and `and dword ptr [rax], esp`,
-# neither of which was ever assembled. With the real bound in place NOTHING is asymmetric at any
+# neither of which was ever assembled. With the real bound in place nothing is asymmetric at any
 # window, so this parameter is no longer load-bearing; 5 is kept because it is what the frozen
 # counts were re-measured at, not because anything now hinges on it.
 FOLLOW_INSNS = 5
@@ -157,9 +157,9 @@ FOLLOW_INSNS = 5
 FIELD_MAX = 0x20000
 
 # ---------------------------------------------------------------------------------------------
-# WHICH GLOBAL HOLDS WHICH OBJECT.
+# Which global holds which object.
 #
-# Every row is a CLAIM, so each one is either measured by the 2026-08-30 struct-offset audit or
+# Every row is a claim, so each one is either measured by the 2026-08-30 struct-offset audit or
 # reachable from the repo's own named route. A wrong row here would compare a constant against
 # another class's field set, so this table is deliberately short: an object nobody can ground is
 # left out, and its constants are then reported UNATTRIBUTED rather than waved through.
@@ -184,7 +184,7 @@ CHAINS = {
 
 # Repo constants name their owner by prefix far more often than any curated table can keep up
 # with. These are the prefixes whose meaning is unambiguous; anything else falls through to the
-# curated OWNERS table and then to UNATTRIBUTED.
+# curated owners table and then to UNATTRIBUTED.
 NAME_PREFIX_OWNERS = (
     ("PLAYER_GAME_DATA_", "CS::PlayerGameData"),
     ("PGD_", "CS::PlayerGameData"),
@@ -200,16 +200,16 @@ NAME_PREFIX_OWNERS = (
     ("FLIPPER_", "CS::CSFlipperImp"),
 )
 
-# A constant whose NAME says it is an offset. Deliberately the audit's narrow A-tier: a name that
-# merely contains OFFSET somewhere is noise, and inline `+ 0xNN` cannot be told from an index.
+# A constant whose name says it is an offset. Deliberately the audit's narrow A-tier: a name that
+# merely contains offset somewhere is noise, and inline `+ 0xNN` cannot be told from an index.
 OFFSET_NAME = re.compile(r"(_OFFSET(_[A-Z0-9]+)?$|_OFF$|_OFFS$|_FIELD$|_DISP$|_DISPLACEMENT$)")
 
 # ---------------------------------------------------------------------------------------------
-# FROZEN COVERAGE.
+# Frozen coverage.
 #
 # The per-object counts below are (offsets witnessed in 1.16.2, in 1.17, in both). They are a
-# function of the two frozen images and this matcher ALONE -- no repo source enters -- so they are
-# pinned EXACTLY. A change that blinds the scan (a dropped mov encoding, a narrowed follow window,
+# function of the two frozen images and this matcher alone -- no repo source enters -- so they are
+# pinned exactly. A change that blinds the scan (a dropped mov encoding, a narrowed follow window,
 # a wrong global) moves them, and this gate goes red rather than reporting a smaller clean set.
 # That is the whole point: `assert bad == 0` over an empty set is the failure this repo hit nine
 # times in a week.
@@ -217,7 +217,7 @@ OFFSET_NAME = re.compile(r"(_OFFSET(_[A-Z0-9]+)?$|_OFF$|_OFFS$|_FIELD$|_DISP$|_D
 # Refresh deliberately with --refresh-frozen when the matcher is intentionally widened, and read
 # the diff.
 # ---------------------------------------------------------------------------------------------
-# Re-measured 2026-08-31 with the function-end stop in `_follow`. Two rows moved, and BOTH moved
+# Re-measured 2026-08-31 with the function-end stop in `_follow`. Two rows moved, and both moved
 # because a phantom left: GameMan 160 -> 159 (the `+0x0` "vftable slot", read past the `ret` in
 # both images) and SessionManager (16, 17, 16) -> (16, 16, 16) (the 1.17 `+0x18` `lea`, six bytes
 # into the next function). The gate's old headline -- "SessionManager gains one field in 1.17 and
@@ -233,7 +233,7 @@ FROZEN_FIELD_COUNTS = {
 }
 
 # Cleared repo constants. Unlike the counts above this one reads repo source, which lands
-# continuously, so it is a FLOOR with headroom rather than an exact pin -- a ratchet that goes red
+# continuously, so it is a floor with headroom rather than an exact pin -- a ratchet that goes red
 # because somebody deleted a constant is a ratchet people route around. Measured today: 71.
 MIN_CLEARED_CONSTANTS = 60
 
@@ -291,7 +291,7 @@ def _rip_mov_sites(image):
     """[(file_offset, dest_reg_index, target_rva)] for every `mov r64,[rip+d]` in `image`.
 
     Byte-matched first (a regex over 98 MB is milliseconds; decoding 98 MB is not), then each hit
-    is CONFIRMED by decoding it, so a coincidental three bytes inside another instruction cannot
+    is confirmed by decoding it, so a coincidental three bytes inside another instruction cannot
     contribute a field offset.
     """
     out = []
@@ -321,32 +321,32 @@ _R64_INDEX = {reg: i for i, reg in enumerate(_R64)}
 def _follow(image, off, reg_index, hops):
     """Field offsets read through the register loaded at `off`, after walking `hops`.
 
-    Returns a set of displacements. The window closes at the first of: THE END OF THE FUNCTION
-    THE LOAD IS IN, FOLLOW_INSNS instructions, a write to the register being tracked (after which
+    Returns a set of displacements. The window closes at the first of: The end of the function
+    the load is in, FOLLOW_INSNS instructions, a write to the register being tracked (after which
     it no longer holds the singleton), a branch, or a decode failure.
 
-    THE FUNCTION END IS THE ONE THAT WAS MISSING, AND IT INVENTED FIELDS. The premise of this
+    The function end is the one that was missing, and it invented fields. The premise of this
     whole gate -- "the base register PROVABLY holds that singleton, the instruction two lines up
-    loaded it" -- is a statement about STRAIGHT-LINE CODE INSIDE ONE FUNCTION. Past the `ret` it
+    loaded it" -- is a statement about straight-line code inside one function. Past the `ret` it
     is simply false: control does not fall through, the register belongs to whoever comes next,
     and in a de-Arxan'd image the bytes there are the deobfuscator's leftovers, which
     RESYNCHRONISE into instructions nobody assembled. Three measured artefacts, all removed by
     the `body_end` stop below (2026-08-31):
 
       * SessionManager 1.17 `+0x18`. The load sits at 0x140257d0f inside a function ending at
-        0x140257d22; the "read" is `lea edx, [rax + 0x18]` at 0x140257d28, SIX BYTES into the
+        0x140257d22; the "read" is `lea edx, [rax + 0x18]` at 0x140257d28, six bytes into the
         next function -- and a `lea` computing an address, not a field read, at that. It was the
-        SOLE evidence for this file's headline claim that SessionManager gains a field in 1.17.
-      * CS::GameMan `+0x0`, in BOTH images, from two sites each, every one past its function's
+        sole evidence for this file's headline claim that SessionManager gains a field in 1.17.
+      * CS::GameMan `+0x0`, in both images, from two sites each, every one past its function's
         end. 1.17's decode as `sar dword ptr [rax], 0x6f` and `and dword ptr [rax], esp`. This
         is the "vftable slot" the FOLLOW_INSNS table above used to cite as the reason a window of
         3 was too tight.
-      * The `+0x3b` / `+0x73` junk the same table blamed on a branch JOIN at window 8. Also the
+      * The `+0x3b` / `+0x73` junk the same table blamed on a branch join at window 8. Also the
         next function.
 
-    Being symmetric is no defence: `CS::PlayerGameData +0xe5` reads past the FIRST `.pdata` chunk
+    Being symmetric is no defence: `CS::PlayerGameData +0xe5` reads past the first `.pdata` chunk
     in both images and looks clean because both images agree. It survives here only because
-    `function_regions` MERGES CHUNK RUNS, so the read is genuinely inside the function -- which is
+    `function_regions` MERGES chunk runs, so the read is genuinely inside the function -- which is
     exactly why the extent comes from the shared primitive and not from a local `.pdata` walk. A
     hand-rolled reader written for this fix dropped it, wrongly.
     """
@@ -376,7 +376,7 @@ def _follow(image, off, reg_index, hops):
             if not 0 <= mem.disp <= FIELD_MAX:
                 continue
             if remaining:
-                # Still walking to the object: this displacement must BE the hop, and the
+                # Still walking to the object: this displacement must be the hop, and the
                 # instruction must be the load that takes us there.
                 if mem.disp == remaining[0] and insn.id == cs_x86.X86_INS_MOV:
                     dest = insn.operands[0]
@@ -410,7 +410,7 @@ def scan(image, targets, hops_by_target):
 
 
 def build_chains(old_image, new_image, singletons, chains=CHAINS):
-    """Resolve CHAINS against both images. Returns ([Chain], [problem strings])."""
+    """Resolve chains against both images. Returns ([Chain], [problem strings])."""
     problems = []
     resolved = []
     for obj, (const, hops) in chains.items():
@@ -431,7 +431,7 @@ def build_chains(old_image, new_image, singletons, chains=CHAINS):
             setattr(chain, attr, sets[rva])
 
     # Pass 2: the chains with hops. A hop is admissible only when the hop offset is itself
-    # witnessed on the PARENT object in both images -- re-derived here, never asserted.
+    # witnessed on the parent object in both images -- re-derived here, never asserted.
     hopped = [c for c in resolved if c.hops]
     for chain in hopped:
         parent = next((c for c in flat if c.const == chain.const), None)
@@ -516,7 +516,7 @@ def repo_offsets():
 
 
 def classify(rows, chains, curated):
-    """Sort every repo offset row into CLEARED / LOST / NOT-WITNESSED / UNATTRIBUTED."""
+    """Sort every repo offset row into cleared / lost / not-witnessed / UNATTRIBUTED."""
     by_obj = {c.obj: c for c in chains}
     out = collections.defaultdict(list)
     for name, value, path, line in rows:
@@ -538,12 +538,12 @@ def classify(rows, chains, curated):
 
 
 # ---------------------------------------------------------------------------------------------
-# PGD EVIDENCE MODE (--pgd-offsets). NOT part of the gate: nothing here feeds a verdict or a
+# PGD evidence mode (--pgd-offsets). Not part of the gate: nothing here feeds a verdict or a
 # frozen count. It exists so the offsets pinned in crates/er-game-base/src/pgd.rs can be
-# RE-DERIVED, instead of resting on a one-off script somebody ran once and deleted.
+# RE-derived, instead of resting on a one-off script somebody ran once and deleted.
 #
 # Three routes, each proving the base register holds a PlayerGameData without any cross-image
-# function pairing. The sets are built per image and then intersected, so BOTH means 1.16.2 code
+# function pairing. The sets are built per image and then intersected, so both means 1.16.2 code
 # and 1.17 code each read that offset as a PGD field:
 #
 #   A  the singleton chain, GameDataMan(global) -> +0x8 -> PGD  (the gate's own route)
@@ -551,7 +551,7 @@ def classify(rows, chains, curated):
 #   C  the CS::PlayerGameData constructor, the functions it calls with `this` in RCX, and the
 #      methods of the two vtables it stores at [this+0]
 #
-# The constructor pair below was produced by scripts/map-rvas-1162-to-1170.py and is CHECKED here
+# The constructor pair below was produced by scripts/map-rvas-1162-to-1170.py and is checked here
 # rather than trusted: each address must store both declared vtable pointers at [this+0], or this
 # mode refuses to report. A drifted constructor address then says so instead of quietly scanning
 # an unrelated function and printing a confident, wrong witness set.
@@ -571,7 +571,7 @@ def _walk_function(image, va, arg_reg=cs_x86.X86_REG_RCX):
     """Field offsets read through `arg_reg`, plus the vtable pointers stored at [reg+0].
 
     Bounded by the function's own extent, with FUNC_SCAN_BYTES surviving only as a cap on top of
-    it. The `ret` stop below is not a substitute: a function that ends in a TAIL CALL never
+    it. The `ret` stop below is not a substitute: a function that ends in a tail call never
     reaches one, and the walk then ran up to FUNC_SCAN_BYTES into its neighbours. See `_follow`
     for the three field offsets that shape invented in the gate proper.
     """
@@ -788,7 +788,7 @@ def report(chains, buckets, problems, out=sys.stdout):
     per_obj = collections.Counter(row[2] for row in cleared)
     if per_obj:
         print("  cleared by owner: " + ", ".join(f"{k} {v}" for k, v in sorted(per_obj.items())), file=out)
-    # Name the NOT-WITNESSED rows. They are the ones a reader can act on: the owner IS scanned, so
+    # Name the not-witnessed rows. They are the ones a reader can act on: the owner is scanned, so
     # the offset simply never appears in either image through this route, and calling that "clean"
     # is the exact move this gate refuses to make on anyone's behalf.
     for name, value, obj, path, line in sorted(buckets["NOT-WITNESSED"]):
@@ -832,12 +832,12 @@ def check_frozen(chains, buckets, out=sys.stdout):
 
 
 def selftest(old_image, new_image, singletons, out=None):
-    """Positive control, coverage floors, AND a negative control -- so green is not vacuous."""
+    """Positive control, coverage floors, and a negative control -- so green is not vacuous."""
     chains, problems = build_chains(old_image, new_image, singletons)
     curated = _curated_owners()
     buckets = classify(repo_offsets(), chains, curated)
     out = sys.stdout if out is None else out
-    # The full coverage report belongs to the LIVE run, which check.sh prints. Here it is captured
+    # The full coverage report belongs to the live run, which check.sh prints. Here it is captured
     # and replayed only when something is wrong, so the selftest does not double every number.
     captured = io.StringIO()
     report(chains, buckets, problems, out=captured)
@@ -856,7 +856,7 @@ def selftest(old_image, new_image, singletons, out=None):
         print(f"selftest FAIL: {len(problems)} unresolved chain problem(s)", file=out)
         return 1
 
-    # NEGATIVE CONTROL 1 -- a constant on a MOVED field must be caught. Take an offset each
+    # Negative control 1 -- a constant on a moved field must be caught. Take an offset each
     # object reads in 1.16.2 and never in 1.17 if one exists; otherwise fabricate one by
     # taking a witnessed 1.16.2 offset and deleting it from the 1.17 set.
     caught = 0
@@ -880,7 +880,7 @@ def selftest(old_image, new_image, singletons, out=None):
         return 1
     print(f"  negative control: {caught}/{planted} planted moved fields rejected", file=out)
 
-    # NEGATIVE CONTROL 2 -- the hop admission must actually gate. A hop offset that is not
+    # Negative control 2 -- the hop admission must actually gate. A hop offset that is not
     # witnessed on the parent has to make the chain UNUSABLE, not silently scan garbage.
     bogus = dict(CHAINS)
     bogus["CS::PlayerGameData"] = ("GAME_DATA_MAN_GLOBAL_RVA", (0x7,))
@@ -946,7 +946,7 @@ def main():
     args = parser.parse_args()
 
     # The two de-Arxan'd images are gitignored (game-derived bytes are never committed), so a
-    # fresh checkout and CI do not have them. SKIP at exit 0 -- but say SKIPPED, name the missing
+    # fresh checkout and CI do not have them. Skip at exit 0 -- but say skipped, name the missing
     # file, and never print the word this gate prints when it passes. A gate that cannot run must
     # not read like a gate that ran.
     for path in (args.old, args.new, args.map):

@@ -44,7 +44,7 @@
     fn shape_records_preserve_non_minimal_edge_nbits() {
         // A straight edge whose stored NumBits field (10 -> delta width 12) is
         // wider than the minimal width for dx=3 (which needs 3 bits). Byte
-        // identity REQUIRES preserving the source width, not recomputing a
+        // identity requires preserving the source width, not recomputing a
         // minimal one -- the corpus has 1,133 such non-minimal edges.
         let recs = vec![
             ShapeRecord::StraightEdge {
@@ -269,7 +269,7 @@
     #[test]
     fn define_font3_minimal_roundtrip() {
         // Synthetic single-glyph font (no layout) exercising the offset table,
-        // a styleless glyph SHAPE (End-only), and the code table. flags =
+        // a styleless glyph shape (End-only), and the code table. flags =
         // WideCodes only (so codes are u16, offsets u16).
         let mut body = Vec::new();
         body.extend_from_slice(&1u16.to_le_bytes()); // fontId
@@ -307,7 +307,7 @@
 
     #[test]
     fn define_font3_layout_roundtrip() {
-        // Synthetic single-glyph font WITH a layout block (ascent/descent/leading
+        // Synthetic single-glyph font with a layout block (ascent/descent/leading
         // + advance + bounds + empty kerning table), exercising the HasLayout path
         // even when the corpus is absent.
         let mut body = Vec::new();
@@ -375,7 +375,7 @@
         assert_eq!(glyphs.len(), 8);
         assert_eq!(codes[0], 78);
         assert!(layout.is_some());
-        // Glyph 0's first EDGE record is a vertical straight edge dy=-14870, with
+        // Glyph 0's first edge record is a vertical straight edge dy=-14870, with
         // a stored NumBits field of 13 (verifier-confirmed).
         let first_edge = glyphs[0]
             .records

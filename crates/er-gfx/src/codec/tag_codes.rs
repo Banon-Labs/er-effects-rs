@@ -48,7 +48,7 @@ const TAG_DEFINE_SHAPE3: u16 = 32;
 /// `edgeBounds` RECT and a flags byte before the SHAPEWITHSTYLE.
 const TAG_DEFINE_SHAPE4: u16 = 83;
 
-// --- Tier-4 typed tag codes (text/font tags reusing the RECT + SHAPE machinery). ---
+// --- Tier-4 typed tag codes (text/font tags reusing the RECT + shape machinery). ---
 /// `DefineEditText` (code 37): a dynamic/input text field. Body is a
 /// `characterId`, a bounds `RECT` (byte-aligns), a 2-byte flag field, then a set
 /// of per-flag optional fields and two trailing strings. See [`Tag::DefineEditText`].
@@ -173,12 +173,12 @@ const PO3_HAS_BLENDMODE: u8 = 0x02;
 const PO3_HAS_CACHE_AS_BITMAP: u8 = 0x04;
 /// `PlaceFlagHasClassName`: a NUL-terminated class name follows (right after
 /// `depth`). Never set in the corpus, but modelled. Note: the SWF spec's
-/// alternative "(HasImage AND HasCharacter)" class-name trigger is NOT honored
+/// alternative "(HasImage AND HasCharacter)" class-name trigger is not honored
 /// by this Scaleform exporter -- those bodies carry `characterId`+`MATRIX`
 /// directly after `depth` with no class name (corpus-proven), so class name is
-/// gated SOLELY by this bit.
+/// gated solely by this bit.
 const PO3_HAS_CLASSNAME: u8 = 0x08;
-/// `PlaceFlagHasImage`: marks an image/bitmap placement. Bears NO extra field
+/// `PlaceFlagHasImage`: marks an image/bitmap placement. Bears no extra field
 /// (corpus-proven); the bit is preserved verbatim in `flags2`.
 #[allow(dead_code)]
 const PO3_HAS_IMAGE: u8 = 0x10;

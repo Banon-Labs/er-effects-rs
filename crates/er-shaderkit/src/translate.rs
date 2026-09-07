@@ -62,7 +62,7 @@ pub fn dxil_to_spirv(
 ) -> Result<Vec<u8>, TranslateError> {
     let bin = discover_dxil_spirv().ok_or(TranslateError::BinaryMissing)?;
 
-    // Unique scratch paths so concurrent calls don't collide. pid+len is NOT enough:
+    // Unique scratch paths so concurrent calls don't collide. pid+len is not enough:
     // two shaders of equal byte length (e.g. a vpo+ppo pair, or two bundle members)
     // map to the same path, and one call's cleanup deletes the other's output mid-read.
     // A process-global counter makes every call's scratch path distinct.

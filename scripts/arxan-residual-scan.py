@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Is the de-Arxan'd image CODE everywhere a function is declared, or is there ciphertext left?
+"""Is the de-Arxan'd image code everywhere a function is declared, or is there ciphertext left?
 
 # The question
 
 `eldenring-deobf-1.17.bin` is dearxan's output for the installed build, and everything this
 workspace does on 1.17 -- every ledger row, every hook target, every gate that reads the flat
-image -- assumes it is a faithful rendering of the game's code. dearxan proves the CORRECTNESS of
+image -- assumes it is a faithful rendering of the game's code. dearxan proves the correctness of
 what it decrypted (the plaintext is real code). It cannot prove COMPLETENESS: a region whose
 guarding stub it never found would stay ciphertext, and every downstream verdict taken from those
 bytes would be a verdict about noise, silently.
 
 This is the completeness half, run the way it was first run on 2026-07-01 against the previous
-build: walk every DECLARED function and ask whether its bytes decode as code. A function that is
+build: walk every declared function and ask whether its bytes decode as code. A function that is
 still encrypted cannot pass -- Arxan's at-rest filler differs from the plaintext in every single
 byte (measured: of the 89309 bytes dearxan rewrites on 1.17, zero were already equal), so an
 undecrypted function is maximally unlike code, not marginally.
@@ -20,25 +20,25 @@ undecrypted function is maximally unlike code, not marginally.
 
 Two sources, and the second is why this is not just the 2026-07-01 scan re-run:
 
-  * `.pdata` -- the linker's own exception table. Authoritative, but BLIND TO LEAF FUNCTIONS: the
+  * `.pdata` -- the linker's own exception table. Authoritative, but blind to leaf FUNCTIONS: the
     x64 ABI omits unwind data for a function that allocates no stack and calls nothing, and this
     image has 146,715 holes between consecutive `.pdata` extents. A missing entry is not a missing
     function, so `.pdata` alone leaves most small getters unexamined.
   * `--functions`, a Ghidra function list (`scripts/dump-ghidra-function-list.py`). Ghidra's
     analysis finds ~366k functions against ~176k `.pdata` extents, so it reaches into those holes.
 
-# The classifier, and how its thresholds were CALIBRATED rather than guessed
+# The classifier, and how its thresholds were calibrated rather than guessed
 
-Per function, over a prefix bounded by the function's EXTENT (never by a byte count -- see
+Per function, over a prefix bounded by the function's extent (never by a byte count -- see
 `scripts/function_extent.py` and the gate that enforces it):
 
     tail         bytes at the end of the slice capstone could not decode (an invalid opcode)
     common_frac  share of decoded instructions whose mnemonic is one a compiler emits
     distinct     distinct byte values in the prefix, over the prefix length
 
-    FLAGGED  <=>  distinct >= 0.75  AND  (tail >= 15  OR  common_frac < 0.5)
+    Flagged  <=>  distinct >= 0.75  and  (tail >= 15  or  common_frac < 0.5)
 
-Those numbers are not taste. 1.17 supplies a LABELLED dataset for free: the same 1371 spans exist
+Those numbers are not taste. 1.17 supplies a labelled dataset for free: the same 1371 spans exist
 as ciphertext in the installed `eldenring.exe` and as plaintext in the deobfuscated image, so the
 rule can be scored against known-encrypted and known-decrypted bytes at identical addresses. Over
 the 831 spans of at least 32 bytes, measured 2026-08-31:
@@ -48,17 +48,17 @@ the 831 spans of at least 32 bytes, measured 2026-08-31:
     control     flagged  0.225% <- 4000 random `.pdata` functions
 
 The `distinct` half alone separates them perfectly on those spans (1.000 against 0.000); it is the
-`tail`/`common_frac` half that keeps ordinary-but-unusual code out. Sensitivity is per FUNCTION, and
+`tail`/`common_frac` half that keeps ordinary-but-unusual code out. Sensitivity is per function, and
 that is the honest way to read it: a single encrypted 64-byte prefix escapes 12% of the time, but a
-missed region covers a RUN of functions, and three consecutive misses have probability 0.0017.
+missed region covers a run of functions, and three consecutive misses have probability 0.0017.
 Random bytes decode into mostly-arithmetic x86 far more often than intuition suggests -- a uniform
 byte stream scores common_frac 0.78 -- which is exactly why a common-mnemonic test alone was not
 enough and the two-part rule is.
 
 Flagging is not a defect count. The 2026-07-01 run flagged 13 functions out of 228,889 and every
-one turned out to be Arxan CONTROL-FLOW obfuscation -- `jmp`/`jcc` trampolines whose entry lives in
+one turned out to be Arxan control-flow obfuscation -- `jmp`/`jcc` trampolines whose entry lives in
 Arxan's own `.text` -- which is a different protection layer, out of dearxan's decryption scope,
-and present in a runtime dump too. So the output is a rate and a CLUSTERING, and the verdict is
+and present in a runtime dump too. So the output is a rate and a clustering, and the verdict is
 about where the flags fall, not how many there are. A missed decryption is regional: it would put
 a dense run of flags inside one address range, not a scatter.
 
@@ -155,7 +155,7 @@ def classify(md, blob: bytes, va: int, end_off: int) -> tuple[int, float, float,
 
 
 def flagged(tail: int, common_frac: float, distinct_ratio: float) -> bool:
-    """Not-code means unlike code on the byte axis AND on the decode axis at once.
+    """Not-code means unlike code on the byte axis and on the decode axis at once.
 
     Both halves earn their place: a run of `00` padding is not code but is not ciphertext either
     and fails the first, while a small hand-written thunk can fail the second and is ordinary. See
@@ -184,7 +184,7 @@ def entries_from_tsv(path: str) -> list[tuple[int, int]]:
 
 
 def applied_regions(path: str) -> list[tuple[int, int]]:
-    """Merged `(start_rva, end_rva)` spans dearxan APPLIED, from a `dearxan-profile` region TSV."""
+    """Merged `(start_rva, end_rva)` spans dearxan applied, from a `dearxan-profile` region TSV."""
     spans = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -242,7 +242,7 @@ def scan(image: str, functions: str | None, regions: str | None, out: str | None
     hits = 0
     in_applied = 0
     for va in ordered:
-        # THE EXTENT, NOT A BYTE COUNT. `body_end` answers from `.pdata`'s declared start, then an
+        # The extent, not a byte count. `body_end` answers from `.pdata`'s declared start, then an
         # enclosing extent, then a decoded leaf watermark, and returns None rather than guessing.
         # `limit` bounds only that last arm, so a leaf costs one prefix-sized decode.
         end = function_extent.body_end(blob, va, limit=PREFIX_BYTES)
@@ -292,7 +292,7 @@ def selftest() -> int:
     """Drive the classifier with bytes whose verdict is known, both ways.
 
     Vacuity is the failure this guards against: a scan that flags nothing is indistinguishable
-    from a scan that cannot flag anything. So the negative control is REAL COMPILED CODE and the
+    from a scan that cannot flag anything. So the negative control is real compiled code and the
     positive control is a deterministic byte stream standing in for ciphertext, and the test fails
     if either lands on the wrong side.
     """
@@ -323,7 +323,7 @@ def selftest() -> int:
     assert ncommon >= COMMON_MIN, f"noise should score HIGH on common mnemonics: {ncommon}"
     assert ntail >= TAIL_MIN, ntail
 
-    # A run of zero padding must NOT be flagged: it is not code, but it is not ciphertext either,
+    # A run of zero padding must not be flagged: it is not code, but it is not ciphertext either,
     # and the distinct-byte half of the rule is the only thing separating them.
     ztail, zcommon, zdistinct, _n = classify(md, b"\x00" * PREFIX_BYTES, BASE, PREFIX_BYTES)
     assert not flagged(ztail, zcommon, zdistinct), "zero padding flagged as ciphertext"

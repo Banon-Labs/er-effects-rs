@@ -1,12 +1,12 @@
 //! One line on whatever overlay the process already has. Never a second one.
 //!
-//! This DLL is a GUEST and only a guest. It never calls `Hudhook::apply()`, even when nothing else
+//! This DLL is a guest and only a guest. It never calls `Hudhook::apply()`, even when nothing else
 //! in the process hosts an overlay -- two `apply()` calls double-hook `Present` and the second one
 //! silently renders nothing, which is the failure `er_build_watermark_core::overlay_host` exists
 //! to end. A diagnostic sentence is not worth owning the swapchain and putting a richer UI at risk
 //! of being the one that loses.
 //!
-//! The consequence, stated rather than hidden: loaded ALONE, with no watermark and no path
+//! The consequence, stated rather than hidden: loaded alone, with no watermark and no path
 //! overlay in the profile, this DLL draws nothing at all. The report is in the log either way, and
 //! the log is the primary surface.
 
@@ -52,7 +52,7 @@ pub fn draws() -> usize {
 ///
 /// `frame` is the pointer the overlay host just passed, live for the duration of this call.
 unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
-    // Adopt the host's imgui context and allocators BEFORE touching `ui`: imgui's current context
+    // Adopt the host's imgui context and allocators before touching `ui`: imgui's current context
     // is a per-DLL global, so this module's copy is null until this runs and the first `ui.io()`
     // would fault inside `Present`.
     // SAFETY: `frame` is the host's live pointer.

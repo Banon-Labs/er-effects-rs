@@ -25,16 +25,16 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         && SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst) != 0
     {
-        // Close ProfileSelect via the NATIVE cancel/back close (FUN_1407ac980: SetResult(Failed) +
-        // window close vmethod) instead of arming the confirm-LOAD. Arming the load (writing
-        // load_job_ctx+0x14c=2, the coupled Success-close path) makes the game enter an IN-WORLD
+        // Close ProfileSelect via the native cancel/back close (FUN_1407ac980: SetResult(Failed) +
+        // window close vmethod) instead of arming the confirm-load. Arming the load (writing
+        // load_job_ctx+0x14c=2, the coupled Success-close path) makes the game enter an in-world
         // load/warp transition (GameMan.saveState/b80 -> 2 -> DoSaveStuff). Even with the actual
         // deserialize skipped by the FUN_14067b290 guard, that half-started transition sticks the game
-        // at a loading screen and BLOCKS the return-title chain from ever running (observed 2026-07-01:
+        // at a loading screen and blocks the return-title chain from ever running (observed 2026-07-01:
         // stuck, return_title functor_call_count=0, save_state=3, player still present). The cancel-close
-        // pops the ProfileSelect window WITHOUT starting any load, so the menu-pump return-title chain
+        // pops the ProfileSelect window without starting any load, so the menu-pump return-title chain
         // tears the world down cleanly and the autoload loads the picked slot at a clean title. This
-        // runs in menu-pump ownership (this IS the native confirm callback) and one-shot -- not the racy
+        // runs in menu-pump ownership (this is the native confirm callback) and one-shot -- not the racy
         // game-task tick. See bd system-quit-load-profile-6runs-state-2026-07-01.
         let load_job_ctx = unsafe { safe_read_usize(dialog + 0x1cc8) }.unwrap_or(0);
         if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -65,17 +65,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     unsafe { original(action_obj) }
 }
 
-/// PORTRAIT RETARGET + boot-view cover rearm for an own-menu character switch. It used to be SHARED
-/// between the USER ProfileSelect arm (`system_quit_arm_quickload_autoload`) and a menu-free
+/// Portrait RETARGET + boot-view cover rearm for an own-menu character switch. It used to be shared
+/// between the user ProfileSelect arm (`system_quit_arm_quickload_autoload`) and a menu-free
 /// control-file arm; that second arm was deleted on 2026-09-05, so ProfileSelect is now the sole
 /// caller and the no-drift argument this doc used to make has nothing left to drift against.
 /// Game thread only.
 ///
-/// PORTRAIT RETARGET (user 2026-07-03): the user just confirmed a NEW character for load, so the
-/// loading-screen portrait should render THAT character, not the one still resident (ac0). Make it
+/// Portrait RETARGET (user 2026-07-03): the user just confirmed a new character for load, so the
+/// loading-screen portrait should render that character, not the one still resident (ac0). Make it
 /// before-break: retarget the spare/render to the selected slot (portrait_target_slot now returns
-/// it) and RE-ENGAGE the drive (clear the per-window freeze) so the new model renders + gets its
-/// depth mask -- but do NOT touch LOADING_BG_PORTRAIT_RGBA / PROFILE_HAVE_KEYED_FRAME, so the prior
+/// it) and RE-engage the drive (clear the per-window freeze) so the new model renders + gets its
+/// depth mask -- but do not touch LOADING_BG_PORTRAIT_RGBA / PROFILE_HAVE_KEYED_FRAME, so the prior
 /// masked head keeps displaying until the new model's first KEYED frame replaces it (no opaque
 /// flash, no blank). Clear the stale spare candidate (captured for the old character before this
 /// confirm) so the teardown-spare re-targets the new slot, and drop the depth-mask cache so the new
@@ -85,14 +85,14 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
     PROFILE_SPARE_CANDIDATE_MODEL.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     invalidate_portrait_depth_mask();
-    // ORPHAN RECLAIM AT SWITCH ARM (second-load foreign-head fix, pixel-proven 2026-07-06 run
+    // Orphan reclaim at switch arm (second-load foreign-head fix, pixel-proven 2026-07-06 run
     // jsm-slotstats2-switchqa). The prior window's spared renderer parks in PROFILE_SPARE_ORPHAN at the
     // load-complete reset and was only delete-enqueued inside profile_renderer_teardown_spare_hook --
     // but the System-Quit switch path never fires that native teardown-all (spare_hits stayed 1,
-    // orphans_deleted 0 across the whole run), so the orphan lived through the NEXT loading window with
-    // its model + offscreen scene still registered, rendering the PREVIOUS character's head every frame.
+    // orphans_deleted 0 across the whole run), so the orphan lived through the next loading window with
+    // its model + offscreen scene still registered, rendering the previous character's head every frame.
     // The new window's readback then published that head under the correctly-kicked new renderer
-    // (window-2 RT dump structure-correlated 0.92 with the window-1 character). Reclaim it HERE, on the
+    // (window-2 RT dump structure-correlated 0.92 with the window-1 character). Reclaim it here, on the
     // game thread at the confirm press (same delay-delete path as the spare hook), so the new window's
     // offscreen render belongs to the new character alone.
     let orphan = PROFILE_SPARE_ORPHAN.swap(0, Ordering::SeqCst);
@@ -104,8 +104,8 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
         ));
     }
     PROFILE_PORTRAIT_RETARGETS.fetch_add(1, Ordering::SeqCst);
-    // OFFSCREEN-SIZE ROW FIRST (2026-07-30, different-slot 256x256 root cause): the selected slot is
-    // known HERE, before any of this switch's profile-table builds (ours at the loading screen AND the
+    // OFFSCREEN-size row first (2026-07-30, different-slot 256x256 root cause): the selected slot is
+    // known here, before any of this switch's profile-table builds (ours at the loading screen and the
     // native TitleTopDialog rebuild at the title transition). Patch its offscreen-size row now so every
     // renderer constructed for this switch snapshots the full-size RT; waiting for the loaded-slot flip
     // left the row native 128 until after both builds (run 20260730-202840).
@@ -120,7 +120,7 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
             }
         }
     }
-    // CONFIRM TIMESTAMP (bd er-effects-rs-dpf6 Phase 1): the first portrait publish after this confirm
+    // Confirm TIMESTAMP (bd er-effects-rs-dpf6 Phase 1): the first portrait publish after this confirm
     // consumes it to measure oracle_portrait_confirm_to_publish_ms (the publish-race latency).
     PORTRAIT_CONFIRM_MS.store(
         crate::experiments::boot_view_epoch_ms().max(1) as usize,
@@ -132,11 +132,11 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
     rearm_boot_progress_for_own_menu_load(selected_slot, source);
 }
 
-/// Hand System->Quit->Load Character back so it works a SECOND time, and a third.
+/// Hand System->Quit->Load Character back so it works a second time, and a third.
 ///
 /// Everything this touches is a one-shot the switch just spent. The teardown that clears the old
 /// world runs exactly once per session unless these are handed back: the native return-title
-/// REQUEST fires only while `RETURN_TITLE_REQUEST_COUNT == 0`, the menu-pump submit only while
+/// request fires only while `RETURN_TITLE_REQUEST_COUNT == 0`, the menu-pump submit only while
 /// `DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT == 0`, and the final functor is a
 /// `FINAL_FUNCTOR_CALL_COUNT` compare_exchange 0 -> 1. Spent, the next switch arms, reports
 /// `direct_chain_submitted=true` without submitting anything, and never asks for a teardown: the
@@ -150,13 +150,13 @@ pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, 
 /// its rows do nothing. Resetting them makes the next quit-menu open repopulate through the
 /// MenuWindowJob::Run hook, exactly as it did the first time.
 ///
-/// WHEN IT IS SAFE TO CALL. Only once this switch's return-title machinery is fully consumed --
-/// i.e. after the load has been committed. Resetting at ARM time was tried and reverted on
+/// When it is safe to call. Only once this switch's return-title machinery is fully consumed --
+/// i.e. after the load has been committed. Resetting at arm time was tried and reverted on
 /// 2026-07-02 (the commented-out pair below): the counters are re-consumed during the teardown
-/// still in flight, the chain double-submits, and even a SINGLE switch bounces back to the title.
+/// still in flight, the chain double-submits, and even a single switch bounces back to the title.
 /// At the commit point both remaining gates are independently shut -- `SYSTEM_QUIT_QUICKLOAD_PHASE`
-/// is IDLE (every return-title gate requires >= RETURN_TITLE_REQUESTED) and `GameMan+0xbc4` is 0
-/// (the final functor requires READY) -- so handing the counters back opens nothing until the next
+/// is idle (every return-title gate requires >= RETURN_TITLE_REQUESTED) and `GameMan+0xbc4` is 0
+/// (the final functor requires ready) -- so handing the counters back opens nothing until the next
 /// arm deliberately re-opens it.
 pub(crate) unsafe fn system_quit_rearm_switch_for_next_load(source: &str) {
     let spent = (
@@ -170,7 +170,7 @@ pub(crate) unsafe fn system_quit_rearm_switch_for_next_load(source: &str) {
     unsafe { system_quit_reset_profile_select_state(source) };
     SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
-    // `load=` is not decoration. Every switch hands back the SAME values (1/1/1), so without a
+    // `load=` is not decoration. Every switch hands back the same values (1/1/1), so without a
     // per-call discriminator the second call's line is byte-identical to the first and the debug
     // log's repeat filter SUPPRESSES it outright -- silently, because two occurrences is below its
     // first restatement milestone. Measured on run br-20260905-215045-c4c6: the re-arm ran for both
@@ -201,59 +201,59 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
         ));
         return;
     }
-    // DISABLED (2026-07-01): the CSGaitemImp deserialize/lookup/finalize guards only ever CORRUPT
+    // Disabled (2026-07-01): the CSGaitemImp deserialize/lookup/finalize guards only ever corrupt
     // the gaitem singleton -- emptying gaitemInsTable handles left a garbage non-canonical entry that
     // crashed GetGaitemIns->GetGaitemHandle (live 0x6710c0). They were a doomed attempt to make the
-    // in-world load "safe"; we now BLOCK the in-world load-job entirely (see the robust gate in
+    // in-world load "safe"; we now block the in-world load-job entirely (see the robust gate in
     // system_quit_profile_load_job_run_hook) and return to title + autoload instead, so no in-world
     // gaitem deserialize should run. Leaving them installed would additionally corrupt the AUTOLOAD's
     // own post-title load whenever it deserializes while phase is still 1..3. Not installing them lets
     // every real deserialize run natively. (Install fns retained for reference / bisecting.)
-    // Install the load-ONLY guard so the picked slot is not deserialized into the still-live world
+    // Install the load-only guard so the picked slot is not deserialized into the still-live world
     // when the native confirm arms the load; it forwards the real load at a clean title (autoload).
     install_system_quit_inworld_load_guard();
-    // Install the in-world load REQUEST guard: neutralizes the native RequestLoadSlot (FUN_14067b2f0)
-    // so GameMan.saveState/b80 never reaches 2 during the switch. This is the TRUE source of the
+    // Install the in-world load request guard: neutralizes the native RequestLoadSlot (FUN_14067b2f0)
+    // so GameMan.saveState/b80 never reaches 2 during the switch. This is the true source of the
     // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
     // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
     install_system_quit_request_load_slot_guard();
-    // REVERTED 2026-07-16: wiring install_system_quit_gaitem_deserialize_hook() here (to backstop the
-    // 0x67141a stale-table AV) was WORSE -- its handler's SKIP path during the return-title transition
-    // (phase CONFIRMED..HANDOFF) leaves the gaitem singleton inconsistent and the game DL_PANICs from inside
-    // the gaitem code (crash stk showed the panic called from game+0x671843). That broke the FIRST switch
+    // Reverted 2026-07-16: wiring install_system_quit_gaitem_deserialize_hook() here (to backstop the
+    // 0x67141a stale-table AV) was worse -- its handler's skip path during the return-title transition
+    // (phase confirmed..HANDOFF) leaves the gaitem singleton inconsistent and the game DL_PANICs from inside
+    // the gaitem code (crash stk showed the panic called from game+0x671843). That broke the first switch
     // (DL_PANIC before the load) whereas without the hook the first switch completes via continue_confirm.
     // The 0x67141a crash on the 2nd+ consecutive switch remains a separate, pre-existing issue to solve
-    // without this SKIP-based hook (2026-07-01 already noted these gaitem guards corrupt the singleton).
+    // without this skip-based hook (2026-07-01 already noted these gaitem guards corrupt the singleton).
     // Re-arm the continue_confirm guard's one-shot: the upcoming clean-title confirm must drive a
-    // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
+    // fresh deserialize of this switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
     // Re-arm the menu-free clean-title switch reload one-shot so every switch (not just the first) can
     // drive its own picked-slot feed-deserialize -> continue_confirm (own_load_switch_reload_fire).
     SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED.store(0, Ordering::SeqCst);
-    // Reset the switch-reload FD4-IO phase + Phase-3 outgoing-teardown latches. The USER ProfileSelect arm
-    // was MISSING these (only the since-deleted menu-free arm had them), so a user-driven CONSECUTIVE load
+    // Reset the switch-reload FD4-IO phase + Phase-3 outgoing-teardown latches. The user ProfileSelect arm
+    // was missing these (only the since-deleted menu-free arm had them), so a user-driven consecutive load
     // inherited SWITCH_RELOAD_FD4IO_COMMITTED=1 stale from the prior load -> own_load_switch_reload_fire
-    // short-circuited at the already-committed guard -> no SUBMIT -> FRESH_DESER_DONE stuck 0 -> the b78
+    // short-circuited at the already-committed guard -> no submit -> FRESH_DESER_DONE stuck 0 -> the b78
     // guard wrote GameMan requestedSaveSlotLoad=-1 every frame -> native pump gate false -> world torn down
-    // at ENTERING WORLD = the load3 softlock (bd compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
-    // These are the FD4IO/OUTGOING latches the deleted menu-free arm already reset safely -- NOT the
+    // at entering world = the load3 softlock (bd compounding-reload-two-roots-...-chainB-stale-fd4io-latch-b78-2026-07-23).
+    // These are the FD4IO/OUTGOING latches the deleted menu-free arm already reset safely -- Not the
     // RETURN_TITLE/FINAL_FUNCTOR counters that the 2026-07-02 bisect below found regressive.
     crate::experiments::own_load::reset_switch_reload_latches();
-    // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
+    // Re-arm the return-title one-shots so every switch (not just the first) tears the world down.
     // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
-    // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and
+    // session would skip the native return-title request (`== 0` gate, sets saveRequested+bc4=1) and
     // the final-functor submit (compare_exchange 0->1 gate), leaving the second switch stuck in-world.
     // Resetting them here (the per-switch arm point) is the durable fix for repeatable switching
-    // (er-effects-rs-qwj). SUBMIT_COUNT is intentionally NOT reset: title.rs uses it as a `> 0` enable
+    // (er-effects-rs-qwj). SUBMIT_COUNT is intentionally not reset: title.rs uses it as a `> 0` enable
     // and it re-increments before the final functor needs it.
-    // BISECT 2026-07-02: these two resets regressed even the SINGLE-switch reload (base f59b2af
-    // passes, adding them causes a SECOND title bounce after the load / new-game flash). Disabled
+    // BISECT 2026-07-02: these two resets regressed even the single-switch reload (base f59b2af
+    // passes, adding them causes a second title bounce after the load / new-game flash). Disabled
     // while isolating; a switch-#2-safe re-arm will be reinstated once the mechanism is understood.
     // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
     // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
-    // SPURIOUS-vs-GENUINE arm discriminator (2026-07-18). Record whether the local player is ABSENT at
+    // SPURIOUS-vs-genuine arm discriminator (2026-07-18). Record whether the local player is absent at
     // the instant of the arm. A spurious boot self-reload arms from the title/menu (player absent) while a
     // genuine in-world switch arms with the player present. The in-world time-based disarm keys on this so
     // it only cancels the spurious boot self-reload, never a real switch. See profile_render.rs
@@ -274,12 +274,12 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
     OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
-    // Re-arm the product-core-autoload CONTINUE DRIVER for repeatable switching (2026-07-15): FULLREAD_PHASE is
+    // Re-arm the product-core-autoload continue driver for repeatable switching (2026-07-15): FULLREAD_PHASE is
     // a one-shot that reaches FULLREAD_PHASE_DONE after the first switch's Continue and then early-returns
     // (product_continue.rs:282), so the 2ND consecutive switch's return-title reaches the title but nothing
-    // drives its native Continue -> stuck at the covered title (the "black screen"). Reset the phase to SUBMIT
+    // drives its native Continue -> stuck at the covered title (the "black screen"). Reset the phase to submit
     // and drop the stale MENU_CONTINUE_* row/router pointers captured for the previous switch's (torn-down)
-    // menu, so the driver re-captures + re-submits the Continue for THIS switch. Idempotent one-shots reset to
+    // menu, so the driver re-captures + re-submits the Continue for this switch. Idempotent one-shots reset to
     // their init values, exactly like the per-switch latches above; the continue_confirm/world-up guards still
     // prevent driving a load into a live world. (Distinct from the return-title one-shots at 868-869, which the
     // 2026-07-02 bisect showed regress the single switch -- those stay disabled.)
@@ -296,19 +296,19 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.store(0, Ordering::SeqCst);
     PROFILE_REFRESH_KICKED.store(0, Ordering::SeqCst);
     PORTRAIT_RENDER_WINDOW_DONE.store(0, Ordering::SeqCst);
-    // Reset the switch-outcome oracle so THIS switch's classification starts fresh (see the atomics' doc).
+    // Reset the switch-outcome oracle so this switch's classification starts fresh (see the atomics' doc).
     SWITCH_ORACLE_TICK.store(0, Ordering::SeqCst);
     SWITCH_ORACLE_STABLE_FRAMES.store(0, Ordering::SeqCst);
     SWITCH_ORACLE_MAX_STABLE_FRAMES.store(0, Ordering::SeqCst);
-    // SWITCH-2 SOFT-LOCK FIX (arm-point pre-clear, 2026-07-16). RE of the 1.16.1 dump proved the switch-2
+    // Switch-2 soft-lock fix (arm-point pre-clear, 2026-07-16). RE of the 1.16.1 dump proved the switch-2
     // freeze is the native quit-save (`ShouldSave` 0x1406794c0) aborting on a stale
     // `CSMenuMan->disableSaveMenu` (+0x13c, read by `CanShowSaveMenu` 0x14080d150) left set from the prior
-    // switch's menu flow -- so `bc4` freezes at 1 and the world never tears down. Clear it HERE, the moment
+    // switch's menu flow -- so `bc4` freezes at 1 and the world never tears down. Clear it here, the moment
     // this switch arms its return-title, so the gate is already open before the quit-save orchestrator runs
     // (belt-and-suspenders with the per-frame game-task clear in product_core_autoload_tick and the menu-pump
     // clear in system_quit_restore_real_system_windows). No-op / inert on switch 1 (its byte is already 0);
     // reuses the shared startup_hooks helper. SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT is the runtime
-    // semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
+    // semaphore: >0 on a switch == that switch's quit-save was gated off and we unblocked it.
     let base = er_game_base::mem::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     if base != TITLE_OWNER_SCAN_START_ADDRESS {
         let dsm_prev =
@@ -327,16 +327,16 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
 }
 
 /// Guard on the load-only routine `FUN_14067b380(slot)`. While the in-world System->Quit->Load-Profile
-/// transition is active (phase in CONFIRMED..AUTOLOAD_HANDOFF) AND the old world is still up (local
+/// transition is active (phase in confirmed..AUTOLOAD_HANDOFF) and the old world is still up (local
 /// player present), skip the deserialize+warp and report success -- so `DoSaveStuff` completes (clears
 /// its pending slot) and ProfileSelect closes, but nothing loads into the live world. At a clean title
 /// (player absent, or phase past the transition) it forwards to the real load so the autoload works.
 ///
-/// UNION-SHAPED, not `fn(i32)` (2026-08-31). The native takes ONE integer in ECX and touches no
+/// Union-shaped, not `fn(i32)` (2026-08-31). The native takes one integer in ECX and touches no
 /// XMM register (checked on the 1.17 image at `0x14067c0e0`: 112 instructions, zero XMM), so the
 /// union's four-integer signature fits it -- `b`/`c`/`d` are whatever the caller happened to leave
-/// in RDX/R8/R9 and are forwarded untouched. The shape matters because `orig` may be the NEXT
-/// HANDLER in the chain rather than the game trampoline, and a next handler must be called through
+/// in RDX/R8/R9 and are forwarded untouched. The shape matters because `orig` may be the next
+/// handler in the chain rather than the game trampoline, and a next handler must be called through
 /// the four-argument signature.
 pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
     slot_arg: usize,
@@ -391,9 +391,9 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
     ret
 }
 
-/// THIS GUARD REGISTERS THROUGH THE UNION, and until 2026-08-31 it did not -- so it did not exist.
+/// This guard registers through the union, and until 2026-08-31 it did not -- so it did not exist.
 ///
-/// A bare `MhHook::new` here lost the address to the product's OWN menu-trace observer
+/// A bare `MhHook::new` here lost the address to the product's own menu-trace observer
 /// (`b80_deserialize_67b290`, `experiments/trace/menu_trace_hooks.rs`), which unions
 /// `DESERIALIZE_SLOT_RVA` -- the same `0x67b290` -- at boot. Measured in run
 /// `br-20260831-160354-2513`: `register_union_hook` translated it to `0x14067c0e0` at +1288ms, this
@@ -402,12 +402,12 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(
 /// crashed; the picked slot was free to deserialize into the still-live world.
 ///
 /// `mh_install_hook_once` is the right primitive rather than a permanent `*_CLAIMED.swap(1)`,
-/// because this installer is LAZY and REPEATED: `system_quit_arm_quickload_autoload` calls it every
+/// because this installer is lazy and REPEATED: `system_quit_arm_quickload_autoload` calls it every
 /// time a switch arms, and a failure there (module base not yet readable, a refused address) must
 /// leave the next arm free to retry. The permanent-claim idiom is for installers whose every
 /// reachable failure is permanent.
 pub(crate) fn install_system_quit_inworld_load_guard() {
-    // UNRESOLVED on purpose: `register_union_hook` inside `mh_install_hook_once` owns the single
+    // Unresolved on purpose: `register_union_hook` inside `mh_install_hook_once` owns the single
     // 1.16.2 -> 1.17 resolve. `game_rva` here would be the double-resolve shape
     // `scripts/check-double-resolved-hook-targets.py` refuses.
     let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
@@ -427,20 +427,20 @@ pub(crate) fn install_system_quit_inworld_load_guard() {
     );
 }
 
-/// Guard on the native in-world load REQUEST `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
-/// 0x67b200). This is the TRUE source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
+/// Guard on the native in-world load request `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
+/// 0x67b200). This is the true source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
 /// the per-frame MoveMapStep load steps call it once the confirmed ProfileSelect chain pushes the map
 /// machine into loading, and it sets saveState=2, which starts the 02_904_NowLoading transition that
 /// freezes the menu pump so the queued return-title chain can never run. During the in-world
-/// System->Quit->Load-Profile transition (phase active AND old world still up / local player present)
-/// we return "not armed" (0) WITHOUT calling the original, so saveState never reaches 2: no NowLoading,
+/// System->Quit->Load-Profile transition (phase active and old world still up / local player present)
+/// we return "not armed" (0) without calling the original, so saveState never reaches 2: no NowLoading,
 /// the pump keeps running, and the menu-pump-owned return-title chain tears the world down. Once the
 /// world is gone (player absent) or the switch is idle, we forward to the real request -- so the
 /// clean-title autoload and any normal load work. The boot/Continue autoload uses the distinct sentinel
 /// variants (FUN_14067b290 slot 10 / FUN_14067b570 slot 0xb), which this hook does not touch. See bd
 /// system-quit-loadjob-success-commits-phantom-load-2026-07-01.
 ///
-/// UNION-SHAPED for the same reason as its in-world-load sibling: one integer in ECX, zero XMM in
+/// Union-shaped for the same reason as its in-world-load sibling: one integer in ECX, zero XMM in
 /// the whole body (checked on the 1.17 image at `0x14067c050`: 40 instructions), and `orig` may be
 /// the next chained handler rather than the game trampoline.
 pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
@@ -451,10 +451,10 @@ pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
 ) -> usize {
     let slot = slot_arg as u32;
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    // Range-gate like the sibling system_quit_inworld_load_skip_hook (NOT `!= IDLE`): the clean-title
+    // Range-gate like the sibling system_quit_inworld_load_skip_hook (not `!= IDLE`): the clean-title
     // reload runs at AUTOLOAD_HANDOFF and re-creates a present player, so a `!= IDLE` gate would
-    // neutralize the RELOAD's own RequestLoadSlot mid-load. Neutralize only during the first-world
-    // transition [CONFIRMED, AUTOLOAD_HANDOFF); forward natively at AUTOLOAD_HANDOFF so the reload loads.
+    // neutralize the reload's own RequestLoadSlot mid-load. Neutralize only during the first-world
+    // transition [confirmed, AUTOLOAD_HANDOFF); forward natively at AUTOLOAD_HANDOFF so the reload loads.
     let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
         .contains(&phase);
@@ -486,7 +486,7 @@ pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(
 /// `br-20260831-160354-2513`, leaving `system_quit_request_load_slot_block_count` and
 /// `..._allow_count` both at zero -- the guard was never in the process.
 pub(crate) fn install_system_quit_request_load_slot_guard() {
-    // UNRESOLVED on purpose -- see the sibling installer.
+    // Unresolved on purpose -- see the sibling installer.
     let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve RequestLoadSlot rva 0x{SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA:x}"
@@ -505,16 +505,16 @@ pub(crate) fn install_system_quit_request_load_slot_guard() {
 }
 
 /// Guard on the native title Continue confirm `0x140b0e180` (rcx = the {[+8]=owner} shim; reads
-/// GameMan+0xc30 -> owner+0xbc -> SetState(5); picks NO slot). Static RE 2026-07-02 proved the
-/// post-switch clean-title reload streams the PRE-SWITCH GameMan/PlayerGameData state: no fresh
+/// GameMan+0xc30 -> owner+0xbc -> SetState(5); picks no slot). Static RE 2026-07-02 proved the
+/// post-switch clean-title reload streams the pre-switch GameMan/PlayerGameData state: no fresh
 /// deserialize of the picked slot runs anywhere on that path, so the resident (original) character
 /// gets re-streamed -- the wrong-character bug. While a System->Quit->Load-Profile switch is active
-/// this hook drives ONE fresh synchronous feed-deserialize of the PICKED slot
+/// this hook drives one fresh synchronous feed-deserialize of the picked slot
 /// (`own_load_feed_deserialize`: on-disk read -> gated 0x67b100 feed -> native parser 0x67b290)
-/// BEFORE forwarding, so ac0/c30/PGD all become the picked slot and the confirm streams the right
-/// character. Fail-closed: if the fresh deserialize cannot be proven, the confirm is BLOCKED --
+/// before forwarding, so ac0/c30/PGD all become the picked slot and the confirm streams the right
+/// character. Fail-closed: if the fresh deserialize cannot be proven, the confirm is blocked --
 /// streaming stale state would load the wrong character and the post-load autosave would then write
-/// it back into the picked slot. Boot autoloads and normal play (phase IDLE) pass through
+/// it back into the picked slot. Boot autoloads and normal play (phase idle) pass through
 /// untouched. See bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02.
 pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     shim: usize,
@@ -522,8 +522,8 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     c: usize,
     d: usize,
 ) -> usize {
-    // RENDER-HANDOFF FIX ARM (bd er-effects-rs-um9g): this Continue/Load confirm is the common trigger
-    // for BOTH the boot autoload and the in-world reload; it captures GameMan+0xc30 into the TitleStep,
+    // Render-HANDOFF fix arm (bd er-effects-rs-um9g): this Continue/Load confirm is the common trigger
+    // for both the boot autoload and the in-world reload; it captures GameMan+0xc30 into the TitleStep,
     // then forwards to SetState5 -> STEP_PlayGame -> InGameStep::RequestMoveMap. On our redirect load the
     // captured BlockId can be stale/-1, which makes RequestMoveMap skip building the world-res loadlist
     // path and stall at WorldResWait. Arm the RequestMoveMap fixup here so the upcoming RequestMoveMap
@@ -552,7 +552,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     // Inclusive of AUTOLOAD_HANDOFF (unlike the in-world guards' half-open range): the clean-title
     // reload's confirm fires at TITLE_OWNER_SEEN or AUTOLOAD_HANDOFF and the fresh deserialize is
-    // exactly what phase 4 needs; the one-shot DONE latch prevents repeats after success.
+    // exactly what phase 4 needs; the one-shot done latch prevents repeats after success.
     let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         ..=SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
         .contains(&phase);
@@ -563,7 +563,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             // A title-flow confirm while the old world is still up is not a state we ever drive;
             // never deserialize into a live world (that is the crash the whole switch avoids).
             // Forward and log loudly -- the in-world load guards protect the load paths.
-            // Counted, not just logged: this forward reaches the unconditional ALLOW increment
+            // Counted, not just logged: this forward reaches the unconditional allow increment
             // below, so without its own bucket it would break the load-count decomposition
             // (`allow == fresh_deser + non_switch + world_up`) with no way to tell which bucket lost
             // it. See er_telemetry_core::load_count.
@@ -590,13 +590,13 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} slot={slot} native_slot_proven={native_slot_proven} shim=0x{shim:x}"
             ));
             if !native_slot_proven {
-                // Do NOT disarm GameMan+0xb78 here. The 2026-07-30 slot-1 repro hit this unproven
+                // Do not disarm GameMan+0xb78 here. The 2026-07-30 slot-1 repro hit this unproven
                 // branch, cleared the requested slot to -1, then waited forever for stable-world proof
                 // that the native stream could no longer reach. The same b78-as-warp-target rule below
                 // applies even when the earlier proof latch missed.
-                // The `#n` label comes from this branch's OWN counter. It used to come from
+                // The `#n` label comes from this branch's own counter. It used to come from
                 // ALLOW_COUNT, which also increments unconditionally at the tail of this hook -- so
-                // one call incremented the total-load witness TWICE and inflated it by one per
+                // one call incremented the total-load witness twice and inflated it by one per
                 // unproven reload. Both captured runs had native_slot_proven=true throughout, which
                 // is the only reason their allow counts were exact.
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT
@@ -614,15 +614,15 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                     .fetch_add(1, Ordering::SeqCst)
                     + 1;
-                // LOAD COMMITTED -> get out of the way. The forwarded continue_confirm below fires
-                // SetState5, which streams the picked character. Return the switch machine to IDLE so
-                // the product-core autoload's switch branch STOPS (title.rs: it keeps arming
+                // Load committed -> get out of the way. The forwarded continue_confirm below fires
+                // SetState5, which streams the picked character. Return the switch machine to idle so
+                // the product-core autoload's switch branch stops (title.rs: it keeps arming
                 // GameMan+0xb78 = an in-world MoveMapStep load of the slot, and keeps re-driving the
                 // title, while phase >= RETURN_TITLE_REQUESTED). Left armed, that redundant b78 load
                 // competes with this SetState5 stream, stalls the title owner at state 6, and bounces
                 // the freshly-loaded world back to the title ~4s later (the post-load instability the
-                // earlier single-switch milestone missed -- it tore down before the bounce). IDLE also
-                // makes the in-world load guards inert (they gate on [CONFIRMED, AUTOLOAD_HANDOFF)), so
+                // earlier single-switch milestone missed -- it tore down before the bounce). Idle also
+                // makes the in-world load guards inert (they gate on [confirmed, AUTOLOAD_HANDOFF)), so
                 // the native world stream is unobstructed, and leaves the session clean for the next
                 // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
                 SYSTEM_QUIT_QUICKLOAD_PHASE.store(
@@ -634,10 +634,10 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // loaded target without a valid requested-slot/warp target and TitleStep falls back to
                 // title. A later post-resident proof point must clear it, but not before the world stream
                 // has survived.
-                // CLEAR the return-title "rebuild the title" request flags the final functor set for this
-                // switch's teardown (restored 2026-07-16 after the DEFER experiment failed: the stuck load
-                // has menuData+0x5d==0 to BEGIN with -- the functor never set it, incomplete teardown -- so
-                // deferring OUR clear was inert). They are LEVEL flags nothing resets; left set on a
+                // Clear the return-title "rebuild the title" request flags the final functor set for this
+                // switch's teardown (restored 2026-07-16 after the defer experiment failed: the stuck load
+                // has menuData+0x5d==0 to begin with -- the functor never set it, incomplete teardown -- so
+                // deferring our clear was inert). They are level flags nothing resets; left set on a
                 // resident world they re-request quit-to-title (bounce). Undo them at the clean-title
                 // Continue as before.
                 let menu_man = unsafe {
@@ -668,31 +668,31 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                         0,
                     )
                 };
-                // Clear GameMan.save_requested defensively (typed): the return-title REQUEST set it for
-                // the teardown; a residual true would drive an immediate quit-save on the reload. Do NOT
+                // Clear GameMan.save_requested defensively (typed): the return-title request set it for
+                // the teardown; a residual true would drive an immediate quit-save on the reload. Do not
                 // clear GameMan.warp_requested here. Native full deserialize owns that flag; MoveMapStep
                 // finalize case 8 consumes/autoclears it after advancing mms18.
                 if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
                 }
-                // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
+                // REPEATABLE-switch state restore (er-effects-rs-qwj). The switch-#1 works but
                 // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
-                // one-shots are CONSUMED by this switch's teardown and gate the NEXT switch --
-                // RETURN_TITLE_REQUEST_COUNT (native return-title REQUEST fires only when ==0,
+                // one-shots are consumed by this switch's teardown and gate the next switch --
+                // RETURN_TITLE_REQUEST_COUNT (native return-title request fires only when ==0,
                 // startup_hooks 6922), DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT (menu-pump submit only
                 // when ==0, 7162), FINAL_FUNCTOR_CALL_COUNT (final-functor compare_exchange 0->1,
-                // title.rs 1690). Left set, switch #2 skips its return-title REQUEST + submit and
+                // title.rs 1690). Left set, switch #2 skips its return-title request + submit and
                 // never tears the world down (observed: stuck at title state 10/10, bc4=0). Restoring
                 // them to boot-fresh here makes every switch byte-identical to the first. This is the
-                // SAFE edge (unlike the disabled arm-time reset above, which re-fires during teardown
+                // safe edge (unlike the disabled arm-time reset above, which re-fires during teardown
                 // and double-submits -> the single-switch bounce that regressed it): it runs once per
-                // switch (fresh-deser latch), AFTER this switch's return-title machinery is fully
+                // switch (fresh-deser latch), after this switch's return-title machinery is fully
                 // consumed. The phase remains AUTOLOAD_HANDOFF until the streamed load reaches a stable
                 // world, so every return-title REQUEST/submit/final-functor gate must exclude
                 // AUTOLOAD_HANDOFF; otherwise the reset counts can be consumed by a spurious second
                 // return-title request that leaves bc4=3 stale and blocks the incoming MoveMap finalize.
                 //
-                // THIS BRANCH IS NOT THE ONLY EDGE ANY MORE, and on the product path it is not even the
+                // This branch is not the only edge any more, and on the product path it is not even the
                 // reached one -- see the same call at the end of `own_load_switch_reload_fire`. It stays
                 // here for the confirm that arrives without our own feed having run first; the shared
                 // function is what stops the two drifting.
@@ -705,7 +705,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             }
         }
     }
-    // TOTAL WORLD LOADS, boot included: exactly one increment per forwarded confirm. Every forward
+    // Total world loads, boot included: exactly one increment per forwarded confirm. Every forward
     // is classified into exactly one bucket -- switch reload (FRESH_DESER_COUNT, == the load epoch),
     // old-world-up (WORLD_UP_COUNT), or neither, i.e. the boot/title Continue (NON_SWITCH_COUNT) --
     // so `allow == fresh_deser + non_switch + world_up` holds by construction and any drift is a

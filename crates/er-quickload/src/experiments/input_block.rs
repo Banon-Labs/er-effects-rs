@@ -37,13 +37,13 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 use super::*;
 
 #[allow(dead_code)]
-/// When set, foreign KEYBOARD + GAMEPAD game input is blocked at the API layer (see
-/// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) AND XInput
-/// gamepad (this module's hook). The MOUSE is never blocked and the cursor is never confined. Read by
+/// When set, foreign keyboard + GAMEPAD game input is blocked at the API layer (see
+/// `enforce_input_block`): DInput8 keyboard (state zeroed by the `InputBlocker` hook) and XInput
+/// gamepad (this module's hook). The mouse is never blocked and the cursor is never confined. Read by
 /// `xinput_get_state_hook` each poll so the block is authoritative regardless of window focus.
 pub(crate) use er_telemetry_core::counters::BLOCK_INPUT_ACTIVE;
 const BLOCK_INPUT_ON: usize = 1;
-/// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
+/// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does not read
 /// keyboard via DInput (proven 2026-07-17: dinput_kb_fires==0) nor route fabricated XInput to menu
 /// actions, so the self-drive posts real WM_KEYDOWN/WM_KEYUP to this window (ER reads keyboard via
 /// window messages / RawInput; PostMessageW reaches it without foreground).
@@ -68,10 +68,10 @@ pub(crate) use er_telemetry_core::counters::XINPUT_KEEPALIVE_PACKET;
 /// means the game re-enumerated slot 0 after our hook installed (so forcing "connected" there can
 /// convince it slot 0 exists); 0 means it enumerated once at startup and cached the result.
 pub(crate) use er_telemetry_core::counters::XINPUT_SLOT0_CAPS_QUERIES;
-/// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
-/// the game both polled slot 0 AND received a real button edge from us).
+/// DIAGNOSTIC: times we wrote a non-zero fabricated button into a slot-0 poll (so the log can show
+/// the game both polled slot 0 and received a real button edge from us).
 /// DIAGNOSTIC: total `XInputGetState(user_index==0)` calls the game makes (the poll counter). If this
-/// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is NOT polling slot 0 (cached
+/// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is not polling slot 0 (cached
 /// "no controller" from a pre-hook enumeration -> our button fabrication can never land, and a device
 /// re-scan is required). If it climbs but the menu still does not open, ER polls but ignores the
 /// fabricated buttons (a different problem). Read/logged from `system_quit_repro_tick`.
@@ -83,12 +83,12 @@ pub(crate) use er_telemetry_core::counters::SQ_REPRO_BEST_HWND;
 
 pub(crate) const SAVE_PICKER_NAV_LEFT_MASK: usize = 1 << 0;
 pub(crate) const SAVE_PICKER_NAV_RIGHT_MASK: usize = 1 << 1;
-/// Up/down edges exist so a list longer than the ten native rows scrolls on an explicit PRESS at
-/// the edge row. The picker previously slid the window from a pointer DWELL on the edge, which
+/// Up/down edges exist so a list longer than the ten native rows scrolls on an explicit press at
+/// the edge row. The picker previously slid the window from a pointer dwell on the edge, which
 /// moved the list under a player who was only resting there.
 pub(crate) const SAVE_PICKER_NAV_UP_MASK: usize = 1 << 2;
 pub(crate) const SAVE_PICKER_NAV_DOWN_MASK: usize = 1 << 3;
-/// Wheel detents are latched SEPARATELY from key/pad directions because the native list treats them
+/// Wheel detents are latched separately from key/pad directions because the native list treats them
 /// differently: a key or pad press at an extreme row makes the list wrap, and the picker rides that
 /// wrap as the step signal -- but a wheel detent there moves nothing at all, so a wheel edge that
 /// waited for a wrap would wait forever and the wheel would appear dead at exactly the top and
@@ -109,16 +109,16 @@ static SAVE_PICKER_USER_NAV_LATCH: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_XINPUT_NAV_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_DINPUT_ARROW_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
 
-/// Drain EVERY pending nav edge. Used on the paths that discard input wholesale (picker not live,
+/// Drain every pending nav edge. Used on the paths that discard input wholesale (picker not live,
 /// native text editor owns the screen) so a press made elsewhere cannot replay later.
 pub(crate) fn save_picker_take_user_nav_edges() -> usize {
     SAVE_PICKER_USER_NAV_LATCH.swap(0, Ordering::SeqCst) & SAVE_PICKER_NAV_ALL_MASK
 }
 
-/// Directions currently HELD on a real device, without consuming anything.
+/// Directions currently held on a real device, without consuming anything.
 ///
 /// Distinct from the edge latch on purpose. Elden Ring's menus auto-repeat while a direction is
-/// held, and each repeat moves the native list cursor -- but only the FIRST press produces an edge.
+/// held, and each repeat moves the native list cursor -- but only the first press produces an edge.
 /// A consumer that reacts to edges alone therefore handles one step of a held press and lets the
 /// native list do whatever it likes for the rest, which at the last row means wrapping to the top.
 /// Read from the DInput/XInput device state the game itself polls, so it reflects the real device.
@@ -204,7 +204,7 @@ pub(crate) fn save_picker_latch_dinput_keyboard_state(data: *const u8, size: usi
 /// Deflection at which a left-stick axis counts as a directional press, and the smaller value it
 /// must fall back under before it can press again.
 ///
-/// TWO thresholds, not one: a stick held near a single threshold jitters across it and would latch
+/// Two thresholds, not one: a stick held near a single threshold jitters across it and would latch
 /// a stream of phantom edges from one deliberate push. The press value is ~50% deflection, well
 /// above XInput's 7849 rest deadzone, so stick drift never navigates on its own.
 const XINPUT_STICK_NAV_PRESS: i32 = 16384;
@@ -217,7 +217,7 @@ fn xinput_stick_nav_mask(prev: usize, thumb_lx: i16, thumb_ly: i16) -> usize {
     for (mask, value) in [
         (SAVE_PICKER_NAV_LEFT_MASK, -i32::from(thumb_lx)),
         (SAVE_PICKER_NAV_RIGHT_MASK, i32::from(thumb_lx)),
-        // XInput reports +Y as UP, which is the opposite of the list's row order.
+        // XInput reports +Y as up, which is the opposite of the list's row order.
         (SAVE_PICKER_NAV_UP_MASK, i32::from(thumb_ly)),
         (SAVE_PICKER_NAV_DOWN_MASK, -i32::from(thumb_ly)),
     ] {
@@ -266,9 +266,9 @@ fn wheel_nav_step(accum: isize, delta: i16) -> (usize, isize) {
 static SAVE_PICKER_WHEEL_LAST_MESSAGE: AtomicIsize = AtomicIsize::new(0);
 static SAVE_PICKER_WHEEL_DUPLICATE_READS: AtomicUsize = AtomicUsize::new(0);
 
-/// Latch a wheel detent ONCE PER WM_INPUT MESSAGE.
+/// Latch a wheel detent once per WM_INPUT message.
 ///
-/// `GetRawInputData` is a READ of a message, not the message itself, and the same `HRAWINPUT` can
+/// `GetRawInputData` is a read of a message, not the message itself, and the same `HRAWINPUT` can
 /// legitimately be read more than once (the size-then-data pattern, and any second consumer in the
 /// chain). Counting reads instead of messages multiplied every physical detent: the live log shows
 /// five `delta=120` reads inside 10ms, which no hand can spin, and on screen one notch of the wheel
@@ -289,7 +289,7 @@ fn save_picker_latch_wheel_nav_for_message(message: isize, delta: i16) {
     save_picker_latch_wheel_nav(delta);
 }
 
-/// Latch nav edges from mouse-wheel detents. Wheel UP is toward the top of the list.
+/// Latch nav edges from mouse-wheel detents. Wheel up is toward the top of the list.
 pub(crate) fn save_picker_latch_wheel_nav(delta: i16) {
     if delta == 0 {
         return;
@@ -306,10 +306,10 @@ pub(crate) fn save_picker_latch_wheel_nav(delta: i16) {
     ));
 }
 
-/// Latch nav edges from the real slot-0 pad: D-pad buttons AND the left stick.
+/// Latch nav edges from the real slot-0 pad: D-pad buttons and the left stick.
 ///
 /// The stick is not a nicety. Elden Ring navigates menus with either, so a pad player who flicks
-/// the stick produced NO latched edge at all -- the picker's edge handling (scroll at a window
+/// the stick produced no latched edge at all -- the picker's edge handling (scroll at a window
 /// edge, hold at the listing's end) never ran, and the native list wrapped from the last row to the
 /// top exactly as if the feature did not exist. Keyboard-only coverage made the fix look complete
 /// while the pad was still broken (2026-08-12).
@@ -356,9 +356,9 @@ unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL 
     if pid != unsafe { GetCurrentProcessId() } || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
         return BOOL(1);
     }
-    // Skip OUR OWN overlay/helper windows (class 'ErEffectsLoadingOverlay', the fullscreen D3D12
-    // present-overlay window). It is the LARGEST visible window owned by this process, so without this
-    // filter the finder picked IT and every SendInput/foreground went to our overlay instead of the ER
+    // Skip our own overlay/helper windows (class 'ErEffectsLoadingOverlay', the fullscreen D3D12
+    // present-overlay window). It is the largest visible window owned by this process, so without this
+    // filter the finder picked it and every SendInput/foreground went to our overlay instead of the ER
     // game window -- the root cause of "no key opens the menu" (runtime-proven 2026-07-17).
     let mut cls = [0u16; 128];
     let n = unsafe { GetClassNameW(hwnd, &mut cls) }.max(0) as usize;
@@ -366,7 +366,7 @@ unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL 
     if cls_s.contains("ErEffects") || cls_s.contains("er-quickload") {
         return BOOL(1);
     }
-    // Pick the LARGEST visible window owned by this process -- the game render window, not a helper/
+    // Pick the largest visible window owned by this process -- the game render window, not a helper/
     // overlay/console window (focusing the wrong one is why SendInput could miss the game).
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
@@ -381,11 +381,11 @@ unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL 
     BOOL(1) // keep enumerating to find the largest
 }
 
-/// Return (and cache) the ER main game window HWND: the LARGEST visible top-level window owned by this
-/// process, EXCLUDING our own overlay/helper classes. Logs the chosen window's class/title/rect once
+/// Return (and cache) the ER main game window HWND: the largest visible top-level window owned by this
+/// process, excluding our own overlay/helper classes. Logs the chosen window's class/title/rect once
 /// so it can be confirmed as the game window. `HWND(null)` when no candidate was found.
 ///
-/// Use this and never `hooks::own_window()`, which returns the FIRST visible window of the process
+/// Use this and never `hooks::own_window()`, which returns the first visible window of the process
 /// and does not exclude our own surfaces: the fullscreen D3D12 present-overlay
 /// (`ErEffectsLoadingOverlay`) is the largest visible window we own, the naive finder picked it, and
 /// that was the root cause of "no key opens the menu" (runtime-proven 2026-07-17). Anything that
@@ -417,12 +417,12 @@ pub(crate) fn game_main_window() -> HWND {
     HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
 }
 
-/// FOCUS SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by THIS (the
-/// game) process? Computed FRESH each call (independent of the sq-repro forcing, which stands down in
+/// Focus SEMAPHORE (2026-07-21, focus-controlled A/B): is the OS foreground window owned by this (the
+/// game) process? Computed fresh each call (independent of the sq-repro forcing, which stands down in
 /// deterministic mode). Under Proton/Wine this reflects Wine's foreground window; we emit it as
 /// oracle_window_foreground to test whether the load2/load3 20fps stall correlates with the ER surface
 /// being unfocused (the surviving compositor-present-throttle theory). bd
-/// CANDIDATE-A-empty-native-loadmode-excluded-compositor-B-surviving-2026-07-21.
+/// candidate-A-empty-native-loadmode-excluded-compositor-B-surviving-2026-07-21.
 pub(crate) fn game_window_is_foreground() -> bool {
     unsafe {
         let fg = GetForegroundWindow();
@@ -438,7 +438,7 @@ pub(crate) fn game_window_is_foreground() -> bool {
 /// SendInput one VK keyboard event (down or up) at the OS level, to whatever window has focus.
 ///
 /// The doc here used to call this "the real menu-input channel" on the grounds that native ER reads
-/// keyboard via RawInput. That is FALSE on 1.17: `eldenring.exe` imports no RawInput API at all --
+/// keyboard via RawInput. That is false on 1.17: `eldenring.exe` imports no RawInput API at all --
 /// `GetRawInputData`, `GetRawInputBuffer` and `RegisterRawInputDevices` are absent from the image,
 /// while USER32's `GetKeyState`/`GetKeyboardState` and DINPUT8's `DirectInput8Create` are present.
 /// Measured consequence, run br-20260905-031610-5406: 150 SendInput frames against 0 RawInput key
@@ -466,8 +466,8 @@ fn sq_repro_send_vk(vk: u32, keyup: bool) {
     }
 }
 
-/// Like `sq_repro_drive_wm_key` but NEVER forces the window foreground -- it delivers the held key
-/// ONLY when ER is ALREADY the foreground window, and releases any held key the moment ER loses focus.
+/// Like `sq_repro_drive_wm_key` but never forces the window foreground -- it delivers the held key
+/// only when ER is already the foreground window, and releases any held key the moment ER loses focus.
 /// Used by the can-move probe so it can never steal the user's focus (the earlier probe yanked ER to
 /// the front and trapped the user's keyboard). If the user alt-tabs away, the probe stops injecting.
 #[allow(dead_code)] // kept: fallback OS-keyboard driver; the can-move probe now uses the pad-poll hook
@@ -490,7 +490,7 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
         sq_repro_send_vk(prev, true);
     }
     if vk != 0 {
-        // Movement proof is sampled per frame. Send a foreground-gated key-down every ON frame instead
+        // Movement proof is sampled per frame. Send a foreground-gated key-down every on frame instead
         // of only on the first transition so a lost/filtered single event cannot make the proof falsely
         // report "no supplied input". This path never forces focus; if ER is not already foreground it
         // returned above. Count keyboard delivery as supplied movement input, distinct from actual motion.
@@ -499,29 +499,29 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
     }
 }
 
-/// STAY-ACTIVE gate (`ER_QUICKLOAD_STAY_ACTIVE=1` / `er-quickload-stay-active.txt`). When set, keep ER's
+/// Stay-active gate (`ER_QUICKLOAD_STAY_ACTIVE=1` / `er-quickload-stay-active.txt`). When set, keep ER's
 /// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
 /// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
 /// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
-/// it. Touches ONLY focus-input gating, never the sim/save/load.
-/// DE-GATED (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
+/// it. Touches only focus-input gating, never the sim/save/load.
+/// De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
 /// flag `[DLUID+0x88d]` while unfocused -- a diagnostic golden-capture convenience gated by
 /// env/marker. Env/marker feature gates are forbidden; retired (permanently off).
 pub(crate) fn stay_active_enabled() -> bool {
     false
 }
 
-/// TRUE only while the harness is ACTIVELY INJECTING input THIS frame -- the can-move probe's ON burst
+/// True only while the harness is actively injecting input this frame -- the can-move probe's on burst
 /// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
-/// (`sq_repro_actively_driving`). This is the ONLY window in which the product may fabricate a device or
+/// (`sq_repro_actively_driving`). This is the only window in which the product may fabricate a device or
 /// otherwise touch input state on the harness's behalf (bd input-blocking-only-in-harness-during-driving-
-/// never-in-product-never-outside-window-2026-07-23). Outside it -- boot, the post-load in-world DWELL,
+/// never-in-product-never-outside-window-2026-07-23). Outside it -- boot, the post-load in-world dwell,
 /// between move-probe intervals -- the harness is not injecting, so the user's keyboard and mouse must be
-/// fully live and nothing here may present a phantom pad or suppress input. FALSE the instant injection
+/// fully live and nothing here may present a phantom pad or suppress input. False the instant injection
 /// stops (MOVE_PROBE_ACTIVE latches false the moment the move-probe verdict is reached), so the dwell has
 /// full control.
 pub(crate) fn harness_injection_active() -> bool {
-    // The sq-repro autopilot was the second injector and it is deleted, so the can-move probe's ON
+    // The sq-repro autopilot was the second injector and it is deleted, so the can-move probe's on
     // burst is now the only window in which this crate injects anything.
     MOVE_PROBE_ACTIVE.load(Ordering::SeqCst)
 }
@@ -557,27 +557,27 @@ fn autoload_load_started() -> bool {
     }
     if let Ok(base) = game_module_base() {
         // Current render-pipeline cover visibility is a load-start/current-load signal. Do not use
-        // CSNowLoadingHelperImp::load_done here: that latch is load-COMPLETE and lingers into gameplay.
+        // CSNowLoadingHelperImp::load_done here: that latch is load-complete and lingers into gameplay.
         return unsafe { fake_loading_screen_visible(base) };
     }
     false
 }
 
-// ENV-GATE RATIONALE: ER_QUICKLOAD_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
+// ENV-gate RATIONALE: ER_QUICKLOAD_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
     // The sq-repro autopilot used to hold the input block engaged in-world here while it drove menus,
     // so its fabricated pad was the only input. Deleted 2026-09-05 with the autopilot: keeping the
     // clause would have held the block on for the whole run, because nothing advances SQ_REPRO_STATE
     // out of WAIT_WORLD any more, and a permanently engaged block eats the user's keyboard.
-    // (DE-GATED 2026-07-19: the env/marker FORCE-BLOCK override -- block unconditionally past
+    // (de-gated 2026-07-19: the env/marker force-block override -- block unconditionally past
     // menu-open -- was a falsification diagnostic; env/marker feature gates are forbidden, removed.)
-    // NATIVE-WINDOWS PRODUCT is USER-INTERACTIVE (user drives the startup save picker, then plays). The
-    // DEFAULT zero-input autoload block below -- DInput keyboard + XInput gamepad state-zeroing -- is a
-    // Wine-probe PROOF feature (prove the autoload needs no foreign keyboard/gamepad input), NOT product
+    // native-Windows product is user-interactive (user drives the startup save picker, then plays). The
+    // default zero-input autoload block below -- DInput keyboard + XInput gamepad state-zeroing -- is a
+    // Wine-probe proof feature (prove the autoload needs no foreign keyboard/gamepad input), not product
     // behavior: on the user's machine it would eat the user's keyboard/gamepad from boot until in-world
     // (user-reported 2026-07-15: "the DLL is moving my mouse / clicking / changing focus"; the mouse
     // forcing/blocking + cursor confinement are now fully removed, so the mouse is always live). So the
-    // DEFAULT product path must never suppress the user's input on native Windows. The EXPLICIT probe
+    // default product path must never suppress the user's input on native Windows. The explicit probe
     // opt-in above (sq_repro) is checked first and still engages the keyboard/gamepad block when a
     // real probe wants it, on native Windows or Wine.
     if is_native_windows() {
@@ -600,13 +600,13 @@ pub(crate) fn block_input_enabled() -> bool {
     let product_world_stream_pending = product_autoload_enabled()
         && OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
         && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
-    // ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22, extended
+    // Zero-input invariant (always-block-input-zero-input-invariant-2026-06-22, extended
     // 2026-06-24 user-directive "block input until the load has started -- our side is done"):
-    // block ALL foreign input whenever ANY automated load lever is armed until load start, so no probe
+    // block all foreign input whenever any automated load lever is armed until load start, so no probe
     // can be contaminated and no path can secretly rely on input before the engine commits the load.
-    // This now INCLUDES the DEFAULT zero-input autoload path (native_continue + the readiness PAB
+    // This now includes the default zero-input autoload path (native_continue + the readiness PAB
     // advance), which is on for every real (non-telemetry-only) run -- previously only
-    // own_stepper/own_load/product_autoload engaged the block, so the default path ran with input LIVE
+    // own_stepper/own_load/product_autoload engaged the block, so the default path ran with input live
     // and a human Continue press could (and did, 2026-06-24 gold-load run) drive the load instead of our
     // DLL, masking that native_continue never found the Continue node. Blocking the default path makes
     // the zero-input claim honest: if our drive cannot fire the load with input suppressed, the run
@@ -617,14 +617,14 @@ pub(crate) fn block_input_enabled() -> bool {
         && (OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
             || product_world_stream_pending
             // The default native_continue/pab path does not drive the own_stepper phase machine, so
-            // its phase stays 0 (!= DONE) -- keep it blocked until load-start regardless.
+            // its phase stays 0 (!= done) -- keep it blocked until load-start regardless.
             || native_continue_enabled()
             || pab_advance_enabled())
 }
 
 /// Release the input block (DInput + XInput) once `block_input_enabled()` flips false mid-run.
 /// The hooks stay installed but pass input through when `BLOCK_INPUT_ACTIVE` is clear; the
-/// DInput blocker also needs its own flags cleared. Acts once on the ON->off transition.
+/// DInput blocker also needs its own flags cleared. Acts once on the on->off transition.
 pub(crate) fn release_input_block_now() {
     if BLOCK_INPUT_ACTIVE.swap(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst) == BLOCK_INPUT_ON {
         InputBlocker::get_instance().block_only(InputFlags::empty());
@@ -640,15 +640,15 @@ pub(crate) fn release_input_block_now() {
 /// "controller disconnected" popup, but zero input). Leaves the disconnected return code
 /// untouched so a genuinely absent pad still reads absent.
 ///
-/// NO-CONTROLLER HARNESS SUPPORT (agent-owned diagnostic): the game only KEEPS polling an XInput
+/// No-controller harness support (agent-owned diagnostic): the game only keeps polling an XInput
 /// slot it believes is connected. When no physical pad is plugged in, the real `XInputGetState(0)`
 /// returns ERROR_DEVICE_NOT_CONNECTED, so ER's connection detection stops polling slot 0 and our
 /// button-fabrication frames (below) never reach the game -- which is exactly why the sq-repro
 /// harness previously only worked with a controller physically attached. To make the
-/// harness work with NO controller, whenever an XInput-driven harness is ARMED
-/// (`system_quit_repro_enabled()` / `prove_movement_enabled()`) we force slot 0 to report a CONNECTED
-/// idle pad (SUCCESS + fresh packet) instead of DEVICE_NOT_CONNECTED. That keeps ER polling slot 0
-/// so the fabrication frames land. This is gated STRICTLY behind the existing diagnostic
+/// harness work with no controller, whenever an XInput-driven harness is armed
+/// (`system_quit_repro_enabled()` / `prove_movement_enabled()`) we force slot 0 to report a connected
+/// idle pad (success + fresh packet) instead of DEVICE_NOT_CONNECTED. That keeps ER polling slot 0
+/// so the fabrication frames land. This is gated strictly behind the existing diagnostic
 /// opt-ins (never on the default/product path) and only touches slot 0; other slots and the
 /// non-armed case still read a genuinely absent pad as absent.
 unsafe fn xinput_get_state_common(
@@ -671,8 +671,8 @@ unsafe fn xinput_get_state_common(
     }
     let orig = orig_slot.load(Ordering::SeqCst);
     let mut hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
-        // THROUGH `UnionFn`, NOT the narrow two-argument shape. Since this detour is registered on
-        // the union, the slot may hold the NEXT HANDLER in the chain rather than the game
+        // Through `UnionFn`, not the narrow two-argument shape. Since this detour is registered on
+        // the union, the slot may hold the next handler in the chain rather than the game
         // trampoline, and `register_shared_hook`'s safety contract requires the four-argument call.
         // The final element is the real export, which reads only the arguments it declares.
         let f: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(orig) };
@@ -687,8 +687,8 @@ unsafe fn xinput_get_state_common(
     // and by the picker's nav latch to read stick-driven menu navigation.
     const XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD: usize = 4;
     const XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD: usize = 6;
-    // CAN-MOVE PROBE lane (2026-07-18): when the readiness verifier is testing input-causes-movement,
-    // present a connected slot-0 pad with ONLY the left stick set (no buttons) so the game walks the
+    // Can-move probe lane (2026-07-18): when the readiness verifier is testing input-causes-movement,
+    // present a connected slot-0 pad with only the left stick set (no buttons) so the game walks the
     // character. Independent of the input-block / sq-repro gates -- the probe owns the pad for its
     // brief in-world window regardless of block state, so the injected stick always lands.
     if !state.is_null()
@@ -709,8 +709,8 @@ unsafe fn xinput_get_state_common(
         }
         return XINPUT_SUCCESS;
     }
-    // PASSIVE INPUT-TRACE CAPTURE (er-quickload-input-trace.txt) + product picker D-pad capture:
-    // record the REAL slot-0 pad state exactly as the original returned it, BEFORE the
+    // Passive input-trace capture (er-quickload-input-trace.txt) + product picker D-pad capture:
+    // record the real slot-0 pad state exactly as the original returned it, before the
     // keepalive/fabrication branches below can overwrite the caller's buffer. This never mutates
     // `state` or `hr`, so pass-through/block behavior stays byte-identical.
     if user_index == XINPUT_PRIMARY_USER_INDEX && hr == XINPUT_SUCCESS && !state.is_null() {
@@ -728,15 +728,15 @@ unsafe fn xinput_get_state_common(
     } else if user_index == XINPUT_PRIMARY_USER_INDEX {
         save_picker_latch_xinput_nav_state(0, 0, 0);
     }
-    // KEEP SLOT 0 "CONNECTED" while the harness is ACTIVELY INJECTING (only) -- when no physical pad
+    // Keep slot 0 "CONNECTED" while the harness is actively injecting (only) -- when no physical pad
     // exists, present a connected idle pad with a fresh packet so ER keeps polling slot 0 and the
-    // fabrication below can land. Gated STRICTLY to `harness_injection_active()` (the move-probe ON burst
-    // / sq-repro driving), NOT to the whole run (bd input-blocking-only-in-harness-during-driving-never-in-
-    // product-never-outside-window-2026-07-23). MOUSE-ATTACK FIX: this used to be gated on
-    // `prove_movement_enabled()` (== harness DLL present), so a phantom "connected" pad with a FRESH packet
-    // EVERY poll was presented for the ENTIRE run, including the in-world dwell. ER's active-input-device
+    // fabrication below can land. Gated strictly to `harness_injection_active()` (the move-probe on burst
+    // / sq-repro driving), not to the whole run (bd input-blocking-only-in-harness-during-driving-never-in-
+    // product-never-outside-window-2026-07-23). Mouse-attack FIX: this used to be gated on
+    // `prove_movement_enabled()` (== harness DLL present), so a phantom "connected" pad with a fresh packet
+    // every poll was presented for the entire run, including the in-world dwell. ER's active-input-device
     // arbitration then treated that constantly-changing phantom gamepad as the active device, so the user's
-    // mouse-CLICK attacks were routed to the (idle) gamepad and ignored -- while mouse-LOOK (camera, read
+    // mouse-click attacks were routed to the (idle) gamepad and ignored -- while mouse-look (camera, read
     // straight off the mouse delta) still worked. Outside the injection window we now let slot 0 read its
     // real DEVICE_NOT_CONNECTED, so ER keeps mouse+keyboard as the active device and mouse-click attacks
     // work throughout the dwell. Never runs on the default/product-without-harness path.
@@ -745,7 +745,7 @@ unsafe fn xinput_get_state_common(
         && !state.is_null()
         && harness_injection_active()
     {
-        // Advance a private keepalive counter (NOT INJECT_NAV_FRAME, whose cadence drives the
+        // Advance a private keepalive counter (not INJECT_NAV_FRAME, whose cadence drives the
         // fabrication schedule) so the "connected" pad always presents a fresh, changing packet.
         let pkt = XINPUT_KEEPALIVE_PACKET.fetch_add(1, Ordering::SeqCst) as u32;
         unsafe {
@@ -759,13 +759,13 @@ unsafe fn xinput_get_state_common(
         hr = XINPUT_SUCCESS;
     }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        // THE PHANTOM-PAD FABRICATION IS GONE (2026-09-05, with the sq-repro autopilot it served).
+        // The phantom-PAD fabrication is gone (2026-09-05, with the sq-repro autopilot it served).
         // It replaced the blocked real pad with buttons the autopilot scheduled, gated on
         // `sq_repro_actively_driving()`. Once the autopilot's tick was deleted nothing advanced
         // SQ_REPRO_STATE, so that predicate was pinned true for the whole run and this branch would
         // have presented a live synthesized pad forever -- which the comment it replaced warned is
         // exactly what bounces a title->world advance back to the front end. A gate whose state
-        // machine no longer runs does not fail closed; it fails STUCK.
+        // machine no longer runs does not fail closed; it fails stuck.
         if hr == XINPUT_SUCCESS {
             unsafe {
                 std::ptr::write_bytes(
@@ -783,7 +783,7 @@ unsafe fn xinput_get_state_common(
 /// calls this to ENUMERATE connected pads; when it returns DEVICE_NOT_CONNECTED for slot 0 (no
 /// physical controller) the game stops polling that slot, so the fabrication in
 /// `xinput_get_state_hook` never lands (the root cause of "the harness only works with a controller
-/// plugged in"). While an XInput harness is ARMED, force slot 0 to report a connected standard
+/// plugged in"). While an XInput harness is armed, force slot 0 to report a connected standard
 /// gamepad so enumeration keeps slot 0 live. Gated strictly behind the diagnostic harness opt-ins;
 /// non-armed and other slots pass through untouched (a genuinely absent pad still reads absent).
 pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
@@ -794,7 +794,7 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
     const XINPUT_SUCCESS: u32 = 0;
     const XINPUT_ERROR_DEVICE_NOT_CONNECTED: u32 = 1167;
     const XINPUT_PRIMARY_USER_INDEX: u32 = 0;
-    // XINPUT_CAPABILITIES = { BYTE Type; BYTE SubType; WORD Flags; XINPUT_GAMEPAD Gamepad;
+    // XINPUT_CAPABILITIES = { byte Type; Byte SubType; Word Flags; XINPUT_GAMEPAD Gamepad;
     //                         XINPUT_VIBRATION Vibration; } == 20 bytes.
     const XINPUT_CAPABILITIES_SIZE: usize = 20;
     const XINPUT_DEVTYPE_GAMEPAD: u8 = 1;
@@ -831,7 +831,7 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
 /// Install the XInput gamepad block once. Hooks `XInputGetState` (and ordinal-100
 /// `XInputGetStateEx`, used by Steam Input) in whichever xinput runtime DLL is loaded.
 /// minhook-based, mirroring `create_continue_trace_hook`.
-/// Serialised by a CLAIM-WITH-ROLLBACK; `XINPUT_BLOCK_INSTALL_CLAIMED` carries why both halves are
+/// Serialised by a claim-with-ROLLBACK; `XINPUT_BLOCK_INSTALL_CLAIMED` carries why both halves are
 /// load-bearing and why this lifts `mh_install_hook_once`'s idiom instead of calling it.
 unsafe fn install_xinput_block() {
     if XINPUT_BLOCK_INSTALL_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
@@ -845,16 +845,16 @@ unsafe fn install_xinput_block() {
         b"xinput1_1.dll\0",
     ];
     const XINPUT_GET_STATE_EX_ORDINAL: usize = 100;
-    // THE MODULE, NOT THE HOOK, IS WHAT THE RETRY IS FOR (bd er-effects-rs-ka44). A pad plugged in
+    // The module, not the hook, is what the RETRY is for (bd er-effects-rs-ka44). A pad plugged in
     // mid-session brings an xinput DLL in late, so retrying until one appears is real work. Retrying
-    // because the REGISTRATION did not land is not: that outcome cannot change between frames, so it
-    // retried forever. MEASURED 2026-09-05 with er-hotkey-conflicts co-loaded -- it claims this same
-    // export through `register_shared_hook_with_budget`, which chains into THIS DLL's MinHook
+    // because the registration did not land is not: that outcome cannot change between frames, so it
+    // retried forever. Measured 2026-09-05 with er-hotkey-conflicts co-loaded -- it claims this same
+    // export through `register_shared_hook_with_budget`, which chains into this DLL's MinHook
     // instance, so the bare `MhHook::new` that used to sit here answered MH_ERROR_ALREADY_CREATED on
-    // every attempt: 22,952 retries at 54.6/s, and 164 KB/s of open/write/close logging on the GAME
-    // THREAD (95% of all file write traffic in the process, by fdinfo attribution). Both halves of
-    // the cause are addressed here: the claim is released ONLY when no module was found, and the
-    // registration goes through the union, so a prologue another shell already owns is a CHAIN
+    // every attempt: 22,952 retries at 54.6/s, and 164 KB/s of open/write/close logging on the game
+    // thread (95% of all file write traffic in the process, by fdinfo attribution). Both halves of
+    // the cause are addressed here: the claim is released only when no module was found, and the
+    // registration goes through the union, so a prologue another shell already owns is a chain
     // rather than a defeat.
     let mut module_found = false;
     for name in XINPUT_DLLS {
@@ -876,7 +876,7 @@ unsafe fn install_xinput_block() {
             )),
         }
         // Steam Input routes the guide button through ordinal-100 `XInputGetStateEx`; neuter it too
-        // so a focused pad cannot drive menus through that path. Same handler, but its OWN chain
+        // so a focused pad cannot drive menus through that path. Same handler, but its own chain
         // slot -- see `XINPUT_GET_STATE_EX_ORIG` for why sharing one cell would misroute the chain.
         let ex = unsafe { GetProcAddress(hmod, PCSTR(XINPUT_GET_STATE_EX_ORDINAL as *const u8)) };
         if let Some(ex_addr) = ex {
@@ -924,7 +924,7 @@ unsafe fn install_xinput_block() {
         break;
     }
     if !module_found {
-        // Nothing to hook YET -- no xinput runtime is mapped. This is the ONE outcome a later frame
+        // Nothing to hook yet -- no xinput runtime is mapped. This is the one outcome a later frame
         // can change, so the claim must not stand: release it for the next frame's retry.
         XINPUT_BLOCK_INSTALL_CLAIMED.store(0, Ordering::SeqCst);
         let n = XINPUT_BLOCK_INSTALL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
@@ -967,11 +967,11 @@ unsafe extern "system" fn xinput_get_capabilities_union(
     unsafe { xinput_get_capabilities_hook(a as u32, b as u32, c as *mut u8) as usize }
 }
 
-/// PASSIVE INPUT-TRACE support: install the XInput hooks WITHOUT engaging any input block. With
+/// Passive input-trace support: install the XInput hooks without engaging any input block. With
 /// `BLOCK_INPUT_ACTIVE` clear and no harness gate armed the detour is a pure pass-through (one
 /// Relaxed poll counter + the trace capture), so installing it early fabricates nothing and blocks
 /// nothing. Same retry-until-hooked idiom as `enforce_input_block_now` (xinput DLL may load late).
-/// Deliberately does NOT install the DInput keyboard hook, and never blocks the mouse or cursor.
+/// Deliberately does not install the DInput keyboard hook, and never blocks the mouse or cursor.
 pub(crate) fn ensure_xinput_hook_installed_for_trace() {
     if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { install_xinput_block() };
@@ -979,8 +979,8 @@ pub(crate) fn ensure_xinput_hook_installed_for_trace() {
     ensure_rawinput_counter_installed();
 }
 
-/// Install the RawInput reception counter ONCE (idempotent). Called UNCONDITIONALLY every frame from
-/// tick_before_player_lookup -- unlike the xinput trace path this must run on EVERY run (it is the
+/// Install the RawInput reception counter once (idempotent). Called unconditionally every frame from
+/// tick_before_player_lookup -- unlike the xinput trace path this must run on every run (it is the
 /// contamination oracle: whether the game received user mouse/keyboard input), not only when the
 /// input-trace marker is armed. Pure counting pass-through; never blocks input.
 pub(crate) fn ensure_rawinput_counter_installed() {
@@ -992,31 +992,31 @@ pub(crate) fn ensure_rawinput_counter_installed() {
     ensure_user32_keyboard_injection_installed();
 }
 
-/// LEGACY telemetry field, retained for the emitted oracle schema (write_oracle reads it). It is NO
-/// LONGER incremented: the RawInput hook used to DROP the user's keyboard for the whole agent-owned run
+/// Legacy telemetry field, retained for the emitted oracle schema (write_oracle reads it). It is no
+/// longer incremented: the RawInput hook used to drop the user's keyboard for the whole agent-owned run
 /// (the camera-only-control bug), but that drop was removed (bd input-blocking-only-in-harness-during-
 /// driving-never-in-product-never-outside-window-2026-07-23) -- the user's keyboard is never dropped, so
-/// this stays 0. MOUSE events were never dropped either.
+/// this stays 0. Mouse events were never dropped either.
 pub(crate) use er_telemetry_core::counters::RAWINPUT_BLOCKED_UNFOCUSED_EVENTS;
-/// Total GetRawInputData calls the game made (any command). If this is 0 the game is NOT routing input
-/// through GetRawInputData -> the reception oracle is BLIND and a 0 event count means nothing. If >0 the
+/// Total GetRawInputData calls the game made (any command). If this is 0 the game is not routing input
+/// through GetRawInputData -> the reception oracle is blind and a 0 event count means nothing. If >0 the
 /// oracle is live and a 0 event count is a genuine "no user input this run".
 pub(crate) use er_telemetry_core::counters::RAWINPUT_HOOK_CALLS;
 pub(crate) use er_telemetry_core::counters::RAWINPUT_KEY_EVENTS;
 pub(crate) use er_telemetry_core::counters::RAWINPUT_MOUSE_BUTTON_EVENTS;
-/// GetRawInputData reception counters (user 2026-07-20): the oracle must RECORD whether the GAME is
-/// RECEIVING user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
-/// the input-harness injects via the direct-memory inputmgr, NOT RawInput -- so every RawInput event
-/// counted here is USER input the game received (contamination during an agent-owned run). Emitted as
+/// GetRawInputData reception counters (user 2026-07-20): the oracle must record whether the game is
+/// receiving user mouse/keyboard input, at the OS boundary. ER reads gameplay+menu input via RawInput;
+/// the input-harness injects via the direct-memory inputmgr, not RawInput -- so every RawInput event
+/// counted here is user input the game received (contamination during an agent-owned run). Emitted as
 /// oracle_rawinput_* and consumed by the verdict emitter.
 pub(crate) use er_telemetry_core::counters::RAWINPUT_MOUSE_MOVE_EVENTS;
 static GET_RAW_INPUT_DATA_ORIG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
+// Removed (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
 // 2026-07-23): `harness_run_active()` (harness DLL present, whole run) was the gate for the whole-run
-// RawInput keyboard DROP. That drop was removed (recording-only hook), so this predicate is gone. The
-// active-injection window is now expressed by `harness_injection_active()`, which is TRUE only while the
-// harness is actually injecting THIS frame -- never for the whole run.
+// RawInput keyboard drop. That drop was removed (recording-only hook), so this predicate is gone. The
+// active-injection window is now expressed by `harness_injection_active()`, which is true only while the
+// harness is actually injecting this frame -- never for the whole run.
 
 /// GetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader) pass-through detour: call the
 /// original, then if it returned a RID_INPUT record, classify it and bump the reception counter. Never
@@ -1036,24 +1036,24 @@ unsafe extern "system" fn get_raw_input_data_hook(
     let ret = unsafe { orig(h_raw_input, ui_command, p_data, pcb_size, cb_size_header) };
     const RID_INPUT: u32 = 0x1000_0003;
     if !p_data.is_null() && ui_command == RID_INPUT && ret != u32::MAX && ret >= 0x30 {
-        // RECORDING ONLY (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-
-        // window-2026-07-23): this hook NEVER drops the user's input. It used to zero (drop) every user
-        // KEYBOARD RawInput event for the WHOLE agent-owned run (whenever the harness DLL was loaded), which
+        // Recording only (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-
+        // window-2026-07-23): this hook never drops the user's input. It used to zero (drop) every user
+        // keyboard RawInput event for the whole agent-owned run (whenever the harness DLL was loaded), which
         // killed W-move + Escape-menu for the entire in-world dwell -- the camera-only-control bug.
-        // Disabling the user's input is valid ONLY inside the harness during its active driving window, never
-        // in the product. And a keyboard DROP fundamentally cannot live here anyway: the can-move probe
-        // injects 'W' via SendInput -> RawInput -> this SAME hook, and RawInput carries no injected-vs-user
+        // Disabling the user's input is valid only inside the harness during its active driving window, never
+        // in the product. And a keyboard drop fundamentally cannot live here anyway: the can-move probe
+        // injects 'W' via SendInput -> RawInput -> this same hook, and RawInput carries no injected-vs-user
         // flag, so dropping keyboard here would also drop the harness's own injected key and break movement
         // injection. So classify + count only (contamination oracle) and pass every event through untouched.
-        // The MOUSE was never dropped either. Any user contamination of the movement proof is DETECTED (not
-        // blocked) by the can-move probe's OFF-tail verdict.
+        // The mouse was never dropped either. Any user contamination of the movement proof is detected (not
+        // blocked) by the can-move probe's off-tail verdict.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let base = p_data as usize;
             let dwtype = unsafe { (base as *const u32).read_unaligned() };
             let d = base + 0x18; // past RAWINPUTHEADER
             if dwtype == 0 {
-                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10. The MOUSE is
-                // NEVER dropped -- the user's real mouse (movement, buttons, camera) is always live player
+                // RIM_TYPEMOUSE: usButtonFlags @ +0x04, lLastX @ +0x0C, lLastY @ +0x10. The mouse is
+                // never dropped -- the user's real mouse (movement, buttons, camera) is always live player
                 // input. Recording only; the event passes through untouched.
                 let btn = unsafe { ((d + 0x04) as *const u16).read_unaligned() };
                 let lx = unsafe { ((d + 0x0C) as *const i32).read_unaligned() };
@@ -1064,7 +1064,7 @@ unsafe extern "system" fn get_raw_input_data_hook(
                 if btn != 0 {
                     RAWINPUT_MOUSE_BUTTON_EVENTS.fetch_add(1, Ordering::Relaxed);
                 }
-                // RI_MOUSE_WHEEL: usButtonData @ +0x06 carries the SIGNED notch delta for this
+                // RI_MOUSE_WHEEL: usButtonData @ +0x06 carries the signed notch delta for this
                 // event. Latched as a nav edge so the wheel reaches the picker through the same
                 // path as the arrow keys and obeys the same edge/limit rules, instead of being a
                 // second, differently-behaved way to move the list.
@@ -1088,11 +1088,11 @@ unsafe extern "system" fn get_raw_input_data_hook(
 }
 
 use er_telemetry_core::counters::INJECTED_CURSOR_POS;
-/// USER32 KEYBOARD INJECTION (2026-09-05) -- the second focus-independent stage, beside the DInput
+/// USER32 keyboard injection (2026-09-05) -- the second focus-independent stage, beside the DInput
 /// `GetDeviceState` stamp. `eldenring.exe` 1.17 imports `GetKeyState`, `GetKeyboardState` and
-/// `ToAscii` from USER32 and imports NO RawInput API at all (`GetRawInputData`,
+/// `ToAscii` from USER32 and imports no RawInput API at all (`GetRawInputData`,
 /// `GetRawInputBuffer` and `RegisterRawInputDevices` are absent from the image entirely), so these
-/// two getters are a keyboard stage the game genuinely reads. Both return the CALLING THREAD's key
+/// two getters are a keyboard stage the game genuinely reads. Both return the calling thread's key
 /// table, which Windows populates only while that thread owns the keyboard focus -- so authoring the
 /// result after the original call is exactly what makes injection focus-independent. Nothing is
 /// stamped while `INJECTED_VK` is 0, so these detours are inert outside a harness injection window.
@@ -1148,9 +1148,9 @@ unsafe extern "system" fn get_key_state_hook(virt_key: i32) -> i16 {
     ret
 }
 
-/// `GetCursorPos(lpPoint)` counting detour. MEASUREMENT ONLY -- it never moves the pointer. It
+/// `GetCursorPos(lpPoint)` counting detour. Measurement only -- it never moves the pointer. It
 /// answers the one question that decides how the OptionSetting Game/Quit-Game tab-switch can be
-/// driven: that switch has no keyboard bind, so a real menu path needs the MOUSE, and the mouse is
+/// driven: that switch has no keyboard bind, so a real menu path needs the mouse, and the mouse is
 /// only stampable here if the menu's pointer position actually comes through this USER32 import.
 /// Zero fires means the menu reads the pointer somewhere else (DirectInput mouse device) and the
 /// injection has to go there instead.
@@ -1160,15 +1160,15 @@ unsafe extern "system" fn get_cursor_pos_hook(point: *mut c_void) -> BOOL {
     let orig: unsafe extern "system" fn(*mut c_void) -> BOOL =
         unsafe { std::mem::transmute(orig_addr) };
     let ret = unsafe { orig(point) };
-    // AUTHOR THE ANSWER, DO NOT MOVE THE REAL CURSOR. `SetCursorPos` would yank the user's pointer
+    // Author the answer, do not move the real cursor. `SetCursorPos` would yank the user's pointer
     // across their desktop and would still lose a race with whatever they do with the mouse; this
-    // replaces only what the GAME is told, so the injection is invisible outside the process and
+    // replaces only what the game is told, so the injection is invisible outside the process and
     // cannot be fought by the OS.
     //
-    // WHY THIS LAYER, measured on br-20260905-175511-72a6: writing the menu's own pointer pair
+    // Why this layer, measured on br-20260905-175511-72a6: writing the menu's own pointer pair
     // (`*(FD4PadDevice+0x78)+0x20/+0x24`) reported `wrote=true` at five different Y coordinates and
     // the hovered cell never left 0 -- the game refreshes that pair from the cursor every frame, so
-    // the write was overwritten before the hit-test ever read it. A real mouse DID move that cell
+    // the write was overwritten before the hit-test ever read it. A real mouse did move that cell
     // (the user nudged it through 5,6,1,2,4,3,2,17), and the game asks USER32 for the cursor
     // thousands of times a session, so this getter is where the mouse actually enters the process.
     let packed = INJECTED_CURSOR_POS.load(Ordering::Relaxed);
@@ -1195,7 +1195,7 @@ pub(crate) fn set_injected_cursor_pos(packed: u64) {
     INJECTED_CURSOR_POS.store(packed, Ordering::Relaxed);
 }
 
-/// Install both USER32 keyboard-getter detours ONCE (idempotent). Called every frame from the same
+/// Install both USER32 keyboard-getter detours once (idempotent). Called every frame from the same
 /// place as the RawInput counter, so it is live long before any injection window opens.
 pub(crate) fn ensure_user32_keyboard_injection_installed() {
     if GET_KEYBOARD_STATE_ORIG.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -1239,7 +1239,7 @@ pub(crate) fn ensure_user32_keyboard_injection_installed() {
         let addr = addr as usize;
         match unsafe { MhHook::new(addr as *mut c_void, detour) } {
             Ok(hook) => {
-                // Store the trampoline BEFORE enabling so the detour never transmutes the sentinel.
+                // Store the trampoline before enabling so the detour never transmutes the sentinel.
                 slot.store(hook.trampoline() as usize, Ordering::SeqCst);
                 if unsafe { hook.queue_enable() }.is_ok() {
                     crate::mh::leak_installed_hook(hook);
@@ -1288,7 +1288,7 @@ unsafe fn install_rawinput_counter() {
     let addr = addr as usize;
     match unsafe { MhHook::new(addr as *mut c_void, get_raw_input_data_hook as *mut c_void) } {
         Ok(hook) => {
-            // Store the trampoline BEFORE enabling so the detour never transmutes the unset sentinel.
+            // Store the trampoline before enabling so the detour never transmutes the unset sentinel.
             GET_RAW_INPUT_DATA_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
                 append_autoload_debug(format_args!(
@@ -1317,8 +1317,8 @@ unsafe fn install_rawinput_counter() {
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
 pub(crate) use er_telemetry_core::counters::DINPUT_BLOCK_INSTALLED;
 
-/// Install the DInput8 keyboard `GetDeviceState` detour WITHOUT engaging any input block, and without
-/// touching XInput. The detour is the harness's FOCUS-INDEPENDENT keyboard-injection stage (see
+/// Install the DInput8 keyboard `GetDeviceState` detour without engaging any input block, and without
+/// touching XInput. The detour is the harness's focus-independent keyboard-injection stage (see
 /// `stamp_injected_dinput_key`): it authors the buffer after DInput has filled it, so the key lands
 /// whether or not ER holds the keyboard focus. `enforce_input_block_now` installs the same hook, but
 /// only while the block is engaged -- and the can-move probe runs in-world with the block released,
@@ -1347,13 +1347,13 @@ pub(crate) fn ensure_dinput_keyboard_hook_installed() {
 pub(crate) use er_telemetry_core::counters::MISSING_SAVE_INPUT_RELEASE_LOGGED;
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
-/// run from EITHER the game task OR the render loop -- critical because under the offline
+/// run from either the game task or the render loop -- critical because under the offline
 /// launcher no render callback executes at the title, so the render-loop call
 /// alone never engaged the block (that was the contamination hole). Driven every frame from
 /// the game task while `block_input_enabled()`:
 ///   1. ONCE: install the DInput8 keyboard `GetDeviceState` block (panics on probe
 ///      failure -> contained with catch_unwind so the FD4 task never unwinds into C++).
-///   2. EVERY frame: assert the block flag (sticky, overriding any overlay want-capture
+///   2. Every frame: assert the block flag (sticky, overriding any overlay want-capture
 ///      clear) and install/retry the XInput gamepad hook until the xinput DLL is present.
 ///
 /// Genuinely zero-input: it only SUPPRESSES keyboard + gamepad device reads -- it never synthesizes any
@@ -1394,20 +1394,20 @@ pub(crate) fn enforce_input_block_now() {
         // Not yet hooked (xinput DLL may load late): retry each frame until it sticks.
         unsafe { install_xinput_block() };
     }
-    // MOUSE + CURSOR NEVER TOUCHED (user 2026-07-22 + 2026-07-23, bd input-block-1x1-clipcursor-traps-
-    // user-native-windows-no-failsafe-release): there is NO cursor confinement here -- the per-frame 1x1
-    // `ClipCursor` that used to trap the OS cursor was removed, and the DInput MOUSE `GetDeviceState` block
+    // Mouse + cursor never touched (user 2026-07-22 + 2026-07-23, bd input-block-1x1-clipcursor-traps-
+    // user-native-windows-no-failsafe-release): there is no cursor confinement here -- the per-frame 1x1
+    // `ClipCursor` that used to trap the OS cursor was removed, and the DInput mouse `GetDeviceState` block
     // was removed too, so the user's real mouse (movement, buttons, camera) is always live player input.
-    // The DInput/XInput zeroing above suppresses ONLY keyboard + gamepad; it never forces, confines, or
+    // The DInput/XInput zeroing above suppresses only keyboard + gamepad; it never forces, confines, or
     // blocks the mouse.
 }
 
-// REMOVED (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
-// 2026-07-23): `enforce_keyboard_game_input_disable()` zeroed the user's DInput keyboard for the WHOLE
+// Removed (bd input-blocking-only-in-harness-during-driving-never-in-product-never-outside-window-
+// 2026-07-23): `enforce_keyboard_game_input_disable()` zeroed the user's DInput keyboard for the whole
 // in-world dwell (called every frame the harness DLL was present + the player was in-world). Disabling the
 // user's input is only valid inside the harness during its active driving window, never in the product
 // during normal play, so this whole-in-world keyboard disable is gone. The DInput keyboard block is now
-// driven ONLY by enforce_input_block_now()/release_input_block_now() (boot/reload driving windows), which
+// driven only by enforce_input_block_now()/release_input_block_now() (boot/reload driving windows), which
 // release the block on world entry -- so the dwell keeps full keyboard control.
 
 #[cfg(test)]
@@ -1425,7 +1425,7 @@ mod save_picker_stick_nav_tests {
         assert_eq!(xinput_stick_nav_mask(0, -DRIFT, -DRIFT), 0);
     }
 
-    /// A deliberate push down registers, and -- the point of the two thresholds -- a stick RELAXING
+    /// A deliberate push down registers, and -- the point of the two thresholds -- a stick relaxing
     /// through the press threshold does not re-register. One push must be one row, not a burst.
     #[test]
     fn one_push_is_one_edge_even_while_the_stick_relaxes() {
@@ -1446,7 +1446,7 @@ mod save_picker_stick_nav_tests {
         );
     }
 
-    /// XInput reports +Y as UP while list rows count downward; a sign slip here would scroll the
+    /// XInput reports +Y as up while list rows count downward; a sign slip here would scroll the
     /// list the wrong way on a pad and be invisible on a keyboard.
     #[test]
     fn stick_axes_map_to_the_directions_the_list_uses() {
@@ -1473,7 +1473,7 @@ mod save_picker_stick_nav_tests {
 mod save_picker_wheel_nav_tests {
     use super::*;
 
-    /// Wheel detents must latch their OWN masks, never the key/pad direction masks.
+    /// Wheel detents must latch their own masks, never the key/pad direction masks.
     ///
     /// The distinction is behavioural, not cosmetic: the picker rides the native list's wrap as the
     /// step signal for a key or pad press at an extreme row, but the native list does not wrap for
@@ -1518,7 +1518,7 @@ mod save_picker_wheel_nav_tests {
 mod save_picker_wheel_message_tests {
     use super::*;
 
-    /// A repeat READ of the same WM_INPUT message is not a second detent.
+    /// A repeat read of the same WM_INPUT message is not a second detent.
     ///
     /// `GetRawInputData` can be called more than once for one message, so counting reads rather than
     /// messages turns one notch of the wheel into several rows of movement. Verified through the

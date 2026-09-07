@@ -2,7 +2,7 @@
 //!
 //! # Why the record has a module rather than a local array of words
 //!
-//! It is TWENTY bytes, and the only field the ash-of-war answer depends on is the LAST one:
+//! It is twenty bytes, and the only field the ash-of-war answer depends on is the last one:
 //! `itemId` at `+0x10`. Both readers of a worn armament ask exactly that field --
 //! `GaitemLookupResult::canGemBeChanged` (0x1406741b0, reached through
 //! `GetGemGaitemHandleFromWeapon`) decides whether the weapon may carry a gem at all, and
@@ -10,7 +10,7 @@
 //! `swordArtsParamId` is the armament's default skill.
 //!
 //! So a caller that reserves sixteen bytes hands the engine four bytes of somebody else's stack
-//! as the item id -- and the resulting failure is silent, and CONSTANT. Zero passes both of the
+//! as the item id -- and the resulting failure is silent, and constant. Zero passes both of the
 //! engine's validity tests (`itemId & 0xF0000000 == 0`, and `itemId & 0x0FFFFFFF != 0x0FFFFFFF`),
 //! so a zero there does not read as "nothing": it reads as `EquipParamWeapon` **row 0**, unarmed.
 //! Every slot then resolves to the same row, `canGemBeChanged` says no, the gem override never
@@ -23,7 +23,7 @@
 //!
 //! # The initial state is not zeroes
 //!
-//! [`GaitemLookupResult::from_handle`] calls the engine's OWN constructor instead of filling the
+//! [`GaitemLookupResult::from_handle`] calls the engine's own constructor instead of filling the
 //! record here, because the constructor is where the initial state is defined and that state is
 //! `gaItemIns = nullptr; itemId = -1` before the lookup runs. The `-1` carries as much weight as
 //! the size: it is the sentinel both readers test for, so a handle that resolves to nothing
@@ -43,7 +43,7 @@ use er_game_base::rva::{
 /// It takes no reference and there is nothing to release: the matching
 /// `~GaitemLookupResult` (0x140672730) is a single `RET`, so a record is plain data and may be
 /// dropped. That is worth stating, because the sibling `GaItemHandle` this crate mints in
-/// `grant` DOES hold one and leaks the `CSGaitemImp` table if it is not destructed.
+/// `grant` does hold one and leaks the `CSGaitemImp` table if it is not destructed.
 const GAITEM_LOOKUP_RESULT_CTOR_RVA: usize = 0x6726c0;
 
 type LookupCtorFn = unsafe extern "system" fn(*mut GaitemLookupResult, *mut u32);
@@ -74,7 +74,7 @@ const _: () = assert!(core::mem::size_of::<GaitemLookupResult>() >= 0x14);
 
 /// The engine's `SwordArtsParamLookupResult`: a row id and the row itself.
 ///
-/// Sixteen bytes with the row POINTER at `+0x08`, which is why it is a typed record rather than
+/// Sixteen bytes with the row pointer at `+0x08`, which is why it is a typed record rather than
 /// four `u32`s -- the four-word form happened to be long enough, and being accidentally long
 /// enough is what the sibling record above proves is not a property worth relying on.
 #[repr(C)]
@@ -98,7 +98,7 @@ impl GaitemLookupResult {
         if handle == 0 || handle == u32::MAX {
             return None;
         }
-        // Resolved for the RUNNING build, not added blind: this is a direct CALL into game code
+        // Resolved for the running build, not added blind: this is a direct call into game code
         // at a 1.16.2 address, and on a build that moved it that is a control transfer into
         // whatever now occupies those bytes. `None` means the handle cannot be resolved, which is
         // the answer this function already has a shape for.
@@ -109,7 +109,7 @@ impl GaitemLookupResult {
         )?;
         // Safety: resolved for the running build immediately above.
         let ctor: LookupCtorFn = unsafe { core::mem::transmute(ctor) };
-        // The constructor reads the handle THROUGH a pointer, so it needs a place to live. The
+        // The constructor reads the handle through a pointer, so it needs a place to live. The
         // fields below are overwritten by the constructor; they are named rather than zeroed
         // wholesale so a future field cannot be added without a value being chosen for it.
         let mut handle = handle;
@@ -125,7 +125,7 @@ impl GaitemLookupResult {
         (record.instance != 0).then_some(record)
     }
 
-    /// The `SwordArtsParam` row this instance ACTUALLY carries, gem included.
+    /// The `SwordArtsParam` row this instance actually carries, gem included.
     ///
     /// `GetSwordArtsParamForWeapon` reads the armament's own `EquipParamWeapon.swordArtsParamId`
     /// first and then OVERRIDES it from the gem mounted in the instance's slot 0 -- but only when
@@ -155,7 +155,7 @@ impl GaitemLookupResult {
     }
 }
 
-/// `GaitemLookupResult::GetGemGaitemHandleFromWeapon` -- the handle of the gem MOUNTED on this
+/// `GaitemLookupResult::GetGemGaitemHandleFromWeapon` -- the handle of the gem mounted on this
 /// armament, or zero when it has none.
 ///
 /// Reached through the engine rather than by walking `CSGemSlotTable` here: the function checks
@@ -205,7 +205,7 @@ impl GaitemLookupResult {
 /// signed range `-6..=11`: the six weapon positions, the four ammo positions, and the negative
 /// "whichever hand is active" selectors. It bottoms out in
 /// `ChrAsm::GetEquipmentGaitemHandleBySlot`, a single `chrAsm->equipmentGaItemHandles[slot]` --
-/// so this is genuinely per-slot, and the SAME numbering `GetParamIdInSlot` answers in.
+/// so this is genuinely per-slot, and the same numbering `GetParamIdInSlot` answers in.
 ///
 /// # Safety
 ///

@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Pick between equally-shaped 1.17 candidates using each candidate's CALL-GRAPH SHAPE.
+"""Pick between equally-shaped 1.17 candidates using each candidate's call-graph shape.
 
-THE GAP THIS FILLS. Three tools already exist and each runs out of evidence somewhere:
+The gap this fills. Three tools already exist and each runs out of evidence somewhere:
 `map-rvas-1162-to-1170.py` reports "9 shape matches" when a body is too generic to identify;
-`resolve-1170-by-caller-rel32.py` needs an already-mapped CALLER and finds none for a function
+`resolve-1170-by-caller-rel32.py` needs an already-mapped caller and finds none for a function
 reached only indirectly; `find-1170-vtable-by-rtti.py` needs the function to sit in a vtable.
 A function with a plain body, no mapped caller and no vtable slot falls through all three.
 
-WHAT IS STILL DISTINCTIVE ABOUT SUCH A FUNCTION. Not its bytes -- but Ghidra has analysed BOTH
-images independently, so each candidate carries a `.pdata`-declared SIZE and a measured number of
+What is still distinctive about such a function. Not its bytes -- but Ghidra has analysed both
+images independently, so each candidate carries a `.pdata`-declared size and a measured number of
 callers and callees. Those are properties of the function's role in the program, not of its
 opening instructions, and the nine shape-alike candidates almost never share them. Requiring an
-EXACT size match plus equal caller and callee counts turns a nine-way shrug into one answer, and
+exact size match plus equal caller and callee counts turns a nine-way shrug into one answer, and
 when it does not, this says so rather than picking the first.
 
-WHY EXACT SIZE AND NOT "CLOSE". 1.17 does move code and does grow structures, so a body can
+Why exact size and not "CLOSE". 1.17 does move code and does grow structures, so a body can
 legitimately change length -- but then the honest verdict is that topology cannot decide it, and
 the pair belongs in `verify-rva-map-1170.py` for an instruction-level ruling. A tolerance band
 here would just be the nearest-anchor guess wearing a different hat, and a guess that lands
 mid-instruction is the specific failure that got `dump-deobf-shift.py` deleted from this repo.
 
-The score is reported alongside the answer so a reader can see WHICH properties agreed. A single
-candidate matching on size alone is reported as WEAK; size plus both arities is what this tool is
+The score is reported alongside the answer so a reader can see which properties agreed. A single
+candidate matching on size alone is reported as weak; size plus both arities is what this tool is
 for.
 """
 import importlib.util

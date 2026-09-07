@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
 """Frida live-nudge harness for the ER switch-reload low-fps experiment.
 
-Attaches to a RUNNING offline `eldenring.exe` and, through a small JS agent, lets us
-dynamically CALL a native game stepper function (or read/write memory) on the LIVE
+Attaches to a running offline `eldenring.exe` and, through a small JS agent, lets us
+dynamically call a native game stepper function (or read/write memory) on the live
 low-fps reload state -- then observe the framerate effect via the DLL's telemetry
 (`refresh_per_present` in er-quickload-telemetry.json). Hot-reload = just re-run this with
 different --call args (or use `frida -p <pid> -l frida-nudge.agent.js` for a REPL); no DLL
 rebuild, no relaunch.
 
-The JS agent lives in its OWN file (`frida-nudge.agent.js`) and is loaded here as raw text --
-Python does NOT embed JS inline, so JS tooling validates the agent directly (bd
+The JS agent lives in its own file (`frida-nudge.agent.js`) and is loaded here as raw text --
+Python does not embed JS inline, so JS tooling validates the agent directly (bd
 no-inline-foreign-language-source-in-host-string-load-from-own-file-2026-07-23).
 
-WHY Frida (bd frida-over-ce-mcp-for-live-native-call-nudge-2026-07-23): NativeFunction is the
+Why Frida (bd frida-over-ce-mcp-for-live-native-call-nudge-2026-07-23): NativeFunction is the
 direct "call a native VA with a signature+args" primitive the experiment needs. First prove
 Arxan tolerates the attach (--smoke); if it crashes the game, fall back to Cheat Engine 7.4
 (proven with ER via scripts/cheat-engine/*.CT).
 
-RUN IT (Frida is installed on WINDOWS python only, not WSL python3):
+Run it (Frida is installed on Windows python only, not WSL python3):
     python.exe "$(wslpath -w scripts/frida-nudge.py)" --smoke
     python.exe "$(wslpath -w scripts/frida-nudge.py)" --read 0x140000000:u16     # base MZ bytes
     python.exe "$(wslpath -w scripts/frida-nudge.py)" \
         --call 0x14XXXXXXX:void:pointer --arg 0x<this_ptr>
 
 SAFETY:
-  * Offline `eldenring.exe` ONLY. Refuses to attach to start_protected_game.exe / EAC.
-  * Default is READ-ONLY (--smoke / --read). --call and --write are explicit, one-shot,
+  * Offline `eldenring.exe` only. Refuses to attach to start_protected_game.exe / EAC.
+  * Default is read-only (--smoke / --read). --call and --write are explicit, one-shot,
     and echoed loudly. Attach is bounded: do the op, detach, exit (no lingering agent that
     could hold the loader lock).
   * Addresses are DEOBF/live VAs (what the running game executes, base 0x140000000). Ground
-    any VA you will CALL with scripts/dump-deobf-shift.py first; a dump VA lands mid-function.
+    any VA you will call with scripts/dump-deobf-shift.py first; a dump VA lands mid-function.
 """
 from __future__ import annotations
 

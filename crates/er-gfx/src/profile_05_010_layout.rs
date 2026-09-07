@@ -85,8 +85,8 @@ pub struct TransformLayout {
 pub struct RowChromeLayout {
     pub backing: TransformLayout,
     /// Full-row invisible mouse target. `GridControl::HandleMouse` resolves a row's hit object as
-    /// child `HitArea` FIRST, then `Cursor`, then the cell itself (`FUN_14074b0d0`, 1.16.2), and
-    /// hit-tests the resolved object's own bounds. Without a `HitArea` the row's hit box IS the
+    /// child `HitArea` first, then `Cursor`, then the cell itself (`FUN_14074b0d0`, 1.16.2), and
+    /// hit-tests the resolved object's own bounds. Without a `HitArea` the row's hit box is the
     /// `Cursor` sprite -- which the drive-row runtime shrinks onto the focused sub-control, so the
     /// row stops being hoverable anywhere else. This placement is baked alpha-0 and never renders;
     /// it only restores a full-row hit box so `Cursor` can stay pure focus chrome.
@@ -104,7 +104,7 @@ impl RowChromeLayout {
     ///
     /// This exists because the same list used to be hand-written in several places. `hit_area` was
     /// added to the schema (2026-08-12) without being added to the live protocol's own match, and
-    /// since ONE unknown key rejects the WHOLE control file, every live nudge after that failed
+    /// since one unknown key rejects the whole control file, every live nudge after that failed
     /// with `unknown key row_chrome.hit_area.editable` -- the editor showed "no ack" while the game
     /// ran perfectly, which reads as a dead channel rather than a rejected key. Both directions of
     /// the protocol now enumerate through here, so a new section cannot break the channel again.
@@ -440,7 +440,7 @@ pub fn min_clip_height_px(font_height: i32) -> i32 {
 /// Inverse of [`min_clip_height_px`]: the largest `font_height` a box of `clip_height` can render
 /// one line of. Zero when the box cannot hold any line at all.
 ///
-/// This is the ceiling the LIVE path needs. `font_height` hot-reloads instantly through the
+/// This is the ceiling the live path needs. `font_height` hot-reloads instantly through the
 /// `<font size>` wrap, but `clip_height` is baked into the movie and is never applied live -- so a
 /// font raised past this bound overflows a box that will not grow until the asset is rebuilt and
 /// the screen reopened.
@@ -918,7 +918,7 @@ mod tests {
         assert!(err.to_string().contains("unknown section"), "{err}");
     }
 
-    /// A visible hit target is a full-row opaque plate over EVERY row, not a cosmetic slip: the
+    /// A visible hit target is a full-row opaque plate over every row, not a cosmetic slip: the
     /// row template is shared with the character-slot views. The schema refuses to describe one.
     #[test]
     fn a_visible_row_hit_target_fails_closed() {
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(max_font_height_px(4), 0);
     }
 
-    /// `default()` must BE the shipped schema, and a partial parse must inherit it.
+    /// `default()` must be the shipped schema, and a partial parse must inherit it.
     ///
     /// The regression: `default()` was a second hard-coded copy of every number and had drifted from
     /// the TOML in seven of ten fields. `profile_05_010_protocol` layers an incoming control file

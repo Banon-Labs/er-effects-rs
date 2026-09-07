@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Forbid comparing a LIVE stack address against a raw 1.16.2 RVA.
+"""Forbid comparing a live stack address against a raw 1.16.2 RVA.
 
-WHY
+Why
 ===
 Every other stale-address class in this workspace announces itself. A detour goes through
 `er-hook`, which logs `HOOK REFUSED`. A call goes through `er_game_base::mem::game_rva`, which
 logs `ADDRESS REFUSED`. `scripts/check-stale-rva-calls.py` ratchets the ones that do not.
 
-CALL SITES have no such moment. `trace_first_game_caller_rva()` and
+Call sites have no such moment. `trace_first_game_caller_rva()` and
 `callstack_contains_game_rva(start, end)` take a return address off the live stack with
 `RtlCaptureStackBackTrace`, subtract the module base, and compare the result against a 1.16.2
 constant. Nothing is resolved, so nothing can be refused: on a build that moved the code the
 comparison simply never matches. No log line of any kind is produced, and the feature behind it
 is silently dead.
 
-MEASURED, 2026-08-30. Nine such comparisons existed. Two shipped user-visible features:
+Measured, 2026-08-30. Nine such comparisons existed. Two shipped user-visible features:
 
   * the Load Character / Load Character from File / Load Build from URL rows were never cloned
     onto the System>Quit tab, because `SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA` (0x958a20) never
@@ -22,13 +22,13 @@ MEASURED, 2026-08-30. Nine such comparisons existed. Two shipped user-visible fe
   * the title FadeIn suppression never fired, because
     `TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA` (0x744e02) never matched either.
 
-Both addresses are MID-FUNCTION, so neither could ever appear in the 1.16.2 -> 1.17 map: that map
+Both addresses are mid-function, so neither could ever appear in the 1.16.2 -> 1.17 map: that map
 is keyed on `.pdata` function starts, and `scripts/select-needed-1170-rows.py` could not see them.
 They were invisible to every tool the migration has.
 
-THE RULE
+The rule
 ========
-Name the CONTAINING FUNCTION and add the offset at the use site, then resolve through
+Name the containing function and add the offset at the use site, then resolve through
 `er_game_base::game_build::resolve_call_site_rva` (or `resolve_call_site_band` for a window):
 
     // before -- unmappable, and silent when it stops matching
@@ -44,9 +44,9 @@ Name the CONTAINING FUNCTION and add the offset at the use site, then resolve th
 containing the address, the map's pair for that function, and the callee each image's `E8` reaches
 at the same offset.
 
-WHY NOT JUST PUT THE RETURN ADDRESS IN THE MAP
+Why not just put the return address in the map
 ==============================================
-Because a verdict-table row licenses a DETOUR. `DETOURABLE_ENTRY_EVIDENCE` in
+Because a verdict-table row licenses a detour. `DETOURABLE_ENTRY_EVIDENCE` in
 `er-game-base/build.rs` accepts `NEITHER-ENTRY` -- deliberately, for a pair that sits the same
 distance before a Ghidra-named entry in both images -- so a row for a mid-function address would
 be accepted into `DETOUR_SAFE_1162_TO_1170` and MinHook would then write five bytes into the
@@ -110,8 +110,8 @@ EXEMPT_CONSTANTS = ("AV_GAME_TEXT_RVA_MIN", "AV_GAME_TEXT_RVA_MAX")
 
 # How many following lines to fold into the probe for one source line.
 #
-# NOT cosmetic. `rustfmt` wraps a predicate whose arguments do not fit, and the constant then lands
-# on the NEXT line:
+# Not cosmetic. `rustfmt` wraps a predicate whose arguments do not fit, and the constant then lands
+# on the next line:
 #
 #     let first_row_call = callstack_contains_game_rva(
 #         SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA
@@ -145,7 +145,7 @@ def scan_text(path_label: str, text: str) -> list[str]:
             continue
         for description, pattern in FORBIDDEN:
             match = pattern.search(probe)
-            # Anchored to this line: the match must START within the first line's own text, so a
+            # Anchored to this line: the match must start within the first line's own text, so a
             # call is reported once, at the line that opens it, rather than once per line above it.
             if match and match.start() < len(stripped):
                 findings.append(f"{path_label}:{index + 1}: {description}\n    {stripped[:140]}")
@@ -168,7 +168,7 @@ def scan_repo() -> list[str]:
 def selftest() -> int:
     """Drive the scanner over synthetic sources, so the gate is never trusted on its own say-so.
 
-    The bad fixture is the REAL set this gate was written for: every line below is one of the
+    The bad fixture is the real set this gate was written for: every line below is one of the
     nine comparisons that existed on 2026-08-30, transcribed.
     """
     failures: list[str] = []
@@ -189,7 +189,7 @@ def selftest() -> int:
     if len(hits) != 8:
         failures.append(f"expected 8 violations in the bad fixture, got {len(hits)}: {hits}")
 
-    # THE FORM THE FORMATTER PRODUCES, and the reason `JOIN_LINES` exists. A line-at-a-time
+    # The form the FORMATTER produces, and the reason `JOIN_LINES` exists. A line-at-a-time
     # scanner passes this, and five of the nine real sites looked exactly like it.
     wrapped = "\n".join(
         (
@@ -222,7 +222,7 @@ def selftest() -> int:
     if hits:
         failures.append(f"clean fixture must not report violations, got {hits}")
 
-    # The gate has to see the REAL repo as clean, or it is enforcing nothing.
+    # The gate has to see the real repo as clean, or it is enforcing nothing.
     live = scan_repo()
     if live:
         failures.append(

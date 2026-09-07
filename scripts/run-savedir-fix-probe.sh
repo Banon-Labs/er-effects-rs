@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot launcher for the SAVE-DIR cold-mount fix verification probe.
+# One-shot launcher for the save-DIR cold-mount fix verification probe.
 # Sources the gated env, launches the approved offline eldenring.exe Proton probe with the
 # cold_char_mount autoload request, and lets the readiness watcher tear down on evidence.
 set -uo pipefail

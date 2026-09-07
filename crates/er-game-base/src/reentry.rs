@@ -12,7 +12,7 @@
 //! | `er_save_redirect::reentry` | a detour's own `fs::read` re-enters the detour |
 //! | `crashlog::veh_exit_hooks::crash_vectored_handler` | describing a fault faults, and a VEH is re-entered for its own faults |
 //!
-//! All three are SAME-THREAD synchronous recursion, so the latch is thread-local: a process-wide
+//! All three are same-thread synchronous recursion, so the latch is thread-local: a process-wide
 //! flag would wrongly mute a legitimate concurrent call on another thread, which in the logger's
 //! case silently drops most of the log.
 //!
@@ -125,7 +125,7 @@ mod tests {
         ReentryLatch::enter(&TEST_LATCH, &TEST_REFUSALS)
     }
 
-    /// One entry per thread at a time, and the flag must CLEAR when the token dies -- a latch that
+    /// One entry per thread at a time, and the flag must clear when the token dies -- a latch that
     /// leaked its flag would silence every later call on that thread, which is the same bug
     /// wearing the opposite costume.
     #[test]
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(TEST_REFUSALS.load(Ordering::SeqCst), before + 1);
     }
 
-    /// Per THREAD, not per process: two threads faulting or logging at once are two independent
+    /// Per thread, not per process: two threads faulting or logging at once are two independent
     /// events, and a process-wide flag would drop the second one for no reason.
     #[test]
     fn the_latch_is_per_thread_not_per_process() {
@@ -177,18 +177,18 @@ mod tests {
     }
 }
 
-/// A re-entrancy latch shared by EVERY module in the process, not just this one.
+/// A re-entrancy latch shared by every module in the process, not just this one.
 ///
 /// # Why the thread-local latch above is not enough for the crash-logger VEH
 ///
 /// [`ReentryLatch`] is declared in a `thread_local!` **per module**. That bounds one module
 /// guarding one path. It cannot bound the VEH, because every DLL in this workspace that links a
-/// crash logger installs its OWN vectored handler holding its OWN copy of the static. A fault
+/// crash logger installs its own vectored handler holding its own copy of the static. A fault
 /// raised while module A is describing a fault is therefore still a *first* entry for modules B,
 /// C and D. Each of them describes it, each description can fault in turn, and the amplification
 /// the per-module latch was added to stop returns multiplied by the number of loggers loaded.
 ///
-/// MEASURED 2026-09-02, ELDEN RING 1.17, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
+/// Measured 2026-09-02, ELDEN RING 1.17, 24 native DLLs: one `0xc000001d` at `game+0x10043`, then
 /// 214 identical `0xc0000005` inside ntdll's unwinder, `rsp` marching from `0x10f560` down to
 /// `0x13810` -- a megabyte of stack -- until the faulting thread died and the session wedged with
 /// its window still up. Four crash logs each recorded the same storm (`er-quickload` 213,
@@ -199,9 +199,9 @@ mod tests {
 ///
 /// The backing store is a named zero-filled section (`CreateFileMappingW` against the pagefile,
 /// named with this process's id so two running games never share one), mapped by whichever module
-/// asks first and by every module after it -- the SAME page in all of them.
+/// asks first and by every module after it -- the same page in all of them.
 ///
-/// What the page holds is a table of the thread ids currently inside a report, NOT a single
+/// What the page holds is a table of the thread ids currently inside a report, not a single
 /// process-wide flag. The distinction is the one the module docs above already draw: a
 /// process-wide boolean would mute a legitimate concurrent fault on another thread, which in a
 /// crash logger silently drops most of the log. Entry is refused only when *this* thread is
@@ -332,7 +332,7 @@ pub mod process_wide {
             fn GetCurrentProcessId() -> u32;
         }
 
-        // Per-PROCESS, not per-session: `Local\` alone would make two running copies of the game
+        // Per-process, not per-session: `Local\` alone would make two running copies of the game
         // share one table, and one game's fault storm would then refuse the other's reports.
         let mut name = [0u16; 64];
         let written = write_section_name(&mut name, unsafe { GetCurrentProcessId() });

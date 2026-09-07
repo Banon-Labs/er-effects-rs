@@ -1,7 +1,7 @@
 //! THROWAWAY structural enumeration (bd er-effects-rs-jogu): the armament badge needs the
 //! GRID/SLOT tile sprite in each menu movie, not just any sprite that places `ItemIcon`.
 //! The runtime child probe shows the equip menu's tile has `ArtsIcon` while the inventory
-//! grid tile binds `ItemIcon/AttributeIcon/inadequacy/StockNum` and NO `ArtsIcon`, so this
+//! grid tile binds `ItemIcon/AttributeIcon/inadequacy/StockNum` and no `ArtsIcon`, so this
 //! dumps every `ItemIcon`-placing sprite in each movie with its full named child list and
 //! its `SymbolClass` binding, to tell grid tiles from detail panels.
 //!
@@ -89,7 +89,7 @@ fn dump(label: &str, bytes: &[u8]) {
         for (n, c, d, m) in &children {
             println!("     {n:<16} char={c:?} d={d} {m}");
         }
-        // For each named child that is a sprite, show ITS named children (the two-level
+        // For each named child that is a sprite, show its named children (the two-level
         // container -> IconImage shape the icon setter recurses through).
         for (n, c, ..) in &children {
             let Some(cid) = c else { continue };
@@ -121,9 +121,9 @@ fn dump(label: &str, bytes: &[u8]) {
     }
 }
 
-/// Sweep the WHOLE corpus for movies with a badge-able tile (a sprite placing BOTH
+/// Sweep the whole corpus for movies with a badge-able tile (a sprite placing both
 /// `ItemIcon` and `ArtsIcon`). Run 20260727-232032 showed the Equipment loadout grid binding
-/// `ArtsIcon` with a ZERO extent, i.e. a tile in a movie we had not edited -- so the target
+/// `ArtsIcon` with a zero extent, i.e. a tile in a movie we had not edited -- so the target
 /// list must be derived from the corpus, not guessed menu by menu.
 #[test]
 fn sweep_corpus_for_badgeable_tiles() {

@@ -1,12 +1,12 @@
-//! POSITIVE row identity for the System>Quit dialog, read live from game memory.
+//! Positive row identity for the System>Quit dialog, read live from game memory.
 //!
 //! The pure decision core (`QuitRow`, `QuitRowFacts`, `resolve_quit_row`, and the gate on the
 //! irreversible `ExitProcess(0)`) already lived in [`crate::rows`]; this is the memory-capture and
 //! telemetry half that feeds it, moved out of
 //! `experiments/startup_hooks/quit_menu/system_quit_row_identity.rs`.
 //!
-//! Two reads stay on the product side and arrive as values: the dialog's slot CURSOR and its slot
-//! BOUND, whose offsets are `er_title_flow`'s (`DIALOG_SLOT_CURSOR_B0C_OFFSET` /
+//! Two reads stay on the product side and arrive as values: the dialog's slot cursor and its slot
+//! bound, whose offsets are `er_title_flow`'s (`DIALOG_SLOT_CURSOR_B0C_OFFSET` /
 //! `DIALOG_SLOT_BOUND_B08_OFFSET`, derived from that crate's `ProfileLoadDialogLayout`). Taking a
 //! dependency on the whole title-flow crate for two struct offsets would be a far heavier edge
 //! than handing over the two integers the caller has already read.
@@ -122,7 +122,7 @@ pub fn system_quit_row_controller(row: QuitRow) -> usize {
     }
 }
 
-/// Is this dispatched controller one of the patched Quit tab's rows? A pure SCOPE test: the
+/// Is this dispatched controller one of the patched Quit tab's rows? A pure scope test: the
 /// activation hook shares its `_Func_impl` thunk vtable and `Activate` slot with other dialogs, so it
 /// must forward foreign controllers untouched.
 ///
@@ -138,7 +138,7 @@ pub fn system_quit_controller_is_a_quit_row(controller: usize) -> bool {
 
 /// Read the label of one property row, live from the dialog. `EditProperty.label`
 /// (`row + 0x8`) is a `CS::MenuHelpLabelComponent` whose first field is the `MenuString`'s raw
-/// UTF-16 pointer, so the three cloned rows match this DLL's own static arrays by POINTER, and
+/// UTF-16 pointer, so the three cloned rows match this DLL's own static arrays by pointer, and
 /// every row also matches by text.
 ///
 /// # Safety
@@ -182,15 +182,15 @@ pub unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Option<Quit
     // Confirm the pointer is a readable UTF-16 string before classifying it as foreign, so an
     // unmapped/garbage pointer reports `None` (ambiguous) rather than "native label".
     unsafe { safe_read_u16(label_ptr) }?;
-    // LONGEST LABEL FIRST, AND SINCE 2026-07-31 THAT IS LOAD-BEARING RATHER THAN TIDY.
-    // "Load Character from File" STARTS WITH "Load Character", so a prefix test in the other order
+    // Longest label first, and since 2026-07-31 that is load-bearing rather than TIDY.
+    // "Load Character from File" starts with "Load Character", so a prefix test in the other order
     // classifies the file-browse row as the character row -- and this function's answer decides
     // which row a click ran. The old pair ("Load Save Profiles" / "Load Profile") did not overlap,
     // so the ordering was free then and is not now. Any future label must be checked against this.
     //
     // "Load Build from URL" shares only the word "Load" with the other two, and "Generate Build
     // Link" shares no leading word with anything -- so neither is part of that prefix chain. They
-    // are still tested inside this longest-first list rather than beside it, so a FIFTH label can be
+    // are still tested inside this longest-first list rather than beside it, so a fifth label can be
     // inserted by length alone without re-deriving the rule.
     if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
@@ -285,7 +285,7 @@ pub fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowV
     }
 }
 
-/// The single gate for the irreversible instant `ExitProcess(0)`. Returns `true` only on POSITIVE
+/// The single gate for the irreversible instant `ExitProcess(0)`. Returns `true` only on positive
 /// evidence that the activated row is the Return-to-Desktop row; every refusal is counted so a run
 /// shows the gate working instead of merely not crashing. Takes an already-resolved verdict so one
 /// activation produces exactly one resolution in the oracles.

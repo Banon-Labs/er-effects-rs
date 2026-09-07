@@ -5,7 +5,7 @@
 //! * **Attribution.** A return address captured in a detour is just a number. Turning it into
 //!   `er_invasion_warp.dll` is what makes "which mod polled F7" answerable without that mod
 //!   exporting anything, cooperating, or even knowing this DLL exists. That property -- working
-//!   against ANY author's binary -- is the whole reason the observation is done at the API rather
+//!   against any author's binary -- is the whole reason the observation is done at the API rather
 //!   than by asking each mod what it binds.
 //! * **The settle gate.** A fingerprint over the module list, so "everything has loaded" is a
 //!   thing that can be observed instead of slept through.
@@ -195,7 +195,7 @@ pub fn executable_name() -> String {
 /// Capture the current thread's return addresses, innermost first.
 ///
 /// `skip` is passed straight to the unwinder. This crate passes zero and strips its own frames by
-/// MODULE afterwards, in [`crate::attribution::fold`]: the exact frame the unwinder calls "frame
+/// module afterwards, in [`crate::attribution::fold`]: the exact frame the unwinder calls "frame
 /// zero" is an implementation detail that differs between Windows and Wine, and a hard-coded skip
 /// count would be an untested assumption sitting under every attribution the DLL makes.
 pub fn capture_frames(out: &mut [usize]) -> usize {

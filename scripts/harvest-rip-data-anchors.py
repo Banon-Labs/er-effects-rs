@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Harvest the 1.16.2 -> 1.17 DATA anchor map SOURCE-FIRST, aligning references by BYTE OFFSET.
+"""Harvest the 1.16.2 -> 1.17 data anchor map source-first, aligning references by byte offset.
 
-TWO THINGS THIS DOES DIFFERENTLY FROM `map-data-rvas-1162-to-1170.py`
+Two things this does differently from `map-data-rvas-1162-to-1170.py`
 ---------------------------------------------------------------------
 1. It is source-driven, not target-driven.  That tool takes an address and hunts the image for
    references to it; this one walks the 128k established function pairs once and emits every
@@ -9,19 +9,19 @@ TWO THINGS THIS DOES DIFFERENTLY FROM `map-data-rvas-1162-to-1170.py`
    answer per invocation, and the anchor field is what makes a proposed row auditable: you can
    see where a delta region begins and ends rather than trusting that it is constant.
 
-2. It pairs a reference by its BYTE OFFSET inside the function, not by instruction index.
+2. It pairs a reference by its byte offset inside the function, not by instruction index.
    Index alignment is exact while the two bodies decode to the same stream, and breaks the
    moment one instruction is inserted ahead of the reference -- the index then names a
    different instruction and the reference is lost.  Measured: `MENU_PUMP_KICK_PTR_RVA` and
-   `PROFILE_OFFSCREEN_SIZE_TABLE_RVA` were both in that ledger's UNUSED list, and both have a
+   `PROFILE_OFFSCREEN_SIZE_TABLE_RVA` were both in that ledger's unused list, and both have a
    perfectly good reference sitting at the same byte offset in both builds.
 
-WHAT MAKES A VOTE
+What makes a vote
 -----------------
 The instruction found at the same byte offset must decode from the function's own entry, carry
-the SAME mnemonic and the SAME operand shape, and be rip-relative.  Then its 1.17 displacement
+the same mnemonic and the same operand shape, and be rip-relative.  Then its 1.17 displacement
 is read and the pair is one vote.  Votes are tallied per source address and a source with
-disagreeing votes is reported CONTESTED rather than resolved by majority -- the .data delta is
+disagreeing votes is reported contested rather than resolved by majority -- the .data delta is
 not constant and not monotonic, so a majority is not evidence about an individual address.
 
 This proposes rows.  It does not write `docs/recon/*.tsv`.

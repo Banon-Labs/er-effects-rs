@@ -1,12 +1,12 @@
 //! `CS::InGameStep::STEP_RequestWait` guard -- the one place a loaded world's session is ended.
 //!
-//! WHAT THIS FIXES. A System->Quit switch that loads a foreign save reaches the world: the fresh
+//! What this fixes. A System->Quit switch that loads a foreign save reaches the world: the fresh
 //! deserialize mounts the picked slot (`own-load-feed: c30 0xa010000->0x1c000000 ... level=11`), the
 //! world-res entry is created, 111 blocks populate, and the world streams for ~10 seconds. Then it is
 //! torn back to the title map -- `WORLD LOST #2` in run br-20260905-194101-bd9d, which is the black
 //! screen the user sees.
 //!
-//! WHY. From the named 1.16.2 decompile of `STEP_RequestWait` (0x140aecc10), the step dispatches on
+//! Why. From the named 1.16.2 decompile of `STEP_RequestWait` (0x140aecc10), the step dispatches on
 //! `InGameStep+0xd8` (`requestCode`):
 //!
 //! ```text
@@ -19,24 +19,24 @@
 //!
 //! and `STEP_GameStepWait` (bd `setstate-beginlogo-is-gamestepwait-b7c-b7d-not-menudata-5e-2026-09-04`)
 //! then reads `d8 == 0` with `GameMan+0xb7c`/`+0xb7d` clear and does `SetMapId(0xff,0xff,0xff,0xff)` +
-//! `SetState(2 BeginLogo)`. That is the whole black screen, and `STEP_RequestWait` is its ONLY trigger:
+//! `SetState(2 BeginLogo)`. That is the whole black screen, and `STEP_RequestWait` is its only trigger:
 //! nothing else in the image stores 0 into `+0xd8`.
 //!
-//! A HEALTHY load never reaches the `d8 == 2` arm, because it passes through the step while d8 is still
+//! A healthy load never reaches the `d8 == 2` arm, because it passes through the step while d8 is still
 //! 1 and the `d8 == 1` arm advances to step 4 -- after which `STEP_MoveMap_Update` raising d8 to 2 has
 //! no reader. Measured: br-20260904-165518-e3be sits at `committed=6 ig_d8=1` for its whole session and
 //! loses no world, even though it too shows `ig_d8=2 menu_job=0x0` samples later. Our switch is
-//! different in one way that matters: it mounts the map BEFORE firing `continue_confirm`, so the MoveMap
+//! different in one way that matters: it mounts the map before firing `continue_confirm`, so the MoveMap
 //! request can already be complete when `RequestWait` first ticks -- d8 is 2 on entry, the `d8 == 1`
 //! advance is skipped, and the session-end arm runs against a NowLoading job that is null.
 //!
-//! WHAT THE GUARD DOES. On entry with `d8 == 2` and a null NowLoading job while a genuinely real map is
-//! mounted, it rewrites d8 to 1 and lets the ORIGINAL run. The game then takes its own healthy `d8 == 1`
+//! What the guard does. On entry with `d8 == 2` and a null NowLoading job while a genuinely real map is
+//! mounted, it rewrites d8 to 1 and lets the original run. The game then takes its own healthy `d8 == 1`
 //! branch -- the same fade, the same `FUN_14067a320`, the same `FUN_140aed270(this, 4)` advance a normal
 //! load takes. Nothing here calls a game function, and nothing skips one; the only write is to the
 //! dispatch value, and only to a value the native code sets itself one step earlier.
 //!
-//! WHY IT CANNOT WEDGE A WORLD THAT IS NOT COMING. Every correction spends one of a fixed budget
+//! Why it cannot wedge a world that is not coming. Every correction spends one of a fixed budget
 //! (`MAX_CORRECTIONS`) armed per switch. When the budget is gone the native store runs untouched and the
 //! game returns to the title exactly as it does today. A guard that could suppress the teardown forever
 //! would convert a black screen into a hang, which is worse; this one converts it into at most a few
@@ -122,8 +122,8 @@ fn mounted_map_id() -> i32 {
 unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
     let d8 =
         unsafe { safe_read_i32(in_game_step + INGAMESTEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1);
-    // LOG EVERY TICK, not only the session-end arm. The decompile says the `d8 == 1` arm is what
-    // ADVANCES out of this step (`FUN_140aed270(this, 4)`), and a load that keeps its world is
+    // Log every tick, not only the session-end arm. The decompile says the `d8 == 1` arm is what
+    // advances out of this step (`FUN_140aed270(this, 4)`), and a load that keeps its world is
     // believed to leave through that arm before `STEP_MoveMap_Update` ever raises d8 to 2 -- the
     // boot-load run br-20260904-165518-e3be sat at `ig_d8=1` for its whole session and lost no world.
     // If our switch never ticks this step at d8 == 1, that is the divergence, and it is invisible in
@@ -152,10 +152,10 @@ unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
             ));
         }
         if nowloading == 0 && world_is_real {
-            // OBSERVE ONLY. This used to rewrite d8 2 -> 1 so the native code would take its
+            // Observe only. This used to rewrite d8 2 -> 1 so the native code would take its
             // `d8 == 1` arm instead of ending the session. It did stop the black screen, and it was
-            // still wrong: that arm calls `FUN_140aed270(this, 4)` and ADVANCES the step, which after
-            // the MoveMap has already completed starts a SECOND load. Measured on run
+            // still wrong: that arm calls `FUN_140aed270(this, 4)` and advances the step, which after
+            // the MoveMap has already completed starts a second load. Measured on run
             // br-20260905-211954-d2a7 -- MoveMap init #2 (the switch's real load) got a correct
             // destination block 0x1c000000, and a third init nine seconds later, caused by this
             // conversion, found `GameMan+0x14` already consumed and cleared to 0xffffffff, so
@@ -241,7 +241,7 @@ pub(crate) fn install_request_wait_guard() -> bool {
 /// Log `GameMan+0x14` (moveMapStepBlockId) at `STEP_MoveMap_Init` entry -- the value that init is
 /// about to copy into the MoveMapStep's `mapId` (+0xdc) and then clear.
 ///
-/// READ-ONLY ON PURPOSE. The slot deserialize `FUN_14067b290` (1.16.2 0x14067b290, the function
+/// Read-only on purpose. The slot deserialize `FUN_14067b290` (1.16.2 0x14067b290, the function
 /// `own_load_feed_deserialize` already drives) ends with `SetMoveMapStepBlockId(GameMan+0xc30)` and
 /// `warpRequested = true`: the native flow sets this field itself, from the map id the save's own
 /// bytes just wrote into `+0xc30`. So the correct question is not "who supplies the block" but

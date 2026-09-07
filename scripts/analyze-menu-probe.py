@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Analyze an er-input-harness PROBE-mode log to recover the in-world pause-menu input map.
+"""Analyze an er-input-harness probe-mode log to recover the in-world pause-menu input map.
 
 Probe mode (drive.rs probe_menu_tick) opens the in-world pause menu, then sweeps DLUID virtual-key ids
 1000..1080 into `source+0x88` (via the builder-hook producer path, bd
-MENU-INPUT-LAYER-virtual-key-array-source-plus-0x88) and logs the menu response per id. This tool reads
+menu-input-layer-virtual-key-array-source-plus-0x88) and logs the menu response per id. This tool reads
 that log and answers the three questions that decide whether the producer-hook works:
 
-  1. Does the builder-hook FIRE in-world?            (builder_fires / bf increasing)
-  2. Does OUR source match the GAME's writer source? (my_src == game_src -> we write the array the menu reads)
+  1. Does the builder-hook fire in-world?            (builder_fires / bf increasing)
+  2. Does our source match the game's writer source? (my_src == game_src -> we write the array the menu reads)
   3. Which ids move the menu?                          (job / flags / tab / return_title change per id = that
-                                                        id's action) -> the empirical id->action map, OR
+                                                        id's action) -> the empirical id->action map, or
                                                         "no id responded" = hook fires but the menu still does
                                                         not consume our write (deeper producer problem).
 
@@ -48,7 +48,7 @@ def main() -> int:
         print("NO probe lines found -- not a probe-mode log (run with er-harness-drive-mode.txt='probe').")
         return 2
 
-    # Q1/Q2 from the last OPEN sample (menu is up, pre-sweep baseline).
+    # Q1/Q2 from the last open sample (menu is up, pre-sweep baseline).
     base = opens[-1] if opens else None
     if base:
         bf, gsrc, msrc = int(base["bf"]), base["gsrc"], base["msrc"]
@@ -62,7 +62,7 @@ def main() -> int:
     # Q3: per-id menu response. Baseline job/flags/tab = the mode across id samples (steady menu-open value).
     if ids:
         from collections import Counter
-        # Baseline = the steady MENU-OPEN state, not the global mode: closed-menu samples (job==0) would
+        # Baseline = the steady menu-open state, not the global mode: closed-menu samples (job==0) would
         # otherwise dominate the mode and make every open-menu sample look like a "response". Restrict the
         # baseline to samples where the menu is open (job != 0); fall back to the global mode if none.
         opened = [r for r in ids if r["job"] not in ("0", "")]

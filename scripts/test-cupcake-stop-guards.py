@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 """End-to-end proof that the Stop-event guards actually halt a turn.
 
-WHY THIS TEST EXISTS (2026-08-22). Every Stop guard in this repo was inert for 36 days -- from the
+Why this test exists (2026-08-22). Every Stop guard in this repo was inert for 36 days -- from the
 day the first one landed (2026-07-17) until the day this was written -- and the suite stayed green
 the entire time, because the coverage was split in a way that left the real path untested:
 
-  * scripts/test-*-signal.py           tested the SIGNAL shell scripts alone (no policy, no cupcake);
-  * .cupcake/tests/*_test.rego         tested the POLICIES in the OPA INTERPRETER (`opa test`);
-  * scripts/test-cupcake-policies.py   ran the real `cupcake eval` binary -- PreToolUse events ONLY.
+  * scripts/test-*-signal.py           tested the signal shell scripts alone (no policy, no cupcake);
+  * .cupcake/tests/*_test.rego         tested the policies in the OPA interpreter (`opa test`);
+  * scripts/test-cupcake-policies.py   ran the real `cupcake eval` binary -- PreToolUse events only.
 
 `cupcake eval` does not use the OPA interpreter. It compiles the policies to WASM and runs them in
 its own embedded runtime, where an unimplemented host builtin (`sprintf`) silently yields undefined
 and the rule never fires. So the signal passed, the policy passed, the interpreter passed, and the
-thing that actually runs at turn-end returned `{}` -- a clean ALLOW -- every single time.
+thing that actually runs at turn-end returned `{}` -- a clean allow -- every single time.
 
-This test closes that hole by driving the WHOLE path exactly as Claude Code does: the real
+This test closes that hole by driving the whole path exactly as Claude Code does: the real
 transcript on disk, the real signal scripts, the real `cupcake eval` commands read out of
 .claude/settings.json, and an assertion on the verdict that comes back. Both directions are asserted
 -- a guard that cannot halt is useless, and a guard that halts on a clean turn wedges every session.
 
-IT ALSO DRIVES UserPromptSubmit (2026-08-22), because one guard deliberately does NOT halt. Claude
+It also drives UserPromptSubmit (2026-08-22), because one guard deliberately does not halt. Claude
 Code renders every Stop verdict into the user's transcript ("Stop hook error: <reason>") and Stop
-fires only after the assistant's text has already been streamed, so a Stop halt on ANSWER LENGTH
+fires only after the assistant's text has already been streamed, so a Stop halt on answer length
 makes the user read the long version, the scolding and the rewrite -- three times the reading, from
 a rule whose whole purpose is less of it. wall_of_text therefore lives on UserPromptSubmit, whose
 `additionalContext` is a hidden attachment and lands before the next answer is written. Two things
-have to hold and both are asserted here: it must NOT halt at Stop, and its correction must actually
+have to hold and both are asserted here: it must not halt at Stop, and its correction must actually
 come back on the invisible channel.
 
 Fixtures live in .cupcake/tests/fixtures/*.jsonl and are ordinary Claude Code transcripts.
@@ -98,7 +98,7 @@ CASES = [
 
 @dataclass(frozen=True)
 class ContextCase:
-    """A UserPromptSubmit case: the correction must arrive on the INVISIBLE additionalContext
+    """A UserPromptSubmit case: the correction must arrive on the invisible additionalContext
     channel, or not arrive at all."""
 
     fixture: str
@@ -153,7 +153,7 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict,
 
     with tempfile.TemporaryDirectory(prefix="cupcake-stop-guard-") as tmp:
         # Signals discover the transcript via ~/.claude/projects/<cwd-with-slashes-as-dashes>/*.jsonl
-        # (scripts/cupcake_turn_scan.latest_transcript). Point HOME at a throwaway tree holding only
+        # (scripts/cupcake_turn_scan.latest_transcript). Point home at a throwaway tree holding only
         # this fixture, so the test never reads the live session transcript.
         slug = str(REPO_ROOT).replace("/", "-")
         tdir = Path(tmp) / ".claude" / "projects" / slug

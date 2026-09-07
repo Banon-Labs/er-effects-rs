@@ -1,4 +1,4 @@
-//! The RAW vertex-declaration view: interleaved buffer slices + per-member D3D-style
+//! The raw vertex-declaration view: interleaved buffer slices + per-member D3D-style
 //! declarations, for binding real geometry to the game's compiled `.vpo` vertex shader
 //! via SPIR-V passthrough.
 //!
@@ -47,7 +47,7 @@ pub struct RawVertexBuffer<'a> {
     pub members: Vec<VertexMember>,
     /// The verbatim interleaved vertex bytes (`array_stride * vertex_count` long).
     pub data: &'a [u8],
-    /// Any member is edge-compressed — `data` is NOT directly bindable.
+    /// Any member is edge-compressed — `data` is not directly bindable.
     pub edge_compressed: bool,
 }
 
@@ -264,7 +264,7 @@ mod tests {
                 semantic_index: 0,
                 register: 0,
             },
-            // Shader only consumes the SECOND uv channel (TEXCOORD1).
+            // Shader only consumes the second uv channel (TEXCOORD1).
             Isg1Input {
                 semantic_name: "texcoord".into(),
                 semantic_index: 1,

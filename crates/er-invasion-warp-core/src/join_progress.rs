@@ -11,14 +11,14 @@
 //!
 //! # Why this is not a dwell timer
 //!
-//! Timing the ERSC state was tried and it cancelled a REAL invasion five seconds after accepting
+//! Timing the ERSC state was tried and it cancelled a real invasion five seconds after accepting
 //! it, which is why `0x15` is excluded from the stall watchdog's timed states and pinned there by
 //! a regression test. It is worse than risky, it is meaningless: `0x15` is not a handshake stage
 //! at all. In `ersc.dll` the only instruction that can produce it computes
 //! `((flags >> 19) & 1) * 9 + 12` -- 12 or 21 from one bit -- and `0x15` is never written as a
 //! literal anywhere in the binary. A number that is a published flag cannot be timed as progress.
 //!
-//! So the question is asked of the GAME instead: has the engine got a join in flight, and has it
+//! So the question is asked of the game instead: has the engine got a join in flight, and has it
 //! committed to loading a world? Both are single reads of documented fields, and neither can be
 //! confused with "the player is still standing in their own world".
 //!
@@ -55,7 +55,7 @@ pub const SESSION_WAIT_INIT_REMAIN_OFFSET: usize = 0x1b0;
 
 /// The phase timers are force-zeroed every frame by the `else` branch of
 /// `CSSessionManagerImp::Update` whenever `protocolState` is neither `JoinCheck` nor
-/// `WaitInitData`. So a positive value here is proof the engine is mid-handshake RIGHT NOW.
+/// `WaitInitData`. So a positive value here is proof the engine is mid-handshake right now.
 pub const TIMER_EXPIRED: f32 = 0.0;
 
 /// `LobbyState` (`CSSessionManagerImp + 0x0C`), from the immediates in the writing sites.
@@ -72,7 +72,7 @@ pub mod lobby_state {
     pub const JOINING: i32 = 4;
     /// `CSSessionManager::JoinSession` failed synchronously; also fires `OnJoinFailed`.
     pub const JOIN_FAILED: i32 = 5;
-    /// The join SUCCEEDED -- the P2P session exists.
+    /// The join succeeded -- the P2P session exists.
     pub const CLIENT: i32 = 6;
     /// `LeaveSession` is unwinding.
     pub const CLOSING: i32 = 7;
@@ -88,7 +88,7 @@ pub mod protocol_state {
     pub const WAIT_RELOAD_2: i32 = 5;
     /// The world load finished.
     pub const IN_GAME: i32 = 6;
-    /// `SetupMapReentry` -- the map reload has been ORDERED. For a guest this is set immediately
+    /// `SetupMapReentry` -- the map reload has been ordered. For a guest this is set immediately
     /// before `WarpNextStageKick_`, so it is the earliest engine-side "we are going" marker.
     pub const WAIT_REENTRY_TO_MAP: i32 = 7;
 }
@@ -117,7 +117,7 @@ pub enum Verdict {
     /// The engine has a join in flight: an outstanding RPC, a live session, or a running phase
     /// timer. It may still fail, but it is doing something and it has its own 30s bound.
     Progressing,
-    /// The engine has NOTHING in flight. No RPC, no session, no timer running. If ERSC still
+    /// The engine has nothing in flight. No RPC, no session, no timer running. If ERSC still
     /// believes an attempt is live while this holds, the attempt is dead in ERSC's own transport
     /// and no amount of waiting will produce a loading screen.
     Idle,
@@ -172,7 +172,7 @@ impl fmt::Display for JoinProgress {
 mod tests {
     use super::*;
 
-    /// The reading measured live on 2026-08-16 while the player stood in their OWN world with
+    /// The reading measured live on 2026-08-16 while the player stood in their own world with
     /// Seamless loaded and no invasion under way: `lobbyState` moving 4 -> 5, `protocolState` 0.
     fn idle_seamless() -> JoinProgress {
         JoinProgress {
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn a_running_phase_timer_alone_is_enough_to_be_progressing() {
         // The timers are zeroed every frame outside their phases, so a positive value cannot be
-        // stale -- it is proof the engine ticked the handshake THIS frame.
+        // stale -- it is proof the engine ticked the handshake this frame.
         let mut sample = idle_seamless();
         sample.join_check_remain = 0.1;
         assert_eq!(sample.verdict(), Verdict::Progressing);

@@ -273,8 +273,8 @@ pub(crate) unsafe fn create_continue_trace_hook(
     hook_impl: *mut c_void,
     original: &'static AtomicUsize,
 ) {
-    // UNRESOLVED, so `register_union_hook` owns the single 1.16.2 -> 1.17 resolve. This was
-    // `game_rva`, which resolves too, and the double resolve was MEASURED wrong on 2026-08-30
+    // Unresolved, so `register_union_hook` owns the single 1.16.2 -> 1.17 resolve. This was
+    // `game_rva`, which resolves too, and the double resolve was measured wrong on 2026-08-30
     // 18:42 for `native_submit_7ac890`: 0x1407ac890 -> 0x1407ad710 here, then 0x1407ad710 ->
     // 0x1407ae590 inside the union -- a hot Scaleform function with 16 callers, unioned by
     // mistake while the trace log said 0x1407ad710.
@@ -283,8 +283,8 @@ pub(crate) unsafe fn create_continue_trace_hook(
         append_continue_trace(format_args!("hook {name}: failed to resolve rva=0x{rva:x}"));
         return;
     };
-    // UNION (2026-07-16): these diagnostic trace observers hook the SAME menu functions as product
-    // hooks (e.g. cap_load_activate on 0x9a4670). Register through the union so the trace CHAINS with
+    // Union (2026-07-16): these diagnostic trace observers hook the same menu functions as product
+    // hooks (e.g. cap_load_activate on 0x9a4670). Register through the union so the trace chains with
     // the product handler instead of racing it for the single MinHook slot -- the trace no longer
     // silently steals (or loses) the address depending on install order.
     let handler_fn: crate::mh::UnionFn =
@@ -313,8 +313,8 @@ pub(crate) fn install_continue_trace_hooks() {
     const SAVE_REQUEST_PROFILE_RVA: u32 = er_save_loader::SAVE_REQUEST_PROFILE_RVA;
     const REQUEST_SAVE_RVA: u32 = er_save_loader::REQUEST_SAVE_RVA;
     const SAVE_DISPATCH_SYSTEM_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_SYSTEM_RVA as u32;
-    // 0x67b750 WRITES a save, it does not load one -- see the decompile evidence on
-    // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). The trace LABEL below is
+    // 0x67b750 writes a save, it does not load one -- see the decompile evidence on
+    // `SAVE_WRITE_TO_SLOT_RVA` (constants/stats_panel_text.rs). The trace label below is
     // deliberately left as "continue_load_67b750": er-reload-trace matches that exact
     // string (its lib.rs:555 and :724), so renaming it here would desync the two DLLs' log
     // correlation. The address is in the label, so it stays unambiguous.
@@ -496,12 +496,12 @@ pub(crate) fn install_continue_trace_hooks() {
             b80_dispatcher2_observe_hook as *mut c_void,
             &B80_DISPATCHER2_OBSERVE_ORIG,
         );
-        // NOTE: the c30_writer 0x67bd70 hook is NOT installed here. It is installed
-        // UNCONDITIONALLY at process attach via install_c30_writer_hook (mirroring the
-        // MenuWindow-latch precedent) so the SAVE-SAFE c30-write diagnostic is always
+        // NOTE: the c30_writer 0x67bd70 hook is not installed here. It is installed
+        // unconditionally at process attach via install_c30_writer_hook (mirroring the
+        // MenuWindow-latch precedent) so the save-safe c30-write diagnostic is always
         // armed without requiring the continue-trace path. Installing it twice on the
         // same address would make the second MhHook::new fail, so it lives only there.
-        // MENU-UI capture (Path B state-stepper). One real navigation through these pins the
+        // Menu-UI capture (Path B state-stepper). One real navigation through these pins the
         // this-pointers + construction order + call sequence for the 4 user interactions:
         // SetState (state machine), Continue confirm, ProfileLoadDialog activate (both
         // variants), the enter-Load-Game builder, the selector-step tick, and the mount.
@@ -519,8 +519,8 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_setstate_hook as *mut c_void,
             &CAP_SETSTATE_ORIG,
         );
-        // NOTE: the continue_confirm 0x140b0e180 hook is NOT installed here. It is installed
-        // UNCONDITIONALLY at process attach via install_system_quit_continue_confirm_hook
+        // NOTE: the continue_confirm 0x140b0e180 hook is not installed here. It is installed
+        // unconditionally at process attach via install_system_quit_continue_confirm_hook
         // (mirroring the c30_writer precedent): the System->Quit switch needs it in every product
         // run, and installing a second MhHook on the same address would fail. That hook reproduces
         // this trace set's "CAP continue_confirm" line + OWN_STEPPER_CONFIRMED latch when tracing
@@ -626,7 +626,7 @@ pub(crate) fn install_continue_trace_hooks() {
             &SEQUENCE_ITER_ORIG,
         );
         // CSMenu controller ctor 0x1409060d0: latch router_this (owns the selectable-row vector
-        // at +0x1290) -- it is NOT field-linked from the TitleTopDialog, so capturing it at
+        // at +0x1290) -- it is not field-linked from the TitleTopDialog, so capturing it at
         // construction is how the own-stepper reaches the Continue/Load rows zero-input.
         create_continue_trace_hook(
             &mut hooks,
@@ -651,9 +651,9 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_append_one_hook as *mut c_void,
             &CAP_APPEND_ONE_ORIG,
         );
-        // MoveMapStep child EDGE hooks (3rd-load root, 2026-07-16). InGameStep step 6
-        // STEP_MoveMap_Init CREATES the MoveMapStep child; step 8 STEP_MoveMap_Finish fires when its
-        // load COMPLETES. On the softlock Init fires but Finish never does -- that absence IS the
+        // MoveMapStep child edge hooks (3rd-load root, 2026-07-16). InGameStep step 6
+        // STEP_MoveMap_Init creates the MoveMapStep child; step 8 STEP_MoveMap_Finish fires when its
+        // load completes. On the softlock Init fires but Finish never does -- that absence is the
         // semaphore. These fire once per world load (edge, not per-frame) so they add no timing
         // perturbation to the Windows-native race (unlike detouring the hot Execute pump 0x140b0bd60,
         // which froze the title machine, submit.rs run 305). RVAs ground-truthed dump->deobf via the
@@ -672,11 +672,11 @@ pub(crate) fn install_continue_trace_hooks() {
             mms_step_finish_hook as *mut c_void,
             &MMS_STEP_FINISH_ORIG,
         );
-        // The CHILD's own STEP_Cleanup (MoveMapStep step 18->19 exit, dump 0x140af5840 -> deobf, shift
+        // The child's own STEP_Cleanup (MoveMapStep step 18->19 exit, dump 0x140af5840 -> deobf, shift
         // -0xf0 content-unique). Fires the instant a MoveMapStep child leaves the STEP_MoveMap resident
-        // step toward Finish. Logs the GameMan load-in signals at that exact moment so a SUCCESSFUL load
+        // step toward Finish. Logs the GameMan load-in signals at that exact moment so a successful load
         // reveals which input drives the advance -- on the re-load lock the incoming child never reaches
-        // this hook (parks at 18), so its ABSENCE (with a matching MMS-INIT ptr) is itself the signal.
+        // this hook (parks at 18), so its absence (with a matching MMS-INIT ptr) is itself the signal.
         create_continue_trace_hook(
             &mut hooks,
             "mms_child_cleanup_af5750",
@@ -684,7 +684,7 @@ pub(crate) fn install_continue_trace_hooks() {
             mms_child_cleanup_hook as *mut c_void,
             &MMS_CHILD_CLEANUP_ORIG,
         );
-        // WORLD-RES POPULATE source-builder (deobf 0x66bb10): the ONE function that (re)creates the
+        // World-RES POPULATE source-builder (deobf 0x66bb10): the one function that (re)creates the
         // +0xce0 per-block res the WorldResWait stall waits on. It early-outs when its input MSB-list
         // count (arg2+0x10) is 0. Logging that count per load is the decisive divergence semaphore --
         // full on the fresh boot (load 1), 0 for the dest on the in-game reload (load 2). Read-only.
@@ -695,11 +695,11 @@ pub(crate) fn install_continue_trace_hooks() {
             populate_blocks_lists_hook as *mut c_void,
             &POPULATE_BLOCKS_LISTS_ORIG,
         );
-        // Load-state ENTRY ctor (0x6610e0): decisive load1-vs-load2 probe for whether the destination
+        // Load-state entry ctor (0x6610e0): decisive load1-vs-load2 probe for whether the destination
         // area-0x1c load-state entry is re-created on the reload (absence on load 2 == the resident-reuse
         // root). Read-only, 2 register args (rcx=entry, rdx=descNode) so 4-arg forwarding is safe.
-        // NOTE: we deliberately do NOT hook the world BLOCK ctor 0x62ec00 -- it takes its count/base as
-        // STACK args (0x68/0x70(%rsp)); a 4-register forwarding hook loses them and corrupts every block's
+        // NOTE: we deliberately do not hook the world block ctor 0x62ec00 -- it takes its count/base as
+        // stack args (0x68/0x70(%rsp)); a 4-register forwarding hook loses them and corrupts every block's
         // load-state slice -> AV (runtime-proven 2026-07-17, crash in the 0x61-0x62 worldres region).
         create_continue_trace_hook(
             &mut hooks,
@@ -708,7 +708,7 @@ pub(crate) fn install_continue_trace_hooks() {
             worldres_entry_ctor_hook as *mut c_void,
             &WORLDRES_ENTRY_CTOR_ORIG,
         );
-        // The REAL block-res getter (WITH the search key) -- the determining measurement the keyless
+        // The real block-res getter (with the search key) -- the determining measurement the keyless
         // oracle blk_ls could not give. Change-detected so the hot path is not flooded.
         create_continue_trace_hook(
             &mut hooks,
@@ -726,7 +726,7 @@ pub(crate) fn install_continue_trace_hooks() {
             blockres_phase2_hook as *mut c_void,
             &BLOCKRES_PHASE2_ORIG,
         );
-        // NOTE: do NOT detour MountEblArchive (0x1efc00) for a mount census -- me3 already hooks the
+        // NOTE: do not detour MountEblArchive (0x1efc00) for a mount census -- me3 already hooks the
         // mount_ebl path (asset override), so a second detour collides and corrupts control flow ->
         // boot crash (RIP-outside-.text stack overflow, DLL ec09cb30 2026-07-17). Use the read-only
         // CAPSTATE-SUBSYS globals (repo gate / CSEblFileManager) below, or a sw-breakpoint, instead.
@@ -740,8 +740,8 @@ pub(crate) fn install_continue_trace_hooks() {
             mount_guard_detector_hook as *mut c_void,
             &MOUNT_GUARD_DETECTOR_ORIG,
         );
-        // NOTE: do NOT detour the map-load orchestrator 0x82dbf0 to observe it -- it is a load-critical,
-        // step-dispatched in-game fn and a forwarding detour STALLS the first autoload at "Preparing Save"
+        // NOTE: do not detour the map-load orchestrator 0x82dbf0 to observe it -- it is a load-critical,
+        // step-dispatched in-game fn and a forwarding detour stalls the first autoload at "Preparing Save"
         // (DLL 99a12f98, 2026-07-17). Observe it via a sw-breakpoint on MountEblArchive 0x1efc00 (deep
         // stack shows the 0x82dc1c orchestrator caller chain + the archive descriptor) instead.
     }
@@ -774,7 +774,7 @@ const MMS_CHILD_CLEANUP_RVA: u32 = 0xaf5750;
 pub(crate) use er_telemetry_core::counters::MMS_CHILD_CLEANUP_ORIG;
 
 /// Logs the GameMan load-in signals at the moment a MoveMapStep child advances out of STEP_MoveMap. On a
-/// SUCCESSFUL switch-load this names the input that drives the incoming child to Finish; on the re-load
+/// successful switch-load this names the input that drives the incoming child to Finish; on the re-load
 /// lock the incoming child (matching the MMS-INIT ptr) never reaches this hook. `this` = the MoveMapStep.
 pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
     this: usize,
@@ -794,7 +794,7 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
             }
         };
         // Also read the return-title byte (menuData+0x5d) + force latch (0x3d856a0) at the advance edge --
-        // warp/b7c/b7d proved 0 even on a SUCCESSFUL advance, so the driver is one of these (or session).
+        // warp/b7c/b7d proved 0 even on a successful advance, so the driver is one of these (or session).
         let menudata = game_rva(CS_MENU_MAN_GLOBAL_RVA as u32)
             .ok()
             .and_then(|p| unsafe { safe_read_usize(p) })
@@ -810,13 +810,13 @@ pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
             .and_then(|p| unsafe { safe_read_u8(p) })
             .map(|v| v as i32)
             .unwrap_or(-1);
-        // THE TWO INPUTS THIS LINE USED TO OMIT. The five above are only five of the nine terms
+        // The two inputs this line used to omit. The five above are only five of the nine terms
         // the ending evaluator ORs into `cVar10` (the table is in `constants_return_title.rs`),
         // and all five read 0 at the black-screen advance in three separate runs -- which was
         // read as "the evaluator advanced on nothing" when it actually means we were blind to
         // the rest of it. Two of the remaining four are statically dead (`FUN_140e2aa70` and
         // `FUN_140e62aa0` are both `return 0;`), so these are the only candidates left. `-1` is
-        // "could not resolve or read", NOT a zero: a refusal must stay distinguishable from a
+        // "could not resolve or read", not a zero: a refusal must stay distinguishable from a
         // measurement, because the whole point of this line is which term was non-zero.
         let base = game_module_base().unwrap_or(0);
         let session_proto = if base == 0 {
@@ -893,17 +893,17 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
     c: usize,
     d: usize,
 ) -> usize {
-    // REPORT the destination block this init is about to consume; do NOT supply one.
+    // Report the destination block this init is about to consume; do not supply one.
     //
     // `STEP_MoveMap_Init` reads `GameMan+0x14` into the MoveMapStep's `mapId` (+0xdc) and then clears
-    // the field. An earlier version of this line WROTE the block here, on the theory that nothing on
+    // the field. An earlier version of this line wrote the block here, on the theory that nothing on
     // the switch path set it. That theory is false and the decompile says so: the slot deserialize
     // `FUN_14067b290` -- the function our own-load already calls -- ends with
     // `SetMoveMapStepBlockId(GameMan+0xc30)` and `warpRequested = true`, so the native flow we are
     // already inside sets it for us. Writing it again was a second, redundant store of a field the
     // game owns, which is the shape of fix this repo keeps having to undo. Logging the value instead
     // turns the question into evidence: if it is 0xffffffff at an init that should be loading a
-    // picked slot, the deserialize did not run or something cleared it, and THAT is the defect.
+    // picked slot, the deserialize did not run or something cleared it, and that is the defect.
     crate::experiments::own_load::report_destination_block_at_init();
     let ret = unsafe { mms_call_original(&MMS_STEP_INIT_ORIG, this, b, c, d) };
     let n = SWITCH_ORACLE_MMS_INIT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -913,11 +913,11 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
             "MMS-INIT #{n}: InGameStep=0x{this:x} child(mms)=0x{mms:x} -- MoveMapStep child created+registered (step 6)"
         ));
     }
-    // STEP-3 WORLD-RES REBUILD (init-point fix): on a SUBSEQUENT load (the autoload->reload of the
+    // Step-3 world-RES rebuild (init-point fix): on a subsequent load (the autoload->reload of the
     // same save), the per-block world-res load-state for the destination block is never created, so
     // STEP_WorldResWait (child step 3) stalls with blk_ls=0. The reactive rebuild at the stall AVs
     // (ResetAreaResLists mid-stream), so the candidate fix was to run the game's own
-    // ProcessMsbLoadLists HERE -- right after STEP_MoveMap_Init created the child, BEFORE the world
+    // ProcessMsbLoadLists here -- right after STEP_MoveMap_Init created the child, before the world
     // streams -- where _Common_Initialize legitimately calls it. That call was never runtime-validated
     // and is gone; what remains instruments the arguments unconditionally on a reload.
     unsafe { step3_init_worldres_rebuild(this) };
@@ -926,10 +926,10 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
 
 pub(crate) use er_telemetry_core::counters::POPULATE_BLOCKS_LISTS_ORIG;
 
-/// DECISIVE DIVERGENCE PROBE: log the input MSB-list block count `*(rdx+0x10)` every time PopulateLists'
+/// Decisive divergence PROBE: log the input MSB-list block count `*(rdx+0x10)` every time PopulateLists'
 /// source-builder runs, tagged with IN_WORLD (load 1 = false, subsequent reloads = true). Hypothesis: the
 /// fresh boot passes a non-zero count (rebuilds all block-res incl the dest); the in-game reload passes 0
-/// (the source list is empty for the dest -> +0xce0 never rebuilt -> WORLD RES WAIT stall). Read-only,
+/// (the source list is empty for the dest -> +0xce0 never rebuilt -> world RES wait stall). Read-only,
 /// forwards to the original. `this` (rcx) = builder receiver, `list` (rdx) = the input MSB block list.
 pub(crate) unsafe extern "system" fn populate_blocks_lists_hook(
     this: usize,
@@ -958,10 +958,10 @@ pub(crate) use er_telemetry_core::counters::POPULATE_BLOCKS_LISTS_CALLS;
 pub(crate) use er_telemetry_core::counters::WORLDRES_ENTRY_CTOR_1C_HITS;
 pub(crate) use er_telemetry_core::counters::WORLDRES_ENTRY_CTOR_ORIG;
 
-/// DECISIVE: the load-state ENTRY constructor. `entry`=rcx, `desc`=rdx (descriptor node whose first
+/// DECISIVE: the load-state entry constructor. `entry`=rcx, `desc`=rdx (descriptor node whose first
 /// dword is the BlockId key written to entry+0x8). Logs when an entry is created for an area-0x1c block,
 /// tagged with IN_WORLD -- so load 1 (in_world=false) vs load 2 (in_world=true) shows whether the
-/// 0x1c000000 load-state entry is (re)created on the reload. If it fires on load 1 but NOT load 2, the
+/// 0x1c000000 load-state entry is (re)created on the reload. If it fires on load 1 but not load 2, the
 /// reconcile skips creating the destination entry on the resident-block reload == the stall's root.
 pub(crate) unsafe extern "system" fn worldres_entry_ctor_hook(
     entry: usize,
@@ -986,26 +986,26 @@ pub(crate) unsafe extern "system" fn worldres_entry_ctor_hook(
 
 pub(crate) use er_telemetry_core::counters::WORLDRES_BLOCKRES_GETTER_ORIG;
 pub(crate) use er_telemetry_core::counters::WORLDRES_GETTER_LAST_1C;
-// One-shot: dump the PRISTINE full FD4FileCap state for the stalled 0x1c block's two caps the first
+// One-shot: dump the pristine full FD4FileCap state for the stalled 0x1c block's two caps the first
 // time the resident-null stall (status 0x04 + data +0x90 null) is observed. The refcount +0x58 is the
-// missing semaphore for the teardown refcount-leak root: it tells whether ONE release would evict the
+// missing semaphore for the teardown refcount-leak root: it tells whether one release would evict the
 // cap (leak == 1) or more, and +0x8c (resident bit) / +0x78 (read-job) / +0x80 (pending) reveal why a
 // re-issued read did not recreate the content child. Read-only. Disable the corrective action for a
 // pristine reading by dropping `er-quickload-blockres-stalecap-fix-DISABLE.txt` in the game dir.
 pub(crate) use er_telemetry_core::counters::WORLDRES_CAPSTATE_DUMPED;
 
 pub(crate) use er_telemetry_core::counters::BLOCKRES_PHASE2_ORIG;
-// Retry accounting is PER block-res, not global: BLOCKRES_STALECAP_LAST_BRES pins the block we are
-// currently retrying; when a DIFFERENT block-res stalls (or the same block re-enters after a fresh
+// Retry accounting is per block-res, not global: BLOCKRES_STALECAP_LAST_BRES pins the block we are
+// currently retrying; when a different block-res stalls (or the same block re-enters after a fresh
 // second load) the counter resets, so one exhausted block can never starve later loads (the old single
-// global counter capped the WHOLE session at 6 and never re-armed). Bound is per block; a genuinely
+// global counter capped the whole session at 6 and never re-armed). Bound is per block; a genuinely
 // un-evictable file trips the cap in << 1s of frames and the block is left to the game.
 pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_LAST_BRES;
 pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_LAST_DEAD_CAP;
 pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_RETRIES;
 pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
-// ONE ATTEMPT, NOT A LOOP (2026-07-30). This was 32, and the 2026-07-30 msb-parse capture showed
-// exactly what those 32 extra attempts bought: nothing. The re-enqueue MECHANICALLY WORKS -- the
+// One attempt, not a loop (2026-07-30). This was 32, and the 2026-07-30 msb-parse capture showed
+// exactly what those 32 extra attempts bought: nothing. The re-enqueue mechanically works -- the
 // sole `msbResCap` writer fired once per re-issue, 33 times, each with a fresh `FD4FileLoadProcess`
 // -- and every one of those genuine reads returned zero bytes for `mapstudio_dlc2:/m28_00_00_00.msb`
 // and its `_99` sibling. Attempt 1 already establishes that the bytes are absent from the archive
@@ -1013,17 +1013,17 @@ pub(crate) use er_telemetry_core::counters::BLOCKRES_STALECAP_UNRECOVERABLE;
 //
 // Retrying a corrective action with no plausible second-attempt case is worse than not retrying: it
 // spends ~2.6s, floods the log, and disguises a DETERMINISTIC failure as a flaky one. So: act once,
-// and if the condition survives that single re-issue, treat it as an IDENTIFIED failure and say so
+// and if the condition survives that single re-issue, treat it as an identified failure and say so
 // plainly rather than spinning.
 const BLOCKRES_STALECAP_MAX_RETRIES: usize = 1;
 
-// PRODUCT DEFAULT (2026-07-17): the stale-file-cap reload fix is ON by default so it runs on the plain
-// me3 product path with NO env vars and NO marker (goal: the second-load fix must not depend on
-// agent-only arming). A single diagnostic KILL-SWITCH remains -- the marker file
+// Product default (2026-07-17): the stale-file-cap reload fix is on by default so it runs on the plain
+// me3 product path with no env vars and no marker (goal: the second-load fix must not depend on
+// agent-only arming). A single diagnostic kill-switch remains -- the marker file
 // `er-quickload-blockres-stalecap-fix-DISABLE.txt` in the game dir makes the corrective action inert so
-// the raw pristine stall can still be observed (for the refcount CAPSTATE-DUMP measurement). No env var
+// the raw pristine stall can still be observed (for the refcount CAPSTATE-dump measurement). No env var
 // is read here on purpose (env-gate policy prefers no per-lever env knob). The scoping guard
-// (IN_WORLD_REACHED==YES + exact stuck condition) means the first autoload and normal play are untouched.
+// (IN_WORLD_REACHED==yes + exact stuck condition) means the first autoload and normal play are untouched.
 pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
     !game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1031,15 +1031,15 @@ pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
         .exists()
 }
 
-/// FIX (determined-root): the WorldBlockRes phase-2 handler parks at phase 2 on the reload when the
+/// Fix (determined-root): the WorldBlockRes phase-2 handler parks at phase 2 on the reload when the
 /// block's primary file cap reports loaded (status 0x04) but its data ptr +0x90 is null (file resident
-/// from load 1, re-load short-circuits without re-attaching data). Detect that EXACT condition after the
-/// original handler runs and, only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload is
+/// from load 1, re-load short-circuits without re-attaching data). Detect that exact condition after the
+/// original handler runs and, only on a subsequent load (IN_WORLD_REACHED==yes, so the first autoload is
 /// never touched), re-enqueue the stale cap onto its own CSFile load queue so the read is re-issued and
 /// `+0x90` re-attaches. Bounded retries so a genuinely un-evictable file cannot spin forever.
 /// `bres`=rcx (block-res).
 ///
-/// This sentence used to say the fix "forces the block's phase +0x35 to 5". It does NOT, and has not
+/// This sentence used to say the fix "forces the block's phase +0x35 to 5". It does not, and has not
 /// since the re-issue replaced the phase-force -- see the body's own comment and bd
 /// `blockres-hook-reissues-cap-not-phase-force-and-reissue-works-2026-07-30`, which caught the stale
 /// description being carried forward into a memory. The phase is deliberately left alone.
@@ -1069,14 +1069,14 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
         .map(|v| v as i32)
         .unwrap_or(-1);
     let data = unsafe { safe_read_usize(fc + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
-    // The determined stall: the primary cap reports LOADED (0x88==0x04) but its data (+0x90) is null.
-    // World teardown released the cap's content child (refcount->0, freed) but left the PARENT cap
+    // The determined stall: the primary cap reports loaded (0x88==0x04) but its data (+0x90) is null.
+    // World teardown released the cap's content child (refcount->0, freed) but left the parent cap
     // registered in CSFile's name map with status still 0x04, so the reload's find-or-insert
-    // (0x142651bb0) just refcount-bumps the SAME stale cap and re-reads NOTHING. RE-PROVEN (2026-07-17):
-    // clearing +0x88 alone or resetting the block phase does NOT re-issue -- loading is enqueue-driven
+    // (0x142651bb0) just refcount-bumps the same stale cap and re-reads nothing. RE-proven (2026-07-17):
+    // clearing +0x88 alone or resetting the block phase does not re-issue -- loading is enqueue-driven
     // and nothing polls a registered cap's status. The only native re-issue is to put the cap back on
     // its own CSFile load queue (blockres_reissue_filecap), which the per-frame update loop then reads
-    // and re-attaches +0x90 to, letting the phase-2 handler advance 2->3 on a later frame. We do NOT
+    // and re-attaches +0x90 to, letting the phase-2 handler advance 2->3 on a later frame. We do not
     // touch the block phase: leaving +0x35 at 2 lets the untouched original handler re-check and advance
     // the instant the read completes. Root: step3-run6-fix-was-envgated-off-static-gates-confirmed.
     if status == FILECAP_STATUS_LOADED && data == 0 {
@@ -1112,7 +1112,7 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
                 "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} primary-cap=0x{fc:x} status=0x04 data=null -> re-enqueued {issued} stale file cap(s) onto the CSFile load queue (native 0x269d7b0) to re-attach +0x90"
             ));
         } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
-            // IDENTIFIED FAILURE, not a hedge. One native re-issue already ran and the read came back
+            // Identified failure, not a hedge. One native re-issue already ran and the read came back
             // with nothing, so the file is not retrievable through this path and the block will sit at
             // phase 2 forever (it has no timeout). Name it once, raise a semaphore a caller can act on,
             // and stop -- do not keep re-issuing.
@@ -1165,12 +1165,12 @@ unsafe fn blockres_reissue_filecap(cap: usize) -> bool {
     true
 }
 
-/// DETERMINING MEASUREMENT: the REAL WorldResWait block-res getter, called WITH the search key (rdx),
-/// unlike the SWITCH-ORACLE's keyless call. `area_res`=rcx (WorldAreaRes), `key_ptr`=rdx (int* BlockId).
-/// For area-0x1c keys, log (on change) whether the getter FINDS the 0x1c000000 entry and, if so, the
+/// Determining MEASUREMENT: the real WorldResWait block-res getter, called with the search key (rdx),
+/// unlike the switch-oracle's keyless call. `area_res`=rcx (WorldAreaRes), `key_ptr`=rdx (int* BlockId).
+/// For area-0x1c keys, log (on change) whether the getter finds the 0x1c000000 entry and, if so, the
 /// found WorldBlockRes's +0x2d(ready)/+0x35(phase). This splits the stall's true cause deterministically:
-///   found=0            -> the 0x1c000000 WorldBlockRes is NOT in this area's +0xce0 (key-miss / wrong area);
-///   found=1, 2d==0/35!=0xa -> entry found but the block LOAD never completes (ready/phase never advance).
+///   found=0            -> the 0x1c000000 WorldBlockRes is not in this area's +0xce0 (key-miss / wrong area);
+///   found=1, 2d==0/35!=0xa -> entry found but the block load never completes (ready/phase never advance).
 /// Comparing in_world=false (load 1, works) vs in_world=true (load 2, stall) isolates the determining
 /// difference. Read-only, forwards to the original; change-detected so it does not flood the hot path.
 pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
@@ -1249,9 +1249,9 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
         }
         // Missing semaphore: the parent-cap REFCOUNT (+0x58) and flag state at the pristine stall. One
         // shot when the resident-null condition holds (status 4, data null, phase 2). This measures the
-        // teardown refcount leak so the eviction/teardown fix can release EXACTLY the leaked ref(s).
-        // DEFECT-1 FIX (run8 latch bug): gate on IN_WORLD_REACHED==YES so the one-shot fires only on the
-        // SECOND load (load 2). Without it, load 1 briefly passes through the identical (phase 2, status 4,
+        // teardown refcount leak so the eviction/teardown fix can release exactly the leaked ref(s).
+        // Defect-1 fix (run8 latch bug): gate on IN_WORLD_REACHED==yes so the one-shot fires only on the
+        // second load (load 2). Without it, load 1 briefly passes through the identical (phase 2, status 4,
         // data 0) transient during boot before the data attaches, latching the dump on the healthy load-1
         // state and never capturing the real second-load stall. See bd step3-run8-repo-gate-refuted-*.
         if found == 1
@@ -1286,7 +1286,7 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
                 ));
             }
             // Which mechanism starves the load-2 read? (RE step3-run7-re-result-*): read the
-            // resource-repository gate byte *0x14485cbec (0 => repo fast-path OFF, NameLookup returns
+            // resource-repository gate byte *0x14485cbec (0 => repo fast-path off, NameLookup returns
             // null and AddDefaultFileLoadProcess skips the repo attach) and the FD4 subsystem singletons
             // (repo *0x14485d0e8, CSEblFileManager *0x143d5b078 + lazy *0x143d5b088, CSFile *0x143d5b0f8).
             // A gate==0 at the stall points at repository-path loss; gate==1 with a live EBL manager
@@ -1311,8 +1311,8 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
             append_autoload_debug(format_args!(
                 "CAPSTATE-SUBSYS: repo_gate(*0x14485cbec)={repo_gate} repo_singleton=0x{repo_singleton:x} csebl_mgr=0x{ebl_mgr:x} csebl_lazy=0x{ebl_mgr_lazy:x} csfile=0x{csfile:x} -- gate==0 => repo-path loss; gate==1 + live mgr => EBL unmount (read yields empty)"
             ));
-            // Census only in MEASUREMENT mode (fix disabled via marker); off when the guard-flip fix is
-            // active so its DONE line does not trigger a premature census-teardown of a fix/instrument run.
+            // Census only in measurement mode (fix disabled via marker); off when the guard-flip fix is
+            // active so its done line does not trigger a premature census-teardown of a fix/instrument run.
             if !blockres_stalecap_fix_enabled() {
                 run_ebl_mount_census("getter");
             }
@@ -1323,23 +1323,23 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
 
 pub(crate) use er_telemetry_core::counters::EBL_CENSUS_DONE;
 
-/// EBL-MOUNT-CENSUS (RE 2026-07-17): one-shot read-only walk of the mounted-archive registry
+/// EBL-mount-census (RE 2026-07-17): one-shot read-only walk of the mounted-archive registry
 /// `R = *(EBL_REGISTRY_GLOBAL_RVA)` container B `[R+0x90 .. R+0x98)` stride 0x40 (per entry: archive name =
 /// MSVC wstring @ `+0x08`, `Archive*` @ `+0x30`). Lock-free bounded read (the world is parked at the stall,
 /// so the registry is stable), every pointer validated. Emits the `EBL-MOUNT-CENSUS DONE` measurement
-/// semaphore (the monitor tears down 1s after it). If the m28 (area 0x1c) player-map archive is ABSENT
+/// semaphore (the monitor tears down 1s after it). If the m28 (area 0x1c) player-map archive is absent
 /// here but present on load 1, the mount-skip is the stall root; the m28 archive name is captured for the
-/// re-mount driver. Callable from ANY reliable stall path (the getter is silent some loads) -- e.g. the
-/// SWITCH-ORACLE mms_step=3 tick -- so the measurement fires whenever WORLD RES WAIT is reached.
+/// re-mount driver. Callable from any reliable stall path (the getter is silent some loads) -- e.g. the
+/// switch-oracle mms_step=3 tick -- so the measurement fires whenever world RES wait is reached.
 ///
-/// IT HAS NEVER CENSUSED ANYTHING. Until 2026-08-30 `EBL_REGISTRY_GLOBAL_RVA` was 38.5 MiB outside the
+/// It has never CENSUSED anything. Until 2026-08-30 `EBL_REGISTRY_GLOBAL_RVA` was 38.5 MiB outside the
 /// image, so this took the `registry null` early return on every run and the walk below is unexecuted
 /// code. The `EBL-MOUNT-CENSUS DONE: registry null` line the monitor tore down on was the read failing,
 /// not a finding -- and bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17` recorded
 /// it as "R is GENUINELY 0", which is refuted: the same global read through the uncorrupted
 /// `DL_FILE_DEVICE_MANAGER_SINGLETON_RVA` is non-null mid-reload (the DLC root self-heal walks it).
 ///
-/// THE OFFSETS ABOVE ARE RIGHT, THOUGH -- checked before assuming otherwise. `GetFileDeviceManager`
+/// The OFFSETS above are right, though -- checked before assuming otherwise. `GetFileDeviceManager`
 /// returns `DLFileDeviceManager*` (Ghidra 1.16.2), whose layout is `virtualRoots` @ `+0x48`,
 /// `bnd4FileEntries: BND4MountVector` @ `+0x88` and `mutex: DLPlainLightMutex` @ `+0xB8`. A 32-byte
 /// vector at `+0x88` puts start at `+0x90` and end at `+0x98`, and the lock lands exactly where this
@@ -1349,9 +1349,9 @@ pub(crate) use er_telemetry_core::counters::EBL_CENSUS_DONE;
 /// `_Bx`/`_Mysize`/`_Myres` sit at `+0x00`/`+0x10`/`+0x18` -- i.e. exactly the MSVC `wstring` shape
 /// `read_msvc_wstring_ascii(entry + 0x8)` already assumes.
 ///
-/// So every offset in this function is corroborated and only the ADDRESS was ever wrong: the walk
+/// So every offset in this function is corroborated and only the address was ever wrong: the walk
 /// should be structurally sound the first time it runs. The one correction is the label -- `+0x30` is
-/// a `DlFileDevice*`, not an `Archive*`, so the `archive=0x..` column names the mounted DEVICE.
+/// a `DlFileDevice*`, not an `Archive*`, so the `archive=0x..` column names the mounted device.
 pub(crate) fn run_ebl_mount_census(src: &str) {
     if EBL_CENSUS_DONE.swap(1, Ordering::SeqCst) != 0 {
         return;
@@ -1398,7 +1398,7 @@ pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DET_LOGS_L2;
 pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DETECTOR_ORIG;
 
 /// Read-only instrument of the map-mount change-detector 0x14082d5b0 (rcx=controller, rdx=descriptor -> al
-/// in rax; al=1 CHANGED->mount runs, al=0 UNCHANGED->mount skipped). Logs controller id/bits (+0x120 id,
+/// in rax; al=1 changed->mount runs, al=0 unchanged->mount skipped). Logs controller id/bits (+0x120 id,
 /// +0x128/+0x130/+0x131/+0x132/+0x133 bits) + descriptor id/bits (+0x08 id, +0x04 bits) + al, tagged by
 /// load phase, so the m28 gate is the one whose al is 1 on load1 (in_world=false) and 0 on load2
 /// (in_world=true). Separate bounded counters per phase guarantee load-2 coverage. Forwards unchanged.
@@ -1450,16 +1450,16 @@ pub(crate) use er_telemetry_core::counters::MOUNT_GUARD_DECLINE_BOOT_LOGS;
 /// enough that it cannot crowd out the reload-phase reasons that actually matter.
 const MOUNT_GUARD_DECLINE_BOOT_LOG_CAP: usize = 3;
 
-/// True when `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null OR UNREADABLE. Used to gate the guard-flip: keep
+/// True when `R = *(EBL_REGISTRY_GLOBAL_RVA)` is null or UNREADABLE. Used to gate the guard-flip: keep
 /// flipping only until the map mounts (R becomes non-null), so the fix self-limits.
 ///
-/// UNEXERCISED UNTIL 2026-08-30, AND THE `false` BRANCH HAS NEVER RUN. The constant was `0x84864a8`
+/// UNEXERCISED until 2026-08-30, and the `false` branch has never run. The constant was `0x84864a8`
 /// from the day this was written until then -- 38.5 MiB outside the image (see the alias's own doc in
 /// `er-title-flow`). `game_rva` passes an out-of-image address straight through rather than refusing it,
 /// so the failure arrived here only as a failed `ReadProcessMemory`, which this chain folds into
 /// `is_none()` -- the same answer a genuinely null registry gives. Every observed run reported null.
 ///
-/// Two live conclusions rested on the opposite reading and are WRONG. bd
+/// Two live conclusions rested on the opposite reading and are wrong. bd
 /// `correction-33-retries-are-our-own-fix-and-mount-flip-never-fires-2026-07-30` and
 /// `blockres-hook-reissues-cap-not-phase-force-and-reissue-works-2026-07-30` both name this function as
 /// the "prime suspect" for the flip never firing, on the theory that resident m61 tiles keep R non-null
@@ -1467,7 +1467,7 @@ const MOUNT_GUARD_DECLINE_BOOT_LOG_CAP: usize = 3;
 /// declined anything. Whatever stopped the flip is upstream of here, or is
 /// `force_map_mount_guard_flip()` returning `ok == false`, which logs nothing at all.
 ///
-/// The registry is also NOT null in reality. The same global, read through the uncorrupted
+/// The registry is also not null in reality. The same global, read through the uncorrupted
 /// `DL_FILE_DEVICE_MANAGER_SINGLETON_RVA`, is what `dlc_roots_self_heal` walks to find
 /// `mapstudio_dlc2` among ~100 entries -- and it healed the root mid-reload twice in two processes
 /// (bd `FIXED-CONFIRMED-2x-dlc-root-self-heal-resolves-reload-softlock-2026-07-30`). A null manager
@@ -1480,7 +1480,7 @@ pub(crate) fn ebl_registry_is_null() -> bool {
         .is_none()
 }
 
-/// FIX (RE 2026-07-17): clobber the map-mount guard's cached descriptor so the change-detector 0x14082d5b0
+/// Fix (RE 2026-07-17): clobber the map-mount guard's cached descriptor so the change-detector 0x14082d5b0
 /// sees "changed" on its next check and enqueues the map-mount MenuJob (mount + bind) on the warm reload,
 /// repopulating the block cap's +0x90. `desc = *(*(MOUNT_GUARD_STATE_ROOT_RVA)+0x60)+0x1200`; write id
 /// (+0x08)=0 and clear bits (+0x04 &= ~0x79). One clobber -> exactly one extra mount (the detector
@@ -1511,29 +1511,29 @@ pub(crate) fn force_map_mount_guard_flip() -> (bool, u64, u32) {
 }
 
 /// Per-tick driver for the map-mount guard-flip fix, called from the recurring autoload oracle. On a
-/// SECOND load (`in_world`) that is loading (`mms_step >= 0`) but not yet stable (`sf == 0`) and whose map
+/// second load (`in_world`) that is loading (`mms_step >= 0`) but not yet stable (`sf == 0`) and whose map
 /// is not mounted (registry null), flip the guard on an oracle-tick cooldown (so the detector's re-sync
 /// yields at most a mount every ~cooldown ticks), bounded, self-limiting once the map mounts (R non-null).
 pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) {
     const COOLDOWN_TICKS: usize = 20;
     const MAX_FLIPS: usize = 60;
     let tick = MOUNT_GUARD_TICK.fetch_add(1, Ordering::SeqCst) + 1;
-    // WHY THIS DECLINED (2026-07-30). The 16:44 capture froze at phase 2 with ZERO
-    // MAP-MOUNT-GUARD-FLIP lines, so this driver silently declined on every tick of a stall it exists
+    // Why this declined (2026-07-30). The 16:44 capture froze at phase 2 with zero
+    // map-mount-guard-flip lines, so this driver silently declined on every tick of a stall it exists
     // to fix -- and with five ANDed conditions the log said nothing about which one. Name the first
     // failing condition, bounded, so the next run identifies it instead of leaving it to inference.
     //
-    // THAT SUSPICION IS KILLED (2026-08-30). It read: `ebl_registry_is_null()` asks "is ANY map
+    // That suspicion is killed (2026-08-30). It read: `ebl_registry_is_null()` asks "is any map
     // archive mounted", so with the m61 tiles resident the registry is non-null, this returns false,
     // and the last condition declines the flip. The opposite was true. Its constant was 38.5 MiB
     // outside the image, so the read always failed and the function always returned `true` -- the
     // `!ebl_registry_is_null()` arm below has never declined anything, on any run, ever. Whatever
-    // stopped the flip is one of the FOUR conditions above it, or `force_map_mount_guard_flip()`
-    // answering `ok == false`, which takes the `if ok` branch below and logs NOTHING -- a third
+    // stopped the flip is one of the four conditions above it, or `force_map_mount_guard_flip()`
+    // answering `ok == false`, which takes the `if ok` branch below and logs nothing -- a third
     // outcome that is invisible in the log and looks identical to a decline that was never printed.
     //
     // The constant is fixed now, so the arm is about to evaluate for the first time. Read the next
-    // run's MAP-MOUNT-GUARD-DECLINED[RELOAD] lines as new evidence, not as confirmation of the old
+    // run's map-mount-guard-declined[reload] lines as new evidence, not as confirmation of the old
     // theory; and if the flip still shows zero lines with zero declines, the silent `ok == false`
     // path is the remaining explanation and needs a log line before another run is worth spending.
     let decline = if !blockres_stalecap_fix_enabled() {
@@ -1552,11 +1552,11 @@ pub(crate) fn map_mount_guard_flip_tick(in_world: bool, mms_step: i32, sf: i64) 
         None
     };
     if let Some(reason) = decline {
-        // SPLIT BUDGETS (2026-07-30, fixing this instrumentation's own first run). A single shared
+        // Split budgets (2026-07-30, fixing this instrumentation's own first run). A single shared
         // budget was useless: the driver ticks throughout boot, where `!in_world` declines are
-        // EXPECTED and uninteresting, and they burned all 40 slots between +12.8s and +14.0s -- 35
+        // expected and uninteresting, and they burned all 40 slots between +12.8s and +14.0s -- 35
         // seconds before the stall at +49.2s this was built to explain. The boot-phase reason gets a
-        // token budget just to prove the driver is ticking; every OTHER reason (the ones that can
+        // token budget just to prove the driver is ticking; every other reason (the ones that can
         // only occur once the reload is actually in progress) keeps the full budget.
         let boot_phase = !in_world;
         let (n, cap) = if boot_phase {
@@ -1609,7 +1609,7 @@ const FD4FILECAP_NAME_CAPACITY_OFFSET: usize = 0x30;
 const MSVC_WSTRING_SSO_HEAP_THRESHOLD: usize = 8;
 
 /// Best-effort read of a FD4FileCap's stored resource path (`std::wstring` at cap+0x18). Returns the
-/// printable ASCII low byte of each wchar (non-printable -> '?'), so we can see EXACTLY which map file's
+/// printable ASCII low byte of each wchar (non-printable -> '?'), so we can see exactly which map file's
 /// read returns empty on load 2. Never uses `from_utf8_lossy`; builds the String from validated bytes.
 fn read_fd4filecap_name(cap: usize) -> String {
     if cap <= 0x10000 {
@@ -1682,7 +1682,7 @@ fn read_msvc_wstring_ascii(obj: usize) -> String {
 }
 
 /// Read the loadlist virtual-path (DLString wchar, ASCII low byte) at `InGameStep+0x210/0x220` so the
-/// log reveals which MAP the loadlist points at (the DEST m28 vs a STALE m60) -- the decisive datum for
+/// log reveals which map the loadlist points at (the DEST m28 vs a stale m60) -- the decisive datum for
 /// whether `fcap` is correct at init time.
 fn read_ingamestep_vpath(this: usize) -> (usize, usize, String) {
     let base = unsafe { safe_read_usize(this + INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET) }
@@ -1707,8 +1707,8 @@ fn read_ingamestep_vpath(this: usize) -> (usize, usize, String) {
 }
 
 /// The init-point world-res probe. `this` = InGameStep (the STEP_MoveMap_Init executor's arg). Runs
-/// only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload's init is untouched).
-/// READ-ONLY: it logs the exact arguments `_Common_Initialize` would pass to
+/// only on a subsequent load (IN_WORLD_REACHED==yes, so the first autoload's init is untouched).
+/// Read-ONLY: it logs the exact arguments `_Common_Initialize` would pass to
 /// ProcessMsbLoadLists(&worldInfoOwner @ this+0x250, fcap @ *(this+0x238), dlc02 @ *(this+0x240)),
 /// so a stale fcap is diagnosable from the log, and makes no call itself. The corrective call this
 /// probe was built to gate was never runtime-validated and was deleted rather than defaulted on.
@@ -1726,7 +1726,7 @@ unsafe fn step3_init_worldres_rebuild(this: usize) {
         unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET) }.unwrap_or(0);
     let (vbase, vsize, vpath) = read_ingamestep_vpath(this);
     // Cross-check: the WorldInfoOwner reached via the child chain (MoveMapStep->FieldArea->+0x10),
-    // which the SWITCH-ORACLE uses -- log both so we can confirm the embedded +0x250 is the right arg.
+    // which the switch-oracle uses -- log both so we can confirm the embedded +0x250 is the right arg.
     let mms = unsafe { safe_read_usize(this + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }.unwrap_or(0);
     let fa = if mms > 0x10000 {
         unsafe { safe_read_usize(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) }.unwrap_or(0)
@@ -1749,8 +1749,8 @@ unsafe fn step3_init_worldres_rebuild(this: usize) {
     ));
 }
 
-/// STEP_MoveMap_Finish (InGameStep step 8): the MoveMap load COMPLETED. Edge semaphore -- its
-/// ABSENCE while MMS-INIT fired is the 3rd-load softlock (child never finished, step 7 self-looped).
+/// STEP_MoveMap_Finish (InGameStep step 8): the MoveMap load completed. Edge semaphore -- its
+/// absence while MMS-INIT fired is the 3rd-load softlock (child never finished, step 7 self-looped).
 pub(crate) unsafe extern "system" fn mms_step_finish_hook(
     this: usize,
     b: usize,
@@ -1854,7 +1854,7 @@ pub(crate) unsafe fn call_wrapper_builder_original(
 const B80_HOOK_DEFAULT_RET: i32 = 0;
 
 /// State snapshot for the b80 save-mount capture: the GameMan load-phase fields plus the
-/// iodev request-handle pair the poll keys on. Logged at ENTER and LEAVE of each hooked
+/// iodev request-handle pair the poll keys on. Logged at enter and leave of each hooked
 /// b80 function so a real user-driven load pins which fn populates io18/io20, transitions
 /// b80 0->1/2->3, and writes c30/ac0 (the character-apply). io18 && io20 set == the
 /// deserialize-ready signature (real-load-c30-mount-write-confirmed-seamless-2026).

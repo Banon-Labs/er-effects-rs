@@ -1,16 +1,16 @@
-//! Turning the LIVE character into an `er-build-planner` share link.
+//! Turning the live character into an `er-build-planner` share link.
 //!
 //! The mirror image of [`crate::request`]/[`crate::tick`], and deliberately the same SHAPE: a press
 //! latches a request, the game-thread step does the part that must touch game memory, and a worker
 //! does the part that must not run on the game thread. What differs is which half is slow.
 //!
-//! * The IMPORTER's slow half is at the FRONT -- a blocking HTTPS GET -- so its worker runs first
+//! * The importer's slow half is at the front -- a blocking HTTPS get -- so its worker runs first
 //!   and its game-thread step applies the result.
-//! * The EXPORTER has no network at all. The `?i=` share format carries the whole build in the URL
+//! * The exporter has no network at all. The `?i=` share format carries the whole build in the URL
 //!   (LZUTF8 over base64 over JSON), so nothing is fetched and no account is minted on someone
 //!   else's free hobby service. Its slow half is at the BACK: `ShellExecuteW` spawns
 //!   `winebrowser`, which spawns `xdg-open`, which spawns a browser. So the game-thread step runs
-//!   FIRST -- reading the character is a few dozen native getter calls, microseconds -- and the
+//!   first -- reading the character is a few dozen native getter calls, microseconds -- and the
 //!   worker takes the finished document away to encode, copy and open.
 //!
 //! # The in-flight latch must lose to the player
@@ -20,7 +20,7 @@
 //! went dead for three consecutive presses because an active-flag survived a rebuilt dialog with
 //! nothing left alive to clear it.
 //!
-//! So [`export_latch_is_stale`] answers from LIVE EVIDENCE, never from a flag alone:
+//! So [`export_latch_is_stale`] answers from live evidence, never from a flag alone:
 //!
 //! * [`Phase::Reading`] is claimed by the game-thread step, which runs every frame. A request that
 //!   is still `Reading` after the step has run [`STALE_TICKS`] times was not picked up and never
@@ -29,7 +29,7 @@
 //!   decrements it from a `Drop` guard, so a panicking worker still releases it. `Opening` with no
 //!   worker alive is a phase nobody owns.
 //!
-//! When it cannot prove the export is live, the press WINS and the latch is cleared. The worst case
+//! When it cannot prove the export is live, the press wins and the latch is cleared. The worst case
 //! of being wrong that way is two browser tabs; the worst case of the other way is a row that never
 //! works again until the game restarts.
 
@@ -40,7 +40,7 @@ use crate::read_character::CharacterRead;
 
 /// How many game-thread ticks may pass with a request unclaimed before it is considered stranded.
 ///
-/// This is a count of ticks that DID run, not a duration: the step re-checks its preconditions
+/// This is a count of ticks that did run, not a duration: the step re-checks its preconditions
 /// every frame and claims any `Reading` request whose preconditions hold, so a request that has
 /// survived this many of its own opportunities is one the step is refusing, not one it has not
 /// reached yet. Generous because the first frames after a menu opens are the busiest.
@@ -97,14 +97,14 @@ pub fn phase() -> Phase {
     Phase::from_code(PHASE.load(Ordering::SeqCst))
 }
 
-/// TAKE the reason the last export failed, clearing it. Taken rather than peeked for the same
+/// Take the reason the last export failed, clearing it. Taken rather than peeked for the same
 /// reason the importer's is: the failure is asynchronous, so the only way anyone learns of it is by
 /// polling, and a peek would re-report one failure on every frame.
 pub fn take_error() -> Option<String> {
     LAST_ERROR.lock().ok().and_then(|mut slot| slot.take())
 }
 
-/// TAKE the URL the last export produced.
+/// Take the URL the last export produced.
 pub fn take_url() -> Option<String> {
     LAST_URL.lock().ok().and_then(|mut slot| slot.take())
 }
@@ -119,7 +119,7 @@ fn set_error(reason: String) {
 
 /// Whether a busy-looking latch cannot be shown to be live.
 ///
-/// Returns `true` ONLY when there is positive evidence that nothing owns the phase. See the module
+/// Returns `true` only when there is positive evidence that nothing owns the phase. See the module
 /// header for why the answer defaults toward letting the player through.
 pub fn export_latch_is_stale() -> bool {
     match phase() {
@@ -193,12 +193,12 @@ pub fn request() -> Result<(), RequestError> {
 pub struct ExportReport {
     /// The character's name, as the link will carry it.
     pub character: String,
-    /// Every category the link CARRIES, counted off the encoded document -- see
+    /// Every category the link carries, counted off the encoded document -- see
     /// [`er_build_export::model::WrittenCategories`] for why it is not counted off the read.
     pub written: er_build_export::model::WrittenCategories,
     /// Equipment slots holding an item whose id resolved to no name, so a short build says so.
     pub unnamed: usize,
-    /// Carried items the export DELIBERATELY leaves out, so an omission by design is never
+    /// Carried items the export deliberately leaves out, so an omission by design is never
     /// mistaken for one by accident. See `read_character::read_carried`.
     pub skipped_goods: usize,
     pub skipped_ammunition: usize,
@@ -218,8 +218,8 @@ impl ExportReport {
     /// exporter that never wrote one -- which is the exact question "only the physick came
     /// through" was, and it was answered on the website rather than in this line because the line
     /// did not mention the quickbar, the pouch or the ammunition at all. So each is printed with
-    /// its count whether or not the count is zero, and the two categories that are skipped ON
-    /// PURPOSE are named as skipped rather than omitted.
+    /// its count whether or not the count is zero, and the two categories that are skipped on
+    /// purpose are named as skipped rather than omitted.
     pub fn summary(&self) -> String {
         let written = &self.written;
         format!(
@@ -261,7 +261,7 @@ pub struct Sinks {
     /// clipboard at all.
     pub clipboard: Option<fn(&str) -> bool>,
     /// Hand the URL to the OS to open. Returns whether it was accepted. `None` when the caller has
-    /// no browser to offer -- which is NOT the same as a browser that refused, and must not be
+    /// no browser to offer -- which is not the same as a browser that refused, and must not be
     /// reported as a failed export.
     pub open: Option<fn(&str) -> bool>,
 }
@@ -278,9 +278,9 @@ impl Sinks {
     }
 }
 
-/// One frame of the exporter. Does nothing until a press has asked AND the game can be read.
+/// One frame of the exporter. Does nothing until a press has asked and the game can be read.
 ///
-/// Returns the report only once the whole export is DONE, which is a worker later -- so a caller
+/// Returns the report only once the whole export is done, which is a worker later -- so a caller
 /// polling this sees `None` for the frames in between rather than a half-finished answer.
 ///
 /// # Safety
@@ -367,7 +367,7 @@ pub unsafe fn tick(sinks: Sinks) -> Option<ExportReport> {
 
 /// Hand the finished document to a worker for the parts that must not run on the game thread.
 fn spawn_worker(read: CharacterRead, sinks: Sinks) {
-    /// Releases the alive count on EVERY exit path, panic included. Without this a panicking worker
+    /// Releases the alive count on every exit path, panic included. Without this a panicking worker
     /// would leave `Opening` looking owned forever, which is exactly the stranded-latch failure the
     /// module header exists to prevent.
     struct Alive;
@@ -392,7 +392,7 @@ fn spawn_worker(read: CharacterRead, sinks: Sinks) {
 fn export_inner(read: CharacterRead, sinks: Sinks) {
     let doc = crate::export_doc::document_from(&read);
     let written = doc.written_categories();
-    // THE DOCUMENT'S OWN ACCOUNT OF ITSELF, before it is encoded. Every category is named with
+    // The document'S own account of itself, before it is encoded. Every category is named with
     // its count -- zeros included -- and the two that are left out on purpose are named as left
     // out, so a category that silently stopped being written shows up as a `0` in a log line
     // instead of as a missing row on somebody else's website.
@@ -455,10 +455,10 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
     if let Ok(mut slot) = LAST_URL.lock() {
         *slot = Some(url);
     }
-    // A browser that REFUSED is a failure the player has to be told about. A caller with no
+    // A browser that refused is a failure the player has to be told about. A caller with no
     // browser at all is not: the harness's link went to the log, which is where it was asked to go.
     if sinks.open.is_some() && !report.opened {
-        // A link that was built but never reached a browser is a FAILURE the player must be told
+        // A link that was built but never reached a browser is a failure the player must be told
         // about -- silently succeeding here is how "I pressed it and nothing happened" happens.
         set_error(format!(
             "the link was built ({} characters){} but no browser would open it",
@@ -484,7 +484,7 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
 /// The `?i=` form carries the whole document, and the whole document is what the player asked for
 /// -- every copy of every armament. One live character came to 87 KB of JSON and a
 /// 22,663-character link, which no browser sends and the planner never sees. So past
-/// [`crate::upload::MAX_SELF_CONTAINED_URL_CHARS`] the build is STORED on the planner instead and
+/// [`crate::upload::MAX_SELF_CONTAINED_URL_CHARS`] the build is stored on the planner instead and
 /// the link becomes a short `?b=<id>`.
 ///
 /// A store that fails falls back to the long link rather than to nothing: it may be too long for
@@ -518,7 +518,7 @@ fn share_link(doc: &er_build_export::BuildExportDoc) -> (String, bool) {
 /// The finished report, waiting for whichever thread asks next.
 static LAST_REPORT: Mutex<Option<ExportReport>> = Mutex::new(None);
 
-/// TAKE the report of the last completed export.
+/// Take the report of the last completed export.
 pub fn take_report() -> Option<ExportReport> {
     LAST_REPORT.lock().ok().and_then(|mut slot| slot.take())
 }

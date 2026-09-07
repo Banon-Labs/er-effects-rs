@@ -44,7 +44,7 @@ while (( SECONDS - start < DEADLINE_S )); do
     out=$(python3 "$ORACLE" --save "$SAVE" --telemetry "$TELEM" 2>/dev/null)
     rc=$?
     echo "[poll +${t}s] rc=$rc $out"
-    # 2 = wrong character (FAIL, stop); 0 = correct character in a stable world (PASS, stop);
+    # 2 = wrong character (fail, stop); 0 = correct character in a stable world (pass, stop);
     # 10 = not armed yet (keep polling).
     if [[ "$rc" == "2" ]]; then
       echo "===== FAIL-FAST TRIGGERED (+${t}s): switch loaded the WRONG character ====="

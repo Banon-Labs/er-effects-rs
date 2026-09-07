@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract the LOAD SIGNAL from an er_reload_trace.dll trace log.
+"""Extract the load signal from an er_reload_trace.dll trace log.
 
 The trace is dominated by title-screen idle spam (title_native_ready) and
 high-frequency task_enqueue/result_* churn. This filters those out and emits the

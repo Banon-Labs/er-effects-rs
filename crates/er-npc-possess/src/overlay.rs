@@ -1,4 +1,4 @@
-//! THE ONE PRESENT HOOK THIS DLL OWNS, and the two panels that draw on it.
+//! The one present hook this DLL owns, and the two panels that draw on it.
 //!
 //! # Why this is its own module
 //!
@@ -6,14 +6,14 @@
 //! the only thing this crate drew. It is not any more: the attack-set panel
 //! ([`crate::moveset::banner`]) is a second surface with a completely different lifetime -- the
 //! picker is up for a few seconds while you choose, the banner is up for the whole possession --
-//! and it must NOT come with a second `Present` hook. Two `Hudhook::apply()` calls in one process
+//! and it must not come with a second `Present` hook. Two `Hudhook::apply()` calls in one process
 //! double-hook `Present` and the second one silently renders nothing, measured live on 2026-08-25,
 //! and that is the entire reason `er_build_watermark_core::overlay_host` exists.
 //!
 //! So the host-join lives here, once, and both panels are drawn from [`draw`]. Adding a third
 //! surface later means adding a call to that function and nothing else.
 //!
-//! # The install is LAZY, and now has two triggers
+//! # The install is lazy, and now has two triggers
 //!
 //! Nothing here runs until something needs to be drawn: the first time the picker opens, or the
 //! first time a possession publishes a banner. A session that does neither ends with this DLL
@@ -29,11 +29,11 @@
 //!
 //! The status line used to report a counter called `picker_draws` that this module incremented on
 //! every `Present` regardless of whether the picker was open, beside `picker_rows`, which is zero
-//! whenever the picker is CLOSED. `picker_draws=3747 picker_rows=0` was therefore the correct
+//! whenever the picker is closed. `picker_draws=3747 picker_rows=0` was therefore the correct
 //! reading for a closed picker, and it was read as a picker that had drawn 3747 blank frames.
 //! Verified against that same session's log: every status line with `picker_open=true` carried
 //! `picker_rows=15`, and every line with `picker_rows=0` carried `picker_open=false` -- 611 status
-//! lines, no counter-example. Nothing was broken and the counter said so; the NAME did not.
+//! lines, no counter-example. Nothing was broken and the counter said so; the name did not.
 //!
 //! The counters are therefore split by what they actually count: [`frames`] is Present frames this
 //! module drew into, and each panel counts its own builds.
@@ -112,10 +112,10 @@ fn draw(ui: &Ui) {
 
 /// The attack-set panel, top right, for as long as something is possessed.
 ///
-/// LOCK-FREE FAST PATH FIRST, and it is the common one: once installed this runs on every
+/// Lock-free fast path first, and it is the common one: once installed this runs on every
 /// `Present` for the rest of the process, and nothing is possessed on almost all of them.
 fn draw_banner(ui: &Ui) {
-    // ONE CALL PER DRAWN FRAME, and `take_frame` is named for it: this is what spends the header
+    // One call per drawn frame, and `take_frame` is named for it: this is what spends the header
     // highlight, so calling it twice in a frame would burn the flash at double rate.
     let Some((banner, flashing)) = banner::take_frame() else {
         return;
@@ -123,7 +123,7 @@ fn draw_banner(ui: &Ui) {
     BANNER_DRAWS.fetch_add(1, Ordering::Relaxed);
     let display = ui.io().display_size;
     ui.window(BANNER_ID)
-        // PINNED TO THE CORNER, with the pivot on the panel's own top-RIGHT so the auto-sized
+        // Pinned to the corner, with the pivot on the panel's own top-right so the auto-sized
         // width does not have to be known in advance. `Always` rather than `FirstUseEver`
         // because this is an indicator rather than a tool: it must not be draggable off screen,
         // and it must follow a resolution change instead of being left where the old one put it.
@@ -135,7 +135,7 @@ fn draw_banner(ui: &Ui) {
         .always_auto_resize(true)
         .no_decoration()
         .movable(false)
-        // IT MUST NEVER EAT AN INPUT. It is on screen during play, over a game whose mouse and
+        // It must never eat an input. It is on screen during play, over a game whose mouse and
         // gamepad this DLL deliberately does not claim; a panel that took focus or swallowed a
         // click would be a worse defect than the one it was written to fix.
         .no_inputs()
@@ -157,7 +157,7 @@ fn draw_banner(ui: &Ui) {
 fn banner_rows(ui: &Ui, banner: &Banner, flashing: bool) {
     tinted(ui, DIM_INK, &banner.title());
     for hand in &banner.hands {
-        // THE HIGHLIGHT IS THE HALF OF THIS FEATURE WITH A DEADLINE. The complaint was not only
+        // The highlight is the half of this feature with a deadline. The complaint was not only
         // "I cannot see which set I am on", it was "I cannot see the change happen" -- so the
         // hand whose key was just pressed is the one that changes colour, and only for
         // `banner::FLASH`.
@@ -184,7 +184,7 @@ fn tinted(ui: &Ui, colour: [f32; 4], text: &str) {
 ///
 /// `frame` is the pointer the overlay host just passed, live for the duration of this call.
 unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
-    // Adopt the host's context and allocators BEFORE touching `ui`. imgui's current context is a
+    // Adopt the host's context and allocators before touching `ui`. imgui's current context is a
     // per-DLL global, so this module's copy is null until this runs and `ui.io()` would fault.
     // SAFETY: `frame` is the host's live pointer.
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
@@ -202,11 +202,11 @@ impl ImguiRenderLoop for PossessOverlay {
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        // Guests FIRST and before any early return: this module hosts the only imgui context in
-        // the process, so returning early here draws nothing for every OTHER overlay too.
+        // Guests first and before any early return: this module hosts the only imgui context in
+        // the process, so returning early here draws nothing for every other overlay too.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
         draw(ui);
-        // The watermark is NOT a guest -- it never registers one, because its loser path assumes
+        // The watermark is not a guest -- it never registers one, because its loser path assumes
         // whichever module hosts will carry its rows directly. See er-invasion-path's render loop,
         // where omitting this left a whole session with no watermark at all.
         er_build_watermark_core::draw_rows(ui, possess_log);
@@ -221,7 +221,7 @@ pub(crate) fn install_once() {
     if INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    // ON ITS OWN THREAD, like every other shell here. `install()` below waits for the game's
+    // On its own thread, like every other shell here. `install()` below waits for the game's
     // window (bounded, but tens of seconds), takes a named kernel mutex, walks every loaded
     // module calling into their registrars, and may end in `Hudhook::apply()` -- which creates a
     // D3D12 device and suspends every thread in the process to write its detours. Its caller is
@@ -248,7 +248,7 @@ fn install() {
         er_build_watermark_core::OverlayClaim::Won => {}
         er_build_watermark_core::OverlayClaim::LostToAnotherModule => {
             if er_build_watermark_core::overlay_host::register_with_host_retrying(guest_draw) {
-                // INSTALLED stays set: this module is joined to an overlay and must not run the
+                // Installed stays set: this module is joined to an overlay and must not run the
                 // install path again.
                 possess_log(format_args!(
                     "overlay: another module won the overlay while this one waited for the \

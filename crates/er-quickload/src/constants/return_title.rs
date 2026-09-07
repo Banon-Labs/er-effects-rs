@@ -1,4 +1,4 @@
-// The return-title rebuild-flag / in-game session liveness constant table moved VERBATIM into
+// The return-title rebuild-flag / in-game session liveness constant table moved verbatim into
 // the er-title-flow crate (crates/er-title-flow/src/constants_return_title.rs) with the
 // autoload/title-flow slice. Only visibility changed (`pub(crate)` -> `pub`); the single
 // `pub(crate) use er_title_flow::*;` shim in constants.rs re-exports the whole table into this

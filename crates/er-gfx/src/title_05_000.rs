@@ -1,7 +1,7 @@
 //! Product strip transform for `data0:/menu/05_000_title.gfx` (er-effects-rs-h7x).
 //!
 //! Derives the validated "native-ui-stripped v2" title movie (removes the
-//! PRESS ANY BUTTON / Continue-menu / footer / progress placements and the
+//! press any button / Continue-menu / footer / progress placements and the
 //! golden Cursor glow, preserving the GFx shell + AS3 bindability) from the
 //! **vanilla** movie by applying [`TITLE_05_000_STRIP_EDITS`]: 15 tag removals
 //! and 3 tag replacements, content-addressed by exact serialized bytes. For

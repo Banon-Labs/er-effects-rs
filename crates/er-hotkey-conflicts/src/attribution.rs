@@ -2,7 +2,7 @@
 //!
 //! # The problem
 //!
-//! A detour on `GetAsyncKeyState` wants the CALLER's return address, and a stack walk gives it.
+//! A detour on `GetAsyncKeyState` wants the caller's return address, and a stack walk gives it.
 //! But this DLL registers through the cross-DLL hook union, and the union chains handlers: the
 //! stack inside our detour is
 //!
@@ -16,31 +16,31 @@
 //!
 //! Taking "the first frame outside our own module" therefore names the union host, or another
 //! mod's handler -- and the second case is worse than useless, because it would report the mod
-//! that merely OBSERVES the keyboard as the one that binds every key on it. That is a confident
+//! that merely observes the keyboard as the one that binds every key on it. That is a confident
 //! wrong answer in a tool whose entire output is an accusation.
 //!
 //! # The rule, in three clauses
 //!
 //! 1. **Strip our own frames.** The walk starts inside this DLL's detour, so the first frames are
-//!    always ours. Matched by MODULE, never by a hard-coded skip count -- which frame the unwinder
+//!    always ours. Matched by module, never by a hard-coded skip count -- which frame the unwinder
 //!    calls "frame zero" differs between Windows and Wine, and a constant there would be an
 //!    untested assumption sitting under every attribution the DLL makes.
 //!
 //! 2. **Strip the union host.** Exactly one dispatcher frame stands between the patched prologue
 //!    and the first handler, and it lives in whichever DLL owns the MinHook instance. That module
-//!    is KNOWN at registration time (`HookRoute`), so this clause is exact rather than inferred.
+//!    is known at registration time (`HookRoute`), so this clause is exact rather than inferred.
 //!
 //! 3. **Strip the leading frames every chain agrees on -- but only while they still look like
 //!    handlers.** Other mods' handlers on the same prologue are fixed overhead too, and their
-//!    modules are not known in advance. They ARE the leading frames every call to that API shares,
-//!    so a common prefix finds them. A common prefix ALONE is not safe, though, so the walk stops
+//!    modules are not known in advance. They are the leading frames every call to that API shares,
+//!    so a common prefix finds them. A common prefix alone is not safe, though, so the walk stops
 //!    at the first frame that stops looking like a handler; [`fixed_prefix`] lists the four tests.
 //!
 //! Those four tests are not caution, they are the difference between a correct answer and a
 //! confident wrong one. A raw longest-common-prefix breaks in two shapes that both occur:
 //!
-//! * a mod that is the ONLY caller of an API shares its whole stack with itself, so the "common
-//!   prefix" is its entire stack and the frame past it is the GAME's task runner -- the report
+//! * a mod that is the only caller of an API shares its whole stack with itself, so the "common
+//!   prefix" is its entire stack and the frame past it is the game's task runner -- the report
 //!   would accuse `eldenring.exe` of binding the mod's hotkey;
 //! * a mod polling one key from two call sites has chains that agree for several frames and then
 //!   diverge somewhere deeper, so the prefix eats its own frames and lands past it.
@@ -56,7 +56,7 @@
 //!
 //! The prefix is only correct once enough chains have been seen, and more arrive throughout a
 //! run. So nothing is attributed on the hot path: raw frame addresses are tallied as they come
-//! and the WHOLE tally is attributed from scratch each time a report is rendered. An early call
+//! and the whole tally is attributed from scratch each time a report is rendered. An early call
 //! and a late one are always scored by the same rule.
 
 // Windows-only in practice; ungated so the attribution rule -- the part that can be confidently
@@ -69,7 +69,7 @@ use crate::census::{Census, InputId, Surface};
 
 /// Return addresses captured per call.
 ///
-/// Sized against the WORST chain this DLL can find itself in, and the budget is not only the
+/// Sized against the worst chain this DLL can find itself in, and the budget is not only the
 /// handler chain: the unwinder starts inside this DLL's own detour, so a couple of frames are
 /// spent on us before the interesting ones begin. Twelve leaves room for our own frames, a union
 /// dispatcher, three other handlers on the same prologue, and still several frames of real caller.
@@ -110,7 +110,7 @@ impl Frames {
 
 /// Raw, unattributed observations: the only thing the hot path writes.
 ///
-/// Keyed by the frames themselves, so it is bounded by the number of distinct CALL SITES in the
+/// Keyed by the frames themselves, so it is bounded by the number of distinct call sites in the
 /// process rather than by the number of calls -- a few dozen entries for a whole session, however
 /// many times a second the game polls.
 #[derive(Clone, Debug, Default)]
@@ -168,13 +168,13 @@ impl RawTally {
 /// A resolved call stack: one module name per frame, outermost-first.
 type Chain = Vec<String>;
 
-/// How many OTHER handlers a shared prologue can plausibly carry, and therefore the most frames
+/// How many other handlers a shared prologue can plausibly carry, and therefore the most frames
 /// clause 3 will ever strip.
 ///
 /// Three is the number of shells in this workspace that detour the DirectInput `GetDeviceState`
 /// slot besides this one, which is the busiest prologue anybody here contends. The cap matters
 /// more than the exact value: past it, a "common prefix" stops being evidence of chain overhead
-/// and starts being evidence that one module is the only caller -- and stripping THAT lands on
+/// and starts being evidence that one module is the only caller -- and stripping that lands on
 /// the game's task runner and blames the game for a mod's hotkey.
 pub const MAX_HANDLER_FRAMES: usize = 3;
 
@@ -187,12 +187,12 @@ pub const MIN_CHAINS_FOR_PREFIX: usize = 2;
 
 /// Chain overhead that `chains` all agree on -- clause 3 of the rule in this module's docs.
 ///
-/// A common prefix is the RAW signal; on its own it is not safe, because a module that is the only
+/// A common prefix is the raw signal; on its own it is not safe, because a module that is the only
 /// caller of an API shares its whole stack with itself. So the walk stops at the first frame that
-/// fails ANY of four tests, each of which is a property a genuine handler frame has:
+/// fails any of four tests, each of which is a property a genuine handler frame has:
 ///
 /// * **the chains still agree there** -- otherwise it is where the callers diverge, i.e. the answer;
-/// * **the module has not already contributed a frame** -- a module installs ONE handler on one
+/// * **the module has not already contributed a frame** -- a module installs one handler on one
 ///   prologue, so a repeat is the caller's own stack, not another link in the chain. This is what
 ///   stops a mod that polls one key from two call sites having its own frames eaten;
 /// * **the frame is not in the game executable** -- Elden Ring does not detour its own imports, so
@@ -243,7 +243,7 @@ pub fn caller_of(chain: &[String], prefix: usize) -> Option<&str> {
 /// `resolve` returns the module a code address lives in, or `None` for an address in no mapped
 /// module. `own_module` is this DLL's own file name and `union_host` the module that owns the
 /// MinHook instance the detours were registered through -- clauses 1 and 2 of the rule in this
-/// module's docs, both stripped from the FRONT of every chain before clause 3 runs.
+/// module's docs, both stripped from the front of every chain before clause 3 runs.
 ///
 /// Also returns one diagnostic line per distinct chain, which is the evidence that attribution
 /// worked at all -- a run where every chain resolves to the same module is a broken hook, and the
@@ -265,7 +265,7 @@ pub fn fold(
             .map(|address| resolve(*address).unwrap_or_else(|| format!("0x{address:x}")))
             .collect();
         // Clauses 1 and 2: our own detour's frames, then the union dispatcher's. Positional, not
-        // a name filter -- a module that appears again LATER in the chain is a genuine caller and
+        // a name filter -- a module that appears again later in the chain is a genuine caller and
         // must survive, which is exactly the case where the union host is itself the caller.
         let overhead = chain
             .iter()
@@ -327,7 +327,7 @@ mod tests {
     const VK_F7: u16 = 0x76;
     const VK_F8: u16 = 0x77;
 
-    /// Clause 3 on the shape it exists for: two OTHER handlers chained ahead of us on one
+    /// Clause 3 on the shape it exists for: two other handlers chained ahead of us on one
     /// prologue, present on every call, absent from the answer.
     #[test]
     fn frames_every_chain_shares_are_treated_as_chain_overhead() {
@@ -345,9 +345,9 @@ mod tests {
         assert_eq!(caller_of(&chains[1], prefix), Some("er_invasion_warp.dll"));
     }
 
-    /// THE FAILURE THE CAP EXISTS FOR, and the reason clause 3 is not just "the longest common
+    /// The failure the cap exists for, and the reason clause 3 is not just "the longest common
     /// prefix". One caller, polling from its own game task: every frame of its stack is common to
-    /// every chain, so an uncapped prefix walks past the mod entirely and lands on the GAME's task
+    /// every chain, so an uncapped prefix walks past the mod entirely and lands on the game's task
     /// runner -- and the report would then accuse `eldenring.exe` of binding the mod's hotkey.
     #[test]
     fn a_lone_callers_whole_stack_is_not_mistaken_for_chain_overhead() {
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(caller_of(&lone, 0), Some("er_invasion_warp.dll"));
     }
 
-    /// The same failure one step subtler: two call sites INSIDE one module, differing only deep in
+    /// The same failure one step subtler: two call sites inside one module, differing only deep in
     /// the stack. The cap keeps the answer on the module that made the call.
     #[test]
     fn two_call_sites_in_one_module_do_not_produce_a_deep_prefix() {
@@ -477,7 +477,7 @@ mod tests {
         assert!(diagnostics.iter().all(|line| line.contains("own+host=2")));
     }
 
-    /// Prefixes are computed PER API. A busy surface must not shift a quiet one's answer.
+    /// Prefixes are computed per API. A busy surface must not shift a quiet one's answer.
     #[test]
     fn each_surface_gets_its_own_prefix() {
         let modules = |address: usize| -> Option<String> {

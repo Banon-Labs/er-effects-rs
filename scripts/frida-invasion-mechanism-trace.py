@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Decide, in one Seamless invasion, WHICH code picks where an invader lands.
+"""Decide, in one Seamless invasion, which code picks where an invader lands.
 
-THE QUESTION
+The question
 ------------
 Static RE of the invasion path finishes at roughly 92%. The readable part says the destination is
-chosen entirely on the INVADER'S OWN MACHINE:
+chosen entirely on the INVADER'S own MACHINE:
 
     GetNpcWorldInvasionInfo  0x1405ee3d0   walks the MSB `PseudoMultiplayer` regions and returns the
                                            first one geometrically containing the invader
@@ -12,19 +12,19 @@ chosen entirely on the INVADER'S OWN MACHINE:
                                            `+0x14` names the MSB entry point to spawn on
 
 The unreadable part is Seamless. `ersc.dll` has its own invade site and its own spawn-position
-writer, and the half that offers/accepts an invasion is inside the Themida VM. So the ONE thing
+writer, and the half that offers/accepts an invasion is inside the Themida VM. So the one thing
 that cannot be settled by reading bytes is whether a Seamless invasion travels the vanilla path at
 all -- and everything downstream depends on the answer:
 
-  * if it does, then WHERE YOU STAND selects your destination, because the MSB region containing
+  * if it does, then where you stand selects your destination, because the MSB region containing
     the invader is the whole input; and
   * if it does not, then the destination arrives from Seamless's own code and no amount of
     map-side filtering on our side can steer it.
 
-WHAT THIS WATCHES, and why
+What this watches, and why
 --------------------------
 The destination the engine places an invader at lives in `CSGameMan+0xac8`, and in 1.16.2 exactly
-TWO functions write it. That bounds the whole answer space, so the run watches the writers rather
+two functions write it. That bounds the whole answer space, so the run watches the writers rather
 than the value:
 
   SetTargetMapId  0x14067acf0  <- ReqInvadeNPCWorld     this machine's own MSB-region lookup
@@ -32,11 +32,11 @@ than the value:
 
 A return address at each write says which one decided it, and the same is done for
 `SetNPCInvadeTargetEntryPoint` 0x14067ad00 (`+0xaf0`). `ReqInvadeNPCWorld` itself is hooked too,
-with its whole 48-byte `NpcWorldInvasionInfo` dumped, and its CALLER named -- because one of its
+with its whole 48-byte `NpcWorldInvasionInfo` dumped, and its caller named -- because one of its
 three callers is `DequeueCeremonyPacket`, i.e. a received packet, which is a different story from
 the local path even when the same function runs.
 
-ERSC IS NOT HOOKED, DELIBERATELY. Its addresses are confirmed -- bytes, `.pdata` RUNTIME_FUNCTION
+ERSC is not hooked, deliberately. Its addresses are confirmed -- bytes, `.pdata` RUNTIME_FUNCTION
 and unwind data all agree -- but `ersc.dll` is WinLicense/Themida-protected, and nothing in the
 static image establishes whether this build verifies its own `.text`. A frida Interceptor is an
 inline patch, which is exactly what such a check exists to catch, so "safe" is unproven rather
@@ -44,19 +44,19 @@ than merely unlikely to bite. Seamless's effect is fully visible from the game s
 writes the destination, the write still goes through one of the two hooked setters, and the return
 address lands in `ersc.dll` and is reported as such.
 
-READ-ONLY. Nothing is written and nothing is called. Every hook verifies the target's first bytes
+Read-only. Nothing is written and nothing is called. Every hook verifies the target's first bytes
 against the value established by static RE before attaching, so a version drift fails loudly
 instead of attaching to the middle of some other function.
 
-REACHING THE PROCESS
+Reaching the process
 --------------------
 The game runs under Wine/Proton, so a Linux-side `frida.attach()` sees nothing. `frida-gadget.dll`
 is loaded into the game as an me3 `[[natives]]` entry and listens on 127.0.0.1:27042; this
-connects to it as a REMOTE DEVICE. Launch with a gadget-bearing profile:
+connects to it as a remote device. Launch with a gadget-bearing profile:
 
     /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
-RUN IT (frida is provisioned per-run by uv; nothing is installed system-wide):
+Run it (frida is provisioned per-run by uv; nothing is installed system-wide):
 
     uv run --with frida python3 \
         /home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py
@@ -81,7 +81,7 @@ DEFAULT_OUT = (
 )
 
 # ---------------------------------------------------------------------------------------------
-# THE VERDICT. This is the whole point of the run, so it lives in plain python and is covered by
+# The verdict. This is the whole point of the run, so it lives in plain python and is covered by
 # --selftest: a run that produces records but no conclusion has wasted a launch.
 # ---------------------------------------------------------------------------------------------
 
@@ -98,7 +98,7 @@ UNKNOWN_WRITER = "unknown-writer"
 #: Nothing observed. Not a finding -- a run that did not capture an invasion.
 NO_INVASION = "no-invasion-observed"
 
-#: `SetTargetMapId` is the field the engine places from, so its LAST writer before placement is the
+#: `SetTargetMapId` is the field the engine places from, so its last writer before placement is the
 #: one that actually decided the destination. Its two callers in 1.16.2 bound the answer space.
 _WRITER_VERDICT = {
     "ReqInvadeNPCWorld": LOCAL_MSB,
@@ -108,21 +108,21 @@ _WRITER_VERDICT = {
 def _armed_writes(records: list[dict]) -> list[dict]:
     """The `SetTargetMapId` writes that name a destination the engine can actually place from.
 
-    RETRACTED PREMISE, 2026-08-06. This filter first required a NON-ZERO entry point, on the
+    Retracted premise, 2026-08-06. This filter first required a non-zero entry point, on the
     reasoning that 0 means "unset". Decompiling `SetMultiplayJoinData` (0x1406fb520) killed that:
-    on the join path the entry point is zeroed UNCONDITIONALLY --
+    on the join path the entry point is zeroed unconditionally --
 
         SetTargetMapId(local_68);
         SetMultiplayJoinTargetBlockPos(&local_28);      // spawnPosition x/y/z
         local_68[0] = {0,0,0,0};
         SetNPCInvadeTargetEntryPoint((int *)local_68);  // always zero, by construction
 
-    -- because that path does not place by MSB entry point at all. It places at a raw COORDINATE.
+    -- because that path does not place by MSB entry point at all. It places at a raw coordinate.
     So a zero entry point is definitional there, not evidence of an uncommitted candidate, and the
     old filter would have discarded every real server-pushed destination.
 
-    What actually distinguishes a placeable destination is therefore the accompanying SPAWN
-    COORDINATE, not the entry point: `ReqInvadeNPCWorld` arms an entry point and no coordinate,
+    What actually distinguishes a placeable destination is therefore the accompanying spawn
+    coordinate, not the entry point: `ReqInvadeNPCWorld` arms an entry point and no coordinate,
     `SetMultiplayJoinData` arms a coordinate and no entry point, and either is sufficient.
     """
     def armed_by(name, pred):
@@ -145,7 +145,7 @@ def _armed_writes(records: list[dict]) -> list[dict]:
 def classify(records: list[dict]) -> dict:
     """Reduce a run's records to the one answer the run exists to produce.
 
-    The verdict keys on WHO WROTE THE DESTINATION, not on what the destination was: every case
+    The verdict keys on who wrote the destination, not on what the destination was: every case
     looks identical on screen ("I invaded someone"), and the follow-up work is completely
     different for each. Kept out of the frida plumbing so it is checkable without a game.
     """
@@ -174,7 +174,7 @@ def classify(records: list[dict]) -> dict:
         }
 
     if not writes:
-        # A destination that changed with no write observed is a gap in the hooks, NOT evidence
+        # A destination that changed with no write observed is a gap in the hooks, not evidence
         # about who decided it. Saying anything stronger would be inventing a finding.
         if placed:
             return {
@@ -204,14 +204,14 @@ def classify(records: list[dict]) -> dict:
         "requests_seen": len(req),
         "unarmed_candidate_writes": unarmed,
     }
-    # DID IT ACTUALLY LAND. "A destination was pushed" and "you went there" are separate claims,
+    # Did it actually land. "A destination was pushed" and "you went there" are separate claims,
     # and only the second one proves an invasion happened. The signature is `lastLoadPosition`
-    # becoming the pushed coordinate IN the pushed map.
+    # becoming the pushed coordinate in the pushed map.
     #
-    # Both halves are required. `lastLoadPosition` is a GENERAL load field -- warping home, fast
+    # Both halves are required. `lastLoadPosition` is a general load field -- warping home, fast
     # travel and an invasion join all write it (observed 2026-08-06: a warp home immediately after
     # a committed invasion rewrote it with the player's own position). Position equality alone
-    # would therefore credit any load that happened to be sampled; requiring the MAP to match too
+    # would therefore credit any load that happened to be sampled; requiring the map to match too
     # is what keeps an unrelated load from reading as an invasion landing.
     commits = [p for p in placed
                if p.get("join_pos") and p.get("join_pos") == p.get("last_load_pos")
@@ -220,7 +220,7 @@ def classify(records: list[dict]) -> dict:
     out["landed_at"] = commits[-1].get("join_pos") if commits else None
     if not commits:
         out["why"] += "; NO commit observed -- a destination was pushed but nothing shows you went"
-    # When the vanilla request DID run, say whether the destination that stuck is the one it asked
+    # When the vanilla request did run, say whether the destination that stuck is the one it asked
     # for. A request that fired and was then overwritten is a materially different situation from
     # one that fired and won, and both produce verdict LOCAL_MSB on the writer alone.
     if req:
@@ -260,8 +260,8 @@ def _selftest() -> int:
         return [{"type": "spawn-pos", "seq": seq, "caller_name": caller,
                  "x": 100.0, "y": 20.0, "z": -300.0}]
 
-    # COMMIT DETECTION, and the case that nearly produced a false retraction (2026-08-06).
-    # A committed invasion, then a WARP HOME. The warp rewrites lastLoadPosition with the player's
+    # Commit detection, and the case that nearly produced a false retraction (2026-08-06).
+    # A committed invasion, then a warp home. The warp rewrites lastLoadPosition with the player's
     # own position, so the final sample no longer matches -- but the invasion still happened. The
     # commit must be found anywhere in the run, not only in the last sample.
     D = [49.6, 302.5, -45.6]
@@ -275,7 +275,7 @@ def _selftest() -> int:
     check(warped["committed"] and warped["landed_at"] == D,
           "a commit followed by a warp home is still a commit")
 
-    # A destination pushed but never reached must NOT read as a landing.
+    # A destination pushed but never reached must not read as a landing.
     staged_only = classify(
         write(4, "SetMultiplayJoinData", "m61_46_43_00", entry=0) + pos(5)
         + place(6, "m61_46_43_00", D, HOME)
@@ -283,7 +283,7 @@ def _selftest() -> int:
     check(not staged_only["committed"] and staged_only["landed_at"] is None,
           "a pushed destination you never reached is not a landing")
 
-    # Position equality in a DIFFERENT map is an unrelated load, not this invasion landing.
+    # Position equality in a different map is an unrelated load, not this invasion landing.
     check(
         not classify(
             write(4, "SetMultiplayJoinData", "m61_46_43_00", entry=0) + pos(5)
@@ -292,8 +292,8 @@ def _selftest() -> int:
         "matching positions in another map are an unrelated load, not a landing",
     )
 
-    # THE RETRACTION, kept as a test so it cannot come back. `SetMultiplayJoinData` zeroes the entry
-    # point unconditionally and places by COORDINATE instead, so a zero entry point there is
+    # The RETRACTION, kept as a test so it cannot come back. `SetMultiplayJoinData` zeroes the entry
+    # point unconditionally and places by coordinate instead, so a zero entry point there is
     # definitional -- not evidence of an uncommitted candidate. A filter that required a non-zero
     # entry point discarded every real server-pushed destination and reported 'no invasion'.
     server_push = classify(
@@ -308,7 +308,7 @@ def _selftest() -> int:
         "an entry point with no coordinate is a real destination too",
     )
 
-    # A map write with NEITHER arming signal is genuinely not a destination.
+    # A map write with neither arming signal is genuinely not a destination.
     bare = classify(write(4, "SetMultiplayJoinData", "m11_00_00_00", entry=0))
     check(bare["verdict"] == NO_INVASION,
           "a map write with no entry point and no coordinate is not a destination")
@@ -316,7 +316,7 @@ def _selftest() -> int:
           "the unarmed map is still reported rather than dropped")
 
     # An empty run must not read as a finding. This is the failure mode that matters most: a
-    # clean-looking run with no invasion in it is NOT evidence about which path was used.
+    # clean-looking run with no invasion in it is not evidence about which path was used.
     check(classify([])["verdict"] == NO_INVASION, "an empty run is 'no invasion', never a verdict")
     check(
         classify([{"type": "hook", "ok": True}])["verdict"] == NO_INVASION,
@@ -338,14 +338,14 @@ def _selftest() -> int:
         "a destination written from inside ersc.dll is ersc's own",
     )
 
-    # An unrecognised writer must NOT be rounded to the nearest known one -- that would report a
+    # An unrecognised writer must not be rounded to the nearest known one -- that would report a
     # mechanism the run never observed.
     check(
         classify(write(2, "unknown@0x141234567"))["verdict"] == UNKNOWN_WRITER,
         "an unrecognised writer is reported as unknown, not guessed",
     )
 
-    # A placement with no write observed is a HOLE IN THE HOOKS, not evidence about the path. This
+    # A placement with no write observed is a hole in the hooks, not evidence about the path. This
     # is the trap the earlier design fell into: absence of our hook firing is not presence of ersc.
     check(
         classify([{"type": "placement", "seq": 4, "block": "m60_51_36_00", "entry_point": 1042380}])[
@@ -355,14 +355,14 @@ def _selftest() -> int:
         "a placement with no observed write means the hooks are incomplete, not that ersc did it",
     )
 
-    # The LAST write decides, because that is the value placement actually uses.
+    # The last write decides, because that is the value placement actually uses.
     check(
         classify(write(2, "ReqInvadeNPCWorld") + write(5, "SetMultiplayJoinData"))["verdict"]
         == JOIN_DATA,
         "the last destination write is the one that decided it",
     )
 
-    # Request fired AND won: the destination that stuck is the one it asked for.
+    # Request fired and won: the destination that stuck is the one it asked for.
     survived = classify(
         [
             {"type": "req-invade", "seq": 1, "ceremony_block": "m60_51_36_00",
@@ -388,7 +388,7 @@ def _selftest() -> int:
         "a request that was overwritten is reported as not having survived",
     )
 
-    # A write recorded BEFORE the request is the previous invasion's, and must not be credited to
+    # A write recorded before the request is the previous invasion's, and must not be credited to
     # this one -- that would manufacture a false 'the request survived'.
     stale = classify(
         [

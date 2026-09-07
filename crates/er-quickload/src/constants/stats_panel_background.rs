@@ -1,12 +1,12 @@
 // === Stats-panel per-slot neutral-background textures (2026-07-04) ==================================
 // The stats-panel product mode blanks the character render (see `stats_panel_enabled`) and gives each
-// ProfileSelect save-slot face box a neutral BACKGROUND instead. Mechanism = the SAME proven in-memory
+// ProfileSelect save-slot face box a neutral background instead. Mechanism = the same proven in-memory
 // TPF -> CS::CreateTpfResCap register the er-tpf cover used, but per slot: register one texture under a
 // unique key, then redirect that slot's native `menu_dummyprofileface_NN -> systex_menu_profileMM`
-// Scaleform bind TARGET to our key (a Scaleform-repo miss bridges to GLOBAL_TexRepository by name and
-// resolves our texture). The dummy-face shapes ARE the visible per-row boxes (05_010 RE 2026-07-04), so
+// Scaleform bind target to our key (a Scaleform-repo miss bridges to GLOBAL_TexRepository by name and
+// resolves our texture). The dummy-face shapes are the visible per-row boxes (05_010 RE 2026-07-04), so
 // redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
-// upload is cheap (no per-frame render), so all 10 slots get a background with NO GX-queue overflow.
+// upload is cheap (no per-frame render), so all 10 slots get a background with no GX-queue overflow.
 pub(crate) use er_loading_portrait_core::STATS_PANEL_BG_RGBA;
 pub(crate) use er_loading_portrait_core::STATS_PANEL_SLOT_COUNT;
 pub(crate) use er_loading_portrait_core::STATS_PANEL_SYSTEX_KEYS;
@@ -32,10 +32,10 @@ pub(crate) use er_telemetry_core::counters::STATS_PANEL_BIND_REDIRECT_MASK;
 /// Last error code (see `STATS_PANEL_ERR_*`).
 pub(crate) static STATS_PANEL_LAST_ERROR: AtomicUsize = AtomicUsize::new(STATS_PANEL_ERR_NONE);
 
-// (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
-// the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
+// (Removed: Title INIT-readiness override lever -- it forced CSMenuMan+0x21, which RE later showed is
+// the whole-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
 // finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
-// Reverted per user 2026-06-24. RE preserved in bd title-init-ready-override-NOT-a-press-lever-2026-06-24.)
+// Reverted per user 2026-06-24. RE preserved in bd title-init-ready-override-not-a-press-lever-2026-06-24.)
 pub(crate) use er_title_flow::TitleStepState;
 /// Human name for a TitleStep committed/requested state value (out-of-range -> "?").
 pub(crate) fn title_step_state_name(v: i32) -> &'static str {
@@ -58,10 +58,10 @@ pub(crate) use er_title_flow::TITLE_STEP_END_FLOW_WAIT;
 
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = TitleStepState::BeginTitle as i32;
 /// STEP_BeginLogo (idx2, handler 0x140b0c2a0): the native press-any-button advance target.
-/// The parked press-any-button screen is the FIRST state 10; the engine's own press handler
+/// The parked press-any-button screen is the first state 10; the engine's own press handler
 /// 0x140b0b6b0 issues SetState(owner, 2), then the native pump advances 2->3->10, building
-/// the FULL main menu (Continue / Load-Game item d180 / New Game / ...). SetState(3)=BeginTitle
-/// ALONE (skipping BeginLogo) only built the BackScreen (c000), not the main-menu items -- so
+/// the full main menu (Continue / Load-Game item d180 / New Game / ...). SetState(3)=BeginTitle
+/// alone (skipping BeginLogo) only built the BackScreen (c000), not the main-menu items -- so
 /// we replicate the full sequence by SetState(2) from our idx10 handler (zero-input, the
 /// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
 /// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
@@ -73,7 +73,7 @@ pub(crate) use er_title_flow::TITLE_OWNER_MENU_LIST_130_OFFSET;
 
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_OPEN_MENU_RVA;
 pub(crate) use er_title_flow::TITLE_TOP_DIALOG_VTABLE_RVA;
-/// CS::MenuWindow vtable 0x142a93a60 (.?AVMenuWindow@CS@@) (RVA). The live MenuWindow* the LIVE
+/// CS::MenuWindow vtable 0x142a93a60 (.?AVMenuWindow@CS@@) (RVA). The live MenuWindow* the live
 /// Load-Game dialog factory needs as its rdx call-frame arg. Located by the active-screen scan.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a93a60;
@@ -82,12 +82,12 @@ pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a93a60;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_PROXY_VTABLE_RVA: usize = 0x2a94318;
 
-/// PROBE-2 GROUND TRUTH (2026-06-18, runtime, REFUTES the static group->holder->screen walk):
-/// the 10 slots of the active-screen array 0x143d6d8d0 each hold a menu MODEL RENDERER (vtable
-/// 0x142b80128 CSMenuProfModelRend / 0x142b7f310 CSMenuAsmModelRend), NOT screen/group controllers,
+/// Probe-2 ground truth (2026-06-18, runtime, REFUTES the static group->holder->screen walk):
+/// the 10 slots of the active-screen array 0x143d6d8d0 each hold a menu model RENDERER (vtable
+/// 0x142b80128 CSMenuProfModelRend / 0x142b7f310 CSMenuAsmModelRend), not screen/group controllers,
 /// so the +0xa8 holder / +0x48 screen walk leads nowhere. That walk (and the MENU_GROUP_* /
-/// MENU_HOLDER_* offsets it used) is removed. What IS runtime-reliable: TitleTopDialog at owner+0xe0
-/// (vtable-gated, TITLE_TOP_DIALOG_VTABLE_RVA). The live MenuWindow* is NOT statically pinned; it is
+/// MENU_HOLDER_* offsets it used) is removed. What is runtime-reliable: TitleTopDialog at owner+0xe0
+/// (vtable-gated, TITLE_TOP_DIALOG_VTABLE_RVA). The live MenuWindow* is not statically pinned; it is
 /// read DETERMINISTICALLY by `locate_live_loadgame_node` from the SceneProxy back-ref at proxy+0x20.
 ///
 /// Field-scan stride: one qword pointer per step (also the SceneProxy diagnostic scan stride).
@@ -140,15 +140,15 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize 
 pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// The hook is LIVE. Set only after `MH_ApplyQueued` succeeds, so the oracle that reports it stays
+/// The hook is live. Set only after `MH_ApplyQueued` succeeds, so the oracle that reports it stays
 /// honest about a failed install; use [`TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED`] to decide
 /// whether to attempt one.
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
-/// SOMEONE HAS ALREADY ATTEMPTED THE INSTALL -- claimed with a `swap`, before any work.
+/// Someone has already attempted the install -- claimed with a `swap`, before any work.
 ///
 /// The install has two independent owners (`install_title_visual_startup_hooks` calls it from the
-/// `START_PROFILE_STATS_TEXT` thread AND from the `START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND`
+/// `START_PROFILE_STATS_TEXT` thread and from the `START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND`
 /// thread; two different `Once` gates cannot dedupe each other), and the `_INSTALLED` latch above
 /// is set only on success, so a check-then-act read of it let both threads through. Measured
 /// 2026-08-30: `MhHook::new` at +558 ms and again at +606 ms, the second returning

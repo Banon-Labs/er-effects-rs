@@ -1,11 +1,11 @@
 // The OS common file dialog, as an opt-in alternative to the in-game 05_010 browser
-// (`os_native_save_picker = true`). Recovered from `ca846fa1`, which REMOVED this shape citing the
+// (`os_native_save_picker = true`). Recovered from `ca846fa1`, which removed this shape citing the
 // context switch out of the game -- not a hang -- so the plain blocking call is the only variant
 // with field evidence behind it.
 //
 // This module converts strings and calls comdlg32. It reads no game pointers, calls no game
 // function, and dereferences nothing from `game_module_base()`. Everything that touches the game
-// happens on the CALLER's side of the return, in code that already runs in the right ownership
+// happens on the caller's side of the return, in code that already runs in the right ownership
 // context. That is rule H3 and it is what makes the rest of the hazard analysis tractable.
 //
 // THREADING. The dialog is called inline and synchronously on the thread that already owns "open a
@@ -14,13 +14,13 @@
 // the removed shape did exactly this and functioned; every consumer of the returned pick is
 // menu-thread-only by documentation (`system_quit_ingest_picked_save` writes ProfileSummary records
 // and refreshes the renderer, `save_flow_submit_box` says "MENU-THREAD ONLY"); and a cross-thread
-// `hwndOwner` would be WORSE for input, because it disables the game window from another thread
+// `hwndOwner` would be worse for input, because it disables the game window from another thread
 // while the game keeps polling raw input, so the System>Quit menu underneath would receive the
 // keystrokes typed into the dialog. Blocking the menu pump means the menus cannot process anything
 // at all, which is the modality we want.
 //
-// THAT WARNING IS ABOUT THE THREAD, NOT ABOUT WHICH WINDOW OWNS THE DIALOG, and the two got read as
-// one thing once already. `hwndOwner` is now the DIM COVER rather than the game window whenever a
+// That warning is about the thread, not about which window owns the dialog, and the two got read as
+// one thing once already. `hwndOwner` is now the dim cover rather than the game window whenever a
 // cover is up (see `os_dialog_owner` for the full argument): the call is still inline on this same
 // thread, so nothing above changes, and what comdlg32 disables becomes a click-through,
 // non-activating window with no input to lose. The modality still comes from the block -- from the
@@ -29,17 +29,17 @@
 // The game task keeps ticking meanwhile -- see `save_flow_next_stage_ticks`, which is why the
 // flow's deadlines are frozen while `SAVE_PICKER_OS_DIALOG_OPEN` is set.
 //
-// THE BOOT INTENT IS THE EXCEPTION, and it is an exception about WHICH THREAD, never about this
+// The boot intent is the exception, and it is an exception about which thread, never about this
 // file's contract. See `save_picker_boot.rs`: at a missing-save boot the only threads that reach
 // the picker are the D3D12 Present hook and the CSTaskImp recurring task, and blocking either one
 // stalls the game's own frame loop rather than a menu pump we are trying to make modal. That arm
-// therefore calls `os_pick_validated` from a thread WE own and passes `no_picker_cover`, because
+// therefore calls `os_pick_validated` from a thread we own and passes `no_picker_cover`, because
 // with no game thread blocked Present keeps running and the boot's own overlay keeps drawing --
 // there is nothing frozen for a cover to explain.
 
-// The comdlg32/user32 surfaces below are `#[cfg(windows)]`, so a HOST build compiles their
+// The comdlg32/user32 surfaces below are `#[cfg(windows)]`, so a host build compiles their
 // helpers, constants and counter imports with every caller cfg'd out. `dead_code` /
-// `unused_imports` there describe the cfg, not real debt; the SHIPPING target
+// `unused_imports` there describe the cfg, not real debt; the shipping target
 // (x86_64-pc-windows-msvc) carries the full deny with no allows.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
@@ -92,12 +92,12 @@ use er_telemetry_core::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 /// long, so keep the same generous buffer.
 const OS_PICK_PATH_UNITS: usize = 1024;
 
-/// Consecutive INVALID picks tolerated before the loop gives up and takes the cancel path.
+/// Consecutive invalid picks tolerated before the loop gives up and takes the cancel path.
 ///
 /// This bound is not about user patience -- eight is generous for a human. It exists because
 /// comdlg32 might fail INSTANTLY: Wine's is a reimplementation, and a dialog that returns at once
 /// with a stale path would spin this loop at full speed on the thread that owns the menu pump, an
-/// unbreakable hang. Only invalid PICKS reopen; a cancel or a comdlg32 failure never does.
+/// unbreakable hang. Only invalid picks reopen; a cancel or a comdlg32 failure never does.
 const SAVE_PICKER_OS_MAX_REOPENS: usize = 8;
 
 /// What one dialog invocation produced.
@@ -107,12 +107,12 @@ pub enum OsPickOutcome {
     Picked(String),
     /// The user dismissed the dialog (`FALSE`, extended error 0).
     Cancelled,
-    /// comdlg32 itself failed (`FALSE`, non-zero extended error), or returned TRUE with no path.
+    /// comdlg32 itself failed (`FALSE`, non-zero extended error), or returned true with no path.
     Failed { error: u32 },
 }
 
-/// Read comdlg32's `FALSE` return correctly. A `FALSE` means EITHER the user cancelled (extended
-/// error 0) OR the dialog failed (non-zero) -- collapsing the two would make a broken comdlg32 look
+/// Read comdlg32's `FALSE` return correctly. A `FALSE` means either the user cancelled (extended
+/// error 0) or the dialog failed (non-zero) -- collapsing the two would make a broken comdlg32 look
 /// like a user decision, and only a failure is a bug of ours. Neither reopens.
 ///
 /// Pure so the gate can test it: the real call feeds it `returned`, `CommDlgExtendedError()` and the
@@ -120,7 +120,7 @@ pub enum OsPickOutcome {
 fn classify_os_outcome(returned: bool, extended_error: u32, path: Option<String>) -> OsPickOutcome {
     match (returned, path) {
         (true, Some(path)) if !path.is_empty() => OsPickOutcome::Picked(path),
-        // TRUE with nothing in the buffer is not a user decision; it is a dialog that lied.
+        // True with nothing in the buffer is not a user decision; it is a dialog that lied.
         (true, _) => OsPickOutcome::Failed { error: 0 },
         (false, _) if extended_error == 0 => OsPickOutcome::Cancelled,
         (false, _) => OsPickOutcome::Failed {
@@ -129,7 +129,7 @@ fn classify_os_outcome(returned: bool, extended_error: u32, path: Option<String>
     }
 }
 
-/// Whether an outcome should reopen the dialog. ONLY an invalid pick does, and only under the bound.
+/// Whether an outcome should reopen the dialog. Only an invalid pick does, and only under the bound.
 fn should_reopen(outcome: &OsPickOutcome, pick_was_valid: bool, attempts: usize) -> bool {
     matches!(outcome, OsPickOutcome::Picked(_))
         && !pick_was_valid
@@ -167,7 +167,7 @@ fn show_os_reject_message(cover: Option<&PickerCover>, message: &PickerStatusMes
 #[cfg(not(windows))]
 fn show_os_reject_message(_cover: Option<&PickerCover>, _message: &PickerStatusMessage) {}
 
-/// Why an open ended with nothing staged. THREE reasons, not one, and every collapse between them
+/// Why an open ended with nothing staged. Three reasons, not one, and every collapse between them
 /// has already shipped as a bug.
 ///
 /// A `bool`/`Option` return conflates all three, and two different consumers were burnt by two
@@ -177,7 +177,7 @@ fn show_os_reject_message(_cover: Option<&PickerCover>, _message: &PickerStatusM
 ///    unpick one level up (a `bool` that meant both "the picker ran" and "the picker is still up",
 ///    so the menu pump re-armed a cancelled dialog every ~57 ms, forever -- bd
 ///    `er-effects-rs-rsxi`). That is `Cancelled`/`Failed` vs `NotOpened`.
-///  * conflating "the user decided" with "we could not ask" is what would let the BOOT arm quit a
+///  * conflating "the user decided" with "we could not ask" is what would let the boot arm quit a
 ///    user's game over a defect in comdlg32, because at a missing-save boot a Cancel is
 ///    `ExitProcess(0)`. That is `Cancelled` vs `Failed`.
 ///
@@ -186,16 +186,16 @@ fn show_os_reject_message(_cover: Option<&PickerCover>, _message: &PickerStatusM
 /// is where it makes the decision -- pure, and therefore pinned by a test rather than by a thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OsPickAbort {
-    /// The user dismissed a dialog that RAN. A DECISION, and the only outcome a caller may treat as
+    /// The user dismissed a dialog that ran. A decision, and the only outcome a caller may treat as
     /// one. Terminal: the request that asked for the dialog has been carried out.
     Cancelled,
-    /// A dialog RAN and came back unusable: comdlg32 failed, or the invalid-pick reopen bound was
+    /// A dialog ran and came back unusable: comdlg32 failed, or the invalid-pick reopen bound was
     /// exhausted. Terminal for the same reason `Cancelled` is -- a dialog happened, so re-asking
-    /// would reopen it -- but NEVER a user decision, so no caller may act on it as a choice. A
+    /// would reopen it -- but never a user decision, so no caller may act on it as a choice. A
     /// caller with a second surface should use that surface instead.
     Failed,
-    /// NO dialog ran at all: the core `CreateFileW` detour is not live yet, or a re-entrant open was
-    /// refused because one is already up. The request is STILL OWED, and a caller that can ask again
+    /// No dialog ran at all: the core `CreateFileW` detour is not live yet, or a re-entrant open was
+    /// refused because one is already up. The request is still OWED, and a caller that can ask again
     /// on its next tick must.
     NotOpened,
 }
@@ -205,14 +205,14 @@ pub enum OsPickAbort {
 ///
 /// The `Err` half used to be a single `None`, and collapsing it is what let a user's Cancel be
 /// retried as though the dialog had never opened (bd `er-effects-rs-rsxi`). Those are opposite
-/// facts: a dismissal means a dialog RAN and was answered, so the request that asked for it is
+/// facts: a dismissal means a dialog ran and was answered, so the request that asked for it is
 /// finished; a `NotOpened` means no dialog ran at all, so the request still stands.
 pub type OsPickResult<T> = Result<T, OsPickAbort>;
 
 /// Double-NUL-terminated comdlg32 filter for the active flavor's extensions, e.g.
 /// `"Elden Ring save (*.co2;*.sl2)\0*.co2;*.sl2\0\0"`.
 ///
-/// DISPLAY-ONLY. The removed code's own comment said so: the dialog returns whatever path the user
+/// Display-only. The removed code's own comment said so: the dialog returns whatever path the user
 /// types, filter or not. `save_picker_accepts` is what actually decides, which is why there is no
 /// "All files" escape hatch here -- it would change nothing.
 fn os_dialog_filter(extensions: &[&str]) -> Vec<u16> {
@@ -231,15 +231,15 @@ fn os_dialog_filter(extensions: &[&str]) -> Vec<u16> {
     out
 }
 
-/// Guard for the ONE dialog claim. Its `Drop` clears the latch, so an unwind cannot leave the flow
+/// Guard for the one dialog claim. Its `Drop` clears the latch, so an unwind cannot leave the flow
 /// permanently frozen (the latch is the tick-freeze predicate).
 struct OsDialogClaim;
 
 impl OsDialogClaim {
     /// Claim the right to open a dialog, or `None` if one is already up.
     ///
-    /// COMPARE-EXCHANGE, not a store, and that distinction is the whole point (H1). A modal common
-    /// dialog runs its own `GetMessage`/`DispatchMessage` loop for the CALLING thread, and a
+    /// Compare-exchange, not a store, and that distinction is the whole point (H1). A modal common
+    /// dialog runs its own `GetMessage`/`DispatchMessage` loop for the calling thread, and a
     /// dispatched message can re-enter the game's window proc, its menu code, and therefore our own
     /// row-action detour -- which would open a second dialog underneath the first, or start a second
     /// save flow. Only the first caller proceeds; a re-entrant one bails immediately. Same
@@ -264,38 +264,38 @@ impl Drop for OsDialogClaim {
     }
 }
 
-/// The `hwndOwner` for a dialog: THE DIM COVER when one is up, otherwise the game's own main
+/// The `hwndOwner` for a dialog: The dim cover when one is up, otherwise the game's own main
 /// window. Never `hooks::own_window()` -- see [`game_main_window`].
 ///
-/// WHY THE COVER (user report 2026-07-31: the picker came up BEHIND the blur). `hwndOwner` is not
+/// Why the cover (user report 2026-07-31: the picker came up behind the blur). `hwndOwner` is not
 /// a hint, it is the z-order relation: a window is always above the window that owns it. Owning the
-/// dialog to the game window only promises dialog-above-GAME, and left dialog-vs-cover to be
+/// dialog to the game window only promises dialog-above-game, and left dialog-vs-cover to be
 /// settled by creation order -- a race the cover can and did win, because its `HWND_TOP` raise was
 /// issued asynchronously by the overlay thread and could land after comdlg32's window existed. The
 /// cover is itself an owned popup of the ER window (`picker_dim::attach_to_game`), so owning the
 /// dialog to the cover makes the whole chain game < cover < dialog a window-manager invariant.
 ///
-/// THE FILE-HEADER INPUT WARNING DOES NOT APPLY TO THIS, and the distinction is worth being exact
-/// about. That warning is about calling the dialog from ANOTHER THREAD while the game window is the
+/// The file-header input warning does not apply to this, and the distinction is worth being exact
+/// about. That warning is about calling the dialog from another thread while the game window is the
 /// owner: comdlg32 disables its owner, so a cross-thread open would disable the game window while
 /// the thread that polls raw input kept running. Nothing about the thread changes here -- the call
-/// is still inline on the thread that owns the pump. What changes is WHICH window comdlg32
+/// is still inline on the thread that owns the pump. What changes is which window comdlg32
 /// disables, and the cover is `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT` behind a bare `DefWindowProcW`
 /// proc, so it has no input to be deprived of.
 ///
-/// Leaving the game window ENABLED is likewise not a loss of modality. The modality has never come
+/// Leaving the game window enabled is likewise not a loss of modality. The modality has never come
 /// from `EnableWindow` -- the header says so directly: "Blocking the menu pump means the menus
 /// cannot process anything at all, which is the modality we want." The one thing an enabled game
 /// window could still do that a disabled one could not -- be clicked, and raised over the dialog --
 /// is precisely what the ownership chain forbids, since a window can never be raised above the
 /// windows it owns.
 ///
-/// A null result is NOT fatal: pass it through and log `owner=none`, so a report can distinguish
+/// A null result is not fatal: pass it through and log `owner=none`, so a report can distinguish
 /// "we passed no owner" from "we passed one and the dialog still went behind the game".
 fn os_dialog_owner(cover: Option<&PickerCover>) -> usize {
-    // Null cover = no cover to own to: the missing-save BOOT arm passes `no_picker_cover` and
+    // Null cover = no cover to own to: the missing-save boot arm passes `no_picker_cover` and
     // raises none, and an arm whose cover did not come up in time reports null rather than hand
-    // comdlg32 a window that is still 1x1 at the origin -- comdlg32 CENTRES the dialog on its
+    // comdlg32 a window that is still 1x1 at the origin -- comdlg32 centres the dialog on its
     // owner, so that would put the picker in the desktop's top-left corner.
     let cover_hwnd = cover.map(PickerCover::owner_hwnd).unwrap_or(0);
     let is_cover = cover_hwnd != 0;
@@ -318,14 +318,14 @@ fn os_pick_path_from_buffer(buffer: &[u16]) -> Option<String> {
     String::from_utf16(&buffer[..end]).ok()
 }
 
-/// Run ONE dialog. `save_as` selects `GetSaveFileNameW` over `GetOpenFileNameW` and the Save-As flag
+/// Run one dialog. `save_as` selects `GetSaveFileNameW` over `GetOpenFileNameW` and the Save-As flag
 /// set; `leaf` pre-fills the filename field (empty for an Open).
 ///
-/// H2 -- NO LOCK OF OURS MAY BE ALIVE ACROSS THIS CALL. The dialog's own file I/O re-enters our
-/// `CreateFileW` detour ON THIS THREAD, and that detour takes `save_dest_redirect_lock()` and logs;
+/// H2 -- No lock of ours may be alive across this call. The dialog's own file I/O re-enters our
+/// `CreateFileW` detour on this thread, and that detour takes `save_dest_redirect_lock()` and logs;
 /// `save_dest_redirect_for_open`'s own doc states the rule ("a second lock acquisition would
 /// deadlock the save worker"), and commit `a02a274d` is the same class one level down in the logger.
-/// This signature is the structural enforcement: every parameter is an OWNED `String`/`&str`, so no
+/// This signature is the structural enforcement: every parameter is an owned `String`/`&str`, so no
 /// `MutexGuard` can be borrowed through it.
 #[cfg(windows)]
 fn os_dialog_run(
@@ -359,16 +359,16 @@ fn os_dialog_run(
         path_buffer[index] = unit;
     }
     // OPEN: exactly the flag set `ca846fa1` shipped.
-    // SAVE-AS: `OFN_FILEMUSTEXIST` is dropped, because a new destination must be nameable, and
+    // Save-AS: `OFN_FILEMUSTEXIST` is dropped, because a new destination must be nameable, and
     // `OFN_NOTESTFILECREATE` is added -- without it comdlg32 may create and delete a probe file, and
     // a probe left behind (or a race with our own `target.is_file()`) would make Box3 ask
     // "Overwrite this file?" about a name the user just invented, and could hand a 0-byte file to
     // the seed path. Writability is still caught, without touching the destination, by
     // `save_dest_write_atomic`'s sibling-temp-plus-rename.
     //
-    // `OFN_OVERWRITEPROMPT` IS DELIBERATELY ABSENT. Our Box3 is the single overwrite gate; the OS
+    // `OFN_OVERWRITEPROMPT` is deliberately absent. Our Box3 is the single overwrite gate; the OS
     // prompt would ask the user the same question twice, and the one that decides is ours. This is
-    // the one flag whose ABSENCE is load-bearing.
+    // the one flag whose absence is load-bearing.
     let flags: OPEN_FILENAME_FLAGS = if save_as {
         OFN_EXPLORER
             | OFN_PATHMUSTEXIST
@@ -400,14 +400,14 @@ fn os_dialog_run(
     let savelike_before = SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst);
     let started = Instant::now();
     SAVE_PICKER_OS_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
-    // The OPENED line is unconditional and pairs with CLOSED below. OPENED with no CLOSED and a
-    // responsive game means an invisible dialog; OPENED with no CLOSED and a frozen game means a
-    // hung one; a CLOSED pair with result=cancelled means it worked and the user declined.
+    // The opened line is unconditional and pairs with closed below. Opened with no closed and a
+    // responsive game means an invisible dialog; Opened with no closed and a frozen game means a
+    // hung one; a closed pair with result=cancelled means it worked and the user declined.
     append_autoload_debug(format_args!(
         "save-picker-os: dialog OPENED surface={} owner=0x{:x}{} dir='{}' leaf='{}' filter='{}' flags=0x{:x} overwrite_prompt=NOT_SET commit_window_armed={commit_window_armed}",
         if save_as { "save-as" } else { "load" },
         owner,
-        // Spell out the OWNERSHIP CHAIN, because "the picker is in front of the blur" is now a
+        // Spell out the ownership chain, because "the picker is in front of the blur" is now a
         // structural claim about these three handles and a log that only shows one of them cannot
         // be used to check it. `owner=<cover>` with the cover owned by the game is the good shape;
         // `owner=<game>` while a cover is armed means the handshake timed out and this open's
@@ -500,14 +500,14 @@ pub fn no_picker_cover(_surface: &str) -> Option<PickerCover> {
     None
 }
 
-/// Open the dialog, validate what comes back with the picker's OWN predicate, and reopen where the
+/// Open the dialog, validate what comes back with the picker's own predicate, and reopen where the
 /// user was standing when it is not a save this intent accepts.
 ///
 /// Contract 7: the OS dialog's filter is display-only, so the returned path must clear the same gate
-/// the in-game LISTING applies -- rejecting is the OS-mode analogue of "the file simply is not
-/// listed", which is why there is no error UI. The reopened dialog IS the feedback.
+/// the in-game listing applies -- rejecting is the OS-mode analogue of "the file simply is not
+/// listed", which is why there is no error UI. The reopened dialog is the feedback.
 ///
-/// `stage` runs on the accepted path WHILE THE DIALOG CLAIM IS STILL HELD, and that ordering is
+/// `stage` runs on the accepted path while the dialog claim is still held, and that ordering is
 /// load-bearing rather than incidental. The save-flow tick runs concurrently and reads
 /// `SAVE_PICKER_OS_DIALOG_OPEN` as its "a browser is live" term; if the claim dropped first, a tick
 /// landing in the gap would see no dialog, no browser and no latch and end the flow as abandoned
@@ -516,7 +516,7 @@ pub fn no_picker_cover(_surface: &str) -> Option<PickerCover> {
 ///
 /// Returns `Ok(stage(path))`, or one of the three [`OsPickAbort`]s -- in which case `stage` never
 /// ran and nothing was staged, which is exactly what stage 3 already reads as "the user abandoned
-/// the save". `NotOpened` is deliberately NOT spelled the same as a dismissal: no dialog ran, so the
+/// the save". `NotOpened` is deliberately not spelled the same as a dismissal: no dialog ran, so the
 /// caller's open request is still owed. `Cancelled` and `Failed` are both terminal and are
 /// deliberately not spelled the same either: only one of them is a user's decision, and the boot arm
 /// answers a user's decision by quitting the game.
@@ -533,7 +533,7 @@ pub fn os_pick_validated<T>(
     // every other thread and allocates while they are frozen, and a thread parked in comdlg32
     // holding a heap or shell critical section is the one deadlock candidate. Every installer in
     // this DLL is attach-time and long finished before a user reaches System>Quit, so this gate
-    // removes the overlap rather than reasoning about it. NAMED ACCEPTANCE: any FUTURE lazy MinHook
+    // removes the overlap rather than reasoning about it. Named ACCEPTANCE: any future lazy MinHook
     // install reachable from in-world reopens this hazard.
     if !save_file_core_hooks_live() {
         append_autoload_debug(format_args!(
@@ -544,13 +544,13 @@ pub fn os_pick_validated<T>(
     let Some(_claim) = OsDialogClaim::claim() else {
         return Err(OsPickAbort::NotOpened);
     };
-    // COVER THE GAME FOR EXACTLY AS LONG AS IT IS FROZEN. Everything below this line runs with the
+    // Cover the game for exactly as long as it is frozen. Everything below this line runs with the
     // menu thread parked inside comdlg32, so the game renders nothing and a user with no cover sees
-    // a still frame that is indistinguishable from a hang. `_dim` is declared AFTER `_claim`, so it
-    // drops FIRST and the screen is released the instant the dialog is gone, while the claim still
+    // a still frame that is indistinguishable from a hang. `_dim` is declared after `_claim`, so it
+    // drops first and the screen is released the instant the dialog is gone, while the claim still
     // covers the staging closure below.
     //
-    // The bracket is the whole `os_pick_validated`, not each `os_dialog_run`, ON PURPOSE: an invalid
+    // The bracket is the whole `os_pick_validated`, not each `os_dialog_run`, on PURPOSE: an invalid
     // pick REOPENS the dialog, and a per-call bracket would flash the game back at full brightness
     // between the two dialogs. From the user's side the reopen is one continuous "pick a save",
     // which is what the cover should track.
@@ -569,7 +569,7 @@ pub fn os_pick_validated<T>(
         );
         let picked = match &outcome {
             OsPickOutcome::Picked(path) => path.clone(),
-            // BOTH are terminal -- a dialog ran, so the request is discharged and must not be
+            // Both are terminal -- a dialog ran, so the request is discharged and must not be
             // re-armed -- and they are still two answers, because only the first is the user's.
             OsPickOutcome::Cancelled => return Err(OsPickAbort::Cancelled),
             OsPickOutcome::Failed { .. } => return Err(OsPickAbort::Failed),
@@ -598,7 +598,7 @@ pub fn os_pick_validated<T>(
             append_autoload_debug(format_args!(
                 "save-picker-os: {SAVE_PICKER_OS_MAX_REOPENS} consecutive invalid picks -- abandoning the open (a comdlg32 that fails instantly must not spin the calling thread)"
             ));
-            // FAILED, not Cancelled -- and not NotOpened either. Dialogs DID run, so the request is
+            // Failed, not Cancelled -- and not NotOpened either. Dialogs did run, so the request is
             // discharged and the System>Quit arms still read this as "nothing staged" and leave the
             // System menu alone. But exhaustion is a dialog we could not get a usable answer out of
             // -- most plausibly a comdlg32 returning instantly with a stale path -- so calling it a
@@ -621,7 +621,7 @@ pub fn os_pick_validated<T>(
 mod save_picker_os_dialog_tests {
     use super::*;
 
-    /// A `FALSE` return means EITHER cancel OR failure, and the extended error is the only thing
+    /// A `FALSE` return means either cancel or failure, and the extended error is the only thing
     /// that tells them apart. Collapsing them would make a broken comdlg32 look like a user
     /// decision -- and only one of the two is a bug of ours.
     #[test]
@@ -654,7 +654,7 @@ mod save_picker_os_dialog_tests {
         );
     }
 
-    /// ONLY an invalid pick reopens, and only under the bound. A user who keeps cancelling must
+    /// Only an invalid pick reopens, and only under the bound. A user who keeps cancelling must
     /// never be re-prompted, and a comdlg32 that fails instantly must not be able to spin the loop
     /// on the thread that owns the menu pump.
     #[test]

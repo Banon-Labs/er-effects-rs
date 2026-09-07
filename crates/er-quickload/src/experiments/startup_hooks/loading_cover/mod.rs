@@ -47,7 +47,7 @@ pub(crate) use window_reconfig_observer::install_window_reconfig_observer_hooks;
 ///
 /// The portrait seam (`PortraitHost`) is installed from `DllMain`. This one cannot be: adding
 /// fields to that struct literal would edit `lib_parts/dll_entry_parts/bootstrap.rs`, which is the
-/// spine several parallel crate extractions hang off. Instead EVERY facade entry point into the
+/// spine several parallel crate extractions hang off. Instead every facade entry point into the
 /// moved loading-cover code calls this first, so the seam is always installed before any moved
 /// code can read through it -- the moved modules are unreachable from the root by any other path.
 ///

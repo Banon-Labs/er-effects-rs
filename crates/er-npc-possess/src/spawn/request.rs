@@ -10,7 +10,7 @@
 //!
 //! # The one field that cannot be filled until the block stops moving
 //!
-//! `model.backingString.pointer` points AT the block: at `model + MODEL_BUFFER`, thirty-two
+//! `model.backingString.pointer` points at the block: at `model + MODEL_BUFFER`, thirty-two
 //! `wchar_t` of inplace storage. A self-referential pointer cannot be baked into a value that is
 //! about to be moved, so [`SpawnRequest::new`] leaves it zero and [`SpawnRequest::bind`] writes it
 //! once the block is at the address the game will read it from. `bind` is ordinary Rust arithmetic
@@ -41,7 +41,7 @@ const NO_EVENT_ENTITY: u32 = 0;
 /// What to create. Everything the game needs that this crate has to decide.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SpawnSpec {
-    /// The MODEL number -- `4500` becomes `c4500`, which is the whole of how a chr id reaches the
+    /// The model number -- `4500` becomes `c4500`, which is the whole of how a chr id reaches the
     /// asset loader.
     pub(crate) chr_id: u32,
     /// The `NpcParam` row. Drives stats, behaviour and which resources the `ChrRes` step machine
@@ -50,7 +50,7 @@ pub(crate) struct SpawnSpec {
     /// The `NpcThinkParam` row. May be anything: the lookup pre-initialises its result and
     /// `LoadWait` treats the resulting NULL `LuaDat` caps as satisfied.
     pub(crate) npc_think_id: i32,
-    /// Where the request SAYS to put it. Not read on the creature path -- see the module docs on
+    /// Where the request says to put it. Not read on the creature path -- see the module docs on
     /// [`req`] -- and filled anyway because the retail caller fills it.
     pub(crate) position: [f32; 3],
     /// Likewise for the facing.
@@ -128,7 +128,7 @@ impl SpawnRequest {
         let model = req::MODEL;
         request.put_usize(model + req::MODEL_VFTABLE, 0);
         request.put_usize(model + req::MODEL_BACKING, 0);
-        // `len` counts characters, NOT the terminator.
+        // `len` counts characters, not the terminator.
         request.put_usize(model + req::MODEL_LEN, name.len() - 1);
         request.put_u32(model + req::MODEL_UNK18, 0);
         request.put_u16(model + req::MODEL_CHAR_SIZE, 2);
@@ -142,7 +142,7 @@ impl SpawnRequest {
 
     /// Point `model.backingString.pointer` at this block's own inplace buffer.
     ///
-    /// MUST be called once the block is at its final address, and the block MUST NOT be moved
+    /// Must be called once the block is at its final address, and the block must not be moved
     /// afterwards -- the pointer is into itself. Calling it twice is harmless; not calling it hands
     /// the game a null name pointer, which `Format(L"%s_%04d", ptr, index)` would dereference.
     pub(crate) fn bind(&mut self) {
@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// THE FIELD THAT DECIDES WHICH OBJECT IS ALLOCATED. A non-negative `charaInitParam` takes
+    /// The field that decides which object is allocated. A non-negative `charaInitParam` takes
     /// `CreateCharacter` down the `HeapAlloc(0x740)` + `PlayerIns` branch instead of the
     /// `HeapAlloc(0x5e0)` + `EnemyIns` one -- a different type, a different size, a different
     /// vtable -- and everything this crate then does to the result would be reading a `PlayerIns`
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(request.get_i32(req::NPC_THINK_ID), 45_000);
     }
 
-    /// The name IS the model selection; a wrong `%04d` resolves to a `chrbnd` that does not exist
+    /// The name is the model selection; a wrong `%04d` resolves to a `chrbnd` that does not exist
     /// and the creature sits in `LoadWait` forever, which is the failure the deadline exists to
     /// bound rather than the one it should be catching.
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         );
     }
 
-    /// THE SELF-POINTER. Unbound it is null, and `Format(L"%s_%04d", ptr, index)` would dereference
+    /// The self-pointer. Unbound it is null, and `Format(L"%s_%04d", ptr, index)` would dereference
     /// that; bound it must land exactly on the first character of the name.
     #[test]
     fn binding_points_the_backing_pointer_at_the_blocks_own_buffer() {
@@ -353,7 +353,7 @@ mod tests {
     /// load from.
     ///
     /// `size_of` is 208 rather than 200 because `align(16)` pads the tail -- the game reads
-    /// `0x00..0xc8` and never sees those eight bytes. The PAYLOAD is what has to be exact, so that
+    /// `0x00..0xc8` and never sees those eight bytes. The payload is what has to be exact, so that
     /// is what is asserted; asserting `size_of == 200` would only be satisfiable by dropping the
     /// alignment.
     #[test]

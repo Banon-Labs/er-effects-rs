@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Does a Steam lobby WITHOUT a key fail an equality filter on that key?
+"""Does a Steam lobby without a key fail an equality filter on that key?
 
-WHY THIS ONE QUESTION IS WORTH A RUN
+Why this one question is worth a run
 ------------------------------------
 The whole "request invasions by location" design rests on it. The plan is: a host publishes
 `er_map = <block>` on its lobby, and an invader adds `AddRequestLobbyListStringFilter("er_map", ...)`
 so only hosts at that place come back.
 
-That works ONLY if a lobby lacking the key is EXCLUDED. If Steam instead treats a missing key as a
+That works only if a lobby lacking the key is excluded. If Steam instead treats a missing key as a
 pass, the filter matches every vanilla host, the design silently inverts, and the feature would
 appear to work while doing nothing at all. It is documented behaviour, not measured behaviour, and
 this repo has been burned before by shipping a predicate that could never fire.
 
-WHAT IT DOES
+What it does
 ------------
 Two searches, same session:
 
-  BASELINE  (default)         count how many lobbies the real query returns
-  FILTERED  (--inject-filter) add one filter on a key NOBODY publishes, then count again
+  Baseline  (default)         count how many lobbies the real query returns
+  filtered  (--inject-filter) add one filter on a key nobody publishes, then count again
 
 Zero-with-a-nonzero-baseline confirms exclusion. Unchanged counts refute it.
 
-MEASURED 2026-08-06, and why counting needs care: ersc calls `GetLobbyByIndex` exactly ONCE per
+Measured 2026-08-06, and why counting needs care: ersc calls `GetLobbyByIndex` exactly once per
 query, and it asked for **index 14** -- so the result set had at least 15 entries and ersc is
 choosing among them, not taking the first. Its single call therefore says nothing about how many
 came back. The count here is taken by probing indices ourselves.
@@ -32,10 +32,10 @@ window after `RequestLobbyList` and records the high-water mark. That distinguis
 that matter: results arrived and were counted, results never arrived within the window, and the
 probe never ran at all.
 
-THE ONE THING THAT MODIFIES BEHAVIOUR: `--inject-filter` adds a filter to YOUR OWN outgoing query.
+The one thing that MODIFIES BEHAVIOUR: `--inject-filter` adds a filter to your own outgoing query.
 It narrows what you see and nothing else -- no other player is affected, nothing is published, and
 no game state is written. It is off by default, and while armed your search will legitimately find
-nobody if the hypothesis is right. That IS the expected result.
+nobody if the hypothesis is right. That is the expected result.
 
     uv run --with frida python3 scripts/frida-steam-filter-probe.py --iface 0x45d1bb50
     uv run --with frida python3 scripts/frida-steam-filter-probe.py --iface 0x45d1bb50 --inject-filter
@@ -213,9 +213,9 @@ rpc.exports = {
 
 
 def own_lobby_finding(counts: list[dict]) -> dict:
-    """Does an unfiltered query return the querying player's OWN lobby?
+    """Does an unfiltered query return the querying player's own lobby?
 
-    This decides whether location matchmaking can be proven on ONE machine. If Steam returns your
+    This decides whether location matchmaking can be proven on one machine. If Steam returns your
     own lobby, a host that publishes its map and then hunts for that same map matches itself, and
     publish -> filter -> match is established end to end with nobody else involved. If it does not,
     a solo filtered search is empty by construction and can only ever show that the filter left the
@@ -315,7 +315,7 @@ def _selftest() -> int:
 
     check(verdict([])["verdict"] == "no-search-observed", "no search is not a finding")
 
-    # THE TRAP THIS GUARDS. A filtered zero against an empty baseline is 'nobody online', and
+    # The trap this guards. A filtered zero against an empty baseline is 'nobody online', and
     # calling it confirmation would ship a design on no evidence at all.
     v = verdict([count(0, False), count(0, True)])
     check(v["verdict"] == "inconclusive-empty-baseline",
@@ -344,7 +344,7 @@ def _selftest() -> int:
           "ersc picking index 14 proves >=15 results even when polling missed them")
 
     # The contamination this tool shipped with on its first run: our own counting walk went through
-    # the same hook and every iteration logged as an 'ersc-pick', so a run with ONE real pick looked
+    # the same hook and every iteration logged as an 'ersc-pick', so a run with one real pick looked
     # like hundreds and the implied minimum was read off our own out-of-range probe. The agent now
     # suppresses its own calls; this pins the arithmetic that consumes them.
     v = verdict([{"type": "ersc-pick", "index": 7}, count(13, False)])
@@ -353,7 +353,7 @@ def _selftest() -> int:
 
     # --- does a query return your own lobby? ---------------------------------------------------
     #
-    # THE TRAP: reporting an unmeasured field as False. "we did not look" and "we looked and it was
+    # The TRAP: reporting an unmeasured field as False. "we did not look" and "we looked and it was
     # not there" lead to opposite decisions -- one says get a second machine, the other says the
     # experiment is still open -- and a bare False conflates them.
     v = verdict([count(13, False)])

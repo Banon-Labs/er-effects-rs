@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Fail the build when one refused hook can abort a whole MinHook batch.
 
-WHAT THE BUG WAS
+What the bug was
 ================
 On 2026-08-30 a user played for seven minutes with the mod's loading cover pasted over live
 gameplay, and the loading bar froze at `LOADING SAVE 7/11`. Both symptoms had one cause, and it
 was not the address that went missing -- it was the shape of the installer around it.
 
-`install_now_loading_helper_observer_hooks` created FIVE observer detours, queue-enabled each into
+`install_now_loading_helper_observer_hooks` created five observer detours, queue-enabled each into
 MinHook's pending set, and applied them all with a single `MH_ApplyQueued()`. Between the queueing
 and the apply sat this:
 
@@ -19,7 +19,7 @@ and the apply sat this:
     match unsafe { MH_ApplyQueued() } { ... }
 
 `LOADING_SCREEN_GFX_FADEOUT_RVA` (1.16.2 `0x90a0a0`) had no detour-safe 1.17 mapping, so
-`MhHook::new` refused it, `ok` went false, and the `return` fired. The other FOUR detours were
+`MhHook::new` refused it, `ok` went false, and the `return` fired. The other four detours were
 already created and queued -- correctly, on good addresses -- and were never applied. Among them
 was `CS::LoadingScreen::Update`, the sole writer of `LOADING_SCREEN_UPDATE_HITS`, which is:
 
@@ -29,53 +29,53 @@ was `CS::LoadingScreen::Update`, the sole writer of `LOADING_SCREEN_UPDATE_HITS`
     had no reachable exit at all.
 
 One unmapped address, four healthy detours dead, two user-visible failures. The address is fixed
-and `check-detour-rva-coverage.py` now gates that class. THIS gate covers the other half: the
+and `check-detour-rva-coverage.py` now gates that class. This gate covers the other half: the
 batch shape that turned one refusal into five.
 
-THE RULE
+The rule
 ========
-A function that queue-enables MORE THAN ONE hook must reach its `MH_ApplyQueued()`. It may not
-return early on an AGGREGATE flag -- a single local boolean that more than one hook's outcome
-writes -- because such a flag cannot say WHICH hook failed and the early return punishes all of
+A function that queue-enables more than one hook must reach its `MH_ApplyQueued()`. It may not
+return early on an aggregate flag -- a single local boolean that more than one hook's outcome
+writes -- because such a flag cannot say which hook failed and the early return punishes all of
 them. Per-hook state is the fix: a hook that cannot install costs one feature, never the batch.
 
-Note what this deliberately does NOT forbid. A `return` on a SINGLE hook's outcome is fine (there
-is no batch to damage). A `return` before anything is queued is fine. A flag read AFTER the apply
+Note what this deliberately does not forbid. A `return` on a single hook's outcome is fine (there
+is no batch to damage). A `return` before anything is queued is fine. A flag read after the apply
 is fine -- the batch already landed.
 
-THE ONE EXEMPTION, AND WHY IT IS NOT AN EXCUSE LIST
+The one exemption, and why it is not an excuse list
 ===================================================
 Some hook sets are genuinely ATOMIC: installing part of the set is worse than installing none.
 `install_scaleform_handler_lifecycle_guard` is the measured case in this tree. Its dtor detour
-SKIPS the game's real destructor for any object absent from a live-set that only its ctor detour
-fills, so a dtor installed without its ctor classifies EVERY teardown as a double-free and skips
+skips the game's real destructor for any object absent from a live-set that only its ctor detour
+fills, so a dtor installed without its ctor classifies every teardown as a double-free and skips
 it. For such a set the all-or-nothing abort is the correct behaviour.
 
 To declare one, put a line
 
     // HOOK-BATCH-ATOMIC: <why partial installation is unsafe>
 
-inside the function. A bare marker with no reason does NOT exempt. Every exemption is PRINTED on
+inside the function. A bare marker with no reason does not exempt. Every exemption is printed on
 every run, pass or fail, so the set of them stays visible instead of accumulating in silence --
 the same rule `1170-translation-collisions.baseline.tsv` is kept under.
 
-WHAT COUNTS
+What counts
 ===========
 offender = a function body where all of the following hold:
 
   1. it calls `MH_ApplyQueued(`;
-  2. it creates TWO OR MORE hooks (`MhHook::new(` / `register_union_hook` / `register_shared_hook`)
+  2. it creates two or more hooks (`MhHook::new(` / `register_union_hook` / `register_shared_hook`)
      -- with one hook there is no batch to damage and the early return costs nothing;
   3. it declares a local `let mut F = true;` / `= false;` (optionally `: bool`);
-  4. `F` is written from TWO OR MORE distinct sites in the body (`F = false`, `F &= ..`,
+  4. `F` is written from two or more distinct sites in the body (`F = false`, `F &= ..`,
      `F = F && ..`) -- one write is one hook's outcome and cannot be an aggregate;
-  5. a `return` guarded by `F` (`if !F { .. return .. }`) sits BEFORE the first
+  5. a `return` guarded by `F` (`if !F { .. return .. }`) sits before the first
      `MH_ApplyQueued(` in the body.
 
 Condition 2 is load-bearing and was learned the hard way: without it the gate flagged
 `install_menu_window_job_dtor_guard` and `install_quit_to_desktop_clean_kill_hook`, which install
-exactly ONE hook each and write `ok` twice only because a create failure and a `queue_enable`
-failure are two different ways for THAT hook to fail. Both are now GREEN selftest fixtures.
+exactly one hook each and write `ok` twice only because a create failure and a `queue_enable`
+failure are two different ways for that hook to fail. Both are now green selftest fixtures.
 
 Comments and string literals are masked out before any of this is measured, because the sources
 this scans carry multi-page doc comments and format strings full of braces, and brace-matching
@@ -98,14 +98,14 @@ CRATES = REPO / "crates"
 
 APPLY_CALL = "MH_ApplyQueued("
 QUEUE_CALL = "queue_enable("
-# Creating a hook is what puts a member IN the batch. Kept in sync with the installer list
+# Creating a hook is what puts a member in the batch. Kept in sync with the installer list
 # `check-detour-rva-coverage.py` derives from er-hook; a name added there and missed here makes
 # this gate quieter, never louder, so the two are checked against each other in --selftest.
 HOOK_CREATE_RE = re.compile(r"\b(?:MhHook::new(?:_runtime_derived)?|register_union_hook(?:_runtime_derived|_resolved)?|register_shared_hook(?:_with_budget)?)\s*\(")
 
 # `let mut ok = true;`, `let mut ok: bool = false;`
 FLAG_DECL_RE = re.compile(r"\blet\s+mut\s+([a-z_][a-z0-9_]*)\s*(?::\s*bool\s*)?=\s*(?:true|false)\s*;")
-# A write to the flag that is NOT its declaration: `ok = false`, `ok &= expr`, `ok |= expr`.
+# A write to the flag that is not its declaration: `ok = false`, `ok &= expr`, `ok |= expr`.
 def flag_write_re(name: str) -> re.Pattern[str]:
     return re.compile(r"(?<![\w.])" + re.escape(name) + r"\s*(?:&=|\|=|=)(?!=)")
 
@@ -121,9 +121,9 @@ ATOMIC_MARKER_RE = re.compile(r"//\s*HOOK-BATCH-ATOMIC:[ \t]*(\S.*?)\s*$", re.MU
 
 
 def mask_comments_and_strings(src: str) -> str:
-    """Replace comment and string-literal CONTENT with spaces, preserving every byte offset.
+    """Replace comment and string-literal content with spaces, preserving every byte offset.
 
-    Offsets must survive: the caller slices the ORIGINAL text with indices measured here, so a
+    Offsets must survive: the caller slices the original text with indices measured here, so a
     mask that shortens the text would report the wrong lines and match the wrong braces.
     """
     out = list(src)
@@ -258,7 +258,7 @@ def scan_source_full(src: str, label: str) -> tuple[list[str], list[str]]:
             # One hook is not a batch. Its `ok` can be written twice (create failed / queue_enable
             # failed) and the early return still costs nothing but itself.
             continue
-        # Read the marker from the ORIGINAL slice: `body` is masked, so its comments are blank.
+        # Read the marker from the original slice: `body` is masked, so its comments are blank.
         atomic = ATOMIC_MARKER_RE.search(src[start:end])
         for decl in FLAG_DECL_RE.finditer(body):
             flag = decl.group(1)
@@ -314,7 +314,7 @@ def scan_repo() -> tuple[list[str], list[str], int, int]:
 
 
 # --------------------------------------------------------------------------------------------
-# Selftest fixtures. The RED one is the shape of `install_now_loading_helper_observer_hooks` as it
+# Selftest fixtures. The red one is the shape of `install_now_loading_helper_observer_hooks` as it
 # stood at commit 7a7f25b3 -- condensed, but with every element the gate keys on kept verbatim.
 # --------------------------------------------------------------------------------------------
 
@@ -396,7 +396,7 @@ pub fn install_one_hook() {
 '''
 
 # Verbatim shape of `install_menu_window_job_dtor_guard`
-# (system_quit_ownership_repro.rs:849). ONE hook, `ok` written twice -- once for the create
+# (system_quit_ownership_repro.rs:849). One hook, `ok` written twice -- once for the create
 # failure, once for the queue_enable result. The first draft of this gate flagged it; there is no
 # batch here, so the early return costs only the hook that failed.
 GREEN_ONE_HOOK_TWO_FAILURE_MODES = r'''
@@ -436,7 +436,7 @@ pub fn install_then_report() {
 '''
 
 # The masker earns its keep here: without it the brace inside the doc comment and the `{status:?}`
-# in the format string mis-match the body and the RED case above is silently missed.
+# in the format string mis-match the body and the red case above is silently missed.
 GREEN_COMMENT_ONLY_MENTION = r'''
 /// Historical note: this used to read
 /// ```text
@@ -470,7 +470,7 @@ def selftest() -> int:
                 f"check-hook-batch-abort SELFTEST FAIL: {name} -- "
                 f"expected {'an offender' if want_offender else 'no offender'}, got {got}"
             )
-    # The marker only exempts WITH a reason, and it must not exempt anything else.
+    # The marker only exempts with a reason, and it must not exempt anything else.
     marked = RED_SHARED_OK.replace(
         "    let mut ok = true;",
         "    // HOOK-BATCH-ATOMIC: the dtor detour is unsound without its ctor detour\n    let mut ok = true;",
@@ -508,7 +508,7 @@ def main() -> int:
     if args.selftest:
         return selftest()
     offenders, exemptions, files, batched = scan_repo()
-    # Printed on EVERY run, pass or fail. An exemption nobody sees is an excuse list.
+    # Printed on every run, pass or fail. An exemption nobody sees is an excuse list.
     for line in exemptions:
         print("  exempt: " + line)
     if offenders:

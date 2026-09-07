@@ -1,10 +1,10 @@
-// POSITIVE row identity for the five-row System -> Quit dialog.
+// Positive row identity for the five-row System -> Quit dialog.
 //
 // # Why the previous identity was wrong
 //
 // The Quit-tab routing keyed every decision on an "action object" pointer read from
 // `controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET` (`+0xa8`). That pointer is
-// **not an object of its own** -- it is a fixed-offset ALIAS of the controller:
+// **not an object of its own** -- it is a fixed-offset alias of the controller:
 //
 // `CS::PropertyNewButtonController` is a 0x300-byte heap object (`HeapAlloc(0x300, 8, ...)` in the
 // 1.16.2 dump's `FUN_14086a950`) whose constructor `FUN_14086a2a0` copy-constructs the caller's
@@ -17,7 +17,7 @@
 //
 // Therefore `action_obj == captured_action` is exactly `controller == captured_controller` wearing
 // a disguise, and it carries no row information whatsoever. Worse, the visible buttons are
-// dispatched through only TWO controllers: in the measured run only the two NATIVE row controllers
+// dispatched through only two controllers: in the measured run only the two native row controllers
 // ever reached `PropertyNewButtonController::Activate` (0x23517880 with index 0, 0x23517580 with
 // index 1, twice per frame), and the two cloned rows' controllers never appeared at all. So a click
 // on the fourth visible button ("Load Character from File") arrives carrying the second native row's
@@ -26,12 +26,12 @@
 //
 // # The identity used instead
 //
-// Each `EditProperty` row carries its own LABEL, and the label is reachable live from the dialog:
+// Each `EditProperty` row carries its own label, and the label is reachable live from the dialog:
 // `PropertyEditDialog.properties.items` starts at `dialog + 0x1268`, rows are `0x88` apart, and
 // `EditProperty.label` at `+0x8` is a `CS::MenuHelpLabelComponent` whose first field is the
-// `MenuString`'s RAW UTF-16 pointer (`CS::MenuString::MenuString` stores the pointer it is given).
+// `MenuString`'s raw UTF-16 pointer (`CS::MenuString::MenuString` stores the pointer it is given).
 // The cloned rows are built from this DLL's own process-lifetime label arrays, so they match by
-// exact POINTER equality; every row also matches by text. That is measured, not assumed: a run of
+// exact pointer equality; every row also matches by text. That is measured, not assumed: a run of
 // the four-row build reported `oracle_optionsetting_active_row_count = 4` with
 // `oracle_optionsetting_active_row_quit_label_mask = 15`, i.e. all four rows' labels were readable
 // and each matched one of the four known Quit labels, on the very dialog (`0x175842080`) the fatal
@@ -39,7 +39,7 @@
 // row 1 Return to Desktop, row 2 Load Character, row 3 Load Character from File -- and the fifth
 // row, Load Build from URL, is appended after them by the same cloner in the same pass.
 //
-// Which row was ACTIVATED comes from ONE source for all three input kinds: the dialog's own list
+// Which row was activated comes from one source for all three input kinds: the dialog's own list
 // cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
 // (`FUN_140739e20` returns it; the widget's item count is `+0xd0 == dialog + 0xb08`).
 //
@@ -47,24 +47,24 @@
 //
 // `GridControl::Update` (vtable `+0x10`, 1.16.2 `FUN_1407392f0`) is the single writer of that field:
 //
-//   * MOUSE -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
+//   * mouse -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
 //     (`FUN_140758050`: `CSMenuManImp::disableMouseCursor == false`) and the mouse is the active
 //     pointer (`FUN_1407588a0`: `CSMouseMan + 0x30`) and no drag/wheel/direction input is in flight,
-//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid CELL
+//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid cell
 //     proxies via `FUN_14074b0d0`, converts the hit cell's `(row, col)` into an item index, and calls
 //     `FUN_14073bc10(this, index)` -- which writes `+0xd4`. Hover moves the native cursor.
-//   * PAD / KEYBOARD -- the direction branches of the same `Update` (`FUN_14073b0c0` /
+//   * PAD / keyboard -- the direction branches of the same `Update` (`FUN_14073b0c0` /
 //     `FUN_14073b4d0` / `FUN_14073a250`) land on the same `FUN_14073bc10`, and `Update` then diffs
 //     `+0xd4` against its pre-update value to fire the selection-changed callbacks.
 //
 // There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
 // cursor identifies the row for mouse, keyboard and pad alike -- see `er_gfx::options_02_040` for the
 // movie-side half (the added cells are named `Item_1_0`/`Item_1_1`/`Item_2_0`/`Item_2_1` so the grid
-// measures a FULL 2x3, which is what makes them hit-testable AND puts the vertical axis in play).
+// measures a full 2x3, which is what makes them hit-testable and puts the vertical axis in play).
 //
-// The cursor's two halves are cross-checked and must agree: the captured build-time row TABLE
-// (index -> row) and the LIVE label read at that index. A mismatch, an unreadable label, an
-// out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row NEVER quits and
+// The cursor's two halves are cross-checked and must agree: the captured build-time row table
+// (index -> row) and the live label read at that index. A mismatch, an unreadable label, an
+// out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row never quits and
 // never runs anything.
 
 /// The six rows of the patched System -> Quit dialog, in property-list order.
@@ -83,9 +83,9 @@ pub enum QuitRow {
     /// Cloned row, labelled "Load Build from URL": runs the `er-build-planner` build importer
     /// against a share link, on the character already in the world. Unlike the two rows above it
     /// neither returns to the title nor touches the save container -- it grants, equips and
-    /// re-stats the LIVE character in place.
+    /// re-stats the live character in place.
     LoadBuildFromUrl,
-    /// Cloned row, labelled "Generate Build Link": the EXACT INVERSE of the row above. It reads the
+    /// Cloned row, labelled "Generate Build Link": the exact inverse of the row above. It reads the
     /// character already in the world -- equipped loadout, memorised spells, stats -- encodes it
     /// into a self-contained `er-build-planner` `?i=` share link, puts that link on the clipboard
     /// and opens it in the player's browser. It writes nothing to the character and nothing to the
@@ -107,10 +107,10 @@ impl QuitRow {
         }
     }
 
-    /// The row's VISIBLE label. The variant names still say "profile" because that is the native
+    /// The row's visible label. The variant names still say "profile" because that is the native
     /// vocabulary these rows are built from (`ProfileSummary`, `05_010_ProfileSelect`,
     /// `SaveRequest_Profile`) and renaming them would rename half the save-flow surface; the words
-    /// a USER reads live here, and only here.
+    /// a user reads live here, and only here.
     pub fn label(self) -> &'static str {
         match self {
             QuitRow::SaveGame => "Save Game",
@@ -134,7 +134,7 @@ pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 6] = [
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
-/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the SAME value the
+/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the same value the
 /// old `*_ACTION_LAST_OBJECT` latches held -- named for what it is.
 pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET: usize = 0x70;
 
@@ -192,14 +192,14 @@ pub enum QuitRowLabel {
     Foreign,
 }
 
-/// How the activation arrived, as classified by the game's OWN predicates on the dispatched event
+/// How the activation arrived, as classified by the game's own predicates on the dispatched event
 /// (`FUN_140758a10` = pad/keyboard confirm, `FUN_140758a70` = mouse click; both are the tests
 /// `PropertyNewButtonController`'s should-invoke predicate `FUN_140974b00` itself runs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitInputKind {
-    /// A confirm press from EITHER a pad button OR the keyboard: `FUN_140758a10` is one predicate
-    /// covering both, so there is deliberately no separate keyboard variant. Do NOT add one, and do
-    /// NOT test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
+    /// A confirm press from either a pad button or the keyboard: `FUN_140758a10` is one predicate
+    /// covering both, so there is deliberately no separate keyboard variant. Do not add one, and do
+    /// not test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
     /// own predicate is exactly what makes a rebind work without this DLL knowing any key codes.
     Confirm,
     MouseClick,
@@ -219,7 +219,7 @@ impl QuitInputKind {
     }
 }
 
-/// Which evidence resolved the row. Exactly ONE variant on purpose: the dialog's own list cursor is
+/// Which evidence resolved the row. Exactly one variant on purpose: the dialog's own list cursor is
 /// the single row identity for mouse, keyboard and pad, so every resolution reports the same
 /// discriminator regardless of input kind (`oracle_system_quit_row_last_discriminator == 1`).
 /// Adding a second variant means a second identity source was reintroduced -- which is the defect
@@ -245,7 +245,7 @@ impl QuitRowDiscriminator {
     }
 }
 
-/// Why the row could not be identified. Every one of these refuses the quit AND runs nothing.
+/// Why the row could not be identified. Every one of these refuses the quit and runs nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRowAmbiguity {
     /// One or more of the row indices was never captured, or two captured the same index.
@@ -261,7 +261,7 @@ pub enum QuitRowAmbiguity {
     /// The cursor row's label pointer could not be read at all.
     CursorRowLabelUnreadable,
     /// The cursor row's label is foreign but the cursor matches neither captured native row index --
-    /// again the table and the live label DISAGREE about what sits at that index.
+    /// again the table and the live label disagree about what sits at that index.
     CursorRowUnclaimed,
 }
 
@@ -291,7 +291,7 @@ impl QuitRowAmbiguity {
         }
     }
 
-    /// `true` when the refusal is the two halves of the cursor identity CONTRADICTING each other --
+    /// `true` when the refusal is the two halves of the cursor identity contradicting each other --
     /// the captured build-time row table versus the label read live at that index. This is the
     /// refusal-on-disagreement backstop; the other reasons are simply absence of evidence.
     pub fn is_disagreement(self) -> bool {
@@ -319,7 +319,7 @@ impl QuitRowVerdict {
         }
     }
 
-    /// `true` only for a POSITIVELY identified Return-to-Desktop row. Everything else -- including
+    /// `true` only for a positively identified Return-to-Desktop row. Everything else -- including
     /// every ambiguity -- is false, so the irreversible instant `ExitProcess(0)` can never run on
     /// absence of evidence.
     pub fn authorizes_quit(self) -> bool {
@@ -347,7 +347,7 @@ pub struct QuitRowFacts {
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
-    /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. THE row
+    /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. The row
     /// identity: the native grid writes it from mouse hover, keyboard and pad alike.
     pub cursor: i32,
     /// Number of rows in the table (always `QUIT_ROW_TABLE_ROWS.len()` once complete); the cursor
@@ -355,7 +355,7 @@ pub struct QuitRowFacts {
     pub row_count: i32,
     /// Label read live at the cursor row; `None` when the pointer was unreadable.
     pub cursor_row_label: Option<QuitRowLabel>,
-    /// How the game classified the dispatched event. RECORDED, never branched on -- it is the
+    /// How the game classified the dispatched event. Recorded, never branched on -- it is the
     /// evidence that one discriminator serves every input kind, not an input to the decision.
     pub input_kind: QuitInputKind,
 }
@@ -420,7 +420,7 @@ impl QuitRowFacts {
     }
 
     /// The row the list cursor is sitting on. Both halves of the identity must agree: the captured
-    /// build-time row TABLE (index -> row) and the LABEL read live at that index.
+    /// build-time row table (index -> row) and the label read live at that index.
     fn cursor_candidate(&self) -> Result<QuitRow, QuitRowAmbiguity> {
         if self.cursor < 0 || self.cursor >= self.row_count {
             return Err(QuitRowAmbiguity::CursorOutOfRange);
@@ -449,7 +449,7 @@ impl QuitRowFacts {
     }
 }
 
-/// Resolve which System -> Quit row an activation belongs to, from the ONE identity the native grid
+/// Resolve which System -> Quit row an activation belongs to, from the one identity the native grid
 /// maintains for every input kind: its list cursor.
 ///
 /// There is deliberately no per-input-kind branch, no screen-geometry rectangle and no controller /
@@ -554,7 +554,7 @@ mod system_quit_row_identity_tests {
         assert!(verdict.authorizes_quit());
     }
 
-    /// The acceptance property: the SAME cursor resolves the SAME row with the SAME discriminator no
+    /// The acceptance property: the same cursor resolves the same row with the same discriminator no
     /// matter which input kind the game classified the event as. Nothing branches on input kind, so a
     /// mouse click on the row under the pointer and a pad confirm on the focused row are one path.
     #[test]
@@ -766,7 +766,7 @@ mod system_quit_row_identity_tests {
             }
         }
         // A resolved verdict must be distinguishable from an ambiguous one in the oracle, and there
-        // is exactly ONE discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
+        // is exactly one discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
         // resolution, whatever the input kind.
         assert_eq!(QuitRowDiscriminator::CursorRow.code(), 1);
     }

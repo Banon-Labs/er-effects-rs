@@ -1,11 +1,11 @@
 //! Stats-panel layout transform for `data0:/menu/05_010_profileselect.gfx`.
 //!
 //! Derives the "stats-panel v1" ProfileSelect movie from the **vanilla** movie
-//! by applying [`TITLE_05_010_STATS_EDITS`]: HIDES the 128x128 face box
-//! (`Icon_0`) via an alpha-0 color transform -- kept PLACED so the native
+//! by applying [`TITLE_05_010_STATS_EDITS`]: Hides the 128x128 face box
+//! (`Icon_0`) via an alpha-0 color transform -- kept placed so the native
 //! row-populate can still resolve/release it (unplacing it crashes,
 //! er-effects-rs-7e7) -- repurposes the icon-frame deco (char 67, placed
-//! nowhere else) as a left-aligned `MenuFont_01` `DefineEditText`, PLACED ONCE
+//! nowhere else) as a left-aligned `MenuFont_01` `DefineEditText`, placed once
 //! as one merged lower-row stat line between the Level cluster and PlayTime, and
 //! shifts PlayerName / the Level FMG caption / the Level value field left into
 //! the freed strip.
@@ -37,7 +37,7 @@ include!("title_05_010_edits.rs");
 /// Instance name of the injected per-row stats text field. Single source of
 /// truth: the DLL resolves each row child by this name for its native SetText
 /// push, and the generator example bakes it into the placement tag. It must keep
-/// matching NO engine populate prefix (`StaticText_*`/`StaticRegionText_*`/
+/// matching no engine populate prefix (`StaticText_*`/`StaticRegionText_*`/
 /// `StaticLineHelp_*`/`StaticSystemText_*`/`StaticDialogText_*`/`StaticKeyGuide_*`/
 /// `Dynamic`+`KeyIcon_`) so only the DLL ever writes it.
 pub const STATS_FIELD_NAME: &str = "ErStats";
@@ -65,7 +65,7 @@ pub const CURRENT_PATH_FIELD_NAME_NUL: &str = "CurrentPath\0";
 pub const CURRENT_PATH_BUTTON_NAME: &str = "CurrentPathButton";
 /// Instance name of the row's invisible full-row mouse target.
 ///
-/// This one is NOT ours to choose. `GridControl::HandleMouse` resolves a row's hit object through
+/// This one is not ours to choose. `GridControl::HandleMouse` resolves a row's hit object through
 /// `FUN_14074b0d0` (1.16.2), which looks up exactly this name before falling back to `Cursor` and
 /// then to the cell itself, and hit-tests the resolved object's own bounds. The literal lives at
 /// `0x142a8fa08` and is the only occurrence in the image, referenced by nothing but that resolver
@@ -247,7 +247,7 @@ mod tests {
         std::fs::read(path).ok()
     }
 
-    // Measured geometry of the SHIPPED 05_010 movie -- the baseline every `COMPACT_*` value
+    // Measured geometry of the shipped 05_010 movie -- the baseline every `COMPACT_*` value
     // above is derived against. Kept as a block even where no assertion currently reads one:
     // the numbers are the record of what vanilla does, not scaffolding for a caller.
     #[allow(dead_code)]

@@ -1,4 +1,4 @@
-//! Rebuild EVERY live `CS::ProfileSummary` record from one save container's own bytes.
+//! Rebuild every live `CS::ProfileSummary` record from one save container's own bytes.
 //!
 //! Moved from er-quickload `experiments/startup_hooks/quit_menu/save_swap_profile_table.rs`, whose
 //! remaining half (the System>Quit preview's snapshot/backout bookkeeping and the renderer refresh)
@@ -23,21 +23,21 @@ use crate::serialized_slot::{
     PROFILE_PREVIEW_FACE_HASH, PROFILE_PREVIEW_PLACE_NAME_UNSOURCED, SerializedSaveSlot,
 };
 
-/// Rebuild EVERY live `CS::ProfileSummary` record from one save container's own bytes.
+/// Rebuild every live `CS::ProfileSummary` record from one save container's own bytes.
 ///
 /// Pure record transport: it zeroes the ten records + occupancy bytes, then rewrites one record per
 /// slot the container's `USER_DATA010` occupancy bitmap marks active, from that slot's own body --
-/// name, level, play time, rune memory, map, `PlaceName`, `FaceData` and `ChrAsm`. It does NO
-/// snapshot/backout bookkeeping and NO renderer refresh: the callers own those, because the two
+/// name, level, play time, rune memory, map, `PlaceName`, `FaceData` and `ChrAsm`. It does no
+/// snapshot/backout bookkeeping and no renderer refresh: the callers own those, because the two
 /// callers want opposite things from them (a System>Quit preview is reversible; a boot autoload's
 /// re-read is not a preview at all).
 ///
-/// `summary_snapshot` is the whole `CS::ProfileSummary` allocation as it looked BEFORE this call --
-/// used only as a STRUCTURAL template for slots whose visual blocks cannot be located, and read
+/// `summary_snapshot` is the whole `CS::ProfileSummary` allocation as it looked before this call --
+/// used only as a structural template for slots whose visual blocks cannot be located, and read
 /// before the zeroing below, so callers must capture it first.
 ///
 /// Returns the mask of slots written plus each written slot's attribute line.
-/// THE CALLER HANDS OVER A CLONE OF ITS CANDIDATE BYTES, AND MUST. Emptying the swap state's
+/// The caller hands over a clone of its candidate bytes, and must. Emptying the swap state's
 /// `candidate_bytes` for the duration of this call (a `mem::take`) would make
 /// `system_quit_committed_foreign_save_path` -- which the own-load feed reads to decide whether the
 /// switch overrides the configured save -- report "no pick is active" for that window. One ~28 MB
@@ -45,12 +45,12 @@ use crate::serialized_slot::{
 ///
 /// # Safety
 ///
-/// `summary` must be the LIVE `CS::ProfileSummary` allocation: this zeroes all ten records and
+/// `summary` must be the live `CS::ProfileSummary` allocation: this zeroes all ten records and
 /// their occupancy bytes through raw pointers before rewriting them, with no fault guard, and
 /// `summary_snapshot` must be the `PROFILE_SUMMARY_TOTAL_BYTES` image of that same allocation as
-/// it looked BEFORE the call (see above). `base` must be the running game module base.
+/// it looked before the call (see above). `base` must be the running game module base.
 ///
-/// Must run on the game thread. It is destructive and NOT reversible by itself -- a caller that
+/// Must run on the game thread. It is destructive and not reversible by itself -- a caller that
 /// needs to back out owns the snapshot/restore, which is why this function does none.
 pub unsafe fn write_profile_summary_records_from_save_bytes(
     base: usize,
@@ -114,8 +114,8 @@ pub unsafe fn write_profile_summary_records_from_save_bytes(
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
-            // The place name is NOT in the character body -- the game writes it from the front-end
-            // manager at save time. It IS in the save's own stored summary table, so take it from
+            // The place name is not in the character body -- the game writes it from the front-end
+            // manager at save time. It is in the save's own stored summary table, so take it from
             // there rather than deriving one from the map id.
             let place_name_id = er_save_loader::profile_summary::slot_place_name_id(bytes, slot);
             let face_bytes = slot_body.face_data_buffer_bytes(pgd);
@@ -146,15 +146,15 @@ pub unsafe fn write_profile_summary_records_from_save_bytes(
     (mask, preview_stats)
 }
 
-/// Put the previewed save's records back into the LIVE `CS::ProfileSummary` after the game's
+/// Put the previewed save's records back into the live `CS::ProfileSummary` after the game's
 /// return-title save has overwritten them.
 ///
-/// THE FILE WAS NEVER THE ONLY CASUALTY. The re-commit above exists because the return-title save
-/// re-writes the ACTIVE slot in the save FILE; measured 2026-09-07 (run br-20260907-191016-4020) it
-/// re-writes the in-memory summary record for that slot too, from the RESIDENT character. The user
+/// The file was never the only casualty. The re-commit above exists because the return-title save
+/// re-writes the active slot in the save file; measured 2026-09-07 (run br-20260907-191016-4020) it
+/// re-writes the in-memory summary record for that slot too, from the resident character. The user
 /// picked slot 1 of a foreign save (`Nephilim`), the preview wrote that container's ten records at
 /// +112752ms, and 5.8s later every build kick still read `record=0x88071f38` naming `Onyx Lord` --
-/// the character being replaced. The loading screen therefore showed the PREVIOUS character's
+/// the character being replaced. The loading screen therefore showed the previous character's
 /// portrait for the whole window, and the pipeline's own face fingerprint said so twice:
 ///
 /// ```text
@@ -175,7 +175,7 @@ pub unsafe fn write_profile_summary_records_from_save_bytes(
 ///
 /// # Safety
 ///
-/// `summary` must be the LIVE `CS::ProfileSummary` allocation and `base` the running game module
+/// `summary` must be the live `CS::ProfileSummary` allocation and `base` the running game module
 /// base; this writes that allocation through raw pointers. Game/menu thread only, which is where
 /// the bc4-terminal re-commit already runs. A zero `summary` is handled, not undefined.
 pub unsafe fn reapply_profile_summary_after_return_title_save(

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Locate a C++ vtable in either ELDEN RING image by its RTTI class name. Exact, not a vote.
 
-WHY THE VOTE WAS NOT ENOUGH. `locate-1170-vtable.py` infers a vtable's new address from how many
+Why the vote was not enough. `locate-1170-vtable.py` infers a vtable's new address from how many
 of its slots hold already-mapped functions. That works until sibling classes enter the picture.
 `RideManipulator`, `ComManipulator`, `PadManipulator` and `NetAIManipulator` all derive from
-`ChrManipulator` and therefore SHARE most of their slots -- so a wrong sibling's vtable scores
+`ChrManipulator` and therefore share most of their slots -- so a wrong sibling's vtable scores
 almost as well as the right one. Measured on 1.16.2 `RideManipulator` (`0x142a2c108`): the top two
-candidate bases TIED at 42 agreeing slots each. Picking the winner would have been a coin flip
+candidate bases tied at 42 agreeing slots each. Picking the winner would have been a coin flip
 dressed as evidence, and the loser was `0x142a2f118` -- the address a uniform `+0x3010` shift
 predicts, which is exactly the kind of plausible-looking wrong answer this repo has been bitten by.
 
-THE EXACT ANSWER. MSVC records the class name in the binary. Every polymorphic class has a
+The exact answer. MSVC records the class name in the binary. Every polymorphic class has a
 TypeDescriptor holding its decorated name (`.?AVRideManipulator@CS@@`); a Complete Object Locator
-points at that descriptor; and the qword IMMEDIATELY BEFORE a vtable points at that locator. So
+points at that descriptor; and the qword immediately before a vtable points at that locator. So
 the chain runs name -> descriptor -> locator -> vtable with no similarity metric anywhere in it.
 A hit is the class, by the compiler's own record.
 

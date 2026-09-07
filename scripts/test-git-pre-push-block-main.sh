@@ -53,7 +53,7 @@ expect_block "main to feature" $'refs/heads/main 1111111111111111111111111111111
 expect_allow "feature to feature" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222\n'
 expect_block "feature to remote main" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222\n'
 
-# THE SHAPE THAT ACTUALLY REACHED THE GUARD, AND THAT EVERY CASE ABOVE MISSES. Each `$'...\n'`
+# The shape that actually reached the guard, and that every case above misses. Each `$'...\n'`
 # literal above ends in a newline, so `read` always saw a terminated line and the loop always ran.
 # scripts/hooks/pre-push sent something else: it captures git's stdin with `pushed=$(cat)` (which
 # strips the trailing newline) and replayed it. `read` returns non-zero at EOF-without-delimiter,
@@ -63,7 +63,7 @@ expect_block "feature to remote main" $'refs/heads/feature/pre-push-guard 111111
 expect_block "feature to remote main, UNTERMINATED final line" 'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222'
 expect_allow "feature to feature, UNTERMINATED final line" 'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222'
 
-# And the multi-line form, where only the LAST row is the dangerous one: the earlier rows are
+# And the multi-line form, where only the last row is the dangerous one: the earlier rows are
 # terminated and would be read even by the broken loop, so this fails only if the fix is absent.
 expect_block "trailing main row after a terminated feature row" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222\nrefs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222'
 

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Generate a small, *readable* `.beads/PRIME.md` for `bd prime`.
 
-WHY THIS EXISTS, AND WHY THE OBVIOUS FIX IS NOT ENOUGH
+Why this exists, and why the obvious fix is not enough
 ------------------------------------------------------
-`bd prime` inlines every persistent memory BODY by default: 4.6 MB / ~650k tokens
+`bd prime` inlines every persistent memory body by default: 4.6 MB / ~650k tokens
 at 2454 memories. The first fix here replaced that with a titles-only index, which
 got it to 157 KB -- still far past what Claude Code will inline. The harness wrote
 the whole thing to `tool-results/hook-<uuid>-stdout.txt` and showed the agent a
-2 KB preview, so the priming content was effectively LOST while still costing a
+2 KB preview, so the priming content was effectively lost while still costing a
 large chunk of every session. It also fires on PreCompact, i.e. exactly when
 context is scarcest.
 
-Titles-only was the wrong axis. The memory index is not a document to be READ; it
+Titles-only was the wrong axis. The memory index is not a document to be read; it
 is a search corpus, and `bd` already ships the search (`bd memories <keyword>`,
-`bd recall <key>`). So this generator emits only what an agent CANNOT get on
+`bd recall <key>`). So this generator emits only what an agent cannot get on
 demand:
 
   * the newest memories (recency -- no bd query orders by date),
@@ -125,7 +125,7 @@ def memory_keys():
 
 
 def newest(keys, n):
-    """Most-recent memories, ordered by the trailing YYYY-MM-DD their keys carry.
+    """Most-recent memories, ordered by the trailing YYYY-mm-DD their keys carry.
 
     bd exposes no created/updated timestamp on a memory (`bd recall --json` returns
     key/value/found only), so the date in the key is the only recency signal there is.

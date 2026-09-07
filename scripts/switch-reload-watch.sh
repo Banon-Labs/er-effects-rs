@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Post-reload switch watcher: unlike switch-failfast-poll.sh, this does NOT tear down on the
-# TRANSIENT wrong-character state that exists BEFORE the reload deserialize runs (the stale
+# Post-reload switch watcher: unlike switch-failfast-poll.sh, this does not tear down on the
+# transient wrong-character state that exists before the reload deserialize runs (the stale
 # pre-switch character is still resident while the world tears down). It only reaches a verdict once
 # the reload has actually committed (telemetry system_quit_continue_confirm_fresh_deser_count >= 1),
-# then reads the switch-character oracle. Tears down on: ER self-exit (crash = FAIL), a post-reload
+# then reads the switch-character oracle. Tears down on: ER self-exit (crash = fail), a post-reload
 # oracle verdict, or a hard deadline. Bounded, agent-owned teardown.
 set -u
 REPO=/home/banon/projects/er-mods-rs
@@ -58,7 +58,7 @@ while (( SECONDS - start < DEADLINE_S )); do
     break
   fi
 
-  # Only judge the oracle AFTER the reload deserialize has committed (post-reload window).
+  # Only judge the oracle after the reload deserialize has committed (post-reload window).
   if [[ "${deser:-0}" -ge 1 ]]; then
     SAVE=$(ls "$ART"/save/EldenRing/*/ER0000.sl2 2>/dev/null | head -1)
     if [[ -n "$SAVE" && -f "$TELEM" ]]; then

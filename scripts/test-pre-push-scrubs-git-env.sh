@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Prove scripts/hooks/pre-push cannot let a gate edit the live repository.
 #
-# THE DEFECT THIS PINS, measured 2026-09-06. `git` exports GIT_DIR to hooks run from a LINKED
+# The defect this pins, measured 2026-09-06. `git` exports GIT_DIR to hooks run from a linked
 # WORKTREE but not from the main checkout (scripts/measure-git-hook-env.sh, git 2.55.0). GIT_DIR
 # wins over cwd, so a gate that builds a throwaway repository and configures it with
-# `git -C <fixture> config ...` writes to THIS repository instead of the fixture. A push from
+# `git -C <fixture> config ...` writes to this repository instead of the fixture. A push from
 # .worktrees/teardown-outcome came back with the config guard reporting
 #     core.hooksPath  scripts/hooks -> /home/banon/projects/er-mods-rs/scripts/hooks
 # -- an absolute path computed for a fixture, landing on the checkout every other worktree and
 # every other agent reads.
 #
-# WHY A BEHAVIOURAL TEST AND NOT A GREP. `unset $(git rev-parse --local-env-vars)` is one line and
-# easy to keep; what is easy to LOSE is its position. Moved above the `cd`, or below the first
+# Why a behavioural test and not a GREP. `unset $(git rev-parse --local-env-vars)` is one line and
+# easy to keep; what is easy to lose is its position. Moved above the `cd`, or below the first
 # gate, it still greps fine and stops working. So this builds a real main-repo-plus-linked-worktree
 # pair in a temp directory, exports GIT_DIR exactly as git does, and measures where a fixture write
 # actually lands -- with and without the scrub. Nothing here touches the repository it lives in.
@@ -43,7 +43,7 @@ git_dir=$(git -C "$tmp/linked" rev-parse --absolute-git-dir)
 
 shared_value() { git -C "$main" config --get core.hooksPath; }
 
-# NEGATIVE CONTROL FIRST. If this does not leak, the test is vacuous -- it would pass on a git
+# Negative control first. If this does not leak, the test is vacuous -- it would pass on a git
 # that never exported GIT_DIR, proving nothing about the scrub.
 env GIT_DIR="$git_dir" bash -c \
 	"cd '$tmp/linked'; git -C '$fixture' config core.hooksPath /LEAKED" >/dev/null 2>&1
@@ -68,8 +68,8 @@ else
 	bad "the write did not reach the fixture"
 fi
 
-# The hook must actually carry it, AFTER the cd that establishes which tree it is about and
-# BEFORE the first gate it invokes. Position is the part that rots.
+# The hook must actually carry it, after the cd that establishes which tree it is about and
+# before the first gate it invokes. Position is the part that rots.
 line_cd=$(awk '/^cd "\$repo_root"$/ { print NR; exit }' "$hook")
 line_unset=$(awk '/^unset \$\(git rev-parse --local-env-vars\)$/ { print NR; exit }' "$hook")
 line_first_gate=$(awk '/^(printf|bash|python3|mapfile|exec)/ { print NR; exit }' "$hook")

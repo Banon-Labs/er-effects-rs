@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Print the FULL vote tally behind a `map-data-rvas-1162-to-1170.py` carry verdict.
+"""Print the full vote tally behind a `map-data-rvas-1162-to-1170.py` carry verdict.
 
 `CONTESTED 2 answers from 651 callers` is not a usable verdict on its own: it does not say
 whether the split is 650-to-1 -- one caller whose body was edited, so the answer is obvious --
 or 320-to-331, where the address genuinely forked and no answer is safe. This prints the tally
 so a reader can tell those apart, and the delta each candidate implies, because a runner-up
-that is NOT at the region's delta is the signature of a decode that slipped inside one edited
+that is not at the region's delta is the signature of a decode that slipped inside one edited
 caller rather than of a second real function.
 
-THREE KINDS OF VOTE, AND THE TWO THIS TOOL WAS BLIND TO UNTIL 2026-08-30
+Three kinds of vote, and the two this tool was blind to until 2026-08-30
 ------------------------------------------------------------------------
 It counted `call`/`jmp` sites and nothing else, so it could only ever answer for a function
-something BRANCHES to. Every function whose address is merely TAKEN -- stored into a `std::function`
+something branches to. Every function whose address is merely taken -- stored into a `std::function`
 / functor, parked in a dispatch table, compared against a field -- was invisible, and the tool
 said `None ... 0 real` about it in the same words it uses for an address nothing references at
 all. That is not a rare shape in ELDEN RING's menu code; it is how most of it is written.
 
 `MENU_ITEM_ACCEPT_IDLE_RVA` (1.16.2 `0x7add70`) is the measured case. Nothing calls it: it is a
 3-byte `xor eax,eax; ret` whose address a `CS::MenuItem` row carries at `+0xf8` as its
-constant-false accept predicate. The whole 1.16.2 image contains exactly ONE reference to it, a
+constant-false accept predicate. The whole 1.16.2 image contains exactly one reference to it, a
 `lea` -- so the old tool reported `None (1 candidate branch site, 0 real)` and no instrument in
 this tree could map the address. The same `lea` is the whole answer: it sits at byte `+0xa5` of
 `0x7acf80`, whose 1.17 pair is known, and reading the paired instruction there gives `0x7aebf0`.
 
-So three carriers run, and they stay SEPARATE in the output. They are different evidence and a
+So three carriers run, and they stay separate in the output. They are different evidence and a
 reader must be able to weigh them apart:
 
   * `call/jmp`      -- `carry_code`: a branch at instruction N of a mapped caller.
@@ -31,18 +31,18 @@ reader must be able to weigh them apart:
     the address) at the same byte offset of a mapped referrer. This is the carrier the data map
     already used for globals; a function pointer is carried by exactly the same arithmetic.
   * `pointer-table` -- an 8-byte absolute `BASE + rva` stored in `.rdata`/`.data`: a vtable slot
-    or a function-pointer table. Carried by its NEIGHBOURS in the same table, each of which is a
+    or a function-pointer table. Carried by its neighbours in the same table, each of which is a
     code pointer the function map answers for, so the table is located in 1.17 by content rather
     than by address.
 
-AND THE STRENGTH THAT `WEAK` HIDES. `carry`'s vocabulary calls a single reference WEAK, which is
+And the strength that `WEAK` hides. `carry`'s vocabulary calls a single reference weak, which is
 right when an address has fifty references and one of them survived the decode -- it means the
-other forty-nine were lost. It is the wrong word when the address HAS exactly one reference in
+other forty-nine were lost. It is the wrong word when the address has exactly one reference in
 each image: `1-of-1` in both directions is unanimity, not a fragment. The reverse check below
-distinguishes them by counting references to the ANSWER in 1.17, and reports `UNANIMOUS 1-of-1`
+distinguishes them by counting references to the answer in 1.17, and reports `UNANIMOUS 1-of-1`
 only when both counts are 1.
 
-USAGE
+Usage
     uv run --with capstone --with numpy python3 scripts/report-1170-caller-votes.py 0x739e20
     uv run --with capstone --with numpy python3 scripts/report-1170-caller-votes.py --selftest
 """
@@ -60,7 +60,7 @@ MAPPER = os.path.join(ROOT, "scripts", "map-data-rvas-1162-to-1170.py")
 FUNCTION_MAP = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.functions.tsv")
 BASE = 0x140000000
 
-# How far either side of a pointer slot to look for a NEIGHBOUR the function map answers for.
+# How far either side of a pointer slot to look for a neighbour the function map answers for.
 # A vtable's slots are its own methods and a functor table's are its own callbacks, so a mappable
 # neighbour is normally adjacent; eight slots is generous and still bounded.
 POINTER_ANCHOR_SLOTS = 8
@@ -114,7 +114,7 @@ def _slots_holding(image, value):
 
 
 def pointer_votes(old, new, fmap, target):
-    """Carry an address by the TABLE its pointer sits in. `(votes, slots_used, note)`.
+    """Carry an address by the table its pointer sits in. `(votes, slots_used, note)`.
 
     A pointer slot has no instruction to decode and no displacement to re-read, so the anchors
     are its NEIGHBOURS: another slot in the same table holding a code pointer the function map
@@ -171,7 +171,7 @@ def pointer_votes(old, new, fmap, target):
 
 
 def real_reference_count(md, mapper, image, target):
-    """How many references of ANY kind this image really holds to `target`.
+    """How many references of any kind this image really holds to `target`.
 
     Candidates decoded and discarded, not counted raw: `references` scans four displacement tails
     over the whole of `.text`, so its raw count includes bytes that merely look like the right
@@ -195,8 +195,8 @@ def tally(md, mapper, old, new, fmap, target):
     """Every carrier's answer for one address. `(answer, headline, kinds)`.
 
     `kinds` is `{kind: (moved, note, votes, )}` so the caller can print the three tallies apart.
-    The merged answer sums votes ACROSS kinds -- they are independent evidence about the same
-    question -- but a disagreement between kinds is reported as CONTESTED exactly as a
+    The merged answer sums votes across kinds -- they are independent evidence about the same
+    question -- but a disagreement between kinds is reported as contested exactly as a
     disagreement within one is, because it is the same failure.
     """
     kinds: dict[str, tuple] = {}
@@ -222,7 +222,7 @@ def tally(md, mapper, old, new, fmap, target):
         return answer, f"CONTESTED {len(merged)} answers from {sum(merged.values())} references", kinds
     if merged[answer] >= 2:
         return answer, f"agreed by {merged[answer]} references", kinds
-    # ONE reference. Whether that is thin or unanimous depends on how many there ARE, which is a
+    # One reference. Whether that is thin or unanimous depends on how many there are, which is a
     # question about the images and not about the vote.
     old_total = real_reference_count(md, mapper, old, target)
     new_total = real_reference_count(md, mapper, new, answer)
@@ -249,13 +249,13 @@ def load(mapper):
     return md, old, new, fmap
 
 
-# Addresses whose answer is settled, one per CARRIER, so a carrier that stops working is caught by
+# Addresses whose answer is settled, one per carrier, so a carrier that stops working is caught by
 # a red selftest rather than by a `None` nobody reads as a regression.
 #
 # The `None` is the control on the controls: a tool that answers everything answers it too, and
 # three carriers voting is three times as many chances to invent an address. `0xc57666` is a
-# chained CONTINUATION chunk 0x86 bytes into `0xc575e0` -- nothing in either image branches to it,
-# takes its address, or stores a pointer to it, because callers reach the FUNCTION and not its
+# chained continuation chunk 0x86 bytes into `0xc575e0` -- nothing in either image branches to it,
+# takes its address, or stores a pointer to it, because callers reach the function and not its
 # cold half. `None` is the true answer and this tool must keep giving it.
 SELFTEST_CASES = (
     (0xCF9300, 0xCFA9D0, "call/jmp", "16 callers branch here; the carrier this tool started with"),
@@ -279,10 +279,10 @@ def selftest():
 
     Returns a process exit code.
 
-    THE FAILURE THIS IS SHAPED AGAINST is a tool that reports a confident answer no clause of it
+    The failure this is shaped against is a tool that reports a confident answer no clause of it
     actually produced. So each case names the carrier that must supply its votes, and that
     carrier is asserted to be the one holding them -- an `address-taken` case whose votes arrived
-    from `call/jmp` is a pass by coincidence and is failed here. Then each carrier is DISABLED in
+    from `call/jmp` is a pass by coincidence and is failed here. Then each carrier is disabled in
     turn and its own case must go `None`, which is the only way to tell a carrier that works from
     a carrier whose answer was already there.
     """
@@ -304,7 +304,7 @@ def selftest():
         check(f"0x{target:x} is carried by {carrier}", kinds[carrier][2].get(want, 0) > 0, True)
         check(f"0x{target:x} headline is not a refusal", headline.startswith("no usable"), False)
 
-    # ------------------------------------------------------------------ MUTATION
+    # ------------------------------------------------------------------ Mutation
     # Break one carrier, watch its own case fall, put it back, watch it stand again. A carrier
     # that cannot be made to fail is not the one producing the answer.
     real_carry_code, real_carry = mapper.carry_code, mapper.carry

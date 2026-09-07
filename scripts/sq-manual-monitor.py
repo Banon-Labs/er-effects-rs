@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Non-launching ATTACH monitor for a MANUAL (user-driven) me3 run.
+"""Non-launching attach monitor for a manual (user-driven) me3 run.
 
-The game is already up (launched by scripts/me3_live_launch.py); the USER drives System->Quit->
-Load-Profile with a real controller -- NO self-drive, NO fabricated input, NO markers armed here.
-This monitor only WATCHES the DLL debug log and tears down on a terminal RAM semaphore:
+The game is already up (launched by scripts/me3_live_launch.py); the user drives System->Quit->
+Load-Profile with a real controller -- No self-drive, no fabricated input, no markers armed here.
+This monitor only watches the DLL debug log and tears down on a terminal RAM semaphore:
 
-  * WORLD RES WAIT stall (THE teardown semaphore): a 0x1c block-load whose phase stays below the
-    ready value 0x0a(10) with stable_frames==0 and NO phase progress for STALL_SECONDS. That is the
+  * World RES wait stall (the teardown semaphore): a 0x1c block-load whose phase stays below the
+    ready value 0x0a(10) with stable_frames==0 and no phase progress for STALL_SECONDS. That is the
     exact bug -- when the user hits it they are done, so we tear the game down for offline analysis.
-  * WORLD READY: stable_frames >= LOADED_STABLE_FRAMES (the second load reached the same world-ready
+  * World READY: stable_frames >= LOADED_STABLE_FRAMES (the second load reached the same world-ready
     state as the first autoload) -- success, tear down.
 
-Other transient stalls are NOT teardown cases right now; only the two above tear down. Teardown =
+Other transient stalls are not teardown cases right now; only the two above tear down. Teardown =
 kill eldenring.exe + me3.exe (which releases me3_live_launch's hold). Deterministic readiness via
-inotify on the game dir (repo no-sleep policy); the wall-clock CAP is only a backstop.
+inotify on the game dir (repo no-sleep policy); the wall-clock cap is only a backstop.
 
 Usage: python3 scripts/sq-manual-monitor.py <log_start_offset> [cap_seconds]
 """
@@ -29,15 +29,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from er_artifact_env import artifact_source_dirs, resolve_artifact  # noqa: E402
 
-# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+# Where this run'S artifacts actually are.
 #
-# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
-# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# Launchers redirect the DLL's per-run artifacts into the run's own directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is single-SLOT: `er_game_base::log::begin_fresh_run` renames
 # `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
-# last. A monitor pinned to the game directory therefore finds NOTHING for a redirected run and
+# last. A monitor pinned to the game directory therefore finds nothing for a redirected run and
 # reports a perfectly healthy run as silent -- a false negative indistinguishable from the very stall
 # this monitor exists to catch. `resolve_artifact` looks in the run directory first and falls back to
-# the game directory, by EXISTENCE, and the inotify watch below covers BOTH for the same reason.
+# the game directory, by existence, and the inotify watch below covers both for the same reason.
 #
 # The `/mnt/c/SteamLibrary/...` default was WSL-era and does not exist on a native Linux Steam box:
 # every read against it came back empty, which reads as "the DLL wrote nothing".
@@ -59,9 +59,9 @@ def watch_dirs():
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 600
 POLL = 1.0
-# no world-load phase progress this long (armed) => THE stall. Default 1s (measurement: tear down fast);
-# pass a larger value (argv[3], e.g. 10) for a FIX run so the fix's bounded flips + async mount can play
-# out before a genuine-stall teardown, while WORLD READY (stable>=300) still wins instantly if it works.
+# no world-load phase progress this long (armed) => the stall. Default 1s (measurement: tear down fast);
+# pass a larger value (argv[3], e.g. 10) for a fix run so the fix's bounded flips + async mount can play
+# out before a genuine-stall teardown, while world ready (stable>=300) still wins instantly if it works.
 STALL_SECONDS = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 LOADED_STABLE_FRAMES = 300     # world entered and held
 READY_PHASE = 10               # loadstate +0x35 == 0x0a
@@ -120,10 +120,10 @@ def main():
     t0 = time.time()
     offset = START_OFFSET
     phase_hwm = -1          # high-water of the 0x1c block load phase (from WORLDRES-GETTER, if it fires)
-    mms_hwm = -1            # high-water of mms_step (from SWITCH-ORACLE -- the RELIABLE stall semaphore)
+    mms_hwm = -1            # high-water of mms_step (from switch-oracle -- the reliable stall semaphore)
     stable_max = 0
     armed = False           # a world load (load 2) is actively being waited on
-    census_seen = False     # the DLL emitted its EBL-MOUNT-CENSUS measurement -> tear down 1s after
+    census_seen = False     # the DLL emitted its EBL-mount-census measurement -> tear down 1s after
     census_at = None
     last_progress = time.time()
     last_report = ""
@@ -148,7 +148,7 @@ def main():
                 chunk = f.read()
             offset = sz
             for line in chunk.decode("utf-8", "replace").splitlines():
-                # PROBE MEASUREMENT semaphore: the DLL captured its census -> the probe has its data.
+                # Probe measurement semaphore: the DLL captured its census -> the probe has its data.
                 if "EBL-MOUNT-CENSUS DONE" in line:
                     census_seen = True
                     if census_at is None:
@@ -166,7 +166,7 @@ def main():
                             last_progress = now
                         armed = True
                         last_report = line.split("dll:", 1)[-1].strip()[:150]
-                # SWITCH-ORACLE: the RELIABLE per-frame world-load semaphore. mms_step is WORLD RES WAIT's
+                # Switch-ORACLE: the reliable per-frame world-load semaphore. mms_step is world RES wait's
                 # own "3/20" counter; arm + track progress off it so a silent getter cannot mask the stall.
                 if "SWITCH-ORACLE" in line or "LAST ORACLE" in line:
                     st = re.search(r"stable_frames=(\d+)", line)
@@ -193,7 +193,7 @@ def main():
         if census_seen and census_at is not None and now - census_at >= STALL_SECONDS:
             verdict = f"CENSUS CAPTURED (probe measurement semaphore) -- {last_report}"
             break
-        # Fallback teardown: a world-load stall with no progress -- keyed on mms_step OR getter phase, so a
+        # Fallback teardown: a world-load stall with no progress -- keyed on mms_step or getter phase, so a
         # silent getter cannot soft-lock the run.
         incomplete = (0 <= phase_hwm < READY_PHASE) or (2 <= mms_hwm < ready_mms)
         if armed and stable_max == 0 and incomplete and now - last_progress >= STALL_SECONDS:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified diff of ONE file in an outside checkout against a commit in THIS repo.
+"""Unified diff of one file in an outside checkout against a commit in this repo.
 
 Sibling of `compare-tree-to-commit.py`, for when the answer needed is not "did it change" but
 "what changed" -- and, like it, it exists because a worktree-isolated agent cannot point git at

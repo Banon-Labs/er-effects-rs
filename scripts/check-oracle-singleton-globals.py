@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard the game singletons the telemetry oracles read: resolved in source, corroborated in the image.
 
-WHAT WENT WRONG, AND WHY NOTHING CAUGHT IT
+What went wrong, and why nothing caught it
 ==========================================
 `er-telemetry-core`'s `standalone_tick` read four game singletons through a closure that added the
 1.16.2 RVA straight to the module base:
@@ -10,7 +10,7 @@ WHAT WENT WRONG, AND WHY NOTHING CAUGHT IT
         unsafe { er_game_base::mem::safe_read_usize(base + rva) }.unwrap_or(0)
     };
 
-Every `.data` global moved on 1.17. The reads did not fail -- they SUCCEEDED against whatever now
+Every `.data` global moved on 1.17. The reads did not fail -- they succeeded against whatever now
 occupies the old address. Across all 4,350 records of run `br-20260831-160354-2513`:
 
     oracle_game_data_man_ptr  = "0x6e614d6e6f697463"   little-endian ASCII "ctionMan"
@@ -23,68 +23,68 @@ occupies the old address. Across all 4,350 records of run `br-20260831-160354-25
 `"ctionMan"` is eight bytes out of the middle of the RTTI type name
 `.?AVNWSteamConnectionManager@DLNW3@@`, which 1.17 parks at the old GameDataMan address. The other
 three stale slots landed in still-blank `.data`, and a zero pointer is indistinguishable from a
-global the game has not created yet. THAT is the failure mode this gate exists for: a wrong
-pointer oracle does not go quiet, it goes CONSTANT, and a constant is invisible.
+global the game has not created yet. That is the failure mode this gate exists for: a wrong
+pointer oracle does not go quiet, it goes constant, and a constant is invisible.
 
 Three existing gates all reported clean the whole time, correctly, because none of them is looking
 at this:
 
-  * `check-stale-rva-calls.py` keys on a NAMED constant next to the module base. Here the constant
-    is a closure PARAMETER, so there is nothing at the read site to name.
+  * `check-stale-rva-calls.py` keys on a named constant next to the module base. Here the constant
+    is a closure parameter, so there is nothing at the read site to name.
   * `check-no-stale-callsite-rva.py` is about comparing live stack addresses to raw RVAs.
   * `check-oracle-writers.py` asks whether a counter has a writer, not where a read points.
 
-WHAT THIS GATE CHECKS
+What this gate checks
 =====================
-SOURCE half (always runs, ratcheted by `docs/recon/ungated-module-base-arithmetic.txt`). Any
-ARITHMETIC on the game module base whose right-hand side is a compiled-in 1.16.2 claim, when the
+source half (always runs, ratcheted by `docs/recon/ungated-module-base-arithmetic.txt`). Any
+arithmetic on the game module base whose right-hand side is a compiled-in 1.16.2 claim, when the
 result is not handed to something that resolves it. The address of a game global has to come from
 `er_game_base::mem::game_data_addr` (or `game_rva` / `read_global_ptr` / `resolve_game_address`),
 which translates through the verified 1.16.2 -> 1.17 map and answers `0` for an address with no
 mapping.
 
-WIDENED 2026-08-31, because the fixed site's SPELLING is not the class. A sweep of the whole
+Widened 2026-08-31, because the fixed site's spelling is not the class. A sweep of the whole
 workspace for the shape found three more live 1.17 defects, and not one was a `safe_read_*` with a
 lowercase RVA:
 
-  * `safe_read_usize(module_base + 0x3d6b7b0)` -- a HEX LITERAL on a base that arrives as a
-    function PARAMETER (`er-title-flow/src/title_tick_cover.rs`, three sites; both RVAs are in the
+  * `safe_read_usize(module_base + 0x3d6b7b0)` -- a HEX literal on a base that arrives as a
+    function parameter (`er-title-flow/src/title_tick_cover.rs`, three sites; both RVAs are in the
     shipped ledger, and the same file resolves the same two addresses correctly elsewhere);
-  * `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` -- the RVA is an ELEMENT of a const array and
-    the result is COMPARED, not read (`er-input-harness/src/pad_inject.rs`). That is the silent
+  * `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` -- the RVA is an element of a const array and
+    the result is compared, not read (`er-input-harness/src/pad_inject.rs`). That is the silent
     end of the family: the std::map walk simply never matches, so the in-world input drive is inert
     with no fault, no refusal and no counter moving;
   * `base.wrapping_add(MSGBOX_DIALOG_UPDATE_RVA)` -- a spelling no `+`-shaped pattern can see,
     including `check-stale-rva-calls.py`, whose entire job is `base + CONSTANT`.
 
-So the two halves of the rule are decided from EVIDENCE, never from either identifier's name:
+So the two halves of the rule are decided from evidence, never from either identifier's name:
 
-  IS IT THE MODULE BASE?  From the BINDING. A `let` from `game_module_base`/`GetModuleHandle`, or
-                          -- new -- a PARAMETER that the same file passes as the first argument to
-                          `game_data_addr` and friends, whose first parameter IS the module base.
-                          A name shadowed by a `for` pattern or a closure is NOT the module base,
+  Is it the module base?  From the binding. A `let` from `game_module_base`/`GetModuleHandle`, or
+                          -- new -- a parameter that the same file passes as the first argument to
+                          `game_data_addr` and friends, whose first parameter is the module base.
+                          A name shadowed by a `for` pattern or a closure is not the module base,
                           which is what keeps `for &(base, cnt) in GROUPS` (a table of struct
                           offsets) and `let base = ersc_module_base()` (a different DLL) out.
-  IS IT A 1.16.2 CLAIM?   From the RVA's PROVENANCE. A literal in [0x1000, 0x0800_0000), or a
-                          binding that was not READ OUT OF THE RUNNING IMAGE. An RVA the code read
+  Is it a 1.16.2 claim?   From the RVA's provenance. A literal in [0x1000, 0x0800_0000), or a
+                          binding that was not read out of the running image. An RVA the code read
                           from the live PE (`base + e_lfanew`, `base + vaddr`) is already correct
                           for the running build and translating it would be the bug -- the same
                           distinction `MhHook::new_runtime_derived` draws.
 
 And a sum handed to `resolve_game_address` / `resolve_detour_address` / `MhHook::new` /
-`register_union_hook` is CORRECT and excluded: those perform the single resolve themselves, and
+`register_union_hook` is correct and excluded: those perform the single resolve themselves, and
 resolving first would translate twice, which lands on a third unrelated function whenever an
 address is both one row's destination and another row's source.
 
-IMAGE half (skips when the two de-Arxan'd images are absent, e.g. in CI). For each singleton the
-oracles read, the 1.17 address is RE-DERIVED from the two images -- not read out of the ledger and
+Image half (skips when the two de-Arxan'd images are absent, e.g. in CI). For each singleton the
+oracles read, the 1.17 address is RE-derived from the two images -- not read out of the ledger and
 believed -- and compared against the shipped `rva-map-1162-to-1170.data.tsv` row:
 
   1. find every `mov <r64>, [rip+disp]` in the 1.16.2 image whose target is the 1.16.2 global;
   2. take a short window at each such site, blank the four displacement bytes, and keep only the
-     windows that are UNIQUE in 1.16.2 -- a shape that already occurs twice cannot identify
+     windows that are unique in 1.16.2 -- a shape that already occurs twice cannot identify
      anything;
-  3. find that masked window in the 1.17 image; keep only the ones that occur exactly ONCE there;
+  3. find that masked window in the 1.17 image; keep only the ones that occur exactly once there;
   4. read the 1.17 displacement and let each site vote for a target.
 
 A site whose surrounding code was edited between the builds simply fails to match and casts no
@@ -97,14 +97,14 @@ same as the address being a manager pointer:
   * the derived address is 8-byte aligned and its qword is zero at rest in the static image, which
     is what an uninitialised pointer global looks like;
   * it does not sit inside a printable-ASCII run -- the RTTI/string-literal test that the stale
-    GameDataMan address FAILS on 1.17. That failure is asserted as a positive control, so a
+    GameDataMan address fails on 1.17. That failure is asserted as a positive control, so a
     detector that has quietly stopped detecting cannot pass this gate.
 
     python3 scripts/check-oracle-singleton-globals.py             # enforce
     python3 scripts/check-oracle-singleton-globals.py --selftest  # prove the assertions can fail
 
-WIRING (for whoever lands the current `scripts/check.sh` -- this file must not touch it). The two
-lines already exist there, COMMENTED OUT at 253-254 with a note saying they were disarmed on
+Wiring (for whoever lands the current `scripts/check.sh` -- this file must not touch it). The two
+lines already exist there, commented out at 253-254 with a note saying they were disarmed on
 2026-08-31 only because `crates/er-input-harness/src/pad_inject.rs` and `crates/er-title-flow/*`
 were mid-edit in someone's working tree. Those files have landed (f49f5e9b), the blinds are
 re-derived against their current text, and both commands below exit 0 on this tree. Un-comment:
@@ -113,7 +113,7 @@ re-derived against their current text, and both commands below exit 0 on this tr
     python3 "$repo_root/scripts/check-oracle-singleton-globals.py"
 
 Leaving them commented is not neutral. This gate and `check-stale-rva-calls.py` are the two halves
-of one defect class, and the sibling is wired; running only the half that keys on a NAMED constant
+of one defect class, and the sibling is wired; running only the half that keys on a named constant
 is the configuration that let four telemetry pointer oracles report garbage for two whole runs
 while three gates said clean.
 """
@@ -138,7 +138,7 @@ except ImportError as missing:
         "which is how another gate in this repo ended up with two of its three baseline rows "
         "being paragraphs about the hazard rather than instances of it."
     ) from missing
-try:  # the SHARED vocabulary this gate and check-stale-rva-calls.py must not answer differently
+try:  # the shared vocabulary this gate and check-stale-rva-calls.py must not answer differently
     from module_base_arith import (
         ADD_METHODS,
         ADD_SITE_RE,
@@ -213,10 +213,10 @@ LITERAL_RUN = 8
 
 
 # --------------------------------------------------------------------------------------------
-# SOURCE half
+# Source half
 # --------------------------------------------------------------------------------------------
 
-# `safe_read_usize(base + rva)` -- a raw read at a module base plus a LOCAL BINDING. A constant
+# `safe_read_usize(base + rva)` -- a raw read at a module base plus a local binding. A constant
 # would be SCREAMING_SNAKE or path-qualified; a lowercase identifier here is a value that came
 # from somewhere else, which is precisely the indirection that hid the original defect from every
 # name-keyed tool in the repo.
@@ -226,12 +226,12 @@ RAW_READ_RE = re.compile(
     r"([a-z_][a-z0-9_]*)\s*[,)]",
     re.S,
 )
-# What makes an identifier the MODULE base rather than any other pointer called `base` now lives in
+# What makes an identifier the module base rather than any other pointer called `base` now lives in
 # `scripts/module_base_arith.py` (`MODULE_BASE_SOURCE_RE`, `names_module_base`, `is_module_base`),
 # because `check-stale-rva-calls.py` has to answer the identical question and answering it twice is
 # what let 29 sites fall between the two gates. The reasoning is preserved there in full.
 #
-# `binds_module_base` stays here: it is not the shared decision, it is the NARROW pre-2026-08-31
+# `binds_module_base` stays here: it is not the shared decision, it is the narrow pre-2026-08-31
 # matcher, kept only so `--selftest` can prove each widening is load-bearing by showing the old
 # shape misses the control.
 def binds_module_base(text: str, name: str, before: int) -> bool:
@@ -252,21 +252,21 @@ def binds_module_base(text: str, name: str, before: int) -> bool:
 
 
 # ============================================================================================
-# SOURCE half, widened 2026-08-31: the ARITHMETIC, not the read
+# source half, widened 2026-08-31: the arithmetic, not the read
 # ============================================================================================
 #
 # `RAW_READ_RE` above is the shape of the one site that was found. It is not the shape of the
-# CLASS, and the sweep that followed proved it: every remaining live instance in the tree was
+# class, and the sweep that followed proved it: every remaining live instance in the tree was
 # spelled some other way.
 #
 #   crates/er-title-flow/src/title_tick_cover.rs:860,2179,2182
-#       `safe_read_usize(module_base + 0x3d6b7b0)` -- a HEX LITERAL, not an identifier, so
+#       `safe_read_usize(module_base + 0x3d6b7b0)` -- a HEX literal, not an identifier, so
 #       `RAW_READ_RE`'s `[a-z_][a-z0-9_]*` could not match it. Both RVAs are in the shipped
 #       ledger (0x3d6b7b0 -> 0x3d6f820, 0x3d856a0 -> 0x3d89720), and the same file resolves the
 #       same two addresses correctly through `game_data_addr` a few hundred lines away.
 #   crates/er-input-harness/src/pad_inject.rs:154
-#       `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` -- the RVA is an ELEMENT of a const
-#       array and the base is a FUNCTION PARAMETER. It was not read at all; it was COMPARED
+#       `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` -- the RVA is an element of a const
+#       array and the base is a function parameter. It was not read at all; it was compared
 #       (`key == target`) while walking a std::map, which is the silent end of the family --
 #       no fault, no refusal, the tree walk simply never matches and the in-world drive is inert.
 #   crates/er-title-flow/src/product_autoload_gates.rs:942
@@ -274,13 +274,13 @@ def binds_module_base(text: str, name: str, before: int) -> bool:
 #       resolves its address properly. A log that names the wrong address during a migration is
 #       how the next reader is sent to the wrong function.
 #
-# So this half now keys on the ADDITION and on what the two sides ARE, and it deliberately does
-# NOT duplicate `check-stale-rva-calls.py`. That gate owns `base + NAMED_CONSTANT`; this one owns
-# every OTHER right-hand side -- literal, local, parameter, field, index, closure binding -- plus
+# So this half now keys on the addition and on what the two sides are, and it deliberately does
+# not duplicate `check-stale-rva-calls.py`. That gate owns `base + NAMED_CONSTANT`; this one owns
+# every other right-hand side -- literal, local, parameter, field, index, closure binding -- plus
 # the one spelling a `+`-shaped pattern structurally cannot see, `base.wrapping_add(CONST)`.
 
-# THE VALUE BOUNDS, THE ADDITION PATTERN, THE CORROBORATORS, THE RESOLVING CONSUMERS and the
-# RUNTIME-DERIVED MARKS all moved to `scripts/module_base_arith.py` on 2026-08-31 and are imported
+# The value bounds, the addition pattern, the CORROBORATORS, the resolving consumers and the
+# runtime-derived marks all moved to `scripts/module_base_arith.py` on 2026-08-31 and are imported
 # at the top of this file. They are the vocabulary this gate and `check-stale-rva-calls.py` have to
 # share; keeping a second copy here is precisely how the two ended up disagreeing about which sites
 # each owned.
@@ -295,9 +295,9 @@ _CONSTANT_VALUES: dict[str, int | None] | None = None
 def constant_values(root: Path) -> dict[str, int | None]:
     """`{name: value}` for every unambiguous `const NAME: T = <literal>;` under `crates/`.
 
-    Only the METHOD add forms need this -- `base.saturating_add(MAX_IMAGE_SPAN)`, which is
+    Only the method add forms need this -- `base.saturating_add(MAX_IMAGE_SPAN)`, which is
     `er-invasion-warp-core`'s image-extent bound, not an address in the image. A name declared
-    twice with different values records `None`, and an unresolved constant is KEPT as a finding:
+    twice with different values records `None`, and an unresolved constant is kept as a finding:
     "I could not read it" must never be spelled the same way as "I read it and it is safe".
     """
     global _CONSTANT_VALUES  # noqa: PLW0603 - one scan of the tree, reused across files
@@ -318,11 +318,11 @@ def constant_values(root: Path) -> dict[str, int | None]:
 # `_identifiers`, `binders`, `nearest_binder`, `is_module_base` and `_balanced_rhs` moved to
 # `scripts/module_base_arith.py` on 2026-08-31 and are imported at the top of this file. Only
 # `rhs_is_compiled_in` stays: it is the question this gate asks and the sibling does not --
-# whether a right-hand side that is NOT a named constant is a compiled-in 1.16.2 claim.
+# whether a right-hand side that is not a named constant is a compiled-in 1.16.2 claim.
 
 
 def rhs_is_compiled_in(text: str, bound, rhs: str, base_name: str, before: int) -> bool:
-    """Is this right-hand side a COMPILED-IN 1.16.2 claim rather than a runtime-derived value?"""
+    """Is this right-hand side a compiled-in 1.16.2 claim rather than a runtime-derived value?"""
     stripped = rhs.strip()
     if not stripped:
         return False
@@ -376,12 +376,12 @@ def source_offenders(root: Path) -> list[str]:
     return sorted(found)
 
 
-# A RATCHET, not a freeze -- the same shape and the same reasoning as
-# `docs/recon/stale-rva-call-sites.txt`. The set may SHRINK freely; growth is refused.
+# A ratchet, not a freeze -- the same shape and the same reasoning as
+# `docs/recon/stale-rva-call-sites.txt`. The set may shrink freely; growth is refused.
 #
 # It exists because the sweep that widened this gate found three live defects in a file another
 # agent was editing at the time, and silently exempting them would rebuild the contaminated
-# baseline this repo has now been bitten by twice. Every row below is a REAL finding with a known
+# baseline this repo has now been bitten by twice. Every row below is a real finding with a known
 # fix written next to it, not a shape someone decided was acceptable.
 SOURCE_BASELINE = REPO / "docs" / "recon" / "ungated-module-base-arithmetic.txt"
 SOURCE_BASELINE_HEADER = """\
@@ -455,23 +455,23 @@ def offenders_in(text: str, relative: str) -> list[str]:
         if plus and re.match(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Z]", rhs):
             # A named constant reached with `+`. That is `check-stale-rva-calls.py`'s ratchet, and
             # duplicating it here would put the same site in two baselines that drift apart. The
-            # METHOD forms below are NOT duplicated: no `+`-shaped pattern can see them.
+            # method forms below are not duplicated: no `+`-shaped pattern can see them.
             #
-            # THE DELEGATION IS NOW AIRTIGHT, AND IT WAS NOT UNTIL 2026-08-31. This `continue`
+            # The delegation is now AIRTIGHT, and it was not until 2026-08-31. This `continue`
             # hands the site to a sibling that, until then, recognised a named constant in only
             # three SYNTACTIC contexts -- `transmute(base + C)`, `safe_read_*(base + C)` and
             # `== base + C`. Anywhere else it matched nothing, so the pair described as a partition
             # of the class had a hole in the middle of it.
             #
-            # MEASURED, not asserted: 37 sites reached this `continue` while
+            # Measured, not asserted: 37 sites reached this `continue` while
             # `check-stale-rva-calls.py` reported 0 findings tree-wide, so every one of them was
-            # reported by NEITHER gate. Twenty-two were `format_args!` log lines naming a 1.16.2
-            # address -- `title_scaleform_msgbox.rs:361` printed one directly ABOVE a correctly
-            # resolved `game_data_addr` call in the SAME `format_args!` -- and the other fifteen
+            # reported by neither gate. Twenty-two were `format_args!` log lines naming a 1.16.2
+            # address -- `title_scaleform_msgbox.rs:361` printed one directly above a correctly
+            # resolved `game_data_addr` call in the same `format_args!` -- and the other fifteen
             # were correct code (resolver arguments, install-table rows, image extents). All
-            # twenty-two are converted and the sibling now matches the addition in ANY context,
+            # twenty-two are converted and the sibling now matches the addition in any context,
             # with the module-base and resolver-fed questions it needed the moment it stopped
-            # relying on a syntactic frame. Those questions, and this gate's, are the SAME code:
+            # relying on a syntactic frame. Those questions, and this gate's, are the same code:
             # `scripts/module_base_arith.py`. A fourth-context site planted in a real file is
             # caught by the sibling and still delegated away here, which is the shape a partition
             # is supposed to have.
@@ -479,7 +479,7 @@ def offenders_in(text: str, relative: str) -> list[str]:
             # bd `two-gate-partition-seam-named-const-outside-three-contexts-2026-08-31`.
             continue
         if not plus:
-            # A named constant reached by `.wrapping_add`. It is a real address unless its VALUE
+            # A named constant reached by `.wrapping_add`. It is a real address unless its value
             # says otherwise -- below `.text` it is a PE-header field, at or above the image span
             # it is an extent bound.
             named = re.match(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*([A-Z][A-Z0-9_]*)\s*$", rhs)
@@ -498,7 +498,7 @@ def offenders_in(text: str, relative: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------------
-# IMAGE half
+# Image half
 # --------------------------------------------------------------------------------------------
 
 
@@ -670,7 +670,7 @@ def image_findings(old: bytes, new: bytes, mapped: dict[str, tuple[int, int]]) -
 # selftest
 # --------------------------------------------------------------------------------------------
 
-# The exact closure that was live until 2026-08-31, kept verbatim so the SOURCE half is proved
+# The exact closure that was live until 2026-08-31, kept verbatim so the source half is proved
 # against the thing it was written for rather than against a paraphrase of it.
 BEFORE_FIX = """
     let base = er_game_base::mem::game_module_base().unwrap_or(0);
@@ -697,16 +697,16 @@ NOT_A_MODULE_BASE = """
 """
 
 # ---------------------------------------------------------------------------------------------
-# Controls for the WIDENED matcher, all frozen from real sites in this tree (2026-08-31 sweep).
+# Controls for the widened matcher, all frozen from real sites in this tree (2026-08-31 sweep).
 #
-# Each POSITIVE is a spelling that the pre-widening SOURCE half could not see, so a control that
-# both versions catch would pass on the broken gate and prove nothing. Each NEGATIVE is a real
+# Each positive is a spelling that the pre-widening source half could not see, so a control that
+# both versions catch would pass on the broken gate and prove nothing. Each negative is a real
 # site the widening had to be taught to leave alone -- they are the reason the matcher decides
-# what a module base is from the BINDING and what an RVA is from its PROVENANCE, rather than from
+# what a module base is from the binding and what an RVA is from its provenance, rather than from
 # either identifier's name.
 # ---------------------------------------------------------------------------------------------
 
-# POSITIVE: a HEX LITERAL RVA on a module base that arrives as a function PARAMETER, corroborated
+# POSITIVE: a HEX literal RVA on a module base that arrives as a function parameter, corroborated
 # by the file's own `game_data_addr` call. `er-title-flow/src/title_tick_cover.rs`, three sites.
 # Both RVAs are in the shipped ledger, so these read the wrong `.data` slot on 1.17.
 HEX_LITERAL_ON_PARAM = """
@@ -715,8 +715,8 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32) -> bool 
     let menu_man = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.filter(|&m| m > 0x10000);
 }
 """
-# POSITIVE: the RVA is an ELEMENT of a const array, reaching the addition as a closure parameter,
-# and the result is COMPARED rather than read. `er-input-harness/src/pad_inject.rs`.
+# POSITIVE: the RVA is an element of a const array, reaching the addition as a closure parameter,
+# and the result is compared rather than read. `er-input-harness/src/pad_inject.rs`.
 TABLE_ELEMENT_RVA = """
 const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df28];
 pub unsafe fn stamp_vk_direct(base: usize, id: u32, val: u8) {
@@ -733,7 +733,7 @@ pub unsafe fn note(base: usize) {
 }
 """
 
-# NEGATIVE: `base` shadowed by a `for` pattern over a table of STRUCT OFFSETS, in a file that DOES
+# NEGATIVE: `base` shadowed by a `for` pattern over a table of STRUCT OFFSETS, in a file that does
 # use the name for the module base elsewhere. `er-title-flow/src/title_tick_cover.rs:1270`.
 # Corroboration alone would report this; the shadowing binder is what stops it.
 SHADOWED_BY_LOOP = """
@@ -746,7 +746,7 @@ pub unsafe fn tick(module_base: usize) {
     }
 }
 """
-# NEGATIVE: a DIFFERENT module. `ersc_module_base()` contains the substring `module_base(`, and
+# NEGATIVE: a different module. `ersc_module_base()` contains the substring `module_base(`, and
 # reading it as one reported `er-invasion-warp/src/local_invasion_filter.rs` -- whose addresses
 # are Seamless Co-op's, guarded by a prologue byte-check against a shipped ersc build.
 ANOTHER_MODULES_BASE = """
@@ -755,7 +755,7 @@ fn ersc_action(rva: usize, prologue: &[u8]) -> Option<ErscActionFn> {
     let address = base + rva;
 }
 """
-# NEGATIVE: a PE-header walk. `e_lfanew` was READ out of the running image, so it is already
+# NEGATIVE: a PE-header walk. `e_lfanew` was read out of the running image, so it is already
 # correct for the running build and translating it would be the bug -- the same distinction
 # `MhHook::new_runtime_derived` draws. Six crates write this shape.
 RUNTIME_DERIVED_PE_WALK = """
@@ -766,7 +766,7 @@ fn image_span(base: usize) -> Option<usize> {
     Some(nt)
 }
 """
-# NEGATIVE: handed to an API that resolves it ITSELF. Resolving here too would translate twice,
+# NEGATIVE: handed to an API that resolves it itself. Resolving here too would translate twice,
 # which lands on a third unrelated function whenever an address is both one row's destination and
 # another row's source. `er-armament-icons/src/hud_badge.rs`, and the same shape in five crates.
 RESOLVED_BY_THE_HOOK_API = """
@@ -778,7 +778,7 @@ fn install(base: usize) {
     }
 }
 """
-# NEGATIVE: an image EXTENT, not an address in the image. Excluded by the constant's VALUE, never
+# NEGATIVE: an image extent, not an address in the image. Excluded by the constant's value, never
 # by its name. `er-invasion-warp-core/src/msb_invasion_points.rs:532`.
 IMAGE_EXTENT_BOUND = """
 fn upper(base: usize) -> usize {
@@ -788,11 +788,11 @@ fn upper(base: usize) -> usize {
 """
 
 # The real files the mutation blinds run against, and the site each one must produce when the
-# conversion is undone. Mutating the REAL text (in memory, never on disk) is the point: a control
+# conversion is undone. Mutating the real text (in memory, never on disk) is the point: a control
 # written by hand proves the regex matches the control.
 MUTATION_BLINDS = [
-    # RE-DERIVED 2026-08-31 (the second time in one day), because the site this blind used to
-    # revert NO LONGER EXISTS -- and the reason it stopped existing is the whole point of keeping a
+    # RE-derived 2026-08-31 (the second time in one day), because the site this blind used to
+    # revert no longer exists -- and the reason it stopped existing is the whole point of keeping a
     # blind here rather than dropping the file.
     #
     # The morning's sweep converted `CS_INGAME_PAD_TYPEID_RVAS.map(|rva| base + rva)` to a
@@ -805,9 +805,9 @@ MUTATION_BLINDS = [
     # loudly as a missed defect; it fails as "the converted form is gone", which reads like the
     # gate's problem rather than the file's, and is what left this gate red and unwired.
     #
-    # THE MUTATION MUST NOT DESTROY THE FILE'S ONLY CORROBORATOR. `base` reaches every function in
-    # this file as a PARAMETER, so `is_module_base` cannot decide it from a binding; the sole
-    # evidence is the one `game_data_addr(base, ...)` call at `stamp_vk_direct`. Reverting THAT
+    # The mutation must not destroy the file'S only CORROBORATOR. `base` reaches every function in
+    # this file as a parameter, so `is_module_base` cannot decide it from a binding; the sole
+    # evidence is the one `game_data_addr(base, ...)` call at `stamp_vk_direct`. Reverting that
     # call to `base + FD4_PAD_MANAGER_RVA` -- the obvious choice -- removes the corroboration in
     # the same edit, `base` stops being recognised as the module base anywhere in the file, and the
     # gate reports nothing. Measured: that mutant yields `[]`, and reading it as "the gate is
@@ -817,7 +817,7 @@ MUTATION_BLINDS = [
     # the corroborator upstream stays intact. It exercises the three decisions unique to this file:
     # a parameter base recognised only by file-level corroboration, a parameter RVA with no local
     # derivation (so its provenance is compiled-in), and the `is_resolver_fed` exclusion, which must
-    # keep clearing the `let addr = (base + rva)` on the line ABOVE while still reporting this one.
+    # keep clearing the `let addr = (base + rva)` on the line above while still reporting this one.
     # `crate::win32::read_usize` is the file's own fault-safe read primitive, used verbatim this way
     # at `stamp_vk_direct`, and `usize + usize -> usize` is the type it already takes, so the mutant
     # compiles.
@@ -838,7 +838,7 @@ MUTATION_BLINDS = [
         "base + 0x9b3070usize",
         "base + 0x9b3070usize",
     ),
-    # THE TWO SITES THIS GATE'S OWN BASELINE HEADER USED TO NAME AS LIVE DEFECTS (2026-08-31).
+    # The two sites this gate'S own baseline header used to name as live defects (2026-08-31).
     #
     # `title_tick_cover.rs` read `CS::MenuMan` and the ending-request force flag as raw
     # `module_base + 0x3d6b7b0` / `+ 0x3d856a0` -- 1.16.2 offsets on a 1.17 image, feeding four
@@ -847,8 +847,8 @@ MUTATION_BLINDS = [
     # announcing three defects that no longer existed.
     #
     # A fix with no blind is a fix that regresses quietly, and this one is more exposed than most:
-    # the raw form is SHORTER and reads more naturally, so it is what a reverting hand writes. The
-    # replacement text below is the verbatim pre-fix source from HEAD, so both mutants compile --
+    # the raw form is shorter and reads more naturally, so it is what a reverting hand writes. The
+    # replacement text below is the verbatim pre-fix source from head, so both mutants compile --
     # a mutant that fails to build never exercises the matcher and produces a false "the gate is
     # blind" verdict.
     (
@@ -868,7 +868,7 @@ MUTATION_BLINDS = [
         "module_base + 0x3d856a0",
     ),
 ]
-# Files whose CURRENT text must stay clean. Frozen negatives taken from the sweep: a name shadowed
+# Files whose current text must stay clean. Frozen negatives taken from the sweep: a name shadowed
 # by a table of struct offsets, and a base that belongs to another DLL entirely.
 FROZEN_NEGATIVE_FILES = [
     ("crates/er-invasion-warp/src/local_invasion_filter.rs", "ersc.dll module base"),
@@ -901,7 +901,7 @@ def selftest() -> int:
     ):
         if not flags(snippet):
             failures.append(f"SOURCE matcher misses {name}")
-        # ...and the pre-widening pattern must MISS it, or the control proves nothing.
+        # ...and the pre-widening pattern must miss it, or the control proves nothing.
         legacy = code_only(snippet)
         if any(
             binds_module_base(legacy, m.group(2), m.start()) for m in RAW_READ_RE.finditer(legacy)
@@ -918,7 +918,7 @@ def selftest() -> int:
         if flags(snippet):
             failures.append(f"SOURCE matcher flags {name}")
 
-    # MUTATION BLINDS, run against the REAL files. Undoing a conversion must produce exactly that
+    # Mutation blinds, run against the real files. Undoing a conversion must produce exactly that
     # finding; the shipped text must produce none. Both directions, because a matcher that fires
     # on everything passes the first half.
     for relative, fixed, reverted, expected in MUTATION_BLINDS:
@@ -926,7 +926,7 @@ def selftest() -> int:
         if not path.exists():
             failures.append(f"BLIND: {relative} is gone; the mutation cannot be performed")
             continue
-        # Mutate the RAW text and strip comments afterwards. Stripping first would blank the
+        # Mutate the raw text and strip comments afterwards. Stripping first would blank the
         # string literals the converted form contains (`"CS_INGAME_PAD_TYPEID_RVAS"`), so the
         # needle could never be found and the blind would silently degrade into a skip.
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -966,7 +966,7 @@ def selftest() -> int:
         if image_findings(old, new, mapped):
             failures.append("IMAGE half is not green on the shipped ledger")
 
-        # BLIND 1: revert every row to its 1.16.2 value, which is what a stale constant looks
+        # Blind 1: revert every row to its 1.16.2 value, which is what a stale constant looks
         # like. Every singleton must go red, or the gate cannot see the defect it exists for.
         reverted = {name: (old_rva, old_rva) for name, (old_rva, _) in mapped.items()}
         red = image_findings(old, new, reverted)
@@ -974,7 +974,7 @@ def selftest() -> int:
             if not any(line.startswith(f"{name}:") for line in red):
                 failures.append(f"BLIND(revert to 1.16.2) did not turn {name} red")
 
-        # BLIND 2: move one row by a plausible-looking eight bytes. A gate that only rejects the
+        # Blind 2: move one row by a plausible-looking eight bytes. A gate that only rejects the
         # 1.16.2 value would pass this, and an off-by-one-slot ledger row is a real way to be
         # wrong.
         nudged = dict(mapped)
@@ -985,7 +985,7 @@ def selftest() -> int:
         ):
             failures.append("BLIND(+8 bytes) did not turn GAME_DATA_MAN_GLOBAL_RVA red")
 
-        # BLIND 3: blind the literal detector. The positive control must then fail, so a
+        # Blind 3: blind the literal detector. The positive control must then fail, so a
         # detector that has stopped detecting cannot let the run look clean.
         global LITERAL_RUN  # noqa: PLW0603 - deliberately blinding the detector for one call
         keep, LITERAL_RUN = LITERAL_RUN, 4096

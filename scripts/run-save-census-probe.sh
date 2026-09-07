@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Agent-owned census probe: run ELDEN RING with ONLY the save-disable DLL loaded and
+# Agent-owned census probe: run ELDEN RING with only the save-disable DLL loaded and
 # record every call site that touches save data on disk.
 #
 # Split into two fast subcommands so neither exceeds the repo's 30s cap on non-game
-# operations; the GAME portion is bounded separately by the caller against
+# operations; the game portion is bounded separately by the caller against
 # .auto/runtime_timeout_cap_seconds.
 #
 #   bash scripts/run-save-census-probe.sh start   # preflight, snapshot, launch
 #   bash scripts/run-save-census-probe.sh finish  # snapshot, verdict, teardown
 #   bash scripts/run-save-census-probe.sh resolve <name> <game-dir> <artifact-dir> <launch-epoch>
-#                                                 # which file is THIS run's copy of <name>
+#                                                 # which file is this run's copy of <name>
 #
 # `start` prints the artifact directory; `finish` reuses the most recent one unless
 # ARTIFACT_DIR is set. Env overrides: ME3_STEAM_DIR, GAME_EXE, ME3_BIN, ARTIFACT_DIR.
@@ -41,21 +41,21 @@ resolve_artifact_dir() {
 
 # resolve_run_artifact <name> <game_dir> <artifact_dir> <launch_epoch>
 #
-# THIS RUN's copy of <name>: the redirect if the DLL honoured it, otherwise the game-directory
+# This run's copy of <name>: the redirect if the DLL honoured it, otherwise the game-directory
 # fallback -- and never a file older than the launch. Both halves are load-bearing.
 #
 # The redirect is set from this script's side, but the DLL only obeys it if the env survives
 # me3 -> Proton; when it does not, it writes into the game directory rather than nowhere, and a
-# reader that knows only the run directory would report a healthy run as SILENT.
+# reader that knows only the run directory would report a healthy run as silent.
 #
 # `newer_than` is the other half, and it is what makes it safe to have stopped deleting the game
-# directory's copy. That copy is the PREVIOUS run's file, complete and readable, so a reader that
+# directory's copy. That copy is the previous run's file, complete and readable, so a reader that
 # resolves by existence alone binds to it and scores a finished run as this one's. A stale file's
 # mtime never changes either, so a freshness check downstream calls a perfectly healthy game
 # frozen. The floor makes an old candidate unresolvable, and the honest answer -- the run
 # directory's not-yet-written path -- is what is returned instead.
 #
-# The `env VAR=... "$ME3_BIN"` prefix used at launch does NOT put the redirects in this script's
+# The `env VAR=... "$ME3_BIN"` prefix used at launch does not put the redirects in this script's
 # own environment, so `prefer` is passed explicitly: the artifact directory is what this script
 # knows first-hand, and it beats anything inherited.
 resolve_run_artifact() {
@@ -104,7 +104,7 @@ cmd_start() {
 	fi
 	profile="$REPO/target/save-census/save-census.me3"
 
-	# NOTHING IS CLEARED FROM THE GAME DIRECTORY ANY MORE, so nothing needs rescuing from it
+	# Nothing is cleared from the game directory any more, so nothing needs rescuing from it
 	# either. Every artifact this probe reads is redirected into `$artifact` below, and the reader
 	# resolves with a `newer_than` floor, so a leftover in `$game_dir` can no longer be mistaken
 	# for this run's evidence -- which is all the old sweep bought. The census pair is off this
@@ -122,14 +122,14 @@ cmd_start() {
 	if [[ "$carried_any" == "1" ]]; then
 		echo "NOTE: a previous run left un-finished artifacts; archived to $carried" >&2
 	fi
-	# NOTHING IS DELETED FROM THE GAME DIRECTORY HERE. This used to be
+	# Nothing is deleted from the game directory here. This used to be
 	#     rm -f "$game_dir/$TELEMETRY_NAME" "$game_dir/$TELEMETRY_NAME".tmp* "$game_dir/$DLL_LOG_NAME"
 	#     rm -f "$game_dir/$HARNESS_LOG_NAME" "$game_dir/$HARNESS_PHASES_NAME"
 	# so the files read at `finish` were guaranteed to be this run's. It destroyed two runs at a
 	# time: the live file, and -- because `er_game_base::log::begin_fresh_run` removes a stale
 	# `<name>.prev` unconditionally when the live file is absent -- the generation behind it.
 	# Neither was this run's, since several sessions launch concurrently here. The census telemetry
-	# was the worst of them, being the run-stopping ORACLE of a suppression proof and kept in ZERO
+	# was the worst of them, being the run-stopping oracle of a suppression proof and kept in zero
 	# copies (it publishes tmp-then-rename, so there is no `.prev` at all).
 	#
 	# The freshness those deletes bought comes from the redirect instead: both files are written
@@ -138,7 +138,7 @@ cmd_start() {
 	# leftover in `$game_dir`. The `.tmp.<serial>` publish files follow the same redirect.
 
 	# The harness reads its drive mode from a CWD-relative flag file in the game dir.
-	# `full` is boot -> PRESS ANY BUTTON -> Continue -> in-world -> System->Quit, which is
+	# `full` is boot -> press any button -> Continue -> in-world -> System->Quit, which is
 	# what reaches the return-to-title save; booting alone only ever shows the system-slot save.
 	if [[ "${WITH_INPUT_HARNESS:-0}" == "1" ]]; then
 		printf '%s\n' "${HARNESS_DRIVE_MODE:-full}" >"$game_dir/er-harness-drive-mode.txt"
@@ -156,8 +156,8 @@ cmd_start() {
 	python3 "$REPO/scripts/save-write-witness.py" snapshot --out "$artifact/before.json" \
 		>"$artifact/before.log" 2>&1 || exit 1
 
-	# THE LAUNCH CLOCK, WHICH `finish` CANNOT DO WITHOUT. The game-directory copy of both census
-	# files is now the PREVIOUS run's, sitting there with its final contents because nothing
+	# The launch clock, which `finish` cannot do without. The game-directory copy of both census
+	# files is now the previous run's, sitting there with its final contents because nothing
 	# deletes it any more. A reader that resolves by existence alone binds to it and scores a run
 	# that has already ended as this one's -- and a stale file's mtime never changes, so a
 	# freshness check downstream would call a perfectly healthy game frozen. `finish` therefore
@@ -181,10 +181,10 @@ cmd_start() {
 
 	(
 		cd "$game_dir" || exit 1
-		# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is
-		# SINGLE-SLOT -- the DLL rotates `<name>` to `<name>.prev` on its first write -- so two
+		# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is
+		# single-slot -- the DLL rotates `<name>` to `<name>.prev` on its first write -- so two
 		# launches lose the run before last, and several sessions launch concurrently here. A copy
-		# at `finish` cannot fix that (this run clobbered the last one's file at LAUNCH) and never
+		# at `finish` cannot fix that (this run clobbered the last one's file at launch) and never
 		# runs at all when the game crashes or the operator walks away, which is exactly the case
 		# the `carried-over-from-previous-run` archive above exists to mop up.
 		nohup env ER_QUICKLOAD_SAVE_MODE_HINT=vanilla \
@@ -224,7 +224,7 @@ cmd_start() {
 
 	echo "== census probe started =="
 	echo "artifact:  $artifact"
-	# Where the DLL was TOLD to write. The game-directory copy of either name is the previous
+	# Where the DLL was told to write. The game-directory copy of either name is the previous
 	# run's, and printing it here is how an operator ends up tailing somebody else's census.
 	echo "telemetry: $artifact/$TELEMETRY_NAME"
 	echo "dll log:   $artifact/$DLL_LOG_NAME"
@@ -241,15 +241,15 @@ cmd_finish() {
 	# shellcheck source=/dev/null
 	source "$artifact/run-context.env"
 
-	# RESOLVE, DO NOT COPY-THEN-HOPE. The unconditional `cp -f "$game_dir/..." "$artifact/..."`
+	# Resolve, do not copy-then-hope. The unconditional `cp -f "$game_dir/..." "$artifact/..."`
 	# that used to stand here was actively destructive once the redirect landed: it overwrote the
-	# census this run had just written into `$artifact` with the PREVIOUS run's game-directory
+	# census this run had just written into `$artifact` with the previous run's game-directory
 	# copy, quietly swapping the verdict for somebody else's. Every candidate is resolved against
 	# the launch clock instead, so a leftover can never win.
 	local census_telemetry census_log resolved
 	census_telemetry="$(resolve_run_artifact "$TELEMETRY_NAME" "$game_dir" "$artifact" "${launch_epoch:-0}")"
 	census_log="$(resolve_run_artifact "$DLL_LOG_NAME" "$game_dir" "$artifact" "${launch_epoch:-0}")"
-	# FALLBACK ONLY, and it copies INTO the run directory, never over it: when the env did not
+	# FALLBACK only, and it copies into the run directory, never over it: when the env did not
 	# survive me3 -> Proton the DLL wrote into the game directory, and this is the one chance to
 	# bring a copy home. The source is left exactly where it is -- it is the next run's `.prev`.
 	for resolved in "$census_telemetry" "$census_log" \
@@ -280,7 +280,7 @@ cmd_finish() {
 case "${1:-}" in
 start) cmd_start ;;
 finish) cmd_finish ;;
-# Which file is THIS run's copy of <name>. Exposed as a subcommand for two reasons: an operator
+# Which file is this run's copy of <name>. Exposed as a subcommand for two reasons: an operator
 # asking "where did the census actually land" gets the same answer `finish` will use, and the
 # resolution -- the half of the redirect that decides whether a verdict is drawn from this run or
 # the last one -- becomes testable without a game. `er-artifact-redirect-audit.py --selftest`

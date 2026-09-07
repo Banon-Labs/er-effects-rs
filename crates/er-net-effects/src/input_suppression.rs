@@ -18,7 +18,7 @@ use crate::{
     selector_gate::{self, SelectorKey},
 };
 
-/// Is the selector list on screen and able to act? See [`crate::selector_gate`] -- this is NOT
+/// Is the selector list on screen and able to act? See [`crate::selector_gate`] -- this is not
 /// "the bar exists": a bar minimized to its `[+]` button is closed, and so is one on the title
 /// screen, and neither may touch the player's keys.
 static SELECTOR_OPEN: AtomicBool = AtomicBool::new(false);
@@ -38,7 +38,7 @@ static DINPUT_SUPPRESSED_MOUSE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_PREVIOUS_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_QUEUED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
-/// State reads through the hooked vtable entry that were NOT the keyboard's DIK table. A live
+/// State reads through the hooked vtable entry that were not the keyboard's DIK table. A live
 /// count well above zero is the shared-vtable case, and every one of these used to manufacture a
 /// phantom key release.
 static DINPUT_NON_KEYBOARD_READS: AtomicUsize = AtomicUsize::new(0);
@@ -85,9 +85,9 @@ type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
 
 /// Publish whether the selector is open to the DirectInput detours.
 ///
-/// The hooks install on the FIRST call whatever the value is: they are how the mouse click on the
+/// The hooks install on the first call whatever the value is: they are how the mouse click on the
 /// overlay button is kept out of the game, and how a later opening is noticed at all. What `open`
-/// changes is only what the installed hook DOES -- closed, it forwards every read untouched.
+/// changes is only what the installed hook does -- closed, it forwards every read untouched.
 pub(crate) fn set_selector_open(open: bool) {
     SELECTOR_OPEN.store(open, Ordering::Relaxed);
     if !HOOKS_INSTALLED.load(Ordering::Relaxed) {
@@ -187,7 +187,7 @@ unsafe fn with_probe_device(
 
 /// The keyboard detour, in the hook union's four-`usize` shape.
 ///
-/// `DINPUT_KB_GET_STATE_ORIG` may hold the NEXT handler in the chain rather than the game
+/// `DINPUT_KB_GET_STATE_ORIG` may hold the next handler in the chain rather than the game
 /// trampoline, so it is called through [`UnionFn`] and not through the narrower
 /// three-argument `GetDeviceState` signature. The `usize` return carries the `HRESULT` in its low 32 bits, which is
 /// where the caller reads it from, so it is passed straight back.
@@ -205,7 +205,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(
     let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
     let raw = unsafe { call(device, size, data, unused) };
     let (hr, size, data) = (raw as i32, size as u32, data as *mut u8);
-    // ONLY a 256-byte DIK table is keyboard state. The mouse (and any other device sharing this
+    // Only a 256-byte DIK table is keyboard state. The mouse (and any other device sharing this
     // vtable entry) hands us a buffer with no key bytes in it, which reads as "every arrow
     // released" and re-arms the press on the very next keyboard poll -- see `dinput_state`.
     if dinput_state::is_keyboard_state(size) {
@@ -290,7 +290,7 @@ fn queue_dinput_selector_edges(hr: i32, size: u32, data: *mut u8) {
 
     let open = selector_open();
 
-    // ONE snapshot for the whole poll. Taking it once rather than per key means a reload landing
+    // One snapshot for the whole poll. Taking it once rather than per key means a reload landing
     // mid-poll cannot classify the first half of the buffer against one binding table and the
     // second half against another.
     let bindings = bindings::live();
@@ -367,9 +367,9 @@ fn queue_held_arrow_repeats(
     };
 
     // The press itself was already queued by the caller as the single step. This only decides
-    // whether a HOLD owes another one: latch, then a steady one-at-a-time cadence, and only
+    // whether a hold owes another one: latch, then a steady one-at-a-time cadence, and only
     // after a long stretch of that does it start to speed up. See `hold_repeat`.
-    // The cursor slots ARE the repeat indices: `bindings::slot::CURSOR_UP..CURSOR_RIGHT` are 0..3
+    // The cursor slots are the repeat indices: `bindings::slot::CURSOR_UP..CURSOR_RIGHT` are 0..3
     // by construction, which is what lets a per-direction hold state be looked up by slot.
     for key in bindings.keys() {
         if key.bit() & CURSOR_SLOT_MASK == 0 {
@@ -386,7 +386,7 @@ fn queue_held_arrow_repeats(
     queued
 }
 
-/// Blank the arrow keys out of a DirectInput keyboard read -- but ONLY while the selector is open.
+/// Blank the arrow keys out of a DirectInput keyboard read -- but only while the selector is open.
 ///
 /// This is the hard taking: the game polls this table for menu navigation and quick-item switching,
 /// so a byte zeroed here is a key the player pressed and the game never saw. Closed, the buffer is
@@ -399,7 +399,7 @@ fn zero_dinput_arrow_state(hr: i32, size: u32, data: *mut u8) {
         return;
     }
     let mut cleared = 0usize;
-    // Whatever the CURSOR keys are bound to, and nothing else. The per-offset bounds check
+    // Whatever the cursor keys are bound to, and nothing else. The per-offset bounds check
     // replaced a single `size <= DIK_DOWN` guard on the fixed table: with the offsets now coming
     // from config, one of them could sit past the end of a short buffer while the others do not,
     // and a fixed guard would either wave that through or refuse the whole poll.
@@ -449,7 +449,7 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         })?;
     }
 
-    // THROUGH A UNION REGISTRAR, NEVER A BARE `MhHook`. `er-quickload` (its input blocker) and
+    // Through a union registrar, never a bare `MhHook`. `er-quickload` (its input blocker) and
     // `er-enemynpc-effects` (its hotkey) detour this same `GetDeviceState` slot, and two
     // separately linked MinHook instances on one prologue overwrite each other's trampolines --
     // the loser reports installed and never runs. See the [[shared]] row for this pair in

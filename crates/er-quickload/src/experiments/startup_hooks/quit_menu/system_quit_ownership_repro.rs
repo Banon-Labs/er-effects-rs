@@ -7,7 +7,7 @@ use super::*;
 /// pump is not draining the torn-down profile renderers, whose still-registered draw tasks then keep
 /// filling the GX command queue.
 pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
-    // `game_module_base()`, NOT `game_rva(0)`. RVA 0 is the PE header, never a code or data
+    // `game_module_base()`, not `game_rva(0)`. RVA 0 is the PE header, never a code or data
     // address, so there is nothing for the 1.16.2 -> 1.17 map to translate and asking it is
     // always a refusal. This site alone logged 339,764 of them in one session (it is on the
     // 4 Hz telemetry write), each reading `ADDRESS REFUSED (game_rva): 0x140000000` and naming
@@ -31,8 +31,8 @@ pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
     Some((pending as usize, highwater.max(0) as usize))
 }
 
-/// OWNERSHIP LEDGER -- record that we took manual ownership of a native object (we are now
-/// responsible for releasing it). Pair EVERY `ownership_take` with exactly one `ownership_release`
+/// Ownership ledger -- record that we took manual ownership of a native object (we are now
+/// responsible for releasing it). Pair every `ownership_take` with exactly one `ownership_release`
 /// on the discharge path; a bare `store(0)`/overwrite that drops the pointer without a release is
 /// the leak this ledger exists to catch.
 pub(crate) fn ownership_take(class: OwnedClass) {
@@ -42,8 +42,8 @@ pub(crate) fn ownership_take(class: OwnedClass) {
     OWNED_MAX_OUTSTANDING[i].fetch_max(taken.saturating_sub(released), Ordering::SeqCst);
 }
 
-/// OWNERSHIP LEDGER -- record that we handed a native-owned object back to its native lifecycle
-/// (e.g. delete-enqueued it). Only call on the REAL discharge path, never on an incidental pointer
+/// Ownership ledger -- record that we handed a native-owned object back to its native lifecycle
+/// (e.g. delete-enqueued it). Only call on the real discharge path, never on an incidental pointer
 /// clear, so the ledger stays an honest leak detector.
 pub(crate) fn ownership_release(class: OwnedClass) {
     OWNED_RELEASED[class as usize].fetch_add(1, Ordering::SeqCst);
@@ -60,7 +60,7 @@ pub(crate) fn ownership_outstanding(class: OwnedClass) -> usize {
 /// Destroy a previously-spared portrait renderer via CSDelayDeleteMan -- the exact native path the
 /// profile-renderer teardown (`FUN_1409b2f00`) uses for the other 9 renderers each teardown (marks
 /// the object's +0x756 byte, enqueues it, freed on the delete pump when the GPU is done). Vtable-
-/// guarded so a stale/freed/garbage pointer is never enqueued. MUST run on the game/menu thread (the
+/// guarded so a stale/freed/garbage pointer is never enqueued. Must run on the game/menu thread (the
 /// same thread the native teardown runs on -- the manager's list is mutated without locks). Returns
 /// true if the object was enqueued for deletion.
 pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
@@ -71,7 +71,7 @@ pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
     let Ok(base) = game_module_base() else {
         return false;
     };
-    // Only a LIVE profile renderer (correct vtable) -- never a freed/garbage pointer.
+    // Only a live profile renderer (correct vtable) -- never a freed/garbage pointer.
     if unsafe { safe_read_usize(renderer) }.unwrap_or(0)
         != er_game_base::mem::game_data_addr(
             base,
@@ -183,7 +183,7 @@ pub(crate) unsafe extern "system" fn gx_cmd_pump_hook(
 }
 
 /// Nonzero per-bucket widths from the pump context's 109-bucket slot-range table as
-/// `idx:width, ...` (begin at ctx+0x30+idx*0x18, end at +0x34). The bucket whose width GROWS
+/// `idx:width, ...` (begin at ctx+0x30+idx*0x18, end at +0x34). The bucket whose width grows
 /// across switches is the retained-producer class behind the 0x1aeaf05 overflow. Empty string
 /// until the pump context has been latched.
 pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
@@ -250,8 +250,8 @@ fn gx_cmd_queue_band_unavailable_once() {
 /// (reproduced at switch #4, run autostep10c-directarm-20260703-145348). Tracks occupancy
 /// high-water (cumulative + per-switch), total reserves, and a producer histogram keyed by the
 /// first game-.text caller outside the enqueue-wrapper band (self-tagged when our DLL is in the
-/// chain), and dumps the top producers as the queue nears the edge -- so the overflow run NAMES the
-/// accumulating producer. ALWAYS forwards unchanged: the 5ae3965 drop-on-overflow guard corrupted
+/// chain), and dumps the top producers as the queue nears the edge -- so the overflow run names the
+/// accumulating producer. Always forwards unchanged: the 5ae3965 drop-on-overflow guard corrupted
 /// the render (c2794d9) and must not return.
 pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     queue: usize,
@@ -270,7 +270,7 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
         GX_CMD_QUEUE_CAP_SEEN.store(cap as usize, Ordering::Relaxed);
     }
     GX_CMD_QUEUE_SUBMITS.fetch_add(1, Ordering::Relaxed);
-    // The transport band is an EXCLUSION set, so a stale one is not inert -- it is wrong in a way
+    // The transport band is an exclusion set, so a stale one is not inert -- it is wrong in a way
     // that reads as right: every reserve/enqueue frame would be counted as a producer and the
     // histogram would name the transport wrapper as the thing filling the queue. Resolve it, and
     // when this build has no answer, attribute nothing rather than attributing it wrongly.
@@ -423,9 +423,9 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
         ));
         return;
     };
-    // HOOK-BATCH-ATOMIC: the dtor detour SKIPS the game's real destructor for any object absent
+    // HOOK-BATCH-ATOMIC: the dtor detour skips the game's real destructor for any object absent
     // from the live-set that only the ctor detour fills, so a dtor installed without its ctor
-    // would classify EVERY teardown as a double-free and skip it. Partial installation of this
+    // would classify every teardown as a double-free and skip it. Partial installation of this
     // pair is worse than none, which is why the all-or-nothing abort below is correct here and
     // is a defect everywhere else (`scripts/check-hook-batch-abort.py`).
     let mut ok = true;
@@ -481,16 +481,16 @@ pub(crate) fn install_scaleform_handler_lifecycle_guard() {
     }
 }
 
-/// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (deobf 0x1407ac720). Prevents BOTH observed
+/// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (deobf 0x1407ac720). Prevents both observed
 /// return-to-title crashes (rva 0x7ada87 and 0x7adb28) at their common root: the finalize's whole
-/// `if (owningMenuWindow != 0)` block runs on a DOOMED title window during return-to-title. See
+/// `if (owningMenuWindow != 0)` block runs on a doomed title window during return-to-title. See
 /// `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis (er-effects-rs-j74t). rcx = the job; the native
 /// dtor passes rdx/r8/r9 to the finalize untouched, so we forward all four verbatim.
 ///
 /// We reproduce the exact call the finalize makes -- `owningMenuWindow->vfptr[3](window, &scratch)` --
 /// and inspect the descriptor's first i32 (the event-table index). If the vtable is not in the game
 /// module (freed+reused), or the index is out of range (doomed unmapped window), we null
-/// `owningMenuWindow` so the finalize skips the block entirely (and correctly does NOT unref a dead
+/// `owningMenuWindow` so the finalize skips the block entirely (and correctly does not unref a dead
 /// window). Gated to `menu_id == 0xffff` (the unmapped state every crash was in and the precondition
 /// of the finalize's second getter) so healthy mapped windows are byte-identical -- no extra call.
 pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
@@ -500,9 +500,9 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
     r9: usize,
 ) {
     if job != 0 {
-        // Identity first (er-effects-rs-j74t identity layer): if OUR masquerade preserved this job,
+        // Identity first (er-effects-rs-j74t identity layer): if our masquerade preserved this job,
         // take it out of the set unconditionally -- this destructor is the job's lifecycle end --
-        // and apply the STRICT lifetime predicate below instead of the legacy state heuristic.
+        // and apply the strict lifetime predicate below instead of the legacy state heuristic.
         let preserved_stale = masquerade_preserved_job_take(job);
         if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
             let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
@@ -558,7 +558,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
 /// * `false` (native-owned job): legacy behavior, byte-identical -- any non-0xffff (or unreadable)
 ///   menu_id forwards untouched. The game's own coupling of job destruction to window close is
 ///   trusted for jobs we never touched.
-/// * `true` (a job OUR masquerade preserved past its window's native lifetime): the coupling is
+/// * `true` (a job our masquerade preserved past its window's native lifetime): the coupling is
 ///   already known-broken, so only a VERIFIABLY healthy mapped window (`menu_id <
 ///   MENU_WINDOW_MAPPED_MENU_ID_MAX`, the game's own bound) forwards; an unreadable or garbage
 ///   menu_id means freed/reused memory and is doomed. This closes the 2026-07-23 false negative
@@ -571,7 +571,7 @@ pub(crate) unsafe fn menu_window_doomed_event_index(
 ) -> Option<(bool, Option<i32>)> {
     let in_module = |p: usize| p >= base && p.wrapping_sub(base) < GAME_MODULE_VTABLE_SPAN;
     // Read the window's vtable. A freed+reused window's vtable is heap garbage (not in the module) ->
-    // doomed; the finalize's virtual call would fault. Do NOT call through a non-module vtable.
+    // doomed; the finalize's virtual call would fault. Do not call through a non-module vtable.
     let Some(vtable) = (unsafe { safe_read_usize(window) }) else {
         return Some((true, None));
     };
@@ -584,10 +584,10 @@ pub(crate) unsafe fn menu_window_doomed_event_index(
         Some(MENU_WINDOW_MENU_ID_UNMAPPED_SENTINEL) => {}
         // Native-owned job: leave every non-0xffff state byte-identical (legacy behavior).
         _ if !preserved_stale => return None,
-        // OUR stale job, verifiably mapped window: the native finalize's deregistration is valid
+        // Our stale job, verifiably mapped window: the native finalize's deregistration is valid
         // (same `< 0x47` bound the game itself applies) -- forward so the native cleanup runs.
         Some(id) if id < MENU_WINDOW_MAPPED_MENU_ID_MAX => return None,
-        // OUR stale job, unreadable or garbage menu_id: freed/reused window -> doomed.
+        // Our stale job, unreadable or garbage menu_id: freed/reused window -> doomed.
         _ => return Some((true, None)),
     }
     let Some(vf3) = (unsafe { safe_read_usize(vtable + MENU_WINDOW_INPUT_DESC_VTABLE_SLOT) })
@@ -698,7 +698,7 @@ pub(crate) unsafe fn menu_window_remove_from_push_target(
 }
 
 /// Install the ~MenuWindowJob doomed-window guard (er-effects-rs-j74t). Idempotent.
-/// `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40) -- the CALL-PATH-COMPLETE counterpart to
+/// `MenuWindowJob` FINALIZE hook (deobf 0x1407ada40) -- the call-path-complete counterpart to
 /// `menu_window_job_dtor_hook`.
 ///
 /// The destructor guard only covers the finalize's caller at 0x7ac720. The finalize has five callers,
@@ -1030,8 +1030,8 @@ pub(crate) fn install_system_quit_noop_action_hook() {
             return;
         }
     }
-    // EACH ROW INSTALLS OR FAILS ON ITS OWN. These three used to `return` out of the whole
-    // function when an address would not resolve, so a single refused RVA on the FIRST row took
+    // Each row INSTALLS or fails on its own. These three used to `return` out of the whole
+    // function when an address would not resolve, so a single refused RVA on the first row took
     // the other two with it -- including the guard that sits in front of the native
     // Return-to-Desktop confirmation, which is the irreversible one. On 1.17 that is not
     // hypothetical: SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA is declared `: u32` where the row
@@ -1304,9 +1304,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         unsafe { std::mem::transmute(orig) };
     let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    // RESOLVED. `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so the
+    // Resolved. `CS::ProfileLoadDialog`'s vtable moved on 1.17 (0x2b229f8 -> 0x2b25a78), so the
     // raw form matched no dialog and every slot activation on the profile picker fell through to
-    // "forward-original(no-op)" -- neither the save-file picker branch nor ARM-load reachable, on
+    // "forward-original(no-op)" -- neither the save-file picker branch nor arm-load reachable, on
     // a stale address, with nothing in the log to say so. `vt` is `unwrap_or(0)` and a refusal
     // resolves to 0, so `vt_matches` screens the sentinel for every comparison below.
     let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -1322,8 +1322,8 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
 
-    // DIAGNOSTIC (2026-07-16): slot-click does nothing on native Windows 1.16.2 despite ghosting fixed.
-    // Log EVERY activation with the full gate inputs so ONE click pinpoints the failing condition
+    // Diagnostic (2026-07-16): slot-click does nothing on native Windows 1.16.2 despite ghosting fixed.
+    // Log every activation with the full gate inputs so one click pinpoints the failing condition
     // (vt mismatch = wrong 1.16.2 RVA, or profile_window unset, or hidden unset).
     let flow_active_diag = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     append_autoload_debug(format_args!(
@@ -1337,18 +1337,18 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         }
     ));
 
-    // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
-    // menu picker OR the startup title picker), every slot activation is a browse action (up /
+    // Save-file PICKER: while the live 05_010 window is our directory browser (in-game System
+    // menu picker or the startup title picker), every slot activation is a browse action (up /
     // switch drive / enter dir / page / pick file) -- never a character load. This hook is also
-    // the ONLY picker input the DLL receives from this window, which is why drive switching is a
-    // row rather than a left/right axis. Routed before ALL other logic:
+    // the only picker input the DLL receives from this window, which is why drive switching is a
+    // row rather than a left/right axis. Routed before all other logic:
     // at the title the in-game predicate below is false (nothing hidden), but the picker still
     // owns the dialog. Never forwards the native activation (which would arm a world load).
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt_matches {
         let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
-        // Split out from the shared total: a picker activation is a BROWSE step (up, enter dir,
+        // Split out from the shared total: a picker activation is a browse step (up, enter dir,
         // page, pick file), never a load. Summing both kinds into one counter is what let a reader
         // divide the activation count by 2 and call the result a load count -- true only in a session
         // with zero directory navigation. See er_telemetry_core::load_count.
@@ -1357,11 +1357,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         return unsafe { save_picker_handle_activation(dialog, cursor) };
     }
 
-    // TIMING-INDEPENDENT GATE (2026-07-16): the old gate required `hidden` + `profile_window`, BOTH set
+    // Timing-independent gate (2026-07-16): the old gate required `hidden` + `profile_window`, both set
     // asynchronously by run_post on a later frame. A fast slot-click raced them and fell through to the
     // native no-op -- native Windows exposes the race Wine's scheduling hides. Gate instead on
     // SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE (set SYNCHRONOUSLY the instant "Load Profile" is clicked, in the
-    // route FIRE) plus the dialog vtable read right here -- both known AT click time, no run_post dependency,
+    // route fire) plus the dialog vtable read right here -- both known at click time, no run_post dependency,
     // so the click can't race a value it reads itself.
     let flow_active = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     let system_quit_profile_active = flow_active && vt_matches;
@@ -1375,12 +1375,12 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
 
-    // THE CURSOR IS A ROW INDEX, NOT A ProfileSummary SLOT -- resolve it before ANY of the checks
+    // The cursor is a row index, not a ProfileSummary slot -- resolve it before any of the checks
     // below treat it as one. `05_010_ProfileSelect` lists only the slots that exist, so the two
     // numbers coincide only for a container whose characters run densely from slot 0. Everything
     // here used to pass `cursor` straight through as a slot, which made every sparse container
     // unloadable: `~/Downloads/ER0000.co2` (one character, slot 3) previewed as a one-row list, the
-    // user pressed A on row 0, and the mod asked whether SLOT 0 held a character -- it did not, so
+    // user pressed A on row 0, and the mod asked whether slot 0 held a character -- it did not, so
     // the pick was refused, while the native `load_activate` in the same frame resolved row 0 to
     // slot 3 and built its load job for it (`loadgame-builder: ... built for slot=3`, 2026-08-25).
     //
@@ -1390,28 +1390,28 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     let row_slot = er_quit_menu_core::profile_rows::profile_select_row_for_cursor(cursor, bound)
         .and_then(|row| unsafe { er_title_flow::profile_dialog_row_slot(dialog, row) });
 
-    // A SLOT arm -- the activation that actually confirms a character load, one per user pick.
+    // A slot arm -- the activation that actually confirms a character load, one per user pick.
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT.fetch_add(1, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    // PRODUCT PATH (human-driven pick): the slot activation IS the load confirmation. A human's A on
+    // Product path (human-driven pick): the slot activation is the load confirmation. A human's A on
     // a slot must load that character; the old flow instead forwarded into the native confirm ->
     // MessageBox -> OK -> load-job chain, but the product msgbox path SUPPRESSES that "load this
     // profile?" MessageBox before it renders, so a human never gets an OK to press and every A just
     // re-opens+re-suppresses the confirm -- the pick stalls, no load-job Run, no arm (observed
-    // 2026-07-02: 24 activations, zero loads). Arm the save-safe switch DIRECTLY here and natively
+    // 2026-07-02: 24 activations, zero loads). Arm the save-safe switch directly here and natively
     // cancel-close ProfileSelect, satisfying the confirm's only semantic side effect (user chose to
-    // load this profile) with ZERO MessageBox and zero extra input. Repeatable: the continue_confirm
-    // hook returns the phase to IDLE after each reload, so the next pick re-arms cleanly.
+    // load this profile) with zero MessageBox and zero extra input. Repeatable: the continue_confirm
+    // hook returns the phase to idle after each reload, so the next pick re-arms cleanly.
     //
-    // The now-deleted repro autopilot took this SAME direct-arm path as a human pick. Its old scripted
+    // The now-deleted repro autopilot took this same direct-arm path as a human pick. Its old scripted
     // double-A confirm chain (A pick -> confirm MessageBox -> A OK -> load-job Run -> arm) was already
-    // unreachable after the FIRST completed switch: that switch's arm latches PRODUCT_AUTOLOAD_ARMED,
+    // unreachable after the first completed switch: that switch's arm latches PRODUCT_AUTOLOAD_ARMED,
     // whose msgbox suppression then eats the confirm box the second A needs, so every later pick
     // stalled (observed autostep10b 2026-07-03: switch #1 confirmed via the OK chain, switch #2
     // suppressed msgbox-skip #2/#3 and held 20 min). It also no longer matched the human flow that
     // autopilot existed to reproduce. Remaining gates: skip when a switch is already in flight
-    // (phase != IDLE), for an out-of-range cursor, or for an EMPTY slot (arming an empty slot would
+    // (phase != idle), for an out-of-range cursor, or for an empty slot (arming an empty slot would
     // tear down to a clean title then fail the deserialize).
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     if phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
@@ -1430,12 +1430,12 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             };
         unsafe { system_quit_arm_quickload_autoload(slot, "ProfileSelectSlotActivate") };
         // The arm only takes when the preserved System dialog is present; on success it advances the
-        // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
+        // phase past idle. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
         // this direct path) so the menu-pump return-title chain tears the world down + reloads the
-        // picked slot at a clean title. If it did NOT take, fall through to the native activation so
+        // picked slot at a clean title. If it did not take, fall through to the native activation so
         // the pick is not silently dropped.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-            // Baseline `oracle_msgbox_builds_since_switch_arm`: score the switch on ITS OWN builds.
+            // Baseline `oracle_msgbox_builds_since_switch_arm`: score the switch on its own builds.
             let msgbox_baseline = er_title_flow::MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
             MSGBOX_BUILDS_AT_SWITCH_ARM.store(msgbox_baseline, Ordering::SeqCst);
             if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {

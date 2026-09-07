@@ -50,12 +50,12 @@ pub const PARAM_ICON_ID_OFFSET: usize = 0x1C;
 pub const PARAM_CATEGORY_BITS_OFFSET: usize = 0x1E;
 /// `+0x10` -- forbidden icon id (u16). Copied to pin `+0x288`.
 pub const PARAM_FORBIDDEN_ICON_ID_OFFSET: usize = 0x10;
-/// `+0xE8` -- ALTERNATE icon id (u16). Copied to pin `+0x2C8`.
+/// `+0xE8` -- Alternate icon id (u16). Copied to pin `+0x2C8`.
 ///
 /// `CS::WorldMapWarpPinData::GetIconId` (0x14088bb60) returns this one instead of `+0x1C` whenever
 /// any enabled label carries kind `1` (`NpcName`). Every label this crate writes is kind `0`, so
 /// the alternate is not reached today -- but leaving it zero means a single stray kind byte would
-/// call `gotoAndStop(0)` on a 1-based clip and draw NOTHING, with the row still flagged visible and
+/// call `gotoAndStop(0)` on a 1-based clip and draw nothing, with the row still flagged visible and
 /// every counter green. Mirroring the real icon here costs two bytes and deletes that whole silent
 /// failure mode.
 pub const PARAM_ALT_ICON_ID_OFFSET: usize = 0xE8;
@@ -84,7 +84,7 @@ pub const LABEL_TEXT_ID_NONE: i32 = -1;
 /// (`0x14087ae20`) hands it to Scaleform as `Icon_0.gotoAndStop(id)`. `Icon_0` is a 348-frame
 /// MovieClip (sprite 171) inside `menu:/02_120_WorldMap.gfx`, and frame N places one
 /// `MENU_MAP_*` bitmap. There is no lookup table, no atlas indirection and no clamp: an id
-/// outside the populated frames lands on one of the 230 empty frames and draws NOTHING.
+/// outside the populated frames lands on one of the 230 empty frames and draws nothing.
 ///
 /// This is why the earlier value here was actively wrong. It was `2`, chosen as "some id that
 /// is not the graces' `1`" -- but frame 2 is `MENU_MAP_01_Bonfire` *plus* an overlay, i.e. the
@@ -122,7 +122,7 @@ pub enum PinAppearance {
 
 /// The icon id for one pin.
 ///
-/// Falls back to the single vanilla frame for EVERY appearance when the markers are not installed.
+/// Falls back to the single vanilla frame for every appearance when the markers are not installed.
 /// Distinguishing the tiers requires the spare frames to have been populated; without them the
 /// alternative ids point at empty frames and those pins would silently disappear, which is a worse
 /// outcome than every pin looking the same.
@@ -134,7 +134,7 @@ pub enum PinAppearance {
 /// the filter would do with an invasion landing here". Both have to be visible at once, which is
 /// why there are two frames per tier rather than one dim frame shared by all three.
 ///
-/// A colour transform is baked into a GFx frame, so it CANNOT be toggled on one icon id -- the
+/// A colour transform is baked into a GFx frame, so it cannot be toggled on one icon id -- the
 /// engine's only input is the frame number. Switching the id is the whole mechanism, and it is the
 /// same one the tiers already use.
 #[must_use]
@@ -155,7 +155,7 @@ pub const fn invasion_pin_icon_id_for(
     }
     match appearance {
         PinAppearance::Chosen => CHOSEN_INVASION_PIN_FRAME,
-        // The DEFAULT tier keeps the frame invasion pins have always used, so an untouched config
+        // The default tier keeps the frame invasion pins have always used, so an untouched config
         // renders exactly the map that existed before tiers. Putting this tier on a new frame is
         // what blanked a live map: every pin is `Eligible` until the user marks something.
         PinAppearance::Eligible => RED_INVASION_PIN_FRAME,
@@ -163,7 +163,7 @@ pub const fn invasion_pin_icon_id_for(
     }
 }
 
-/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_03` (188x190) -- the LARGEST of the family, for a
+/// Spare `Icon_0` frame carrying `MENU_MAP_Enemy_03` (188x190) -- the largest of the family, for a
 /// location the user chose.
 ///
 /// The tiers are ranked by size: 188 > 146 > 68. Brightness is not monotonic across this family
@@ -195,7 +195,7 @@ pub const RED_INVASION_PIN_FRAME: u16 = 300;
 /// 263 to 347. None of the six collides with a shipped icon, and each is checked for emptiness
 /// individually before anything is written.
 ///
-/// The BRIGHT set is deliberately the original three, carrying their original placement bytes with
+/// The bright set is deliberately the original three, carrying their original placement bytes with
 /// no colour transform at all. That makes the idle map -- the state a player is in almost all the
 /// time -- byte-identical to the one already proven to render, and confines every new frame to the
 /// dimmed set, where a failure is bounded to the duration of an invasion attempt and is obvious.
@@ -227,7 +227,7 @@ pub const LAYER_BIT_SHADOW_LANDS: u8 = 0x4;
 
 /// Area byte of a Shadow Lands (Shadow of the Erdtree) block.
 pub const AREA_SHADOW_LANDS: u8 = 61;
-/// Area byte the engine treats as the UNDERGROUND layer (Siofra, Ainsel, Deeproot, Mohgwyn).
+/// Area byte the engine treats as the underground layer (Siofra, Ainsel, Deeproot, Mohgwyn).
 ///
 /// It is `12`, not `60`. An earlier comment here asserted that area 60 covered both the surface
 /// and the underground; the binary says otherwise (`0x140886c40` / `0x140887870` promote a
@@ -243,8 +243,8 @@ pub const AREA_UNDERGROUND: u8 = 12;
 /// `bitIdx = FUN_140887e90(currentLayerId)` maps layer `0` -> bit 0, `1` -> bit 1, `10` -> bit 2,
 /// and anything else -> `-1` (invisible).
 ///
-/// **A row carries exactly ONE coordinate** (`row+0x10`), produced by one area converter. Setting
-/// several bits therefore does not put a pin on several maps -- it draws the SAME point on each
+/// **A row carries exactly one coordinate** (`row+0x10`), produced by one area converter. Setting
+/// several bits therefore does not put a pin on several maps -- it draws the same point on each
 /// of them, and that point only means anything on the map whose converter produced it. Setting
 /// all three was wrong in a way that was easy to see and easy to misdiagnose: a Shadow Lands pin,
 /// correctly projected into Shadow Lands space, was also drawn on the Lands Between map at those
@@ -253,7 +253,7 @@ pub const AREA_UNDERGROUND: u8 = 12;
 ///
 /// So the bit must come from the converter that actually accepted the pin (the caller has that
 /// index; see the DLL's `layer_bit_for_converter`), and exactly one bit may be set. "On every
-/// map" is a property of the pin SET, not of any single row's mask.
+/// map" is a property of the pin set, not of any single row's mask.
 pub const LAYER_BIT_DOC: () = ();
 
 /// How a synthetic pin should be described and categorised.
@@ -271,12 +271,12 @@ pub struct SyntheticParamSpec {
     pub place_name_text_id: i32,
 }
 
-/// Write `icon_id` into EVERY icon slot of a synthetic param row.
+/// Write `icon_id` into every icon slot of a synthetic param row.
 ///
 /// # Why all four, and why this is a function
 ///
 /// A pin row does not hold one icon. `CS::WorldMapWarpPinData`'s constructor (`0x14088b7b0`) seeds
-/// FOUR 0x40-byte icon descriptors from four separate fields of this param row -- byte-verified
+/// four 0x40-byte icon descriptors from four separate fields of this param row -- byte-verified
 /// against its own loads:
 ///
 /// | param offset | row descriptor |
@@ -290,11 +290,11 @@ pub struct SyntheticParamSpec {
 /// choice depends on an event-flag predicate over the param row -- state a synthetic row does not
 /// model. So the only way to be sure the pin draws the intended icon is for all four to agree.
 ///
-/// THIS IS A FUNCTION BECAUSE THE TWO CALLERS DRIFTED. `to_row_bytes` set all four; the
+/// This is a function because the two callers drifted. `to_row_bytes` set all four; the
 /// re-stamp that runs when the player marks a location set only `0x1c`. The result was the
 /// reported bug: the log showed the tiers changing correctly on every pin, and the map on screen
 /// never changed, because the descriptor the engine actually read still held the icon from the
-/// FIRST build. One entry point makes that divergence impossible.
+/// first build. One entry point makes that divergence impossible.
 pub fn stamp_icon_id(row: &mut [u8; SYNTHETIC_PARAM_ROW_LEN], icon_id: u16) {
     for at in [
         PARAM_ICON_ID_OFFSET,
@@ -351,7 +351,7 @@ impl SyntheticParamSpec {
 mod tests {
     use super::*;
 
-    /// THE REGRESSION, and it shipped. A pin row carries FOUR icon descriptors and the engine picks
+    /// The regression, and it shipped. A pin row carries four icon descriptors and the engine picks
     /// one at draw time from state a synthetic param row does not model. A stamper that updates
     /// only the first leaves the map showing the icon from the first build forever -- the exact
     /// reported symptom: correct tiers in the log, no change on screen.
@@ -373,7 +373,7 @@ mod tests {
         }
     }
 
-    /// Re-stamping must REPLACE every slot, not leave a stale one behind -- a mark changes the icon
+    /// Re-stamping must replace every slot, not leave a stale one behind -- a mark changes the icon
     /// of a row that already has one.
     #[test]
     fn re_stamping_replaces_every_slot_rather_than_leaving_a_stale_one() {
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn the_buffer_covers_every_byte_the_engine_reads() {
-        // Under-allocating here is an out-of-bounds read INSIDE the engine, not a Rust panic.
+        // Under-allocating here is an out-of-bounds read inside the engine, not a Rust panic.
         assert!(SyntheticParamSpec::highest_read_offset() < SYNTHETIC_PARAM_ROW_LEN);
         // The last label text id must also fit.
         let last_text =
@@ -525,7 +525,7 @@ mod tests {
             PinAppearance::Eligible,
             PinAppearance::Rejected,
         ];
-        // Distinct WITHIN each brightness, and the two brightnesses must not overlap either -- all
+        // Distinct within each brightness, and the two brightnesses must not overlap either -- all
         // six ids are handed to the same `gotoAndStop`, so any collision renders two states or two
         // tiers identically.
         for dimmed in [false, true] {
@@ -553,9 +553,9 @@ mod tests {
             6,
             "bright and dimmed must occupy separate frames"
         );
-        // Without the spare frames populated, every alternative id points at an EMPTY frame and
+        // Without the spare frames populated, every alternative id points at an empty frame and
         // draws nothing. Falling back to one vanilla frame loses the distinction but keeps the
-        // pins visible, which is the right way round -- and that has to hold in BOTH states, or an
+        // pins visible, which is the right way round -- and that has to hold in both states, or an
         // invasion would blank a map that has no markers installed.
         for tier in tiers {
             for dimmed in [false, true] {
@@ -566,9 +566,9 @@ mod tests {
                 );
             }
         }
-        // The DEFAULT tier must be the frame the single-appearance helper already used. This is the
+        // The default tier must be the frame the single-appearance helper already used. This is the
         // no-regression guarantee: an untouched config makes every pin `Eligible`, so the map has
-        // to render exactly as it did before tiers existed. Pointing this tier at a NEW frame is
+        // to render exactly as it did before tiers existed. Pointing this tier at a new frame is
         // what blanked a live map -- 510 of 512 pins moved onto frames that had never been seen to
         // draw, all at once, by doing nothing at all.
         //

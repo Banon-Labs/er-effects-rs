@@ -427,7 +427,7 @@ def parse_protocol_file(path: Path):
 
 # A status file this old means nobody is reading the control file any more. The DLL rewrites
 # status.txt from its necromancy tick roughly once a second while it is alive, so the file's mtime is
-# a heartbeat: a game that exited (or that was launched WITHOUT ER_PROFILE_05_010_EDITOR_DIR, which
+# a heartbeat: a game that exited (or that was launched without ER_PROFILE_05_010_EDITOR_DIR, which
 # makes the whole editor path inert) leaves the last status frozen on disk with `connected = true`.
 # Before this, the badge read that stale line and said "live runtime connected" to a dead process --
 # two saves went into the void with the UI showing green (2026-08-07, sequence 62 vs ack 57).
@@ -492,8 +492,8 @@ def runtime_status(last_sequence: int = 0):
 def start_rebuild():
     if rebuild_state["running"]:
         return
-    # Publish RUNNING before the worker starts. When this happened inside the thread, a client could
-    # POST /rebuild and immediately read the previous completed result, falsely declaring the new
+    # Publish running before the worker starts. When this happened inside the thread, a client could
+    # post /rebuild and immediately read the previous completed result, falsely declaring the new
     # rebuild done before it had begun.
     rebuild_state.update({"running": True, "returncode": None, "output": ""})
     def run():

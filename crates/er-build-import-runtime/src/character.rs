@@ -23,22 +23,22 @@ const GET_MAIN_PLAYER_STATS_RVA: usize = 0x788360;
 const APPLY_MAIN_PLAYER_STATS_RVA: usize = 0x788cf0;
 
 /// `CS::EquipMagicData::GetMagicSlotsCount(emd, SpecialEffect*)` -- pass null and it derives
-/// the effect itself. Clamps to 14. THE source of capacity; never hardcode a number.
+/// the effect itself. Clamps to 14. The source of capacity; never hardcode a number.
 /// `EquipMagicInSlot(emd, ChrAsmSlot slot, uint magicParamId) -> bool`.
 const EQUIP_MAGIC_IN_SLOT_RVA: usize = 0x250490;
 
 /// `EquipMagicData::entries`, an `EquipMagicItem[14]`.
 ///
-/// THE ARRAY BOUND, and deliberately not the character's capacity. Both natives this module
+/// The array bound, and deliberately not the character's capacity. Both natives this module
 /// calls refuse `slot >= 0xe` themselves (`GetEquipMagicId` returns -1, `EquipMagicInSlot`
 /// returns 0 having written nothing), so a slot below it can never be a write past the array --
 /// which is what makes the clear below safe to run over the whole array rather than over the
-/// number of slots the character may USE. See [`memorise_spells`] for why it has to.
+/// number of slots the character may use. See [`memorise_spells`] for why it has to.
 const MAGIC_SLOT_ENTRIES: usize = 14;
 
 /// `EquipMagicItem::paramId` for a slot holding nothing.
 ///
-/// It is BOTH the value the read-back returns for an empty slot and the id handed to
+/// It is both the value the read-back returns for an empty slot and the id handed to
 /// `EquipMagicInSlot` to make one: the writer looks the id up in `MAGIC_PARAM_ST`, finds no row
 /// for -1, and stores `{paramId: -1, charges: -1}`. That is not an inferred use of an invalid
 /// argument -- `ChangeMagicEquipSlot` (`0x1407881c0`), the menu's own handler, computes
@@ -68,17 +68,17 @@ const PGD_INTELLIGENCE: usize = 0x50;
 const PGD_FAITH: usize = 0x54;
 const PGD_ARCANE: usize = 0x58;
 
-// PINNED TO THE SHARED STRUCT, not merely written down twice.
+// Pinned to the shared STRUCT, not merely written down twice.
 //
-// These eight are a PRIVATE COPY of offsets `er-game-base::pgd` already pins against
+// These eight are a private copy of offsets `er-game-base::pgd` already pins against
 // `../fromsoftware-rs`'s `#[repr(C)]` `PlayerGameData`. A private copy is outside those pins by
 // construction: `pgd.rs` const-asserts vigor/mind/endurance/strength/dexterity and the struct
 // could drift under these literals without one assertion firing.
 //
-// It matters more than the duplication suggests. The WRITE does not use these offsets at all --
+// It matters more than the duplication suggests. The write does not use these offsets at all --
 // it goes through `ApplyMainPlayerStats(const int in[10])`, an array API that takes no offsets --
 // so a drift here would not corrupt anything. It would do something quieter: these offsets are
-// the READ-BACK, the oracle that decides whether the import worked. A drifted offset reports a
+// the read-back, the oracle that decides whether the import worked. A drifted offset reports a
 // correct import as a wrong attribute, which sends the next reader after a bug that is not there.
 //
 // intelligence/faith/arcane are three of the eight fields whose 1.17 position is bracketed rather
@@ -186,9 +186,9 @@ pub unsafe fn set_class(pgd: usize, class_name: &str) -> Option<(u8, u8)> {
 /// `CSMenuMan`/`WorldChrMan` and skips the vitals recompute if `mainPlayerIns` is null, so
 /// the caller's in-world gate is a precondition, not a nicety.
 pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> Option<StatsOutcome> {
-    // NOT `StatsOutcome::default()` ON REFUSAL, and the difference is the whole reason this
+    // Not `StatsOutcome::default()` on refusal, and the difference is the whole reason this
     // returns an `Option`. A default outcome has an empty `wrong` list, so `is_correct()` answers
-    // TRUE and the caller logs "every attribute matches the build" for a character whose stats
+    // true and the caller logs "every attribute matches the build" for a character whose stats
     // were never written. A refusal has to be unrepresentable as a success.
     let [get, apply] = crate::native::resolve_all(
         module_base,
@@ -210,7 +210,7 @@ pub unsafe fn apply_stats(module_base: usize, pgd: usize, doc: &BuildDoc) -> Opt
     let before = unsafe { *((pgd + PGD_LEVEL) as *const i32) };
 
     let want = |key: &str| doc.stats.get(key).copied().unwrap_or_default() as i32;
-    // `rl` IS THE DERIVED LEVEL, not the payload's claim. `fetch_inner` overwrites
+    // `rl` is the derived level, not the payload's claim. `fetch_inner` overwrites
     // `doc.stats["rl"]` with `sum(attributes) - 79` before handing the doc over, precisely so
     // this line cannot stamp a level that contradicts the attributes two lines below it. Before
     // that (2026-09-01) a planner claiming `rl: 150` beside attributes summing to 226 produced a
@@ -269,13 +269,13 @@ pub struct SpellOutcome {
     pub over_capacity: usize,
     /// Memory slots emptied before the build's spells were written.
     pub cleared: usize,
-    /// Whether the clear was SKIPPED because the build named no spells at all -- which is a
+    /// Whether the clear was skipped because the build named no spells at all -- which is a
     /// different report from "the character had nothing memorised", and the only case where a
     /// spell the build does not name is left in place on purpose.
     pub clear_declined: bool,
     /// Slots still holding something past the end of the build's list once the pass finished.
     ///
-    /// THE PROOF, and the number the reported defect would have been caught by: the old pass
+    /// The proof, and the number the reported defect would have been caught by: the old pass
     /// wrote slots `0..n` and read those same slots back, so a character carrying nine spells
     /// the build never mentioned scored `1/1 memorised` while the HUD showed ten.
     pub stale: usize,
@@ -287,7 +287,7 @@ pub struct SpellOutcome {
 ///
 /// # Why this empties the memory slots first
 ///
-/// A build's spell list is DENSE and carries no positions: `export_doc.rs` gives a memorised
+/// A build's spell list is dense and carries no positions: `export_doc.rs` gives a memorised
 /// spell no `equipIndex`, only an `order`, and its place in the list *is* the memorisation slot.
 /// So the list cannot express a hole, and a list of length `n` is a complete statement that
 /// slots `n..` hold nothing -- unlike an armament or a talisman, where the build names the
@@ -301,17 +301,17 @@ pub struct SpellOutcome {
 /// # Why the clear runs over all fourteen entries and always from slot 0
 ///
 /// `EquipMagicInSlot` ends by calling `ValidateEquipMagicData` (`0x140251010`), which
-/// LEFT-COMPACTS the array: it walks `0..14` and, for every empty entry, pulls the first
+/// left-COMPACTS the array: it walks `0..14` and, for every empty entry, pulls the first
 /// non-empty entry after it forward and empties the source. Two consequences, and both of them
 /// break the obvious implementation:
 ///
-/// * a clear bounded by the character's CAPACITY is worse than no clear at all. Emptying
+/// * a clear bounded by the character's capacity is worse than no clear at all. Emptying
 ///   `0..capacity` makes the compaction drag whatever sits in `capacity..14` -- spells from
 ///   before a respec dropped the character's Memory Stone count -- forward into exactly the
 ///   slots the build is about to fill;
 /// * slot indices do not survive a clear, so a sweep of `0..14` in order does not empty the
 ///   array. Every non-empty entry is a prefix of it after any write, which is what makes
-///   clearing SLOT 0, repeatedly, correct: each call removes exactly one entry and the engine
+///   clearing slot 0, repeatedly, correct: each call removes exactly one entry and the engine
 ///   re-packs the rest. Fourteen iterations therefore drain fourteen entries, and every one of
 ///   them touches only slot 0, which is inside the array by construction.
 ///
@@ -374,7 +374,7 @@ pub unsafe fn memorise_spells(
     // Safety: null SpecialEffect means "derive it from the player", which the function handles.
     outcome.capacity = unsafe { slots_count(emd, 0) };
 
-    // EMPTY THE ARRAY, then fill it. See the header for why this is slot 0 fourteen times over
+    // Empty the array, then fill it. See the header for why this is slot 0 fourteen times over
     // rather than a sweep, and why the bound is the array rather than the capacity.
     outcome.clear_declined = spells.is_empty();
     if !outcome.clear_declined {
@@ -410,9 +410,9 @@ pub unsafe fn memorise_spells(
         }
     }
 
-    // WHAT THE OLD READ-BACK COULD NOT SEE. Reading back the slots that were just written proves
+    // What the old read-back could not see. Reading back the slots that were just written proves
     // the writes landed and nothing else; the defect this pass exists to close lives entirely in
-    // the slots it did NOT write. So the tail is read too, and a non-zero count here is the
+    // the slots it did not write. So the tail is read too, and a non-zero count here is the
     // import failing to match the build even when every other number on the line is perfect.
     let occupied = spells.len().saturating_sub(outcome.over_capacity);
     for slot in occupied..MAGIC_SLOT_ENTRIES {

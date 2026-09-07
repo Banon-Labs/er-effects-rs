@@ -84,7 +84,7 @@ const ROSTER_EVERY_TICKS: usize = 10;
 
 /// Frames a completed route is kept before its target is re-asked.
 ///
-/// Was 30 -- half a second -- which is how often the ROUTE was re-asked, and therefore how often
+/// Was 30 -- half a second -- which is how often the route was re-asked, and therefore how often
 /// a trail could be torn down and re-laid. A live run at that rate placed over a thousand stones
 /// in three minutes: the target moves, the route legitimately changes, and the whole trail
 /// restarts. Two seconds is still far faster than anyone crosses a trail's worth of ground, and
@@ -124,7 +124,7 @@ unsafe extern "system" {
 /// `GetAsyncKeyState`'s high bit: the key is down right now.
 #[cfg(windows)]
 const KEY_DOWN_MASK: i16 = -0x8000;
-/// Its low bit: the key was pressed since the previous call ON THIS THREAD. Both bits are needed
+/// Its low bit: the key was pressed since the previous call on this thread. Both bits are needed
 /// -- a press and release entirely inside one frame sets only the low one, and polling the high
 /// bit alone would drop it.
 #[cfg(windows)]
@@ -154,7 +154,7 @@ impl KeyEdge {
 ///
 /// `ChrIns::tae_queued_use_item` (`ChrIns+0x160`) is what the animation system reads to decide
 /// which goods row a use-item animation applies, so it names the item at the moment it is used.
-/// Watching for a TRANSITION to the configured id is what stops holding the item from toggling
+/// Watching for a transition to the configured id is what stops holding the item from toggling
 /// the overlay on and off sixty times a second.
 #[cfg(windows)]
 #[derive(Default)]
@@ -242,7 +242,7 @@ struct TaskState {
     draining: Vec<navpath::PendingRequest>,
 }
 
-/// Give up on a request's ANSWER without giving up on the request.
+/// Give up on a request's answer without giving up on the request.
 ///
 /// Dropping a `PendingRequest` looks free and is not. The engine allocates each request from a
 /// fixed-size ring on the `CSHkAiWorld` -- `world+0x130` is the slot array (stride `0x68`),
@@ -252,7 +252,7 @@ struct TaskState {
 /// in `poll`. That release is also what `hkUnref`s the Havok path and frees the two heap buffers
 /// hanging off `+0x50` and `+0x58`.
 ///
-/// So an unfetched request holds its slot, its Havok reference and its allocations FOREVER. And
+/// So an unfetched request holds its slot, its Havok reference and its allocations forever. And
 /// the ring is not ours -- it is the one every NPC in the map allocates from, so filling it stops
 /// the game's own characters pathfinding. Four places here would otherwise drop one: a player
 /// leaving, the overlay switching off, the self-check re-arming, and -- constantly, during exactly
@@ -287,7 +287,7 @@ fn drain_abandoned(state: &mut TaskState) {
 
 #[cfg(windows)]
 fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
-    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // Bounded (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
     // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
     // three minutes while these threads burned 19,000 each, half of it system time. See
     // er_game_base::wait for the measurement.
@@ -300,7 +300,7 @@ fn tick(state: &mut TaskState) {
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
 
     // Settings are editable while the game runs: change the key in the toml, save, press it. The
-    // file is re-read on a slow cadence and compared by CONTENT, so an edit saved in the same
+    // file is re-read on a slow cadence and compared by content, so an edit saved in the same
     // second as the previous read is still seen -- a timestamp check would miss it, and "I
     // changed the key and nothing happened" is the whole failure this avoids.
     if ticks.is_multiple_of(CONFIG_RELOAD_TICKS)
@@ -308,7 +308,7 @@ fn tick(state: &mut TaskState) {
     {
         if let Some(previous) = reloaded.previous_key_text.as_deref() {
             // Whichever key was physically down at the moment of the swap must not count as a
-            // press of the NEW binding, so the edge detector starts over.
+            // press of the new binding, so the edge detector starts over.
             state.toggle = KeyEdge::default();
             path_log(format_args!(
                 "config: reloaded -- toggle key {previous} -> {}",
@@ -325,7 +325,7 @@ fn tick(state: &mut TaskState) {
     let config = config::config();
 
     let by_key = state.toggle.pressed(config.toggle_key);
-    // Read the player ONLY when an item trigger is actually configured. With the default
+    // Read the player only when an item trigger is actually configured. With the default
     // `trigger_item_id = 0` there is nothing to compare against, so polling the player every
     // frame buys nothing and costs a pointer chase through a world that may not exist yet --
     // which is precisely what killed the game at ~100ms before this guard existed.
@@ -463,7 +463,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         // rule of this crate's own invention.
         if remote.distance_meters < config.near_suppress_meters {
             SUPPRESSED.fetch_add(1, Ordering::Relaxed);
-            // The site that would have hurt most: a target crossing INTO the suppression
+            // The site that would have hurt most: a target crossing into the suppression
             // distance is the normal course of a fight, and it happens with a request in flight
             // every time. Dropping it here would burn a slot out of the world's shared ring on
             // every approach.
@@ -540,7 +540,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
                 if let Some(marker_fxr) = marker_fxr {
                     // Retargeting first is what stops the pile-up: a route that has not moved
                     // keeps the trail it already has instead of laying a second one over it. A
-                    // route that HAS moved tears its old stones down before laying new ones.
+                    // route that has moved tears its old stones down before laying new ones.
                     let marker_variant = sfx::SpawnVariant {
                         a: config.marker_variant.0,
                         b: config.marker_variant.1,
@@ -598,7 +598,7 @@ fn rebuild(state: &mut TaskState, ticks: usize, config: &config::PathConfig) {
         };
         // With world markers on, the route is already drawn -- in the world, by the engine. The
         // imgui line on top of it is a second drawing of the same thing, which is what the first
-        // live run looked like. The ARROW still draws either way: there is no trail for a target
+        // live run looked like. The arrow still draws either way: there is no trail for a target
         // the navmesh cannot reach, so suppressing it would leave nothing at all.
         let markers_own_this_route = marker_fxr.is_some() && matches!(shape, RouteShape::Walk(_));
         if !markers_own_this_route {
@@ -692,7 +692,7 @@ fn advance_self_check(state: &mut TaskState, roster: &game::Roster, config: &con
     }
 }
 
-/// Prove the SFX spawn/despawn round-trip WITHOUT a second player.
+/// Prove the SFX spawn/despawn round-trip without a second player.
 ///
 /// The marker path only runs for a remote player's route, so the first execution of a direct
 /// `SpawnFfxInstance` call and the sign-style teardown was in a live Seamless session -- and it
@@ -720,7 +720,7 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
         b: config.marker_variant.1,
         c: config.marker_variant.2,
     };
-    // The settings the DLL ACTUALLY read, printed where they can be checked against the file.
+    // The settings the DLL actually read, printed where they can be checked against the file.
     // Two rounds of "that setting did not take effect" were spent comparing a toml on disk against
     // what the DLL was believed to have loaded, which is a comparison nobody outside the process
     // can make.
@@ -737,7 +737,7 @@ unsafe fn marker_selfcheck(config: &config::PathConfig) {
         config.marker_fxr_ids
     ));
 
-    // One of EVERY configured effect, laid out in a line at your feet.
+    // One of every configured effect, laid out in a line at your feet.
     //
     // Choosing an effect used to mean editing the file, looking, editing again -- once per
     // candidate, and the candidates are picked from file sizes and resource lists, so there are a
@@ -878,8 +878,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crosses an
-        // `extern "system"` boundary and becomes an ABORT, which does not dispatch to a
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
         // vectored handler -- so `er_crash_logging` writes no record at all and the process
         // just vanishes. This hook is what turns that silence into a file:line. The hook is
         // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
@@ -902,7 +902,7 @@ pub extern "C" fn er_invasion_path_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
-// If THIS module wins the imgui context, every other overlay in the process has to be able to
+// If this module wins the imgui context, every other overlay in the process has to be able to
 // find it by name.
 #[cfg(windows)]
 er_build_watermark_core::export_overlay_host!();

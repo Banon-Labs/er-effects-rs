@@ -5,7 +5,7 @@
 //! byte-for-byte identical to the input. The gate is byte-identity; the first
 //! differing offset is reported on mismatch.
 //!
-//! If the corpus root does not exist (CI without assets), the test SKIPS with an
+//! If the corpus root does not exist (CI without assets), the test skips with an
 //! `eprintln!` rather than failing.
 
 mod common;

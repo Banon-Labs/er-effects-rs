@@ -2,27 +2,27 @@
 """Measure static equivalence coverage for the FromSoft manual-const refactor.
 
 This is not a proof that the game runtime is correct by itself. It is a
-source-level oracle for the thing ITS OWN branch was supposed to be: refactoring
+source-level oracle for the thing its own branch was supposed to be: refactoring
 manual constants into typed enums/layouts without changing the feature's numeric
 contract. It compares same-name constants changed relative to `main`, evaluates
 simple numeric aliases (including enum variants), and reports any mismatch or
 unresolved comparison as evidence that the refactor is not fully proven.
 
-REPORTS BY DEFAULT; PASS `--gate` TO FAIL ON UNPROVEN FINDINGS.
+Reports by default; Pass `--gate` to fail on UNPROVEN findings.
 
 Until 2026-08-31 this docstring called itself "fail-closed" while `main()` returned
 0 unconditionally -- it printed 31 findings, 6 of them outright constant
 MISMATCHES, and exited green. The claim is now true, but only under `--gate`,
 because the default has to stay usable on a branch where the finding is expected.
 
-IT MUST NOT BE WIRED INTO `scripts/check.sh` ON AN ADDRESS-MIGRATION BRANCH. Its
+It must not be wired into `scripts/check.sh` on an address-migration branch. Its
 premise is "a refactor must not change the numeric contract"; the premise of
 `fix/repoint-rvas-to-1170` is that every game address changes. All six mismatches
 it reports there are the intentional 1.16.2 -> 1.17 repoints, four of them
 verbatim rows in `docs/recon/rva-map-1162-to-1170*.tsv` and the fifth
 (`0x14067a99a -> 0x14067b7ea`) an entry+0x1a callsite carried by the
 offset-from-entry convention that `check-no-stale-callsite-rva.py` owns. The two
-premises are mutually exclusive. Use `--gate` on a PURE-refactor branch, where a
+premises are mutually exclusive. Use `--gate` on a pure-refactor branch, where a
 changed number really is a defect.
 """
 
@@ -565,7 +565,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     else:
         emit_text(report)
     if args.gate:
-        # THROUGH `metrics`, NOT OFF THE TOP LEVEL. `build_report` nests every count under
+        # Through `metrics`, not off the top level. `build_report` nests every count under
         # `report["metrics"]` (the `--format metrics` view is that dict verbatim), so reading
         # `report["unproven_equivalence_total"]` raised KeyError and `--gate` could not run at
         # all -- the flag was added, documented and never executed once.

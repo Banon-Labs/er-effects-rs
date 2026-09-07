@@ -15,7 +15,7 @@
 //!
 //! Structural parsing wraps `fstools_formats`' FLVER reader; this crate adds the raw
 //! byte slicing, the owned format table, panic-safety, and the ISG1 reconciliation.
-//! It parses ALREADY-DECOMPRESSED `.flver` bytes — DCX/Oodle stays in the er-soulsformats
+//! It parses already-DECOMPRESSED `.flver` bytes — DCX/Oodle stays in the er-soulsformats
 //! wine shaderbridge, so no Oodle library is pulled in. Host-only.
 
 pub mod error;

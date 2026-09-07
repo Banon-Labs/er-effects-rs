@@ -1,47 +1,47 @@
 #!/usr/bin/env python3
-"""Say whether an address is a function ENTRY, a LEAF with no unwind data, or MID-FUNCTION.
+"""Say whether an address is a function entry, a leaf with no unwind data, or mid-function.
 
-WHY THIS EXISTS, and why the verdict table cannot answer it
+Why this exists, and why the verdict table cannot answer it
 -----------------------------------------------------------
 `verify-rva-map-1170.py`'s last column has three states, and one of them is doing two
 incompatible jobs. `BOTH-ENTRIES` means both images' `.pdata` declare a function start at the
 address. `NEITHER-ENTRY` means neither does -- and that covers two populations that could not be
 more different:
 
-  * a LEAF function. The x64 ABI lets a function omit unwind data when it allocates no stack and
+  * a leaf function. The x64 ABI lets a function omit unwind data when it allocates no stack and
     calls nothing, so ELDEN RING's many small getters and `jmp` thunks have no `.pdata` row at
     all. Hooking one is fine.
-  * an address in the MIDDLE of a function. A captured return address, a byte-patch site, a
+  * an address in the middle of a function. A captured return address, a byte-patch site, a
     constant that was derived by subtracting a dump shift that did not apply. Hooking one means
     MinHook overwrites five bytes mid-body.
 
 `er-game-base/build.rs` accepts `NEITHER-ENTRY` for detours on purpose -- refusing it would throw
 away every legitimate leaf -- so the second population is licensed along with the first, and
-nothing downstream re-checks. MEASURED 2026-08-30, during the wave-2 merge: SIX mid-function
+nothing downstream re-checks. Measured 2026-08-30, during the wave-2 merge: Six mid-function
 addresses reached or nearly reached the verified table carrying `IDENTICAL` over 20-94
 instructions and `NEITHER-ENTRY`. Two were already merged -- `0x958b37` (+0x227 inside
 `0x958910..0x958c4f`) and `0xaec480` (below). Four more (`0x7642b0`, `0x76432c`, `0x7acbf0`, `0xc57670`) were in the next batch and were refused by hand. Every
 one clears `MIN_VERIFIED_INSNS`, because being mid-function does not make the surrounding code
 differ -- it makes the comparison agree beautifully about the wrong thing.
 
-READ THAT LAST SENTENCE AGAIN BEFORE TRUSTING A CLEAN VERDICT. A mid-function address produces a
+Read that last sentence again before trusting a clean verdict. A mid-function address produces a
 *better-looking* verdict than a real entry does: it sits in the middle of a stable neighbourhood,
-so the normalised comparison runs long and agrees everywhere. `0x140aec480` verified `IDENTICAL
+so the normalised comparison runs long and agrees everywhere. `0x140aec480` verified `identical
 1.000` over 56 instructions and was merged. It is +0x360 inside `0x140aec120..0x140aec567`, the
-repo had ALREADY recorded that (`crates/er-title-flow/src/title_load_step_hooks.rs` names the real
+repo had already recorded that (`crates/er-title-flow/src/title_load_step_hooks.rs` names the real
 entry `0x140aec570`), and `crates/er-reload-trace/src/lib.rs` carried a raw `rva: 0xaec480`
 HookSpec that would have consumed the licence -- removed the same day by a different agent, which
 is not a mechanism anyone should rely on twice.
 
 The inversion in one line: that impostor row is `IDENTICAL` over 56 instructions and would carry a
-detour, while the CORRECT pair `0xaec570 -> 0xaed880` is `IDENTICAL` over 9 and is refused one by
+detour, while the correct pair `0xaec570 -> 0xaed880` is `IDENTICAL` over 9 and is refused one by
 `MIN_VERIFIED_INSNS`. Verdict quality is not hook-target validity, and no number of matching
 instructions is.
 
 The distinguishing question is not "is there a `.pdata` row AT this address" but "is this address
-INSIDE some other function's declared extent". That is what this answers.
+inside some other function's declared extent". That is what this answers.
 
-USAGE
+Usage
     python3 scripts/classify-1170-entry-kind.py 0x140958b37 0x140836f30
     python3 scripts/classify-1170-entry-kind.py --map docs/recon/rva-map-1162-to-1170.verified.tsv
     python3 scripts/classify-1170-entry-kind.py --fail-on-mid      # gate mode, the tables build.rs reads
@@ -69,13 +69,13 @@ ENTRY = "ENTRY"
 LEAF = "LEAF"
 MID = "MID-FUNCTION"
 
-# The tables `er-game-base/build.rs` reads for CALL and DETOUR licences. A mid-function row in any
+# The tables `er-game-base/build.rs` reads for call and detour licences. A mid-function row in any
 # of them is a licence to transfer control -- or to write five bytes -- into the middle of a live
 # function, so all three are gated together in one process (loading both images is the only slow
 # part, and it is done once).
 #
-# `rva-map-1162-to-1170.data.tsv` is deliberately NOT here: its rows are `.data` globals, which by
-# construction sit in no function at all, so every row would classify LEAF and say nothing. The
+# `rva-map-1162-to-1170.data.tsv` is deliberately not here: its rows are `.data` globals, which by
+# construction sit in no function at all, so every row would classify leaf and say nothing. The
 # candidate table `rva-map-1162-to-1170.tsv` is not here either -- it is a work list, not a
 # licence, and a mid-function candidate in it is caught when the row is promoted.
 GATED_MAPS = (
@@ -115,9 +115,9 @@ def next_entry(spans, rva):
 def classify(spans, starts, rva):
     """`(kind, detail)` for one RVA against one image's function table.
 
-    For a MID-FUNCTION address the detail carries the two addresses a reader needs to act: the
+    For a mid-function address the detail carries the two addresses a reader needs to act: the
     entry of the function it landed inside, and the next entry after it. Which of the two the row
-    MEANT is a judgement this cannot make -- `0x140aec480` landed inside `0x140aec120` but the
+    meant is a judgement this cannot make -- `0x140aec480` landed inside `0x140aec120` but the
     address it was supposed to name is `0x140aec570`, the next one -- so both are printed and
     neither is presented as the answer.
     """
@@ -159,7 +159,7 @@ def rows_from_map(path):
 
 
 def audit(old, new, paths, list_rows=False, out=sys.stdout):
-    """Classify every row of every table. Returns the MID-FUNCTION findings.
+    """Classify every row of every table. Returns the mid-function findings.
 
     `old` and `new` are each `(spans, starts)` for one image, so a caller -- the selftest --
     can drive the whole gate against a synthetic function table with no game image present.
@@ -243,7 +243,7 @@ def selftest():
             failures.append(f"{name}: got {got!r}, want {want!r}")
 
     # A minimal flat image: e_lfanew at 0x3c, PE32+ magic, data directory 3 -> our table. The deobf
-    # images are FLAT (file offset == RVA), which is what lets the table sit at its own RVA.
+    # images are flat (file offset == RVA), which is what lets the table sit at its own RVA.
     image = bytearray(0x4000)
     e_lfanew = 0x80
     struct.pack_into("<I", image, 0x3C, e_lfanew)
@@ -260,13 +260,13 @@ def selftest():
 
     check("declared start is ENTRY", classify(spans, starts, 0x2000)[0], ENTRY)
     check("shared boundary is ENTRY", classify(spans, starts, 0x2100)[0], ENTRY)
-    # SENSE ONE of NEITHER-ENTRY: a genuine leaf. No `.pdata` row, and inside nobody's extent --
+    # Sense one of neither-ENTRY: a genuine leaf. No `.pdata` row, and inside nobody's extent --
     # the x64 ABI's licence to omit unwind data. Hooking one of these is fine, and refusing them
     # is what would throw away ELDEN RING's getters and thunks.
     check("gap between functions is LEAF", classify(spans, starts, 0x2500)[0], LEAF)
     check("one past a function end is LEAF", classify(spans, starts, 0x2180)[0], LEAF)
     check("past the last function is LEAF", classify(spans, starts, 0x3010)[0], LEAF)
-    # SENSE TWO: inside a function. Same `NEITHER-ENTRY` word from the verdict table, opposite
+    # Sense TWO: inside a function. Same `NEITHER-ENTRY` word from the verdict table, opposite
     # meaning -- five bytes written here corrupt a live body.
     kind, detail = classify(spans, starts, 0x2080)
     check("inside a declared function is MID", kind, MID)
@@ -291,7 +291,7 @@ def selftest():
     if findings:
         check("gate names the offending source", findings[0]["old_va"], 0x140002080)
         check("gate reports which side is mid", findings[0]["src"], MID)
-        # A row that verifies IDENTICAL over 56 instructions is still refused: the verdict column
+        # A row that verifies identical over 56 instructions is still refused: the verdict column
         # is not evidence about where the address sits.
         check("clean-verdict row is not rescued by its verdict", findings[0]["dst"], ENTRY)
 
@@ -316,7 +316,7 @@ def selftest():
             classify(old_spans, old_starts, to_rva(0x140958B37))[0],
             MID,
         )
-        # A REAL leaf from the same table, so the check is not merely refusing everything: a
+        # A real leaf from the same table, so the check is not merely refusing everything: a
         # 0x10-byte `mov/mov/jmp` thunk (CS::ChrIns::GetPhysicsHitHeight) with no `.pdata` row.
         check(
             "0x1403efc20 is a genuine LEAF",

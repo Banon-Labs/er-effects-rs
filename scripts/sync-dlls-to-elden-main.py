@@ -3,13 +3,13 @@
 
 Copies every game-loadable DLL from target/x86_64-pc-windows-msvc/release/ into
 ELDEN_MAIN_DIR (default ~/Elden/main) and rewrites dll-deploy-manifest.json with
-per-DLL sha256/size plus the repo HEAD. Fails closed if any expected DLL is missing
+per-DLL sha256/size plus the repo head. Fails closed if any expected DLL is missing
 from the build output (run the release build first).
 
 Usage: python3 scripts/sync-dlls-to-elden-main.py [--dry-run] [--help]
 Env:   ELDEN_MAIN_DIR, ER_MODS_REPO_ROOT override the defaults.
 
-An unrecognised argument is an ERROR, not a silent full deploy: this script had no argument
+An unrecognised argument is an error, not a silent full deploy: this script had no argument
 parsing at all, so `--help` copied ten DLLs and rewrote the manifest instead of printing usage.
 A deploy is a side effect that must be asked for explicitly.
 """
@@ -25,8 +25,8 @@ import sys
 
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parent
 
-# Crates that ship a loadable DLL but are NOT me3 natives, so they are absent from the
-# me3_shells array `me3-dll-list.py` reads. Exactly the EXEMPT set in
+# Crates that ship a loadable DLL but are not me3 natives, so they are absent from the
+# me3_shells array `me3-dll-list.py` reads. Exactly the exempt set in
 # check-me3-shell-coverage.py that still produces a file the game maps -- currently one:
 # the AMD AGS shim, which the game loads by name rather than through an [[natives]] entry.
 NON_NATIVE_DLLS = {"amd_ags_x64.dll": "er-ags-stub"}

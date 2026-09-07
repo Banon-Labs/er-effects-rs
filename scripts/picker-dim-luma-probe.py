@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
-"""Mean-luminance sampler for the OS-picker dim overlay, as a PIXEL oracle.
+"""Mean-luminance sampler for the OS-picker dim overlay, as a pixel oracle.
 
-WHY THIS IS NOT `capture-er-window.py`. That helper deliberately dispatches
+Why this is not `capture-er-window.py`. That helper deliberately dispatches
 `focuswindow` + `alterzorder top` at the ER window before it captures, because its job is to get a
-readable artifact of the game no matter what is in front of it. Doing that here would RAISE the game
+readable artifact of the game no matter what is in front of it. Doing that here would raise the game
 above the very overlay under test and above the OS dialog, i.e. it would destroy the thing being
 measured. This sampler is strictly passive: it queries geometry and captures, and never dispatches
 anything at the compositor.
 
-WHAT IT MEASURES. `grim -g` captures a SCREEN REGION, not a window backing store, so the numbers it
+What it measures. `grim -g` captures a screen region, not a window backing store, so the numbers it
 returns are what is actually composited and visible -- which is exactly the question ("does a window
 we own composite above the fullscreen Proton game?"). Mean luminance over the game's region must drop
 sharply while the dim is up and return afterwards. The comparison is arithmetic, done here; no human
 and no model looks at the image to decide.
 
-PRIVACY. Only windows that identify as Elden Ring are ever considered, and nothing but their geometry
+Privacy. Only windows that identify as Elden Ring are ever considered, and nothing but their geometry
 is read or written. The user's other windows are never enumerated, named, or captured. Several
 top-level windows of the game process can match at once (the game, this overlay, comdlg32's dialog);
-the LARGEST is taken, which is the fullscreen game region, and since every capture is a screen region
+the largest is taken, which is the fullscreen game region, and since every capture is a screen region
 anyway the choice only affects the rectangle.
 
-WINDOW CLASS. `steam_app_1245620` is what a Steam-launched session reports, and every capture helper
-in `scripts/` hard-codes it. That is WRONG for the direct/offline me3 Proton launch the runtime probes
+Window class. `steam_app_1245620` is what a Steam-launched session reports, and every capture helper
+in `scripts/` hard-codes it. That is wrong for the direct/offline me3 Proton launch the runtime probes
 actually use: in run `picker-dim-bringup` the Win32 class was `ELDEN RING(tm)` and Hyprland reported
-NO client of class `steam_app_1245620` at all, so a sample taken during a live dialog came back empty.
+no client of class `steam_app_1245620` at all, so a sample taken during a live dialog came back empty.
 Hence the candidate set below rather than one literal. `ER_WINDOW_CLASS` overrides it outright when a
 future launch path reports something new.
 
@@ -62,7 +62,7 @@ CALL_TIMEOUT_SECONDS = 8
 def is_er_window(client: dict) -> bool:
     """Whether this Hyprland client is an Elden Ring window.
 
-    Checks `class` AND `initialClass`, because Wine can rewrite a window's class after mapping. An
+    Checks `class` and `initialClass`, because Wine can rewrite a window's class after mapping. An
     explicit `ER_WINDOW_CLASS` wins outright.
     """
     override = os.environ.get("ER_WINDOW_CLASS")
@@ -137,8 +137,8 @@ def parse_magick_grey(text: str) -> float | None:
         # ImageMagick pixel enumeration: 1,1,0,65535,gray
         0,0: (32896)  #808080808080  gray(128)
 
-    The value in PARENTHESES is the quantum, scaled against the maximum declared in the header. The
-    trailing `gray(128)` is the same pixel expressed in 8 bits, and reading THAT while dividing by
+    The value in parentheses is the quantum, scaled against the maximum declared in the header. The
+    trailing `gray(128)` is the same pixel expressed in 8 bits, and reading that while dividing by
     the 16-bit maximum is the obvious mistake -- it would report mid-grey as 0.2% and make every run
     look like the screen went black. Hence: header first, parentheses second, `gray(...)` only as a
     fallback for builds that print a percentage there.
@@ -207,7 +207,7 @@ def sample(out_dir: Path, label: str) -> int:
 def watch(out_dir: Path, seconds: float) -> int:
     """Sample until the deadline.
 
-    NO SLEEP, deliberately -- the repo bans sleep as a synchronisation primitive, and none is needed
+    No sleep, deliberately -- the repo bans sleep as a synchronisation primitive, and none is needed
     here. Each iteration already blocks on a full-resolution `grim` grab plus an imagemagick pass,
     both synchronous with their own hard timeouts, so the loop paces itself on real work. `seconds`
     is a safety backstop that bounds the watcher, not a schedule.
@@ -224,7 +224,7 @@ def classify(samples: list[dict], dim_start_ms: int, dim_end_ms: int) -> dict:
     """Score the dim interval against the samples outside it.
 
     Pure, so `--selftest` can prove the verdict logic without a game: a run whose inside-samples are
-    not darker than its outside-samples must NOT come back as a pass, however many frames the overlay
+    not darker than its outside-samples must not come back as a pass, however many frames the overlay
     thread claims to have pushed.
     """
     inside = [
@@ -318,7 +318,7 @@ def selftest() -> int:
     passing = classify(dark + bright, now, now + 300)
     assert passing["result"] == "dim_visible", passing
 
-    # The verdict must FAIL when nothing darkened -- this is the case a frame counter alone would
+    # The verdict must fail when nothing darkened -- this is the case a frame counter alone would
     # happily call a success.
     flat = [{"epoch_ms": now + 100, "mean_luma": 0.60}, {"epoch_ms": now - 500, "mean_luma": 0.61}]
     assert classify(flat, now, now + 300)["result"] == "dim_not_visible"

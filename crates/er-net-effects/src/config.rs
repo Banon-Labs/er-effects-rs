@@ -12,7 +12,7 @@ use er_hotkey_config::{FileChange, HotFile};
 use crate::{duration_filter::PermanentEffects, log::net_effects_log, stacked_config};
 
 const CONFIG_FILE_NAME: &str = "er-net-effects.toml";
-/// Everything in the shipped config file EXCEPT the key section, which lives in
+/// Everything in the shipped config file except the key section, which lives in
 /// [`crate::bindings::SHIPPED_KEY_SECTION`] next to the table it documents -- this module is
 /// windows-gated, so a test that the documented key names actually parse could never run here.
 const DEFAULT_CONFIG_HEAD: &str = r#"# er-net-effects standalone DLL configuration.
@@ -76,7 +76,7 @@ pub(crate) struct RuntimeConfig {
     pub(crate) stacked_effects: Vec<i32>,
     /// Raw `(config key, value)` for every selector binding line the file carries.
     ///
-    /// Kept as TEXT rather than parsed here because the parse has to happen where the PREVIOUS
+    /// Kept as text rather than parsed here because the parse has to happen where the previous
     /// binding is known: a value that does not parse must keep the key that was working, and this
     /// type has no idea what that was. See [`crate::bindings`].
     pub(crate) key_bindings: Vec<(String, String)>,
@@ -114,11 +114,11 @@ impl Default for RuntimeConfig {
 }
 
 static RUNTIME_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
-/// The catalog-shaping settings, RE-READ while the game runs.
+/// The catalog-shaping settings, RE-read while the game runs.
 ///
 /// [`RUNTIME_CONFIG`] is a `OnceLock` frozen at `DllMain`, which is right for paths and hook
 /// wiring -- those cannot change under a running process. But `permanent_effects` and
-/// `stacked_effects` describe what the selector should be offering RIGHT NOW, and requiring a
+/// `stacked_effects` describe what the selector should be offering right now, and requiring a
 /// relaunch to see an edit take effect makes the file feel dead. These two are therefore kept
 /// live, polled by the same signature that already rebuilds the catalogs when their files change.
 static LIVE_PERMANENT_EFFECTS: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -168,7 +168,7 @@ pub(crate) fn live_stacked_effects() -> Vec<i32> {
 static CONFIG_POLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// The last signature published, returned unchanged while the file's text has not moved.
 static LIVE_CONFIG_SIGNATURE: Mutex<String> = Mutex::new(String::new());
-/// The file watcher. Compares the file's TEXT and reads at most about once a second.
+/// The file watcher. Compares the file's text and reads at most about once a second.
 static LIVE_CONFIG_FILE: Mutex<Option<HotFile>> = Mutex::new(None);
 /// Reloads that changed at least one binding. A telemetry number rather than a log-only fact:
 /// "the config never reloaded" and "the poller never ran" are otherwise the same silence.
@@ -179,11 +179,11 @@ pub(crate) fn binding_reloads() -> usize {
     BINDING_RELOADS.load(Ordering::Relaxed)
 }
 
-/// Signature of the live settings, re-parsing the file only when its TEXT changed.
+/// Signature of the live settings, re-parsing the file only when its text changed.
 ///
 /// # Why text, and why throttled
 ///
-/// This used to `stat` the file EVERY FRAME and compare the mtime. Two problems, and the second is
+/// This used to `stat` the file every frame and compare the mtime. Two problems, and the second is
 /// the one that made key rebinding unreliable:
 ///
 /// * mtime has one-second resolution on several filesystems, including the kind a Wine prefix sits
@@ -250,9 +250,9 @@ pub(crate) fn poll_live_config() -> String {
 /// Push the file's binding lines at the live bindings, and clear the key edge state if any moved.
 ///
 /// The edge reset is the half that is easy to leave out and impossible to notice in review. The
-/// DirectInput poll remembers which selector keys were down as a POSITIONAL bitmask; carry it
+/// DirectInput poll remembers which selector keys were down as a positional bitmask; carry it
 /// across a rebind and a key held at that instant either swallows its own press or manufactures
-/// one. A rejected value deliberately does NOT count as a move -- otherwise a config with a
+/// one. A rejected value deliberately does not count as a move -- otherwise a config with a
 /// permanent typo in it would produce one phantom press per reload, forever.
 fn apply_live_key_bindings(config: &RuntimeConfig) {
     let update = crate::bindings::refresh_live(|name| {
@@ -368,7 +368,7 @@ fn load_runtime_config() -> RuntimeConfig {
                      expected include, exclude or only"
                 )),
             },
-            // Binding lines are carried through as TEXT. They are parsed by `crate::bindings`,
+            // Binding lines are carried through as text. They are parsed by `crate::bindings`,
             // which knows what the previous key was and can therefore keep it when a value does
             // not read.
             other if crate::bindings::is_binding_key(other) => {

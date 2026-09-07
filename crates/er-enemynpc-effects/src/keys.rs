@@ -19,7 +19,7 @@ pub(crate) use er_hotkey_config::keys::{Chord, parse_scancode_chord};
 /// Borrow a DirectInput state buffer as a slice, or nothing when it cannot be one.
 ///
 /// The size check is not defensive padding. Devices of different classes can share one
-/// `GetDeviceState` implementation, so the MOUSE arrives at the keyboard hook carrying a 16-byte
+/// `GetDeviceState` implementation, so the mouse arrives at the keyboard hook carrying a 16-byte
 /// `DIMOUSESTATE`; reading scancode offsets out of one finds whatever is next in memory.
 ///
 /// # Safety
@@ -119,7 +119,7 @@ mod tests {
     }
 
     /// A mouse-sized buffer arriving at the keyboard hook must never read as a press. Without the
-    /// size check, "the hotkey was released" is what a mouse poll looks like, and a HELD hotkey
+    /// size check, "the hotkey was released" is what a mouse poll looks like, and a held hotkey
     /// then re-arms and toggles once per interleaved poll.
     #[test]
     fn a_short_buffer_is_never_a_press() {

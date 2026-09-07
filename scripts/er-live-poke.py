@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Read, scan and write a running ELDEN RING's memory from OUTSIDE the process.
+"""Read, scan and write a running ELDEN RING's memory from outside the process.
 
-WHY THIS EXISTS, and why it is not frida. Frida cannot bootstrap into this target: three attempts on
+Why this exists, and why it is not frida. Frida cannot bootstrap into this target: three attempts on
 2026-09-05 produced three different failures, ending at `ptrace pokedata: Input/output error`. That
 was never a permissions problem -- measured on the live game (pid 2266653, ER 1.17 under Proton):
 
@@ -9,15 +9,15 @@ was never a permissions problem -- measured on the live game (pid 2266653, ER 1.
     /proc/<pid>/mem  open O_RDWR   -> OK
     PTRACE_ATTACH                  -> 0
 
-so this process can already read AND write the game's address space directly. Frida's ptrace-based
+so this process can already read and write the game's address space directly. Frida's ptrace-based
 agent injection is a means to that end, and the end is available without it.
 
-WHAT THIS REPLACES. Every live question used to cost a Rust verb in `er-input-harness`'s REPL, a
+What this replaces. Every live question used to cost a Rust verb in `er-input-harness`'s REPL, a
 cross-compile and a relaunch -- "teach me a new input" and "rebuild the DLL" were the same act. Scans
 and reads do not need to be either: they are a seek and a read on a file descriptor.
 
-WHAT IT DELIBERATELY DOES NOT DO. It writes memory only when asked with `poke`, and driving GAME
-INPUT is not what it is for: the input path is the DirectInput keyboard buffer, which the game refills
+What it deliberately does not do. It writes memory only when asked with `poke`, and driving game
+input is not what it is for: the input path is the DirectInput keyboard buffer, which the game refills
 every frame, so an outside write races it and loses. Input still belongs in the in-process stamp.
 Reading state -- which grid is the cursor, what is its cell, did that press land -- is what this owns.
 
@@ -37,7 +37,7 @@ import sys
 GRID_CONTROL_VTABLE = 0x142A94438
 # Selected cell, off the pager's comparisons against the extents at +0xd0/+0xd8/+0xdc.
 GRID_SELECTED_OFFSET = 0xD4
-# Skip the game's own PE image and anything below the heap: a vtable VALUE appears inside .rdata as
+# Skip the game's own PE image and anything below the heap: a vtable value appears inside .rdata as
 # the vtable itself, which is not an instance and would be reported as one.
 HEAP_LO = 0x10000000
 CHUNK = 1 << 20
@@ -111,7 +111,7 @@ def main():
     a = ap.parse_args()
 
     if a.selftest:
-        # Prove the read path against THIS process rather than against the game: a selftest that
+        # Prove the read path against this process rather than against the game: a selftest that
         # needs the game running is a selftest nobody runs.
         me = os.getpid()
         vals, err = read_qwords(me, id(0) & ~7, 1)

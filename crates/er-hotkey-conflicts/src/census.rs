@@ -8,13 +8,13 @@
 //! # Two tiers of evidence, kept apart on purpose
 //!
 //! Some input APIs name the key in their arguments -- `GetAsyncKeyState(VK_F7)` says *F7*, right
-//! there. Those give an EXACT `(module, key)` pair and an exact collision.
+//! there. Those give an exact `(module, key)` pair and an exact collision.
 //!
 //! DirectInput does not. `IDirectInputDevice8::GetDeviceState` hands back all 256 scancodes at
 //! once and the caller picks its own out of the buffer afterwards, in its own code, where nothing
 //! is observable. A module reading that buffer could be bound to any key on the board. Reporting
 //! that as "no collision found" would be a lie of omission, so it is reported as its own,
-//! explicitly weaker claim -- and the keys that turn out to be CONSUMED from that buffer (see
+//! explicitly weaker claim -- and the keys that turn out to be consumed from that buffer (see
 //! [`crate::dik`]) are reported as a third thing again.
 //!
 //! Conflating the tiers is the failure this split exists to prevent: the reproducer that motivated
@@ -130,7 +130,7 @@ impl InputId {
 pub struct Collision {
     /// The key or device being contended.
     pub input: InputId,
-    /// Every module observed taking it, sorted, EXCLUDING the game executable.
+    /// Every module observed taking it, sorted, excluding the game executable.
     pub modules: Vec<String>,
     /// The APIs it was taken through, sorted.
     pub surfaces: Vec<Surface>,
@@ -211,7 +211,7 @@ impl Census {
             .map(|((module, input, surface), count)| (module.as_str(), *input, *surface, *count))
     }
 
-    /// Specific keys claimed by two or more distinct MODULES.
+    /// Specific keys claimed by two or more distinct modules.
     ///
     /// `game_module` is the game executable's own file name; it is excluded from the module count
     /// because "the game reads this key" is a different finding, reported on the collision itself
@@ -229,7 +229,7 @@ impl Census {
 
     /// Modules that read a whole device at once, per device.
     ///
-    /// Not a collision list. Two modules reading the raw keyboard MIGHT be bound to the same key
+    /// Not a collision list. Two modules reading the raw keyboard might be bound to the same key
     /// or to different ones, and this API cannot tell -- which is the finding.
     pub fn whole_device_readers(&self, game_module: &str) -> Vec<(InputId, Vec<String>)> {
         let mut grouped: BTreeMap<InputId, BTreeSet<&str>> = BTreeMap::new();
@@ -258,7 +258,7 @@ impl Census {
         let mut by_input: BTreeMap<InputId, (BTreeSet<&str>, BTreeSet<Surface>, bool)> =
             BTreeMap::new();
         for (module, input, surface) in self.observations.keys() {
-            // BOTH halves of the tier split, checked here rather than assumed. A specific key can
+            // Both halves of the tier split, checked here rather than assumed. A specific key can
             // only have come from an API that names one; anything else reaching this point would
             // mean a surface had been given a key it could not possibly have known, and reporting
             // that as a collision would accuse a module of a binding nobody observed.
@@ -335,7 +335,7 @@ mod tests {
         assert!(census.key_collisions(GAME).is_empty());
     }
 
-    /// The game reading a key is not a second mod. It is reported ON the collision instead, so a
+    /// The game reading a key is not a second mod. It is reported on the collision instead, so a
     /// key only the game and one mod use still shows up -- see [`game_only_pairs_are_still_named`].
     #[test]
     fn the_game_is_not_counted_as_a_colliding_mod() {

@@ -4,7 +4,7 @@
 Runtime Elden Ring probes are disruptive. The durable contract is conservative:
 manual probes must be explicit, event/readiness-driven, cleanly torn down, and
 hard-bounded by a timeout_seconds value greater than 0 and no more than the canonical
-GAME idle/stall backstop in .auto/runtime_timeout_cap_seconds (currently 180s; the
+game idle/stall backstop in .auto/runtime_timeout_cap_seconds (currently 180s; the
 primary teardown is semaphore-driven, and non-game ops are separately capped at 30s).
 """
 from __future__ import annotations
@@ -362,7 +362,7 @@ def scan_contract() -> list[Finding]:
             "telemetry_loading_screen_portrait_capture_ready",
             # Was "oracle_title_portrait_visible_surface_bound" until 2026-08-31. That oracle was
             # removed because no code ever wrote the counter behind it, and this requirement would
-            # then have been satisfied by the COMMENT recording its removal -- a contract check
+            # then have been satisfied by the comment recording its removal -- a contract check
             # passing on a mention of the thing it wants. `oracle_portrait_onto_draw_hits` is the
             # capture predicate's actual primary gate and is genuinely written.
             "oracle_portrait_onto_draw_hits",

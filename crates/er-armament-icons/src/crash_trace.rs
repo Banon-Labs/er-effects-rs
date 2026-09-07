@@ -1,7 +1,7 @@
 //! In-DLL crash tracer (bd directive-dll-owns-crash-logging-deep-traces-veh, 2026-07-23).
 //!
-//! Installs a Vectored Exception Handler (fires FIRST, before arxan/OS handlers) plus an
-//! unhandled-exception filter. On an access violation it writes a DEEP trace to the DLL
+//! Installs a Vectored Exception Handler (fires first, before arxan/OS handlers) plus an
+//! unhandled-exception filter. On an access violation it writes a deep trace to the DLL
 //! log: exception code, faulting instruction address + game-module RVA, faulting data
 //! address, access kind, `CONTEXT` Rip/Rsp, and a scanned return-address backtrace (stack
 //! qwords that land inside the game image). Rate-limited so arxan's routine AVs don't spam
@@ -72,7 +72,7 @@ unsafe fn trace_exception(tag: &str, info: *mut ExceptionPointers) {
         },
     ));
 
-    // CONTEXT (x64): Rsp @ +0x98, Rip @ +0xF8. Scan the stack for return-address-looking
+    // Context (x64): Rsp @ +0x98, Rip @ +0xF8. Scan the stack for return-address-looking
     // values inside the game image as a poor-man's backtrace.
     let ctx = unsafe { (*info).context_record };
     if ctx.is_null() {

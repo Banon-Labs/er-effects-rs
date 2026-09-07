@@ -1,43 +1,43 @@
 #!/usr/bin/env python3
 """The 1.16.2 -> 1.17 verdict admission rules, and the emptiness assertion that keeps a gate honest.
 
-WHY THIS FILE EXISTS
+Why this file exists
 --------------------
 `crates/er-game-base/build.rs` decides which rows of a `verify-rva-map-1170.py` verdict table are
-good enough to CALL and to DETOUR. Several audits under `scripts/` reproduce that decision so they
-can report on it. Every one of them that TRANSCRIBED the rules instead of reading them has since
+good enough to call and to detour. Several audits under `scripts/` reproduce that decision so they
+can report on it. Every one of them that transcribed the rules instead of reading them has since
 been wrong:
 
   * the verdict vocabulary grew from a bare `IDENTICAL` to `BYTE-IDENTICAL` / `IDENTICAL-WHOLE` /
     `IDENTICAL-LEAF` / `IDENTICAL-SHORT` / `IDENTICAL-PREFIX`. A gate still comparing against the
-    literal `"IDENTICAL"` now matches NOTHING, and `docs/recon/rva-map-1162-to-1170.verified.tsv`
-    contains that exact string ZERO times out of 101 rows;
-  * one such transcription reported the DETOUR table as 42 rows instead of 374;
-  * `select-needed-1170-rows.py::verified_rvas` returned the EMPTY SET for the whole of 2026-08-30,
+    literal `"IDENTICAL"` now matches nothing, and `docs/recon/rva-map-1162-to-1170.verified.tsv`
+    contains that exact string zero times out of 101 rows;
+  * one such transcription reported the detour table as 42 rows instead of 374;
+  * `select-needed-1170-rows.py::verified_rvas` returned the empty set for the whole of 2026-08-30,
     so its documented "the verified map wins wherever both cover an address" rule was not applied
     at all.
 
 VACUOUS QUANTIFICATION, which is the class all of those belong to
 ----------------------------------------------------------------
-"No element of S has property P" is TRIVIALLY TRUE when S is empty. A gate that filters rows and
+"No element of S has property P" is TRIVIALLY true when S is empty. A gate that filters rows and
 then asserts something about what survived cannot, on its own, tell "checked 800 rows, all fine"
 apart from "checked zero rows". Both exit 0. Both print a green tick. Only one of them looked.
 
 So a gate here does two things it did not do before:
 
-  1. it RE-DERIVES the vocabulary (`rules()` below) rather than spelling it out, so a rename in
+  1. it RE-derives the vocabulary (`rules()` below) rather than spelling it out, so a rename in
      build.rs moves the gate with it instead of silently emptying it; and
-  2. it asserts the filtered set is NON-EMPTY, and non-trivially so, BEFORE asserting anything
+  2. it asserts the filtered set is non-empty, and non-trivially so, before asserting anything
      about its contents (`nonempty`, `admit_rows`). A gate that legitimately has nothing to check
-     must SAY SO LOUDLY -- an empty scope is a finding about the audit, not a pass.
+     must say so loudly -- an empty scope is a finding about the audit, not a pass.
 
-THE ONE PARSER
+The one PARSER
 --------------
 `rules()` does not parse `build.rs` itself. It calls `check-1170-translation-collisions.py`'s
 `build_rules()`, which already does it properly -- reading the ledger paths, the instruction floor,
 `EXHAUSTIVE_VERDICTS`, `DETOURABLE_ENTRY_EVIDENCE`, the field indices, and (the part every stale
-gate got wrong) the PREFIX verdict out of `detourable_pairs`'s match arm, where it is spelled as a
-bare literal rather than a constant. Adding a SECOND parser here would recreate the duplication
+gate got wrong) the prefix verdict out of `detourable_pairs`'s match arm, where it is spelled as a
+bare literal rather than a constant. Adding a second parser here would recreate the duplication
 this module exists to delete. If that file is missing or its parse of build.rs fails, `rules()`
 RAISES: four gates going red together because the rules can no longer be read is correct, and is
 strictly better than four gates quietly auditing an empty set.
@@ -45,7 +45,7 @@ strictly better than four gates quietly auditing an empty set.
 Usage:
     python3 scripts/rva_admission.py            # print the rules as read today
     python3 scripts/rva_admission.py --selftest # negative control: a filter that matches nothing
-                                                # must go RED, not green
+                                                # must go red, not green
 """
 
 from __future__ import annotations
@@ -59,8 +59,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REFERENCE = os.path.join(ROOT, "scripts", "check-1170-translation-collisions.py")
 
-# A filtered set may not fall below this fraction of the rows it was filtered FROM before the gate
-# refuses to draw a conclusion. It is a floor on COVERAGE, derived from the input on every run, not
+# A filtered set may not fall below this fraction of the rows it was filtered from before the gate
+# refuses to draw a conclusion. It is a floor on coverage, derived from the input on every run, not
 # a tuned row count that has to be edited whenever a ledger grows -- and not a number any table can
 # be nudged past, because the only way to satisfy it is for the filter to actually recognise the
 # data. Today's real tables sit at 98% (99/101) and 99.7% (339/340); a vocabulary rename drops them
@@ -120,9 +120,9 @@ def rules(build_rs: str | None = None) -> dict:
 def nonempty(label: str, items, *, at_least: int = 1, out_of: int | None = None, why: str = ""):
     """Assert `items` is worth drawing a conclusion from, and return it. Raises `Vacuous` if not.
 
-    This is the assertion that has to come BEFORE "and none of them is bad". Call it on the set the
+    This is the assertion that has to come before "and none of them is bad". Call it on the set the
     gate is about to quantify over, never on the findings the quantification produced -- an empty
-    FINDINGS list is the good outcome; an empty INPUT list is the bug.
+    findings list is the good outcome; an empty input list is the bug.
     """
     count = len(items)
     if count >= at_least and not (out_of and count < out_of * MIN_ADMITTED_FRACTION):
@@ -156,11 +156,11 @@ def admits(fields, rule_set) -> bool:
     if verdict in rule_set["exhaustive"]:
         pass  # the whole of both bodies was compared; there is no prefix left to doubt
     elif verdict in rule_set["patch_site"]:
-        # The whole of both bodies was compared and they DIFFER -- somewhere the detour never
+        # The whole of both bodies was compared and they differ -- somewhere the detour never
         # reaches. The floor is a proxy for coverage and there is nothing left for it to insure.
         pass
     elif verdict == rule_set["prefix_verdict"]:
-        # A claim about a PREFIX of unknown remainder, so how much of it agreed is the question.
+        # A claim about a prefix of unknown remainder, so how much of it agreed is the question.
         try:
             if int(fields[rule_set["insns_column"]].strip()) < rule_set["min_insns"]:
                 return False
@@ -187,7 +187,7 @@ def table_rows(path: str) -> list[list[str]]:
 def admit_rows(path: str, rule_set, *, label: str | None = None, require: bool = True):
     """`(admitted rows, unrecognised-verdict tally)` for one ledger, refusing a vacuous result.
 
-    The tally is the diagnosis: when a table has rows but NONE were admitted, the words it actually
+    The tally is the diagnosis: when a table has rows but none were admitted, the words it actually
     carries are what the reader needs, and printing them turns a mute empty set into the name of
     the thing that changed.
     """
@@ -254,9 +254,9 @@ def selftest() -> int:
         admitted, _ = admit_rows(good, live)
         check("a table in the live vocabulary is admitted whole", len(admitted), 8)
 
-        # THE NEGATIVE CONTROL FOR THIS CLASS. Not "plant a finding and see it caught" -- that
-        # tests the wrong thing. Make the FILTER MATCH ZERO ROWS, by feeding it a verdict word the
-        # vocabulary cannot contain, and the gate must go RED. Before `nonempty` existed, this
+        # The negative control for this class. Not "plant a finding and see it caught" -- that
+        # tests the wrong thing. Make the filter match zero rows, by feeding it a verdict word the
+        # vocabulary cannot contain, and the gate must go red. Before `nonempty` existed, this
         # returned [] and every downstream "none of them is bad" passed.
         blind = _synthetic(os.path.join(scratch, "blind"), "IDENTICAL-SHORT")
         try:
@@ -281,7 +281,7 @@ def selftest() -> int:
         except Vacuous:
             pass
 
-        # A table that is EMPTY to begin with is not the same defect and must not be forced to
+        # A table that is empty to begin with is not the same defect and must not be forced to
         # fail: there is nothing to mis-read. `require` still refuses when rows exist.
         empty = os.path.join(scratch, "empty.tsv")
         with open(empty, "w", encoding="utf-8") as handle:
@@ -289,7 +289,7 @@ def selftest() -> int:
         admitted, _ = admit_rows(empty, live)
         check("an genuinely empty ledger is not misreported as a filter failure", admitted, [])
 
-    # `nonempty` itself: the floor is a FRACTION of the input, so it cannot be satisfied by a
+    # `nonempty` itself: the floor is a fraction of the input, so it cannot be satisfied by a
     # table that merely got bigger.
     try:
         nonempty("fraction floor", list(range(5)), out_of=1000)

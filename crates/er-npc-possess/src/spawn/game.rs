@@ -1,9 +1,9 @@
-//! THE TWO GAME FUNCTIONS THIS LAYER CALLS, and the field reads that decide when to call them.
+//! The two game functions this layer calls, and the field reads that decide when to call them.
 //!
 //! # Why these two and not the two the brief named
 //!
 //! The obvious spawn entry is `CS::ChrSet::SpawnSummonBuddy` (1.16.2 `0x140492cb0`), and it is the
-//! wrong one. Its decompilation is explicit about why: it takes the slot from the CALLER, as a
+//! wrong one. Its decompilation is explicit about why: it takes the slot from the caller, as a
 //! `FieldInsHandle`, and then does
 //!
 //! ```text
@@ -12,11 +12,11 @@
 //! if (chrSetEntry->chrIns != NULL) return chrSetEntry->chrIns;
 //! ```
 //!
-//! -- an unchecked index into a heap array, and a silent return of SOMEBODY ELSE'S character when
+//! -- an unchecked index into a heap array, and a silent return of somebody else'S character when
 //! the slot is taken. Every bound on that path would have had to be ours, on an array Seamless
 //! Co-op also lives in.
 //!
-//! [`SPAWN_DYNAMIC_CHR_RVA`] is the entry the GAME uses for exactly this job.
+//! [`SPAWN_DYNAMIC_CHR_RVA`] is the entry the game uses for exactly this job.
 //! `CSTalkDynamicChrCtrl` -- the runtime spawner behind dynamically-placed NPCs -- calls it, and it
 //! forwards to `FUN_140492a90`, which opens `index = 6`, loops `while (index < 0x14)` and takes the
 //! first entry whose `chrIns` is null. **The index is never ours, so there is no index of ours to
@@ -24,7 +24,7 @@
 //! registration `SpawnSummonBuddy` skips: the `ChrSet` vtable slot, the `eventEntityIdMap` insert
 //! (only when the entity id is nonzero, which is why ours is zero) and `AddChrInsToGroupIdMap`.
 //!
-//! What is left for this module to bound is the ARRAY, because that loop consults no capacity at
+//! What is left for this module to bound is the array, because that loop consults no capacity at
 //! all: see [`spawn`], which reads `chrInsCapacity` at runtime and refuses when it does not cover
 //! the band the game is about to walk.
 //!
@@ -61,14 +61,14 @@ use crate::possess::layout::{chr_ins, chr_res, chr_set, chr_spawn_request, file_
 use crate::spawn::readiness::Gate;
 use crate::spawn::request::{SpawnRequest, SpawnSpec};
 
-/// COMPILE-TIME CROSS-CHECK, same contract as `crate::possess::game`'s: the left side is this
+/// Compile-time cross-check, same contract as `crate::possess::game`'s: the left side is this
 /// crate's reverse engineering, the right is `fromsoftware-rs`'s independently derived model, and a
 /// failure here is a build error rather than a wrong read.
 const _: () = {
     assert!(core::mem::offset_of!(CsChrIns, chr_set_entry) == chr_ins::CHR_SET_ENTRY);
-    // `chr_res` is PRIVATE in the crate's `ChrIns`, so it cannot be cross-checked the way the rest
+    // `chr_res` is private in the crate's `ChrIns`, so it cannot be cross-checked the way the rest
     // are. Its evidence is byte-level instead and is stronger for it: `ChrIns::GetEneDat` is
-    // BYTE-IDENTICAL between the two builds and opens `48 8b 43 28`, i.e. `MOV RAX,[RBX+0x28]`.
+    // byte-identical between the two builds and opens `48 8b 43 28`, i.e. `MOV RAX,[RBX+0x28]`.
     // See `crate::possess::layout::chr_res`.
     assert!(core::mem::offset_of!(ChrSet<CsChrIns>, capacity) == chr_set::CAPACITY);
     assert!(core::mem::offset_of!(ChrSet<CsChrIns>, entries) == chr_set::ENTRIES);
@@ -86,11 +86,11 @@ const _: () = {
 /// this->field_0x1e610)` on a non-null result -- so calling it rather than `FUN_140492a90` directly
 /// is what keeps the post-spawn step the game performs.
 ///
-/// VERIFIED FOR 1.17 RATHER THAN ASSUMED, twice over. The sweep row in
+/// Verified for 1.17 rather than assumed, twice over. The sweep row in
 /// `docs/recon/rva-map-1162-to-1170.verified.tsv` is `IDENTICAL-WHOLE` over 18 instructions with
 /// `.pdata` extents `0x43/0x43` in both images; and independently, a masked byte search with the
-/// two struct immediates PINNED (`0x10f90` for the buddy `ChrSet`, `0x1e610` for the vtable call's
-/// argument) matches exactly ONE place in each image -- 1.16.2 `0x140506f3a`, 1.17 `0x140507d0a`,
+/// two struct immediates pinned (`0x10f90` for the buddy `ChrSet`, `0x1e610` for the vtable call's
+/// argument) matches exactly one place in each image -- 1.16.2 `0x140506f3a`, 1.17 `0x140507d0a`,
 /// both `+0xa` into the function. Pinning those immediates is what separates it from
 /// `WorldChrManImp::CreatePlayer`, its byte-for-byte twin on `playerChrSet` `+0x10ee0`, which a
 /// fully wildcarded pattern cannot tell it from (two hits per image).
@@ -98,7 +98,7 @@ pub(crate) const SPAWN_DYNAMIC_CHR_RVA: u32 = 0x0050_6f30;
 
 /// `CS::WorldChrManImp::RemoveChrIns(WorldChrManImp*, ChrIns*)`, 1.16.2 RVA `0x50a570`.
 ///
-/// THE ONLY THING DESPAWN MAY CALL. The refcount needs nothing from us: this hands the character to
+/// The only thing DESPAWN may call. The refcount needs nothing from us: this hands the character to
 /// `CSDelayDeleteMan` and the game balances the `EneDat` reference itself, exactly as its own
 /// `SummonBuddyManager::RemoveChrIns` does. Calling the release helper `FUN_1404cd870` alongside it
 /// -- which an earlier reading of the brief suggested -- would double-free.
@@ -109,7 +109,7 @@ pub(crate) const SPAWN_DYNAMIC_CHR_RVA: u32 = 0x0050_6f30;
 /// `WorldChrManDbg+0xb8` when that names the character being removed, and it removes it from the
 /// `+0x1e630..+0x1e638` vector.
 ///
-/// **ORDERING, AND IT IS A CRASH IF IT MOVES.** The delayed delete eventually destroys the
+/// **ordering, and it is a crash if it moves.** The delayed delete eventually destroys the
 /// `ChrIns`, which runs `ChrCtrl::Unref`, which DLPanics on a non-null `ChrCtrl+0x3b0`. So this
 /// must never run before the manipulator override has been cleared; see
 /// `crate::possess::teardown::Step`, where that ordering is the enum's own discriminants.
@@ -140,7 +140,7 @@ pub(crate) struct Spawned {
 /// What a spawn needs to know about the roster before it touches it: the manager to call, and the
 /// capacity and entry array of the `ChrSet` that manager is about to walk.
 ///
-/// All three from ONE `WorldChrMan::instance()`, on purpose. Two lookups would leave a window --
+/// All three from one `WorldChrMan::instance()`, on purpose. Two lookups would leave a window --
 /// however small, and however unlikely on the game's own thread -- in which the capacity was read
 /// from one manager and the spawn performed against another.
 fn buddy_roster() -> Result<(usize, u32, usize), String> {
@@ -157,8 +157,8 @@ fn buddy_roster() -> Result<(usize, u32, usize), String> {
             "the buddy roster reports a negative capacity ({capacity})"
         ));
     };
-    // THE BOUND, ON THE ARRAY THE GAME IS ABOUT TO WALK. `FUN_140492a90` scans `entries[6..20)`
-    // without consulting this field, so a roster shorter than the band would have the GAME read
+    // The bound, on the array the game is about to walk. `FUN_140492a90` scans `entries[6..20)`
+    // without consulting this field, so a roster shorter than the band would have the game read
     // past its own allocation -- and nothing about the call we are about to make would look wrong.
     if capacity < chr_set::BAND_END {
         return Err(format!(
@@ -180,7 +180,7 @@ fn buddy_roster() -> Result<(usize, u32, usize), String> {
 /// Create the creature `spec` describes, on the game thread.
 ///
 /// Returns the character and the roster slot it landed in, or the reason it did not happen.
-/// A refusal has changed nothing; an `Ok` means a `ChrIns` now exists that this mod OWNS and must
+/// A refusal has changed nothing; an `Ok` means a `ChrIns` now exists that this mod owns and must
 /// eventually hand to [`despawn`].
 pub(crate) fn spawn(spec: &SpawnSpec) -> Result<Spawned, String> {
     let (world_chr_man, capacity, entries) = buddy_roster()?;
@@ -212,7 +212,7 @@ pub(crate) fn spawn(spec: &SpawnSpec) -> Result<Spawned, String> {
     // straight through, i.e. two pointer arguments in the Win64 order.
     let spawn_dynamic_chr: SpawnDynamicChrFn = unsafe { core::mem::transmute(address) };
     let returned = unsafe { spawn_dynamic_chr(world_chr_man as *mut c_void, request.as_ptr()) };
-    // NOTHING RETAINS THE BLOCK, which is the question worth answering because it holds a pointer
+    // Nothing retains the block, which is the question worth answering because it holds a pointer
     // into ITSELF: `FUN_140492a90` formats the name into its own `DLAllocatedStr` and
     // `CreateCharacter` copies it into the `ChrInitData`, both synchronously, before this call
     // returns. So `request` is dead from here and nothing below may read it.
@@ -279,8 +279,8 @@ fn locate(creature: Chr, capacity: u32, entries: usize) -> Result<(u32, usize), 
     let Ok(slot) = u32::try_from(offset / chr_set::ENTRY_STRIDE) else {
         return Err("the spawned character's roster slot does not fit in a u32".to_owned());
     };
-    // AGAINST THE BAND, NOT MERELY AGAINST THE CAPACITY. `capacity` (checked to be at least
-    // `BAND_END` before the call) is the bound that makes later reads of `entries[slot]` SAFE; the
+    // Against the band, not merely against the capacity. `capacity` (checked to be at least
+    // `BAND_END` before the call) is the bound that makes later reads of `entries[slot]` safe; the
     // band is the bound the game's own loop promises, and it is the stronger of the two. A slot
     // outside 6..20 would be safe to read and would still mean this crate's model of
     // `FUN_140492a90` is wrong, which is worth refusing over rather than tracking.
@@ -302,11 +302,11 @@ fn locate(creature: Chr, capacity: u32, entries: usize) -> Result<(u32, usize), 
 
 /// Hand a creature this mod created back to the game.
 ///
-/// ONLY EVER FOR A CREATURE THIS MOD SPAWNED, and only once. `RemoveChrIns` passes it to
+/// Only ever for a creature this mod spawned, and only once. `RemoveChrIns` passes it to
 /// `CSDelayDeleteMan`; calling it twice, or on a character the game already removed, queues a freed
 /// `ChrIns` for a second destruction.
 ///
-/// **`ChrCtrl+0x3b0` MUST ALREADY BE CLEAR.** The delayed delete runs `ChrCtrl::Unref`, which
+/// **`ChrCtrl+0x3b0` must already be clear.** The delayed delete runs `ChrCtrl::Unref`, which
 /// DLPanics on a non-null override slot. The teardown ordering enforces that; this function does
 /// not re-check it, because a despawn that silently declined would leave an orphan and say nothing.
 pub(crate) fn despawn(creature: Chr) -> bool {
@@ -376,7 +376,7 @@ fn chr_res_loaded(creature: Chr) -> bool {
 ///
 /// The `EneDat` pointer is read through `safe_read_usize` and null-checked here, so this is safe to
 /// evaluate on its own -- but it is still ordered after [`Gate::ChrResLoaded`], because the game's
-/// own version does NOT null-check its argument and the gate order is the contract that keeps a
+/// own version does not null-check its argument and the gate order is the contract that keeps a
 /// future caller from copying half of this.
 fn assets_resident(creature: Chr, primary: usize, fallback: usize) -> bool {
     let Some(chr_res) = (unsafe { safe_read_usize(creature.address() + chr_ins::CHR_RES) }) else {

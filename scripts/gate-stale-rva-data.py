@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
-"""Route hand-built `base + SOME_RVA` DATA addresses through the 1.17 data map.
+"""Route hand-built `base + SOME_RVA` data addresses through the 1.17 data map.
 
-WHY THIS IS A SEPARATE TOOL FROM THE CALL ONE
+Why this is a separate tool from the call one
 ---------------------------------------------
-`gate-stale-rva-calls.py` handles addresses that get EXECUTED, where a refusal has to become a
+`gate-stale-rva-calls.py` handles addresses that get executed, where a refusal has to become a
 control-flow decision (return what, exactly?) and the risk is deleting behaviour. Data addresses
 have no such problem: `er_game_base::mem::game_data_addr` returns `0` when the running build has
 no verified mapping, and every one of these sites is already a read or an identity compare with an
 existing "not the object I wanted" branch. Handing it `0` puts a refusal down the path the caller
 already had.
 
-The hazard being fixed is the QUIET one. A stale data address does not crash -- the reads are
+The hazard being fixed is the quiet one. A stale data address does not crash -- the reads are
 fault-safe -- so the comparison simply never matches and the feature behind it stops working with
 nothing said. Measured 2026-08-29: `TITLE_OWNER_VTABLE_RVA` is `CS::TitleStep` in 1.16.2 and not a
 vtable at all in 1.17, and its three scans had been finding no title owner, forever, silently.
 
-ONLY CONSTANTS ONE OF THE FOUR LEDGERS IN `MAPS` ALREADY CARRIES are rewritten. A constant with no row would gain
+Only constants one of the four LEDGERS in `MAPS` already carries are rewritten. A constant with no row would gain
 nothing but noise: `game_data_addr` would return 0 where the raw value at least had a chance of
 being right on some build. Getting the row is `map-data-rvas-1162-to-1170.py`'s job first.
 
-WHICH CONSTANTS THOSE ARE WAS DECIDED BY A REGEX THAT COULD ONLY READ ONE SPELLING (fixed 2026-08-30)
+Which constants those are was decided by a REGEX that could only read one spelling (fixed 2026-08-30)
 -----------------------------------------------------------------------------------------------------
 `mapped_constants()` used to learn a constant's address from `const FOO_RVA: usize = 0x1234;` and
 nothing else, and the comment beside that regex said so out loud: "a constant defined from an enum
-discriminant has no value here and falls back to matching by NAME." Falling back to the name means
-the constant is only ever recognised when a generator happened to write ITS name into a map's label
+discriminant has no value here and falls back to matching by name." Falling back to the name means
+the constant is only ever recognised when a generator happened to write its name into a map's label
 column -- and the labels are written from a different spelling of the same set, so most do not.
 
 The code now knows what the comment knew. Values come from `scripts/rva_symbols.py`, which resolves
 every declaration form this tree uses -- `: u32` / `: u64` as well as `: usize`, enum discriminants,
 `const A: usize = B;` re-exports across crates, `use X as Y` aliases -- so "mapped" is decided by
-the ADDRESS, which is what a map row is keyed on, instead of by the spelling.
+the address, which is what a map row is keyed on, instead of by the spelling.
 
-MEASURED, on the tree as of 2026-08-30: 530 -> 728 constants recognised as mapped, and the sweep
+Measured, on the tree as of 2026-08-30: 530 -> 728 constants recognised as mapped, and the sweep
 went from 7 ungated data sites to 16. (728 -> 749 on 2026-08-31, when `needed.tsv` was added to
 `MAPS` -- see the comment there. The site count did not move: all 21 of the newly-named constants
 already resolved to addresses another ledger carried.) All nine of the newly-visible sites are real
@@ -48,9 +48,9 @@ derivation or as an enum discriminant:
 
 Nothing was lost: the old set is a subset of the new one.
 
-REPORTING IS THE DEFAULT; REWRITING TAKES `--write`
+Reporting is the default; Rewriting takes `--write`
 ---------------------------------------------------
-Inverted 2026-08-30. The old default was to REWRITE, and `--dry-run` was the flag you had to
+Inverted 2026-08-30. The old default was to rewrite, and `--dry-run` was the flag you had to
 remember -- which put the destructive action one forgotten word away, on a tool whose whole job is
 editing source in bulk across the workspace. It cost exactly what it was always going to cost: an
 agent ran the bare command while investigating, silently rewrote
@@ -58,7 +58,7 @@ agent ran the bare command while investigating, silently rewrote
 it back out. Nobody asks a scanner for a report and gets edits; they do the reverse by accident.
 `--dry-run` is still accepted and still means "do not write", so old invocations keep working.
 
-USAGE
+Usage
     python3 scripts/gate-stale-rva-data.py                # report only
     python3 scripts/gate-stale-rva-data.py --write        # actually rewrite
     python3 scripts/gate-stale-rva-data.py --selftest
@@ -73,7 +73,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. `rva_symbols` resolves every declaration spelling in this tree to a VALUE,
+# One dialect, not four. `rva_symbols` resolves every declaration spelling in this tree to a value,
 # and blanks comments and string bodies before anything is matched. Both matter here: the first
 # decides which constants the resolver can answer for, and the second decides whether a `//`
 # paragraph describing `base + FOO_RVA` is treated as a site to rewrite.
@@ -90,30 +90,30 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECON = os.path.join(REPO, "docs", "recon")
-# `game_data_addr` -> `resolve_game_address` answers out of ONE table, `VERIFIED_1162_TO_1170`
+# `game_data_addr` -> `resolve_game_address` answers out of one table, `VERIFIED_1162_TO_1170`
 # (crates/er-game-base/game_build.rs:764), and `crates/er-game-base/build.rs::emit_address_map`
-# seeds that table from THREE ledgers: `verified.tsv`, `needed.tsv` and `data.tsv`. So "already
+# seeds that table from three ledgers: `verified.tsv`, `needed.tsv` and `data.tsv`. So "already
 # mapped" has to mean their union. Scoring against the data map alone said 167 sites needed a new
 # row; against the union it is 110, and 57 of the difference were free wins sitting in plain sight.
 #
-# `needed.tsv` WAS MISSING FROM THIS TUPLE while the comment above it claimed all three (fixed
-# 2026-08-31). It cost nothing measurable only by coincidence: `needed-verified.tsv` is the SAME
+# `needed.tsv` was missing from this TUPLE while the comment above it claimed all three (fixed
+# 2026-08-31). It cost nothing measurable only by coincidence: `needed-verified.tsv` is the same
 # 357 source addresses put through the byte comparison, so the RVA half of the union was already
-# complete -- but the two files' NAME columns are not the same set (414 labels against 394, 21 of
+# complete -- but the two files' name columns are not the same set (414 labels against 394, 21 of
 # them reachable only through `needed.tsv`), and nothing keeps them identical. The next `--refresh`
 # that adds a row to one and not the other silently narrows the "already mapped" set, and a
 # narrower set means a real ungated `base + FOO_RVA` is skipped with no output at all. A comment
 # that names three files and code that opens two is not a documentation slip; it is the reviewer
 # being told the union is complete when it is not.
 #
-# `needed-verified.tsv` stays even though it seeds the DETOUR table rather than this one: its rows
+# `needed-verified.tsv` stays even though it seeds the detour table rather than this one: its rows
 # are a subset of `needed.tsv`'s addresses, and its column 5 carries labels the others do not.
 # The two ledgers `build.rs` reads and this tool must NOT: `rva-1170-quarantine.tsv` and the
 # `DIVERGES` rows, which build.rs SUBTRACTS. A subtracted address is one `game_data_addr` refuses
 # and answers `0` for -- which is precisely the refusal this rewrite exists to deliver -- so those
 # constants still want routing through the resolver, not excluding from it.
 #
-# NAME column per map, or None where the map has no constant column at all. `verified.tsv` has
+# Name column per map, or None where the map has no constant column at all. `verified.tsv` has
 # none -- its column 5 is a signature description -- and reading it as a name pulled junk into the
 # "already mapped" set. Match by RVA there, which is the only key every map actually shares.
 MAPS = (
@@ -125,7 +125,7 @@ MAPS = (
 # Which ledgers `build.rs` actually seeds `VERIFIED_1162_TO_1170` from, re-derived from that file
 # rather than trusted from the comment above. The omission this replaces was invisible precisely
 # because the only statement of the intended set was prose; `_map_coverage_control` turns the
-# claim into an assertion, so dropping one from MAPS -- or build.rs gaining a fourth source --
+# claim into an assertion, so dropping one from maps -- or build.rs gaining a fourth source --
 # fails the selftest instead of quietly shrinking what this tool considers mapped.
 BUILD_RS = os.path.join(REPO, "crates", "er-game-base", "build.rs")
 # `emit_address_map` up to the point where it starts SUBTRACTING. Every ledger constant named in
@@ -135,13 +135,13 @@ BUILD_RS = os.path.join(REPO, "crates", "er-game-base", "build.rs")
 BUILD_TABLE_REGION = re.compile(r"fn emit_address_map(.*?)let mut held_back", re.S)
 BUILD_LEDGER_DECL = re.compile(r'const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]*docs/recon/[^"]+\.tsv)"')
 IMAGE_BASE = 0x140000000
-# THE MATCHER THIS FILE USED TO DECIDE "which constant is which address", frozen as a LITERAL so
+# The MATCHER this file used to decide "which constant is which address", frozen as a literal so
 # `--selftest` can prove the replacement is load-bearing. Its own comment admitted the hole:
 #
 #     # `const FOO_RVA: usize = 0x1234;` -- only the literal form; a constant defined from an enum
-#     # discriminant has no value here and falls back to matching by NAME.
+#     # discriminant has no value here and falls back to matching by name.
 #
-# SPELLED OUT, NOT COMPOSED. A control assembled from live pattern pieces widens when they widen,
+# Spelled out, not composed. A control assembled from live pattern pieces widens when they widen,
 # and "the old matcher misses this" quietly becomes "the new matcher misses this" -- the opposite
 # claim. `check-stale-rva-calls.py` nearly shipped exactly that.
 LEGACY_DECLARATION = re.compile(
@@ -152,64 +152,64 @@ RESOLVER = "er_game_base::mem::game_data_addr"
 # `$base` included on purpose: several sites live inside macro bodies, and the dollar has to stay
 # attached to the identifier rather than being swallowed into the replacement.
 #
-# THE BASE IS ANY LOWERCASE BINDING, not a fixed list of four spellings. The list used to be
+# The base is any LOWERCASE binding, not a fixed list of four spellings. The list used to be
 # `(base|module_base|image_base|game_base)`, and `crates/er-loading-portrait-core/src/lookat_stage_camera.rs`
 # writes `if let Ok(b) = game_module_base()` -- so `b + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA`
 # was invisible to this scanner and stayed on a 1.16.2 address through the whole 1.17 migration, with
 # no refusal logged because a raw add never reaches the resolver. A scanner keyed on what the author
-# happened to CALL the variable finds only the sites written by authors who agreed with it.
+# happened to call the variable finds only the sites written by authors who agreed with it.
 #
 # What keys the match instead is the CONSTANT: `*_RVA*`, and only when `mapped_constants()` says the
 # resolver can answer for it. Two deliberate restrictions remain on the base itself:
 #   * it must start lowercase, so a SCREAMING_CASE constant added to an RVA (`SOME_OFFSET + FOO_RVA`)
 #     is not mistaken for a module base;
 #   * it must not be preceded by `.`, because rewriting `self.base + FOO_RVA` would drop the
-#     receiver and produce `game_data_addr(base, ...)` -- which can still COMPILE where a local
+#     receiver and produce `game_data_addr(base, ...)` -- which can still compile where a local
 #     `base` exists, and that is a silent wrong answer rather than a loud one.
 SITE = re.compile(
     r"(?<![.\w])(?P<base>\$?[a-z_][A-Za-z0-9_]*)\s*\+\s*"
     r"(?P<prefix>(?:\w+::)*)(?P<const>[A-Z0-9_]*RVA[A-Z0-9_]*)\b"
 )
-# `base.checked_add(FOO_RVA)?` is the SAME hand-built address wearing a different costume, and the
+# `base.checked_add(FOO_RVA)?` is the same hand-built address wearing a different costume, and the
 # `base + FOO_RVA` pattern walked straight past six of them. That gap black-screened the game on
-# 2026-08-29: `find_title_owner_by_vtable` ended up comparing a RESOLVED state table against a RAW
+# 2026-08-29: `find_title_owner_by_vtable` ended up comparing a resolved state table against a raw
 # 1.16.2 vtable, so the scan could never match, the autoload waited forever for a title owner that
 # would never be found, and the boot cover -- which holds until the game's own loading screen
 # lights -- never released. A converter that covers one spelling of an idiom covers none of it.
 CHECKED_ADD_SITE = re.compile(
     r"(?<![.\w])(?P<base>\w+)\.checked_add\(\s*(?P<prefix>(?:\w+::)*)(?P<const>[A-Z0-9_]*RVA[A-Z0-9_]*)\s*\)\?"
 )
-# Tested against THE ENCLOSING CALL, never a window of surrounding lines.
+# Tested against the ENCLOSING call, never a window of surrounding lines.
 #
 # It used to be tested against a +/-2-line window, and that is precisely backwards: the shape this
-# whole tool exists to catch is a HALF-converted site, one gated address sitting beside a raw one,
+# whole tool exists to catch is a half-converted site, one gated address sitting beside a raw one,
 # and a window makes the gated neighbour hide the raw one. Both of the addresses found broken on
 # 2026-08-30 were hidden this way -- `dialog_active.rs` computes `want_a` raw and `want_b` through
 # the resolver four lines apart, and `profile_select_flow.rs` had both halves of a single `||`
-# written the two different ways, on ONE line.
+# written the two different ways, on one line.
 #
-# What "already gated" actually means is structural, not positional: the raw add is an ARGUMENT to a
+# What "already gated" actually means is structural, not positional: the raw add is an argument to a
 # resolver, as in `resolve_game_address(base + SPLASH_SKIP_FN_RVA, "SPLASH_SKIP_FN_RVA")`, which
-# takes an absolute address and is correct as written. A resolver call merely NEAR the site says
+# takes an absolute address and is correct as written. A resolver call merely near the site says
 # nothing. `enclosing_calls_gated` answers the structural question by walking outward through the
 # unclosed parentheses that contain the match, so a neighbour cannot hide anything and an argument
 # is still recognised across the line breaks of a multi-line call.
 ALREADY_GATED = re.compile(r"game_data_addr|game_rva|resolve_game_address|game_ptr")
 # How far back `enclosing_calls_gated` looks for the parentheses that contain a match. Wide enough
 # for a multi-line call's argument list, deliberately too narrow to reach the enclosing `fn` name of
-# a typical body -- a function that merely HAS a resolver-ish name should not silence its contents.
+# a typical body -- a function that merely has a resolver-ish name should not silence its contents.
 ENCLOSING_SCAN_CHARS = 400
-# A HOOK TARGET must stay a raw `base + rva`: `MhHook::new` resolves it itself, through the DETOUR
+# A hook target must stay a raw `base + rva`: `MhHook::new` resolves it itself, through the detour
 # resolver, which is a stricter test than the call one. Pre-resolving it does one of two bad
-# things -- translates the address TWICE (the bug in bd resolve-twice-refuses-double-translation),
+# things -- translates the address twice (the bug in bd resolve-twice-refuses-double-translation),
 # or hands MinHook the `0` that `game_data_addr` returns on a refusal, which is an install at
 # address zero. Measured 2026-08-29: an earlier version of this tool rewrote 18 such sites,
 # including a whole `let targets = [...]` list whose `MhHook::new` sat fourteen lines below the
 # addresses it collected -- hence the deliberately wide window.
 #
-# `register_shared_hook` WAS MISSING, and it is the same footgun with a different name (2026-08-31).
-# Its target arrives UNRESOLVED by contract -- `er_hook::register_shared_hook_with_budget` resolves
-# once, AFTER the branch, in whichever image ends up owning the detour, and its own doc says so:
+# `register_shared_hook` was missing, and it is the same footgun with a different name (2026-08-31).
+# Its target arrives unresolved by contract -- `er_hook::register_shared_hook_with_budget` resolves
+# once, after the branch, in whichever image ends up owning the detour, and its own doc says so:
 # "`target` arrives UNRESOLVED and each branch resolves it exactly once". Two live sites pass
 # `base + FOO_RVA` straight into it and say the same thing in their own comments:
 #
@@ -221,7 +221,7 @@ ENCLOSING_SCAN_CHARS = 400
 # at address 0. `register_union_hook` was already here and covers its `_runtime_derived` /
 # `_resolved` spellings by substring; `register_shared_hook` covers `_with_budget` the same way.
 # `selftest`'s registrar control re-derives the list from er-hook rather than trusting this comment,
-# so a NEW registrar added there turns this file red instead of silently becoming a rewrite target.
+# so a new registrar added there turns this file red instead of silently becoming a rewrite target.
 HOOK_TARGET = re.compile(
     r"MhHook::new|MH_CreateHook|register_union_hook|register_shared_hook"
     r"|detour|trampoline|hook as \*mut",
@@ -257,10 +257,10 @@ def map_rvas() -> tuple[set[int], set[str]]:
 
 
 def constants_at(rvas: set[int], root=None) -> set[str]:
-    """Every symbol in `crates/` whose RESOLVED value is one of `rvas`.
+    """Every symbol in `crates/` whose resolved value is one of `rvas`.
 
-    THE ADDRESS IS THE KEY, NOT THE SPELLING. A map row is an address pair; whether this tool can
-    use one depends on whether it can tell that `FOO_RVA` IS that address, and this tree writes
+    The address is the key, not the spelling. A map row is an address pair; whether this tool can
+    use one depends on whether it can tell that `FOO_RVA` is that address, and this tree writes
     that fact five different ways. `rva_symbols` evaluates all of them:
 
         const FILE_OPEN_RVA: usize = er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
@@ -270,7 +270,7 @@ def constants_at(rvas: set[int], root=None) -> set[str]:
         use er_game_base::rva::GAME_MAN_SINGLETON_RVA as GAME_MAN_GLOBAL_RVA;
 
     The old literal-only regex saw only the third of those with a `usize` type, and every other
-    constant fell back to matching by NAME against a label column that mostly does not carry it.
+    constant fell back to matching by name against a label column that mostly does not carry it.
     """
     index = rva_symbols.index(root)
     found: set[str] = set()
@@ -282,7 +282,7 @@ def constants_at(rvas: set[int], root=None) -> set[str]:
             if rva in rvas:
                 found.add(decl.symbol)
                 break
-    # An alias is another NAME for a mapped value, and the rewrite reads the name at the USE site.
+    # An alias is another name for a mapped value, and the rewrite reads the name at the use site.
     for alias, target in index.aliases.items():
         if target.split("::")[-1] in found:
             found.add(alias)
@@ -290,10 +290,10 @@ def constants_at(rvas: set[int], root=None) -> set[str]:
 
 
 def mapped_constants(root=None) -> set[str]:
-    """Every constant the resolver can answer for, by NAME -- resolved through both keys.
+    """Every constant the resolver can answer for, by name -- resolved through both keys.
 
-    A constant counts as mapped when its NAME appears in a map that has a name column, OR when its
-    RESOLVED value appears in any map. The second half is what carries the load: `verified.tsv`
+    A constant counts as mapped when its name appears in a map that has a name column, or when its
+    resolved value appears in any map. The second half is what carries the load: `verified.tsv`
     carries no names at all, and the label columns of the other two are written from one spelling
     of a set that is declared in five.
     """
@@ -305,7 +305,7 @@ def enclosing_calls_gated(text: str, pos: int, limit: int = ENCLOSING_SCAN_CHARS
     """Is the expression at `pos` an argument to a call whose name is already a resolver?
 
     Walks left from `pos` matching parentheses. A `)` deepens; a `(` at depth zero is a call that
-    still CONTAINS `pos`, so the identifier immediately before it is read and tested, then the walk
+    still contains `pos`, so the identifier immediately before it is read and tested, then the walk
     continues outward through the next enclosing call. Nothing else is examined -- a resolver call
     that is a sibling, a neighbour or a previous statement never reaches depth zero from here, which
     is exactly the difference between "this address is already resolved" and "an address near it
@@ -335,19 +335,19 @@ def enclosing_calls_gated(text: str, pos: int, limit: int = ENCLOSING_SCAN_CHARS
 def rewrite(path: str, mapped: set[str], dry_run: bool, found: list | None = None) -> int:
     """Route every ungated `base + FOO_RVA` in `path` through the resolver. Returns the count.
 
-    Both idioms are collected against the ORIGINAL line and the replacements are spliced in by
+    Both idioms are collected against the original line and the replacements are spliced in by
     offset, rather than run as two chained `re.sub` passes. The chained form was fine while the
     decisions were purely local, but `enclosing_calls_gated` needs each match's offset in the
     UNMODIFIED file, and the first substitution moves every offset after it.
     """
     text = open(path, encoding="utf-8").read()
     lines = text.splitlines(keepends=True)
-    # MATCH THE CODE, SPLICE THE SOURCE. `code_only` blanks comments and string bodies to spaces
-    # WITHOUT moving anything, so `masked` has byte-for-byte the same offsets and line breaks as
+    # Match the code, SPLICE the source. `code_only` blanks comments and string bodies to spaces
+    # without moving anything, so `masked` has byte-for-byte the same offsets and line breaks as
     # `text` -- the matches are found in code and the replacements are still built from the real
     # bytes. The old `startswith("//")` test caught a whole-line comment and nothing else: a
     # trailing `// like base + BAR_RVA`, a `/* ... */` block and a quoted example all read as
-    # sites, which on a tool that REWRITES FILES means editing a sentence.
+    # sites, which on a tool that REWRITES files means editing a sentence.
     masked = code_only(text)
     masked_lines = masked.splitlines(keepends=True)
     out, changed = [], 0
@@ -356,12 +356,12 @@ def rewrite(path: str, mapped: set[str], dry_run: bool, found: list | None = Non
         line_start = offset
         offset += len(line)
         code_line = masked_lines[index] if index < len(masked_lines) else line
-        # The HOOK window stays wide (and stays a window): `MhHook::new` can sit fourteen lines
+        # The hook window stays wide (and stays a window): `MhHook::new` can sit fourteen lines
         # below the `let targets = [...]` list whose addresses it installs, and pre-resolving one of
         # those is a real bug. Being gated is the opposite case and is decided per match, below.
         #
-        # AND IT DELIBERATELY READS THE RAW LINES, not the masked ones. Masking exists so prose is
-        # not counted as a FINDING; this test is not looking for a finding, it is looking for a
+        # And it deliberately reads the raw lines, not the masked ones. Masking exists so prose is
+        # not counted as a finding; this test is not looking for a finding, it is looking for a
         # reason to keep its hands off the file. A comment that says "the MhHook::new below
         # installs these" is exactly such a reason, and reading it costs a rewrite that could have
         # been made -- while ignoring it costs a hook target pre-resolved to `0`.
@@ -385,7 +385,7 @@ def rewrite(path: str, mapped: set[str], dry_run: bool, found: list | None = Non
                 continue
             if ALREADY_GATED.search(match.group(0)):
                 continue
-            # ...on the MASKED text: a resolver name inside a comment gates nothing.
+            # ...on the masked text: a resolver name inside a comment gates nothing.
             if enclosing_calls_gated(masked, line_start + match.start()):
                 continue
             rebuilt.append(line[cursor : match.start()])
@@ -420,13 +420,13 @@ pub const CAP_BUILDER_RVA: u32 = 0x826510;
 def _declaration_control() -> list[str]:
     """Prove the value resolver sees constants the frozen literal-only regex could not.
 
-    THE CONTROL IS THE ADDRESS THE OLD MATCHER CALLED UNDECLARED. 0xb0d400 is declared in this
-    tree ONLY as an enum discriminant -- `MenuJobWait` inside `#[repr(u32)] enum MenuTraceRva`,
-    reached through `TITLE_MENU_JOB_WAIT_RVA` -- and a sibling gate recommended DELETING its map
+    The control is the address the old MATCHER called UNDECLARED. 0xb0d400 is declared in this
+    tree only as an enum discriminant -- `MenuJobWait` inside `#[repr(u32)] enum MenuTraceRva`,
+    reached through `TITLE_MENU_JOB_WAIT_RVA` -- and a sibling gate recommended deleting its map
     row on the strength of a `const NAME: usize = 0x..;` search coming back empty.
 
-    Each case asserts BOTH halves: the frozen pre-fix regex must MISS it, and the resolver must
-    CATCH it. A case both see would pass on the broken tool and prove nothing.
+    Each case asserts both halves: the frozen pre-fix regex must miss it, and the resolver must
+    catch it. A case both see would pass on the broken tool and prove nothing.
     """
     import tempfile
 
@@ -452,7 +452,7 @@ def _declaration_control() -> list[str]:
             )
         if symbol not in found:
             out.append(f"declaration control: the resolver did not see {symbol} ({why})")
-    # The negative half: only the LITERAL `usize` form was ever visible to the old regex, and the
+    # The negative half: only the literal `usize` form was ever visible to the old regex, and the
     # resolver must still see that one -- a widening that lost the old set would be a swap, not a
     # widening.
     if "TITLE_SCALEFORM_FILE_OPEN_RVA" not in legacy:
@@ -461,11 +461,11 @@ def _declaration_control() -> list[str]:
 
 
 def _masking_control() -> list[str]:
-    """Prove a `base + FOO_RVA` inside a COMMENT is no longer rewritten -- and a real one still is.
+    """Prove a `base + FOO_RVA` inside a comment is no longer rewritten -- and a real one still is.
 
     The old skip was `line.lstrip().startswith("//")`, which sees a whole-line comment and nothing
-    else. A TRAILING comment, a `/* */` block and a quoted example all read as sites, and this is a
-    tool that EDITS FILES: the finding it invents is a sentence it rewrites.
+    else. A trailing comment, a `/* */` block and a quoted example all read as sites, and this is a
+    tool that edits FILES: the finding it invents is a sentence it rewrites.
     """
     import tempfile
 
@@ -497,7 +497,7 @@ def _masking_control() -> list[str]:
         )
     if count != 1:
         out.append(f"masking control: counted {count} site(s), expected 1")
-    # NON-VACUITY: the pre-fix line filter really did read three of those four as sites, so the
+    # Non-VACUITY: the pre-fix line filter really did read three of those four as sites, so the
     # control is not asserting something that was already true.
     legacy_visible = [
         line
@@ -525,17 +525,17 @@ SHARED_HOOK_SOURCE = """fn install() {
 
 
 def _shared_hook_control() -> list[str]:
-    """A `register_shared_hook(base + FOO_RVA, ...)` target must be left RAW.
+    """A `register_shared_hook(base + FOO_RVA, ...)` target must be left raw.
 
-    THE EXCLUSION IS THE ASSERTION, and it is made end to end through `rewrite` rather than against
+    The exclusion is the assertion, and it is made end to end through `rewrite` rather than against
     the regex alone -- what matters is that no edit is produced, not that a pattern matches. The
-    second half is the non-vacuity control: the SAME fixture with the registrar renamed to a
-    function this tool has never heard of MUST produce one rewrite, or "0 sites" would be true
+    second half is the non-vacuity control: the same fixture with the registrar renamed to a
+    function this tool has never heard of must produce one rewrite, or "0 sites" would be true
     because the fixture matches nothing and the exclusion would be proving itself.
 
     Why the site must stay raw: `er_hook::register_shared_hook_with_budget` resolves `target` once,
     after it has picked the image that will own the detour. Handing it a `game_data_addr`-resolved
-    address translates TWICE -- and a 1.17 destination can itself be another row's 1.16.2 source, so
+    address translates twice -- and a 1.17 destination can itself be another row's 1.16.2 source, so
     the second lookup does not merely miss, it lands on a third unrelated function
     (`scripts/check-double-resolved-hook-targets.py` is the gate that forbids the shape). On a
     refusal instead, `game_data_addr` returns 0 and MinHook is asked to install at address zero.
@@ -555,7 +555,7 @@ def _shared_hook_control() -> list[str]:
                 f"({[c for _p, _l, c, _t in sites]}) -- that address must reach the registrar "
                 "UNRESOLVED or it is translated twice"
             )
-        # NON-VACUITY: the same fixture, same constant, a registrar nobody excludes.
+        # Non-VACUITY: the same fixture, same constant, a registrar nobody excludes.
         loud = os.path.join(tmp, "loud.rs")
         with open(loud, "w", encoding="utf-8") as handle:
             handle.write(SHARED_HOOK_SOURCE.replace("register_shared_hook", "note_the_address"))
@@ -565,7 +565,7 @@ def _shared_hook_control() -> list[str]:
                 "registrar renamed, so the exclusion above proved nothing"
             )
 
-    # DRIFT CONTROL. Re-derive the registrar names from er-hook instead of trusting the hand-list in
+    # Drift control. Re-derive the registrar names from er-hook instead of trusting the hand-list in
     # HOOK_TARGET's comment. A new `register_*_hook` added there is a new way to hand this tool a
     # deliberately-unresolved address, and it should turn this file red rather than quietly become a
     # rewrite target -- which is exactly how `register_shared_hook` went unnoticed.
@@ -592,7 +592,7 @@ def _shared_hook_control() -> list[str]:
 def _map_coverage_control() -> list[str]:
     """Every ledger `build.rs` seeds the resolver's table from must be in [`MAPS`].
 
-    THE CLAIM WAS PROSE AND THE PROSE WAS WRONG. `MAPS` carried three files while the comment above
+    The claim was prose and the prose was wrong. `MAPS` carried three files while the comment above
     it said "ALL THREE maps" -- and one of the three it meant, `needed.tsv`, was simply absent, with
     nothing anywhere to say so. It cost nothing measurable only because `needed.tsv` and
     `needed-verified.tsv` happen to hold the same 357 source addresses right now; they are written
@@ -640,7 +640,7 @@ def _map_coverage_control() -> list[str]:
                 "to `mapped_constants`, so every constant reachable only through it is scored "
                 "UNMAPPED and its ungated sites are skipped in silence"
             )
-    # NON-VACUITY: with one ledger removed, the same check must object. If it does not, the loop
+    # Non-VACUITY: with one ledger removed, the same check must object. If it does not, the loop
     # above is comparing a set against itself.
     survivor = sorted(seeds)[0]
     trimmed = listed - {
@@ -664,7 +664,7 @@ def selftest() -> int:
     failures.extend(_masking_control())
     failures.extend(_shared_hook_control())
 
-    # NON-VACUITY OF THE INPUTS, before anything is concluded from them. A walk that reads nothing
+    # Non-VACUITY of the inputs, before anything is concluded from them. A walk that reads nothing
     # makes "no sites" and "I did not look" the same sentence, and only one is good news.
     index = rva_symbols.index()
     if index.files_read < 200:
@@ -676,7 +676,7 @@ def selftest() -> int:
     map_addresses, map_names = map_rvas()
     if len(map_addresses) < 200:
         failures.append(f"only {len(map_addresses)} addresses read from the ledgers in MAPS")
-    # NOTHING WAS LOST. The frozen regex's answers must all survive into the new set, or this is a
+    # Nothing was lost. The frozen regex's answers must all survive into the new set, or this is a
     # swap rather than a widening.
     legacy_names = set()
     for path in glob.glob(os.path.join(REPO, "crates", "**", "*.rs"), recursive=True):
@@ -716,7 +716,7 @@ def selftest() -> int:
     if HOOK_TARGET.search("if vt != base + FOO_VTABLE_RVA {"):
         failures.append("HOOK_TARGET wrongly claimed a plain vtable compare is a hook install")
 
-    # THE HALF-CONVERTED LINE. One gated address and one raw one in a single `||`, which is
+    # The half-converted line. One gated address and one raw one in a single `||`, which is
     # verbatim the shape of `crates/er-title-flow/src/profile_select_flow.rs`. Under the old
     # window-based ALREADY_GATED test the gated half hid the raw half and this line was skipped.
     half = (
@@ -736,13 +736,13 @@ def selftest() -> int:
     if gated.count(RESOLVER) != 2:
         failures.append(f"half-converted line produced {gated.count(RESOLVER)} resolver calls, want 2")
 
-    # THE BASE NAMED `b`. `lookat_stage_camera.rs` binds the module base as `b`, which the old
+    # The base named `b`. `lookat_stage_camera.rs` binds the module base as `b`, which the old
     # hard-coded `(base|module_base|image_base|game_base)` alternation could not see.
     match = SITE.search("== b + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA")
     if not match or match.group("base") != "b" or not match.group("const").endswith("_RVA"):
         failures.append("SITE missed a one-letter module base -- a real site hid behind that for the whole 1.17 migration")
 
-    # ...but the base still has to look like a binding. These two must NOT match, because rewriting
+    # ...but the base still has to look like a binding. These two must not match, because rewriting
     # them produces something wrong rather than something gated.
     if SITE.search("let addr = TITLE_OWNER_SCAN_START_ADDRESS + FOO_VTABLE_RVA;"):
         failures.append("SITE treated a SCREAMING_CASE constant as a module base")
@@ -753,9 +753,9 @@ def selftest() -> int:
     if ALREADY_GATED.search("base + FOO_VTABLE_RVA"):
         failures.append("ALREADY_GATED matched a raw site -- it would skip every rewrite")
 
-    # THE ENCLOSING-CALL TEST, both directions. `resolve_game_address` takes an ABSOLUTE address, so
+    # The ENCLOSING-call test, both directions. `resolve_game_address` takes an absolute address, so
     # a raw add inside its argument list is correct as written (`constants_autoload_state.rs:224`)
-    # and must be left alone -- while the same raw add merely NEXT TO a resolver call must not be.
+    # and must be left alone -- while the same raw add merely next to a resolver call must not be.
     argument = 'er_game_base::game_build::resolve_game_address(base + SPLASH_SKIP_FN_RVA, "SPLASH_SKIP_FN_RVA")'
     found = SITE.search(argument)
     if not found:
@@ -772,7 +772,7 @@ def selftest() -> int:
     if not found or not enclosing_calls_gated(multiline, found.start()):
         failures.append("a multi-line resolver call did not gate the argument on its own line")
 
-    # REPORTING MUST NOT WRITE. A real `.rs` fixture with real sites, because this file can no
+    # Reporting must not write. A real `.rs` fixture with real sites, because this file can no
     # longer be its own: every `base + FOO_RVA` in it lives inside a comment or a string, and those
     # are now blanked before matching -- which is the point. A fixture that matches nothing would
     # make "the dry run wrote nothing" true for the wrong reason, so the count is asserted first.
@@ -797,7 +797,7 @@ def selftest() -> int:
             )
         if open(fixture, "rb").read() != before:
             failures.append("a dry run WROTE to a file; the safe default is not safe")
-        # ...and the same fixture with --write ON must actually change, or "did not write" is
+        # ...and the same fixture with --write on must actually change, or "did not write" is
         # indistinguishable from "cannot write".
         rewrite(fixture, {"DRY_RUN_FIXTURE_VTABLE_RVA"}, dry_run=False)
         if open(fixture, "rb").read() == before:
@@ -834,7 +834,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.selftest:
         return selftest()
-    # `--dry-run` can only ever turn writing OFF, never on, so the two flags cannot contradict.
+    # `--dry-run` can only ever turn writing off, never on, so the two flags cannot contradict.
     write = args.write and not args.dry_run
     mapped = mapped_constants()
     paths = args.paths or glob.glob(os.path.join(REPO, "crates", "**", "*.rs"), recursive=True)

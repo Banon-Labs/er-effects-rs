@@ -1,7 +1,7 @@
 //! Putting the routes on screen, and joining whatever imgui already exists in the process.
 //!
 //! This DLL never installs a second `Present` hook. If another module in this workspace is
-//! already hosting the overlay it registers as a GUEST and draws through it; if nobody is, it
+//! already hosting the overlay it registers as a guest and draws through it; if nobody is, it
 //! hosts and dispatches guests itself. Two `Hudhook::apply()` calls in one process double-hook
 //! `Present` and the second one silently renders nothing -- measured live on 2026-08-25, and the
 //! reason `er_build_watermark_core::overlay_host` exists.
@@ -80,7 +80,7 @@ fn draw(ui: &Ui) {
         LAST_SEGMENTS.store(0, Ordering::Relaxed);
         return;
     };
-    // The camera is read HERE rather than carried in the snapshot: a path is drawn in screen
+    // The camera is read here rather than carried in the snapshot: a path is drawn in screen
     // space, so a camera one frame stale makes the whole overlay swim across the screen whenever
     // the player turns. The route points are world-space and may be a frame old without anyone
     // noticing; the camera may not.
@@ -153,7 +153,7 @@ fn draw(ui: &Ui) {
 ///
 /// `frame` is the pointer the overlay host just passed, live for the duration of this call.
 unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
-    // Adopt the host's context and allocators BEFORE touching `ui`. imgui's current context is a
+    // Adopt the host's context and allocators before touching `ui`. imgui's current context is a
     // per-DLL global, so this module's copy is null until this runs and `ui.io()` would fault.
     // SAFETY: `frame` is the host's live pointer.
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
@@ -172,12 +172,12 @@ impl ImguiRenderLoop for PathOverlay {
 
     fn render(&mut self, ui: &mut Ui) {
         // Guests first and before any early return: this module hosts the only imgui context in
-        // the process, so returning early here draws nothing for every OTHER overlay too.
+        // the process, so returning early here draws nothing for every other overlay too.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
         draw(ui);
-        // The watermark is NOT a guest -- it never registers one, because its loser path assumes
+        // The watermark is not a guest -- it never registers one, because its loser path assumes
         // whichever module hosts will carry its rows directly. `er-net-effects` and the watermark's
-        // own render loop both do; this one did not, so a run where THIS module won the overlay had
+        // own render loop both do; this one did not, so a run where this module won the overlay had
         // no watermark at all and `er-build-watermark.log` fell silent after its claim line.
         er_build_watermark_core::draw_rows(ui, path_log);
     }
@@ -203,7 +203,7 @@ pub(crate) fn install(hmodule_raw: usize) {
         er_build_watermark_core::OverlayClaim::Won => {}
         er_build_watermark_core::OverlayClaim::LostToAnotherModule => {
             if er_build_watermark_core::overlay_host::register_with_host_retrying(guest_draw) {
-                // INSTALLED stays set: this module is joined to an overlay and must not run the
+                // Installed stays set: this module is joined to an overlay and must not run the
                 // install path again.
                 path_log(format_args!(
                     "overlay: another module won the overlay while this one waited for the \

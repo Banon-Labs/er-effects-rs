@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Reject `CStr::from_ptr` and its wide-string siblings on pointers we did not create.
 
-WHY THIS GATE EXISTS. On 2026-08-23 both testers' games died in MSVC `strlen`, reached from
+Why this gate exists. On 2026-08-23 both testers' games died in MSVC `strlen`, reached from
 `er_invasion_warp`'s Steam lobby hook. The pointer Steam/Seamless handed us was
-`0x011000010e05acda` -- garbage, and very much NOT null, which is the entire point: the call site
+`0x011000010e05acda` -- garbage, and very much not null, which is the entire point: the call site
 guarded with `key == 0`, and a null check does nothing about junk. `CStr::from_ptr` calls `strlen`,
 `strlen` dereferences until it finds a zero byte, and an unmapped page ends the process.
 
 The fix for that one site was `er_game_base::mem::safe_read_cstr`, which reads through
-`ReadProcessMemory` and fails closed. The fix for the BUG CLASS is this file: an audit on
+`ReadProcessMemory` and fails closed. The fix for the bug class is this file: an audit on
 2026-08-25 found three more sites doing exactly the same thing (two more Steam pointers in
 `lobby_publish.rs`, and the game-supplied Scaleform node names in `title_resources_stats_text.rs`),
 each reaching `strlen` at depth 1 in the emitted code. Being right about all four by hand once is
 not the same as staying right, so the invariant is executable: the workspace currently contains
-ZERO of these calls, and this keeps it there.
+zero of these calls, and this keeps it there.
 
-ESCAPE HATCH. A pointer we made ourselves and can prove is NUL-terminated is fine. Say so on the
+Escape hatch. A pointer we made ourselves and can prove is NUL-terminated is fine. Say so on the
 line or the line above:
 
     // Foreign pointer: ours, from CString::new above -- never crosses an FFI boundary.
@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from repo_source_scan import REPO_ROOT, rust_source_files  # noqa: E402
 
 # The whole family that walks memory looking for a terminator. A length-carrying read
-# (`slice::from_raw_parts`) is deliberately NOT here: it cannot run off the end of a mapping
+# (`slice::from_raw_parts`) is deliberately not here: it cannot run off the end of a mapping
 # looking for a byte that may not be there, which is the specific failure this gate is about.
 BANNED_CALLS = (
     "CStr::from_ptr",
@@ -48,7 +48,7 @@ REPLACEMENT = "er_game_base::mem::safe_read_cstr"
 
 
 def banned_call_in(line: str) -> str | None:
-    # A line that only NAMES the call in prose (this gate's own docs, a `//` comment explaining
+    # A line that only names the call in prose (this gate's own docs, a `//` comment explaining
     # why the safe reader exists) is not a call site.
     if line.lstrip().startswith(("//", "///", "//!", "*")):
         return None

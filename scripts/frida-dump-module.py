@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Dump a module's LIVE (unpacked) image out of the running Elden Ring process.
+"""Dump a module's live (unpacked) image out of the running Elden Ring process.
 
-WHY
+Why
 ---
 `ersc.dll` (Seamless Co-op) is Themida-packed. Its on-disk code is obfuscated, so static
 analysis of the file answers almost nothing about Seamless's own systems -- including its
 invasion system, which is not the vanilla one. The unpacked code exists only in memory, after
 the packer's loader stub has run. Dumping the live image is the only way to read it.
 
-The output is a FLAT image: file offset == RVA, the same convention `eldenring-deobf.bin`
+The output is a flat image: file offset == RVA, the same convention `eldenring-deobf.bin`
 already uses here, so `VA = base + offset` and existing tooling habits carry over. Pages that
 cannot be read become zeros rather than being skipped, because a dump whose later offsets
 silently slide is worse than one with honest holes -- every address derived from it would be
@@ -16,20 +16,20 @@ wrong by an amount nobody can see.
 
 SAFETY
 ------
-  * READ-ONLY. The agent never writes target memory and never calls into the target.
+  * Read-only. The agent never writes target memory and never calls into the target.
   * Connect, dump, detach. No lingering agent holding the loader lock.
 
-HOW WE REACH THE PROCESS
+How we reach the process
 ------------------------
 The game runs under Wine/Proton, so a Linux-side `frida.attach()` sees nothing -- there is no
-Linux process to attach to. `frida-gadget.dll` is loaded INTO the game as an me3 `[[natives]]`
-entry and listens on 127.0.0.1:27042; we connect to that as a REMOTE DEVICE. Same mechanism as
+Linux process to attach to. `frida-gadget.dll` is loaded into the game as an me3 `[[natives]]`
+entry and listens on 127.0.0.1:27042; we connect to that as a remote device. Same mechanism as
 scripts/frida/badge-scale.py.
 
 The game must therefore be launched with a gadget-bearing profile, e.g.
 /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3.
 
-RUN IT (uv provisions frida per-run; nothing is installed system-wide):
+Run it (uv provisions frida per-run; nothing is installed system-wide):
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --list
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-dump-module.py --module ersc.dll
 
@@ -83,7 +83,7 @@ def _selftest() -> int:
         assemble(8, [(2, b"\xaa\xbb")]) == bytearray(b"\x00\x00\xaa\xbb\x00\x00\x00\x00"),
         "a piece lands at its RVA, not at the start",
     )
-    # THE DEFECT THIS GUARDS: if a hole shifted everything after it, every address derived from
+    # The defect this GUARDS: if a hole shifted everything after it, every address derived from
     # the dump past the first unreadable page would be wrong, and nothing would say so.
     check(
         assemble(8, [(6, b"\xcc\xdd"), (0, b"\x11\x22")])
@@ -199,7 +199,7 @@ def main() -> int:
         print(f"file offset == RVA, so VA = 0x{base:x} + offset")
         if holes:
             print(f"NOTE: {holes} bytes were in readable ranges but failed to read")
-            # WHY they failed. A systematic failure -- a removed Frida API, a detached session --
+            # Why they failed. A systematic failure -- a removed Frida API, a detached session --
             # looks exactly like "the module refused to be read" unless the reason is surfaced.
             # This tool once wrote a 7.8 MB all-zero image and reported success, because every
             # chunk threw and the fail-soft catch turned that into holes.

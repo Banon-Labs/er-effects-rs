@@ -1,4 +1,4 @@
-//! The System>Quit **Load Build from URL** link field: a SECOND derivation of
+//! The System>Quit **Load Build from URL** link field: a second derivation of
 //! `data0:/menu/win/02_990_textinput.gfx`, centred on the stage with the movie's own chrome intact.
 //!
 //! # Why this movie and no other
@@ -11,13 +11,13 @@
 //! surface -- `01_010/01_011/01_013_messagebox*`, `04_021_chrmake_textselect_center`,
 //! `02_044_pc_textselect`, `01_032_bloodmessage_edit` -- carries only `ReadOnly` display fields and
 //! has no `Text_0` for the controller to drive. There is no third, better-styled text-entry movie
-//! to switch to: 02_990 IS the game's styled text-entry surface, and it is already the wider of the
+//! to switch to: 02_990 is the game's styled text-entry surface, and it is already the wider of the
 //! two.
 //!
 //! # Why the field looked unstyled, anchored to the top-left corner
 //!
 //! Not a missing asset -- a borrowed one. The link field was reusing the save picker's cache key
-//! (`02_990_TextInput_PathEditor`) and therefore the save picker's DERIVED movie, and that
+//! (`02_990_TextInput_PathEditor`) and therefore the save picker's derived movie, and that
 //! derivation ([`crate::text_input_02_990::inline_current_path_editor`]) deliberately alpha-zeroes
 //! all three of the movie's chrome placements, because over ProfileSelect the picker's own
 //! `CurrentPath` button supplies the frame. Nothing else on the Quit tab supplies one, so what
@@ -30,7 +30,7 @@
 //! Its own cache key, its own derived bytes, and the save picker's movie untouched:
 //!
 //! * the black backing plate (character 5) and the two `MENU_FL_Arts_waku2` frame placements
-//!   (character 6, depths 2 and 4) are KEPT and scaled horizontally with the field, so the field
+//!   (character 6, depths 2 and 4) are kept and scaled horizontally with the field, so the field
 //!   keeps the game's own text-entry chrome;
 //! * the field grows from 400 px to [`FIELD_WIDTH_PX`], measured against the link it has to hold;
 //! * a caption ([`CAPTION`]) is added above the box, naming the row that opened it;
@@ -66,7 +66,7 @@ const CAPTION_DEPTH: u16 = 8;
 ///
 /// Character 5 (a solid-black `DefineShape`, bounds `-200..7800 x 0..720` twips) and the field's
 /// own box (character 7 bounds `-40..7960 x -40..680` twips placed at `tx = -160, ty = 40`) are the
-/// SAME rectangle to the twip: `-200..7800 x 0..720`. That exact coincidence is what lets one scale
+/// same rectangle to the twip: `-200..7800 x 0..720`. That exact coincidence is what lets one scale
 /// factor move the plate and the field together without them drifting apart.
 const NATIVE_FIELD_WIDTH_PX: i32 = 400;
 const NATIVE_PLATE_LEFT_TWIPS: i32 = -200;
@@ -83,7 +83,7 @@ const FIXED_POINT_ONE: i32 = 1 << 16;
 
 /// Field width in px.
 ///
-/// MEASURED, not chosen: `scripts/gfx_text_width.py --height-px 24` renders the canonical link
+/// Measured, not chosen: `scripts/gfx_text_width.py --height-px 24` renders the canonical link
 /// `https://er-build-planner.nyasu.business/?b=bc2a932db14675` at 571.5 px in the movie's own
 /// `MenuFont_01` at its own 24 px font height. 640 px clears that by 68.5 px -- room for about five
 /// further share-id characters before the field falls back to scrolling -- and is still far
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(min_signed_nbits(&[-1]), 1);
         assert_eq!(min_signed_nbits(&[-40]), 7);
         assert_eq!(min_signed_nbits(&[12760]), 15);
-        // -910 fits 11 bits; -1456, what it becomes at this width, does NOT.
+        // -910 fits 11 bits; -1456, what it becomes at this width, does not.
         assert_eq!(min_signed_nbits(&[-910]), 11);
         assert_eq!(min_signed_nbits(&[-1456]), 12);
         // 16.16 unity scaled to 640/400 px overflows the source's 17-bit scale field.

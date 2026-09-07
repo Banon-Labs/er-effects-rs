@@ -10,14 +10,14 @@
 //! # The four added cells fill a 2x3 grid, and that is the whole navigation model
 //!
 //! `CS::GridControl` (the list widget embedded at `GenericListSelectDialog + 0xa38`)
-//! does not take its geometry from the property list -- it MEASURES it from the movie.
+//! does not take its geometry from the property list -- it measures it from the movie.
 //! `GridControl::MeasureGridFromMovie` (vtable `+0x18`, 1.16.2 `FUN_140737c60`, called
 //! once from `FUN_14077ef30` while the dialog is constructed) probes the child component
 //! named `Item_<row>_<col>` (`"Item_%d_%d"` formatted `(row, col)` in `FUN_140736fc0`)
 //! for row 0.., col 0.., takes `cols = max(col + 1)` and `rows = max(row + 1)`, and stops
 //! at the first row whose column 0 is absent. Those two numbers then decide everything:
 //!
-//! * `GridControl::Update` (`FUN_1407392f0`) enables the VERTICAL axis only when
+//! * `GridControl::Update` (`FUN_1407392f0`) enables the vertical axis only when
 //!   `rows >= 2`, and the horizontal axis only when `cols != 1 || rows < 2`.
 //! * the mouse hit test (`FUN_140736c90`, reached from `FUN_14073a5c0`) walks exactly
 //!   `cols * rows` cells, so a component outside the measured grid can never be hovered.
@@ -28,7 +28,7 @@
 //! horizontal row, no vertical axis. Naming the added cells `Item_0_2`/`Item_0_3`
 //! (a previous form of this edit) measured `cols = 4, rows = 1`: all four cells were
 //! hoverable, but up/down was disabled outright and left/right had to walk the whole
-//! strip. Naming them by ROW instead fills a rectangle: `Item_1_0`/`Item_1_1` at
+//! strip. Naming them by row instead fills a rectangle: `Item_1_0`/`Item_1_1` at
 //! `ty = 5600` and `Item_2_0`/`Item_2_1` at `ty = 6700`, each reusing one of the two
 //! native columns (`tx = -3979` and `tx = +4780`) and each row one 1100-twip (55px) step
 //! below the last. That measures `cols = 2, rows = 3`: both axes live, every cell inside
@@ -37,25 +37,25 @@
 //! Character from File, Load Build from URL, Generate Build Link. The native placement
 //! matrices are untouched, so nothing that was already on screen moves.
 //!
-//! # SIX items fill the 2x3 grid exactly, which is why this is the easy case
+//! # six items fill the 2x3 grid exactly, which is why this is the easy case
 //!
 //! `cols * rows == 6` and `GridControl::SetItemCount` is given 6, so the two numbers
 //! agree and every cell the engine probes for exists. There is no cell that can be
 //! hovered but not selected, and none that can be selected but not hovered.
 //!
-//! This SIMPLIFIED the movie rather than complicating it. At five items the bottom row
+//! This simplified the movie rather than complicating it. At five items the bottom row
 //! was ragged, and three separate pieces of native behaviour had to be proven harmless:
 //! the mouse hit test walked a sixth cell that was not there (safe only because
 //! `FUN_14074b0d0` tests `(*(u32 *)(value + 0x20) & 0x8f) == 10` first and an absent
 //! component answers `dataType == 0`); `SetItemCount` was given 5 while `cols * rows` was
 //! 6, so the cursor was bounded by the smaller of two disagreeing numbers; and reaching
 //! the bottom row by pad depended on `FUN_14073bae0` answering `2` for an out-of-range
-//! index and `FUN_14073b0c0` walking BACK along the row a column at a time. All of that
+//! index and `FUN_14073b0c0` walking back along the row a column at a time. All of that
 //! reasoning was correct, and all of it is now moot. Nothing here relies on it.
 //!
 //! The measure loop still terminates the same way it always did -- by probing row 3
 //! column 0, finding nothing, and destructing the invalid value it gets back. That absent
-//! probe happens on EVERY dialog including vanilla; it is the loop's exit condition, not a
+//! probe happens on every dialog including vanilla; it is the loop's exit condition, not a
 //! thing this edit introduces.
 //!
 //! # The label field is 400px, and the labels were measured against it
@@ -63,7 +63,7 @@
 //! Each cell (`char 129`) shows its label through `Text_0` -> sprite 96 -> `DefineEditText`
 //! char 95: bounds -40..7960 twips = **400px** wide, `MenuFont_01` at 480 twips = **24px**,
 //! center-aligned, and crucially `wordwrap = false, multiline = false, autosize = false` --
-//! so a label wider than the field CLIPS rather than wrapping, losing its tail silently.
+//! so a label wider than the field clips rather than wrapping, losing its tail silently.
 //! `scripts/gfx_text_width.py --height-px 24 --box-px 400` sums that font's own advance
 //! table: "Save Game" 103.1px, "Return to Desktop" 172.8px, "Load Character" 144.5px,
 //! "Load Character from File" 234.6px, "Load Build from URL" 203.7px, "Generate Build

@@ -1,46 +1,46 @@
 #!/usr/bin/env bash
 # Cupcake signal: last_assistant_stall_on_friction
 #
-# Scans the most recently COMPLETED assistant turn of the current session transcript, plus the USER
-# PROMPT that opened it, and emits ONE facts line describing what the turn did when it met friction.
-# Consumed by the no_stall_on_friction policy (Stop), which owns the RULE; this script owns only the
-# OBSERVATION. Keeping the conjunction in rego is deliberate: it makes the rule unit-testable against
+# Scans the most recently completed assistant turn of the current session transcript, plus the user
+# prompt that opened it, and emits one facts line describing what the turn did when it met friction.
+# Consumed by the no_stall_on_friction policy (Stop), which owns the rule; this script owns only the
+# observation. Keeping the conjunction in rego is deliberate: it makes the rule unit-testable against
 # the verbatim corpus instead of hiding it in shell regexes.
 #
 #   STALLFACTS|friction=<phrase>|admission=<phrase>|handback=<phrase>|blame=<phrase>|acted=<0|1>|blocked=<0|1>|question=<0|1>|owned=<0|1>
 #
-# Emitted only when friction OR blame was detected; a clean turn emits empty (fail-open).
+# Emitted only when friction or blame was detected; a clean turn emits empty (fail-open).
 #
-# WHAT EACH FACT MEANS
-#   friction   -- the OPENING USER PROMPT of this turn carried frustration / conflict / correction
+# What each fact means
+#   friction   -- the opening user prompt of this turn carried frustration / conflict / correction
 #                 ("shut up", "that's a shit thing", "I could have told you", sarcasm like "*you*").
-#   admission  -- the assistant turn admitted / retracted / apologised, OR conceded-and-closed
+#   admission  -- the assistant turn admitted / retracted / apologised, or conceded-and-closed
 #                 ("Retracting:", "were all invented", "I've read none of", "That's the whole delta").
 #                 The concession-closure class is here because the observed stall #3 conceded and
-#                 stopped WITHOUT contrition words, and that is the same defect.
-#   handback   -- the turn ended by making the USER decide ("your call", "let me know how you'd like
+#                 stopped without contrition words, and that is the same defect.
+#   handback   -- the turn ended by making the user decide ("your call", "let me know how you'd like
 #                 to proceed", "say the word", "want me to X?", "two ways forward").
 #   blame      -- the turn attributed a consequence to a tool / guard / sentinel / subagent /
 #                 environment ("the sentinel tore down the run", "cupcake blocked it").
-#   acted      -- the turn made a substantive tool call (Edit/Write/Bash/Agent/Workflow/...). ANY such
+#   acted      -- the turn made a substantive tool call (Edit/Write/Bash/Agent/Workflow/...). Any such
 #                 call counts, deliberately unlike idle_hold's stricter "status peeks are not work":
-#                 here the defect is a turn that changed NOTHING, and reading the log the user pointed
+#                 here the defect is a turn that changed nothing, and reading the log the user pointed
 #                 at is already the corrective direction. Over-blocking is the bigger risk.
 #   blocked    -- the turn stated a real dependency on a user action and committed to acting on its
 #                 result ("invade now and I'll read the log"). A genuine wait, not a stall.
 #   question   -- the friction-carrying prompt asked a question ("?" or an interrogative opener). A
-#                 turn that merely ANSWERS what was asked must never be caught by this guard.
-#   owned      -- the turn named its OWN triggering action ("my edit", "because I", "I tripped it").
+#                 turn that merely answers what was asked must never be caught by this guard.
+#   owned      -- the turn named its own triggering action ("my edit", "because I", "I tripped it").
 #                 Blame is only a defect when the agent's own hand in the outcome goes unmentioned.
 #
-# WHY A WHOLE-TURN SCAN: mirrors last_assistant_authority_agreement / last_assistant_idle_hold -- a
-# slip in an EARLY message of a multi-message turn must not be masked by a later clean block. "Last
+# Why a whole-turn SCAN: mirrors last_assistant_authority_agreement / last_assistant_idle_hold -- a
+# slip in an early message of a multi-message turn must not be masked by a later clean block. "Last
 # completed turn" = the last non-empty run of assistant text bounded by real user prompts; tool-result
-# carrier "user" events do NOT split a turn.
+# carrier "user" events do not split a turn.
 #
 # Fenced code blocks, backtick spans and double-quoted spans are stripped from the assistant text
-# before prose matching, so QUOTING these phrases (this file, the policy's own remedy text, a
-# meta-discussion) does not false-trip; a real unquoted stall still matches. The USER's prompt is
+# before prose matching, so quoting these phrases (this file, the policy's own remedy text, a
+# meta-discussion) does not false-trip; a real unquoted stall still matches. The user's prompt is
 # matched raw -- how they quote things is their business. Fail-open (empty output) on any error so a
 # transcript hiccup cannot wedge the session.
 set -uo pipefail
@@ -83,7 +83,7 @@ def event_text(ev):
     return "\n".join(out)
 
 
-# A substantive action = the turn CHANGED something or drove real work. Read-only inspection tools
+# A substantive action = the turn changed something or drove real work. Read-only inspection tools
 # (Read, Grep, Glob, WebFetch) are intentionally excluded: reading is not rectifying.
 ACTION_TOOLS = {
     "Edit", "Write", "NotebookEdit", "Bash", "Agent", "Task", "Workflow", "SendMessage",
@@ -133,14 +133,14 @@ for bucket in reversed(turns):
 if not turn:
     sys.exit(0)
 
-# Strip fenced code blocks, inline backtick spans and double-quoted spans from the ASSISTANT text so
+# Strip fenced code blocks, inline backtick spans and double-quoted spans from the assistant text so
 # quoting/naming a banned shape is not using it. Single quotes are left alone: the phrases themselves
 # contain apostrophes (I'm / that's / you're).
 scrubbed = re.sub(r"```.*?```", " ", turn, flags=re.DOTALL)
 scrubbed = re.sub(r"`[^`]*`", " ", scrubbed)
 scrubbed = re.sub(r'"[^"]*"', " ", scrubbed)
 
-# --- (a) FRICTION in the opening user prompt ------------------------------------------------------
+# --- (a) friction in the opening user prompt ------------------------------------------------------
 FRICTION_RES = [
     re.compile(r"\bshut\s+up\b", re.IGNORECASE),
     re.compile(r"\bno\s+idea\s+what\s+you'?re\s+talking\s+about\b", re.IGNORECASE),
@@ -166,7 +166,7 @@ FRICTION_RES = [
                re.IGNORECASE),
 ]
 
-# --- (b) ADMISSION / CONCESSION-CLOSURE in the assistant turn -------------------------------------
+# --- (b) admission / concession-closure in the assistant turn -------------------------------------
 ADMISSION_RES = [
     re.compile(r"\b(?:retracting|i\s+retract|withdrawing\s+(?:that|the)\s+claim)\b", re.IGNORECASE),
     re.compile(r"\bi\s+(?:was|got\s+(?:that|this|it))\s+wrong\b", re.IGNORECASE),
@@ -193,8 +193,8 @@ ADMISSION_RES = [
     re.compile(r"\bthe\s+(?:whole\s+)?delta\s+is\b", re.IGNORECASE),
 ]
 
-# --- (c) DECISION HAND-BACK in the assistant turn --------------------------------------------------
-# Kept to DECISION-solicitation forms only. A bare "let me know if ..." is excluded on purpose: asking
+# --- (c) decision hand-back in the assistant turn --------------------------------------------------
+# Kept to decision-solicitation forms only. A bare "let me know if ..." is excluded on purpose: asking
 # the user to report an observation they alone can make is a legitimate handoff, not a hand-back.
 HANDBACK_RES = [
     re.compile(r"\byour\s+call\b", re.IGNORECASE),
@@ -211,8 +211,8 @@ HANDBACK_RES = [
     re.compile(r"\bpick\s+one\b", re.IGNORECASE),
 ]
 
-# --- (d) BLAME DEFLECTION in the assistant turn ----------------------------------------------------
-# A consequence attributed to a mechanism. Only a defect when the turn never names its OWN hand in it
+# --- (d) blame deflection in the assistant turn ----------------------------------------------------
+# A consequence attributed to a mechanism. Only a defect when the turn never names its own hand in it
 # (see `owned` below) -- reporting a real blocker is required behaviour, disowning one is not.
 MECHANISM = (
     r"(?:cupcake|opa|rego|guard(?:rail)?|polic(?:y|ies)|hook|sentinel|watcher|watchdog|harness"
@@ -243,7 +243,7 @@ OWNED_RES = [
 ]
 
 # --- exemptions -----------------------------------------------------------------------------------
-# A stated dependency on a user action PLUS a commitment to act on its result: "invade now and I'll
+# A stated dependency on a user action plus a commitment to act on its result: "invade now and I'll
 # read the log". That is a real wait. It exempts the confess-and-stop arm only; the policy decides.
 BLOCKED_RES = [
     re.compile(r"\b(?:and|then|once|after|when)\b[^.\n]{0,60}\bi'?ll\b", re.IGNORECASE),
@@ -252,7 +252,7 @@ BLOCKED_RES = [
     re.compile(r"\bonly\s+you\s+can\b", re.IGNORECASE),
 ]
 
-# The prompt asked something. A turn that merely ANSWERS it is not a stall.
+# The prompt asked something. A turn that merely answers it is not a stall.
 QUESTION_OPENER_RE = re.compile(
     r"^\s*(?:what|why|how|where|when|which|who|whose|can|could|should|would|will|is|are|was|were"
     r"|does|do|did|has|have|had|am|any)\b",

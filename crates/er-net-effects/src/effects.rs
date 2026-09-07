@@ -48,7 +48,7 @@ const EFFECT_HOTKEY_STACK_REMOVE: usize = 1 << 7;
 const EFFECT_HOTKEY_EXPAND_COLLAPSE: usize = 1 << 8;
 
 // The selector-command keys live in `selector_gate`, which owns their classification; only the
-// extra names the trigger-hotkey FILE can spell are declared here.
+// extra names the trigger-hotkey file can spell are declared here.
 const VK_MULTIPLY: u32 = 0x6a;
 const VK_DECIMAL: u32 = 0x6e;
 const VK_DIVIDE: u32 = 0x6f;
@@ -71,7 +71,7 @@ static EFFECT_SELECTOR_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
-/// The one gate both keyboard hooks read: is the selector list on screen AND able to act? See
+/// The one gate both keyboard hooks read: is the selector list on screen and able to act? See
 /// [`crate::selector_gate`]. It folds in runtime-readiness, so there is no second flag that can
 /// disagree with this one -- the pair that used to be here did exactly that, and the visible half
 /// won.
@@ -152,7 +152,7 @@ pub(crate) struct NamedEffectCall {
     pub(crate) active: bool,
     active_seen_since_enable: bool,
     apply_failed: bool,
-    /// This DLL applied this effect and has not taken it back yet. The ONLY licence to call
+    /// This DLL applied this effect and has not taken it back yet. The only licence to call
     /// `RemoveSpEffect` for it -- see [`NamedEffectCall::release_owned`].
     applied_by_us: bool,
     /// On the always-on stack: stays applied wherever the selector cursor goes.
@@ -180,10 +180,10 @@ impl NamedEffectCall {
         self.applied_by_us = true;
     }
 
-    /// Remove ONLY what this DLL put on the player, and report whether anything was removed.
+    /// Remove only what this DLL put on the player, and report whether anything was removed.
     ///
-    /// WHY OWNERSHIP RATHER THAN A BLIND REMOVE. A catalog is a flat list of raw SpEffect IDs --
-    /// `visuals-only` alone holds 843, among them `491 // Rune Arc` and other IDs the GAME
+    /// Why ownership rather than a blind remove. A catalog is a flat list of raw SpEffect IDs --
+    /// `visuals-only` alone holds 843, among them `491 // Rune Arc` and other IDs the game
     /// applies from talismans, armour, weapon buffs and consumables. The selector used to clear
     /// every non-selected call whenever the selection changed, so choosing one effect fired
     /// `RemoveSpEffect` for 842 IDs the DLL had never applied. Any of those the player legitimately
@@ -670,7 +670,7 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
 
     let permanent_effects = crate::config::live_permanent_effects();
     // An id the player put on the stack by hand outranks the filter. The filter decides what the
-    // selector OFFERS; the stack is a decision already made, and silently dropping it would leave
+    // selector offers; the stack is a decision already made, and silently dropping it would leave
     // a configured effect that never applies and no way to see why.
     let stacked_ids_config = crate::config::live_stacked_effects();
     let mut filtered_by_duration = 0usize;
@@ -890,7 +890,7 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
         let open = selector_open_for_hook();
         let foreground_is_game = foreground_window_belongs_to_this_process();
-        // Swallowing a key here takes it from EVERY window, so the gate is the strict one: only
+        // Swallowing a key here takes it from every window, so the gate is the strict one: only
         // while the selector is genuinely open, and only for the keys it actually drives.
         let suppress_arrow = foreground_is_game
             && (key_down || key_up)
@@ -1110,7 +1110,7 @@ fn sync_selector_input_gate(state: &NetEffectsState) -> bool {
     EFFECT_SELECTOR_OPEN_FOR_HOOK.store(open, Ordering::SeqCst);
     input_suppression::set_selector_open(open);
     if !gate.shown {
-        // A bar that is not drawn cannot be hovered. Keyed on `shown`, NOT on `open`: a collapsed
+        // A bar that is not drawn cannot be hovered. Keyed on `shown`, not on `open`: a collapsed
         // bar still draws its `[+]` button, and a click on that button must still be kept out of
         // the game. Clearing it from the game thread too means a stalled render loop can never
         // leave the left mouse button blanked for good.
@@ -1137,7 +1137,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
     }
     let expand_toggles = EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE.swap(0, Ordering::SeqCst);
     if expand_toggles != 0 {
-        // Drained BEFORE `sync_selector_input_gate` below, so the gate that decides whether the
+        // Drained before `sync_selector_input_gate` below, so the gate that decides whether the
         // cursor keys may act sees this tick's collapsed state rather than last tick's. An
         // expand whose arrow keys only wake up on the following tick is a key that "sometimes"
         // does nothing.
@@ -1215,7 +1215,7 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         "WAITING"
     };
     let stacked_count = state.calls.iter().filter(|call| call.stacked).count();
-    // Say STACKED on the highlighted entry itself, so + and - have visible consequences on the
+    // Say stacked on the highlighted entry itself, so + and - have visible consequences on the
     // thing the player is looking at rather than only in a total off to the side.
     let stack_text = format!(
         " | STACK {stacked_count}{}",
@@ -1340,7 +1340,7 @@ fn stack_remove_selected(player: &mut PlayerIns, state: &mut NetEffectsState) {
         return;
     }
     call.stacked = false;
-    // Unstacking the effect the cursor is ON leaves it enabled: it is still the selection, and
+    // Unstacking the effect the cursor is on leaves it enabled: it is still the selection, and
     // yanking it out from under the player would read as the key doing two things at once.
     if selected != Some(index) || !state.effect_hotkeys_effects_on {
         call.enabled = false;
@@ -1465,7 +1465,7 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
         }
     }
     if stack_allowed {
-        // After the cursor has moved, so a press of + in the same frame stacks what is NOW
+        // After the cursor has moved, so a press of + in the same frame stacks what is now
         // selected.
         for _ in 0..stack_adds {
             stack_add_selected(player, state);
@@ -1761,10 +1761,10 @@ fn enable_only_call(
 
 /// Mark the configured stack on a freshly built call list.
 ///
-/// Shared by startup and by the LIVE rebuild, and that sharing is the point: the rebuild replaces
+/// Shared by startup and by the live rebuild, and that sharing is the point: the rebuild replaces
 /// every call, so a rebuild that did not re-mark silently emptied the stack -- the effects stayed
 /// on the player (nothing released them) but nothing was left to keep them alive or to take them
-/// off, and the overlay said STACK 0. Editing any catalog file was enough to trigger it.
+/// off, and the overlay said stack 0. Editing any catalog file was enough to trigger it.
 fn mark_stacked_calls(calls: &mut [NamedEffectCall]) {
     let stacked_effects = crate::config::live_stacked_effects();
     let mut missing = Vec::new();

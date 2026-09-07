@@ -12,10 +12,10 @@ could not tell "deliberately single-slot" from "compliant": this generator produ
 command of its own (the launch lives inside the heredoc string it writes), so it appeared in no
 report at all -- which reads exactly like a clean tree.
 
-WHAT IT COSTS THE USER, SAID PLAINLY. `er_game_base::log::begin_fresh_run` keeps ONE previous
+What it costs the user, said plainly. `er_game_base::log::begin_fresh_run` keeps one previous
 generation as `<name>.prev`, so a user's second launch after a crash overwrites the crash they were
 trying to report. Whether the shipped launcher should mint a per-run directory (and where -- next
-to the game, or under the user's data dir) is a PRODUCT decision about what an end user should
+to the game, or under the user's data dir) is a product decision about what an end user should
 find, not a bug in this generator, and it is deliberately not made here.
 """
 

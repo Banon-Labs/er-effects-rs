@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""POSITIVE CONTROLS FOR THE GATES: does each check actually go RED on its own defect?
+"""Positive controls for the GATES: does each check actually go red on its own defect?
 
-`scripts/audit-selftest-vacuity.py` answers a NEARBY question -- would the gate's own
+`scripts/audit-selftest-vacuity.py` answers a nearby question -- would the gate's own
 selftest notice if its matcher went blind -- and that is a proxy. This answers the direct
-one: plant the exact defect the gate claims to detect INTO THE REAL TREE, run the real
-gate, and require a non-zero exit that NAMES the defect. Then plant a legitimate lookalike
+one: plant the exact defect the gate claims to detect into the real tree, run the real
+gate, and require a non-zero exit that names the defect. Then plant a legitimate lookalike
 and require the gate to stay green, because a gate that is red on everything is a gate
 people learn to route around.
 
-WHY IT IS NOT IN check.sh
+Why it is not in check.sh
 -------------------------
-Every control here MUTATES TRACKED FILES for the duration of one subprocess. That is safe
-for one operator running it deliberately and NOT safe inside a suite other agents run
+Every control here MUTATES tracked files for the duration of one subprocess. That is safe
+for one operator running it deliberately and not safe inside a suite other agents run
 concurrently: a `git status` taken during a mutation window shows a defect nobody wrote,
 and a concurrent writer to the same file would lose its edit to the restore. So this is a
-manual instrument. `scripts/audit-selftest-vacuity.py --selftest` is the part that IS
+manual instrument. `scripts/audit-selftest-vacuity.py --selftest` is the part that is
 cheap and side-effect-free enough to gate, and it is wired in check.sh.
 
-RESTORATION IS NOT OPTIONAL, AND `finally` IS NOT ENOUGH
+Restoration is not optional, and `finally` is not enough
 -------------------------------------------------------
 SIGTERM -- how an agent harness reclaims a long-running process -- kills the interpreter
 without unwinding. Measured on this tool's own first run: a `subprocess.run(..., timeout=600)`
 mutant survived in `scripts/detect-proc.py` after a 45s harness timeout. Restoration is
-therefore driven by a registry that atexit AND the fatal signal handlers both drain.
+therefore driven by a registry that atexit and the fatal signal handlers both drain.
 
-FOUR WAYS TO WRITE AN INVALID MUTANT (all four were hit while building this)
+Four ways to write an invalid mutant (all four were hit while building this)
 ---------------------------------------------------------------------------
 A mutant that does not actually contain the defect proves nothing about the gate:
   * `fn _pc_probe_dead_helper()` -- rustc's `dead_code` lint EXEMPTS `_`-prefixed names,
     so the "dead function" was never dead and check-save-disable-warnings was right to
     stay green.
-  * renaming a required token `X` to `X + "X"` leaves `X` present as a PREFIX, so a
+  * renaming a required token `X` to `X + "X"` leaves `X` present as a prefix, so a
     substring gate correctly finds it.
-  * `fn pcProbeUsedHelper` fails to COMPILE under `-D non-snake-case`, so the gate never
+  * `fn pcProbeUsedHelper` fails to compile under `-D non-snake-case`, so the gate never
     ran; a mutant that breaks the build is not a positive control.
-  * a forbidden launch URL written as a `#` COMMENT is deliberately skipped by
+  * a forbidden launch URL written as a `#` comment is deliberately skipped by
     check-launch-guardrails, which only scans executable lines.
 
     python3 scripts/prove-gate-positive-controls.py --list
@@ -55,7 +55,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 # Both bounds obey the repo's 30s cap on every non-game operation
-# (scripts/check-no-timeouts.py, MAX_TIMEOUT_SECONDS). Nothing here needs more: the SUBJECT
+# (scripts/check-no-timeouts.py, MAX_TIMEOUT_SECONDS). Nothing here needs more: the subject
 # gates cap their own subprocesses below that -- check-save-disable-warnings caps cargo at
 # 25s itself -- so a longer outer bound would only delay a verdict the gate has already made.
 GATE_TIMEOUT = 30.0
@@ -63,7 +63,7 @@ GATE_TIMEOUT = 30.0
 RESULTS: list[tuple[str, str, str]] = []  # (gate, direction, PASS/FAIL)
 
 # A planted defect left in the tree is the worst outcome this tool can produce, and a bare
-# `finally` does NOT cover it (see the module docstring). The context managers below register
+# `finally` does not cover it (see the module docstring). The context managers below register
 # here; atexit and the fatal signals both drain it.
 _PENDING: "dict[Path, bytes | None]" = {}  # path -> original bytes, or None if it did not exist
 
@@ -129,7 +129,7 @@ def edit_file(rel: str, transform):
 def new_file(rel: str, content: str, track: bool = False):
     """Create a file that did not exist; delete it afterwards.
 
-    ``track`` stages it with ``git add -N`` for gates that enumerate the git INDEX rather
+    ``track`` stages it with ``git add -N`` for gates that enumerate the git index rather
     than the filesystem (check-no-committed-build-artifacts, check-no-timeouts), and
     unstages it in the same ``finally``.
     """
@@ -163,10 +163,10 @@ def expect(gate: str, direction: str, rc: int, out: str, want_red: bool, mention
     """Record one control. ``mentions`` are substrings the failure message must carry --
     a gate that goes red without naming the defect is red for an unknown reason.
 
-    A 124 is NOT a red verdict: it means the gate did not finish inside the repo's 30s cap on
+    A 124 is not a red verdict: it means the gate did not finish inside the repo's 30s cap on
     non-game operations, which several whole-tree scans here genuinely straddle
     (check-no-timeouts ~29s, check-oracle-writers ~22s, both longer under load). Counting that
-    as RED would let a gate that never ran look sensitive, which is the exact error this tool
+    as red would let a gate that never ran look sensitive, which is the exact error this tool
     exists to catch."""
     if rc == 124:
         inconclusive(gate, direction, "gate did not finish inside the repo's own 30s cap")
@@ -194,11 +194,11 @@ CONTROLS: "dict[str, tuple[bool, object]]" = {}  # name -> (is_fast, fn)
 def control(name: str, fast: bool = True, baseline: "list[str] | None" = None):
     """Register a control.
 
-    ``baseline`` is the unmutated gate command. A control can only be read off a GREEN
+    ``baseline`` is the unmutated gate command. A control can only be read off a green
     baseline: if the gate is already red -- which happens routinely on a shared branch,
     where another agent's in-flight edit can remove a line a gate asserts -- then both the
     mutated and unmutated runs are red and the comparison says nothing. That is reported as
-    INCONCLUSIVE with the baseline's own message, never as a failing control.
+    inconclusive with the baseline's own message, never as a failing control.
     """
     def deco(fn):
         def wrapped():
@@ -234,7 +234,7 @@ def _lossy():
 def _timeouts():
     g = ["python3", "scripts/check-no-timeouts.py"]
     # assembled, never written literally: check-no-timeouts.py scans .py source text, so a
-    # literal over-cap timeout in THIS file would make the control tool fail the gate it proves.
+    # literal over-cap timeout in this file would make the control tool fail the gate it proves.
     over_cap = "timeout=" + str(20 * 30)
     py600 = ("\n\ndef _pc_probe():\n    import subprocess\n"
              "    subprocess.run(['true'], " + over_cap + ")\n")
@@ -279,7 +279,7 @@ def _retired():
 
 @control("rust-file-sizes")
 def _sizes():
-    # Run against an ISOLATED root: the live tree is periodically over the limit from
+    # Run against an isolated root: the live tree is periodically over the limit from
     # in-flight work, and a control cannot be read off an already-red baseline.
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -341,7 +341,7 @@ def _launch():
 @control("native-continue-static")
 def _native_continue():
     # The image is ground truth and must not be touched; the mutable input is the gate's
-    # own CLAIM about where a byte window sits. A false claim must be rejected.
+    # own claim about where a byte window sits. A false claim must be rejected.
     s = "scripts/check-native-continue-static.py"
     with edit_file(s, lambda t: t.replace("CONTINUE_LOAD = 0x14067B750",
                                           "CONTINUE_LOAD = 0x14067B760", 1)):
@@ -396,7 +396,7 @@ def _reload_trace():
     with new_file(p, bad):
         rc, out = run(g)
         expect("reload-trace-policy", "sens/env-gate+game-write", rc, out, True)
-    # the 2026-08-30 false positive: the same words as PROSE must stay green.
+    # the 2026-08-30 false positive: the same words as prose must stay green.
     prose = ('// History: this crate used to call std::env::var("ER_QUICKLOAD_X") and\n'
              '// product_autoload_enabled(); both were removed.\npub fn _pc_probe() {}\n')
     with new_file(p, prose):
@@ -419,7 +419,7 @@ def _release_pkg():
 def _save_disable():
     g = ["python3", "scripts/check-save-disable-warnings.py"]
     s = "crates/er-save-disable/src/lib.rs"
-    # NOT `_`-prefixed: rustc exempts those from dead_code, which makes the mutant invalid.
+    # Not `_`-prefixed: rustc exempts those from dead_code, which makes the mutant invalid.
     dead = "\n#[cfg(windows)]\nfn pc_probe_dead_helper(x: u32) -> u32 {\n    x + 1\n}\n"
     with edit_file(s, lambda t: t + dead):
         rc, out = run(g)
@@ -434,7 +434,7 @@ def _save_disable():
 
 @control("er_run_lib")
 def _run_lib():
-    # A bare `python3 scripts/er_run_lib.py` IS its selftest (no --selftest flag).
+    # A bare `python3 scripts/er_run_lib.py` is its selftest (no --selftest flag).
     s = "scripts/er_run_lib.py"
     with edit_file(s, lambda t: t.replace(
             "def collect_dead_runs(root: Path = RUN_STATE_ROOT) -> list[tuple[str, list[str]]]:",
@@ -492,7 +492,7 @@ def _input_harness():
             "const CS_INGAME_PAD_TYPEID_RVAS: [usize; 2] = [0x3d5df27, 0x3d5df29];", 1)):
         rc, out = run(g)
         expect("input-harness-static", "sens/rva-changed", rc, out, True)
-    # Its own docstring promises re-wrapped prose must NOT break it. Re-wrap a `///` LINE:
+    # Its own docstring promises re-wrapped prose must not break it. Re-wrap a `///` LINE:
     # replacing the first textual occurrence of the range instead put a line break inside a
     # code statement, which failed an unrelated assertion -- a broken mutant, not a gate defect.
     def rewrap(text: str) -> str:
@@ -525,7 +525,7 @@ SIGNAL_TESTS = {
 
 @control("cupcake-signal-tests", fast=False)
 def _signals():
-    # These tests drive the REAL shell signal as a subprocess, so blinding the TEST's own
+    # These tests drive the real shell signal as a subprocess, so blinding the test's own
     # regexes proves nothing -- the subject is the shell script. Stub it in both directions.
     silent = "#!/usr/bin/env bash\nexit 0\n"
     always = "#!/usr/bin/env bash\necho 'PROBE:always-fires'\n"
@@ -539,11 +539,11 @@ def _signals():
 @control("unexecuted-promise-openers",
          baseline=["python3", "scripts/test-unexecuted-promise-signal.py"])
 def _promise_openers():
-    """TWO holes let one sentence through; each fix must be load-bearing ON ITS OWN.
+    """Two holes let one sentence through; each fix must be load-bearing on its own.
 
     The production failure (2026-09-01) was the turn-ending "I'm closing it rather than pushing an
     empty merge commit to make an empty PR green". Nothing ran `gh pr close`, the PR stayed open, and
-    the user had to notice and ask. It needed BOTH: OPENER_RE had no bare present continuous, AND
+    the user had to notice and ask. It needed BOTH: OPENER_RE had no bare present continuous, and
     `close` was missing from the concrete-action allowlist -- so fixing only the opener would have
     left the sentence with no verb to commit to, and the regression case would have stayed green
     while the reported failure was still live. One arm per hole, reverted independently, because a
@@ -554,11 +554,11 @@ def _promise_openers():
     """
     g = ["python3", "scripts/test-unexecuted-promise-signal.py"]
     s = ".cupcake/signals/last_assistant_unexecuted_promise.sh"
-    # Each arm must fail THIS case -- the verbatim production sentence -- not merely fail somewhere.
+    # Each arm must fail this case -- the verbatim production sentence -- not merely fail somewhere.
     # A control that goes red for an unrelated reason proves nothing about the reported failure.
     FROZEN_CASE = "true-positive-the-present-continuous-instance"
 
-    # SENSITIVITY 1: the opener set back to what it was -- no bare present continuous.
+    # Sensitivity 1: the opener set back to what it was -- no bare present continuous.
     with edit_file(s, lambda t: t.replace(
             '    r"|i[\'\u2019]?m|i\\s+am)\\b",\n',
             '    r")\\b",\n', 1)):
@@ -566,14 +566,14 @@ def _promise_openers():
         expect("unexecuted-promise-openers", "sens/opener-lacks-present-continuous", rc, out, True,
                [FROZEN_CASE])
 
-    # SENSITIVITY 2: the opener kept, `close` removed from ACTIONS. The sentence still has no verb.
+    # Sensitivity 2: the opener kept, `close` removed from actions. The sentence still has no verb.
     with edit_file(s, lambda t: t.replace(
             '    "close", "archive", "retire", "withdraw", "abandon",\n', "", 1)):
         rc, out = run(g)
         expect("unexecuted-promise-openers", "sens/close-not-an-action", rc, out, True,
                [FROZEN_CASE])
 
-    # SENSITIVITY 3: de-gerunding removed. The opener matches and `close` is listed, but "closing"
+    # Sensitivity 3: de-gerunding removed. The opener matches and `close` is listed, but "closing"
     # never resolves to it -- the third way this same sentence goes quiet.
     with edit_file(s, lambda t: t.replace(
             "        base = base_of_gerund(word)\n        if base:\n            return base\n",
@@ -583,7 +583,7 @@ def _promise_openers():
                [FROZEN_CASE])
 
     # SPECIFICITY: a legitimate future broadening of the allowlist. The suite is behavioural, not a
-    # checksum over the verb list, so adding a verb no case exercises must leave it GREEN. A gate
+    # checksum over the verb list, so adding a verb no case exercises must leave it green. A gate
     # that reddened here would make every later verb addition look like a regression.
     with edit_file(s, lambda t: t.replace(
             '    "close", "archive", "retire", "withdraw", "abandon",\n',
@@ -611,8 +611,8 @@ def _policies():
 def _watchdog():
     g = ["python3", "scripts/test-semaphore-watchdog.py"]
     s = "scripts/semaphore_watchdog.py"
-    # NOTE: emptying TEARDOWN_STALL's VALUE is NOT caught -- the test imports the constant
-    # and compares against it, so both sides move together. Mutate the LOGIC instead.
+    # NOTE: emptying TEARDOWN_STALL's value is not caught -- the test imports the constant
+    # and compares against it, so both sides move together. Mutate the logic instead.
     with edit_file(s, lambda t: t.replace("            if prev is not None and cur > prev:",
                                           "            if prev is not None and cur >= prev:", 1)):
         rc, out = run(g)
@@ -706,7 +706,7 @@ def _oracle_writers():
 @control("counter-writers", fast=False,
          baseline=["python3", "scripts/check-counter-writers.py"])
 def _counter_writers():
-    """The SUPERSET gate: a counter DECLARED with no write site anywhere, read or not.
+    """The SUPERSET gate: a counter declared with no write site anywhere, read or not.
 
     check-oracle-writers only fires on `writes == 0 and reads > 0`, so the unread majority --
     85 counters on 2026-08-31 -- is invisible to it by design. Both directions are proved here,
@@ -715,16 +715,16 @@ def _counter_writers():
     g = ["python3", "scripts/check-counter-writers.py"]
     w = "crates/er-telemetry-core/src/counters.rs"
 
-    # SENSITIVITY 1: a counter declared and written NOWHERE and read NOWHERE -- the whole point of
+    # Sensitivity 1: a counter declared and written nowhere and read nowhere -- the whole point of
     # this gate, and the exact shape its sibling deliberately ignores.
     with edit_file(w, lambda t: t + "\npub static PC_PROBE_UNWRITTEN: AtomicU64 = AtomicU64::new(0);\n"):
         rc, out = run(g)
         expect("counter-writers", "sens/declared-never-written", rc, out, True,
                ["PC_PROBE_UNWRITTEN"])
 
-    # SENSITIVITY 2: delete a REAL write site. SIMULATED_INPUT_PRESSES_TOTAL feeds the
+    # Sensitivity 2: delete a real write site. SIMULATED_INPUT_PRESSES_TOTAL feeds the
     # `simulated_button_presses_total` telemetry field and is written at exactly one place; the
-    # mutant keeps the read so the ONLY thing that changes is that the counter stopped moving --
+    # mutant keeps the read so the only thing that changes is that the counter stopped moving --
     # which is precisely the defect (a live oracle silently pinned to 0) rather than a syntax edit.
     h = "crates/er-quickload/src/hooks.rs"
     real_write = "SIMULATED_INPUT_PRESSES_TOTAL.fetch_add(count, Ordering::SeqCst);"
@@ -734,22 +734,22 @@ def _counter_writers():
         expect("counter-writers", "sens/real-write-site-deleted", rc, out, True,
                ["SIMULATED_INPUT_PRESSES_TOTAL"])
 
-    # SPECIFICITY 1: declared AND written -- must stay green, or the gate is red on everything.
+    # Specificity 1: declared and written -- must stay green, or the gate is red on everything.
     with edit_file(w, lambda t: t + "\npub static PC_PROBE_WRITTEN: AtomicU64 = AtomicU64::new(0);\n"
                                     "pub fn pc_probe_bump() { PC_PROBE_WRITTEN.fetch_add(1, Ordering::Relaxed); }\n"):
         rc, out = run(g)
         expect("counter-writers", "spec/declared-and-written", rc, out, False)
 
-    # SPECIFICITY 2: the by-reference trampoline. A MinHook original is written THROUGH the
+    # Specificity 2: the by-reference trampoline. A MinHook original is written through the
     # reference handed to the installer, never by name; flagging it would punish every hook.
     with edit_file(w, lambda t: t + "\npub static PC_PROBE_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);\n"
                                     "pub fn pc_probe_install() { register(addr, detour, &PC_PROBE_TRAMPOLINE); }\n"):
         rc, out = run(g)
         expect("counter-writers", "spec/by-reference-trampoline", rc, out, False)
 
-    # SPECIFICITY 3, the FROZEN NEGATIVE this gate exists to respect: a counter written only
-    # through an identifier a macro CONSTRUCTS. The literal name is absent from the write site, so
-    # a name search calls it dead and a deletion follows. The gate must REFUSE (exit 2) and name
+    # Specificity 3, the frozen negative this gate exists to respect: a counter written only
+    # through an identifier a macro constructs. The literal name is absent from the write site, so
+    # a name search calls it dead and a deletion follows. The gate must refuse (exit 2) and name
     # the file instead -- red, but for the honest reason, and never a deletion.
     macro = "crates/er-telemetry-core/src/_pc_probe_macro.rs"
     with new_file(macro, "macro_rules! pc_probe_bump {\n"
@@ -758,7 +758,7 @@ def _counter_writers():
         expect("counter-writers", "sens/macro-constructed-write-refused", rc, out, True,
                ["REFUSING", "_pc_probe_macro.rs"])
 
-    # ...and the opposite blind: a benign `$x:ident` macro that performs no atomic write must NOT
+    # ...and the opposite blind: a benign `$x:ident` macro that performs no atomic write must not
     # make the gate refuse. A gate that refuses on every macro in the tree has no verdict at all.
     benign = "crates/er-telemetry-core/src/_pc_probe_benign.rs"
     with new_file(benign, "macro_rules! pc_probe_trace {\n"
@@ -770,20 +770,20 @@ def _counter_writers():
 @control("test-target-coverage",
          baseline=["python3", "scripts/check-test-target-coverage.py"])
 def _test_target_coverage():
-    """THE UNEXECUTED-TEST GATE: a crate whose `#[test]`s no `cargo test` line ever selects.
+    """The UNEXECUTED-test GATE: a crate whose `#[test]`s no `cargo test` line ever selects.
 
-    `default-members = ["crates/er-quickload"]` makes a bare `cargo test` select ONE of 64
-    crates, so a crate is covered only by being NAMED. On 2026-08-31 that left 251 test
+    `default-members = ["crates/er-quickload"]` makes a bare `cargo test` select one of 64
+    crates, so a crate is covered only by being named. On 2026-08-31 that left 251 test
     functions across 15 crates that had never executed once; they were wired up and the gate
     armed on 2026-09-01. The controls below plant each of the three defects it claims to
-    catch, then two lookalikes it must NOT call defects.
+    catch, then two lookalikes it must not call defects.
     """
     g = ["python3", "scripts/check-test-target-coverage.py"]
     sh = "scripts/check.sh"
     allow = "scripts/unexecuted-tests-allowlist.txt"
     drop = lambda t: t.replace("-p er-save-suppress ", "", 1)  # noqa: E731
 
-    # SENSITIVITY 1: the original defect, exactly. Un-name one crate on the batch line and its
+    # Sensitivity 1: the original defect, exactly. Un-name one crate on the batch line and its
     # 53 tests stop executing -- while `cargo test` still prints "ok" for everything else, which
     # is what made this class invisible for as long as it was.
     with edit_file(sh, drop):
@@ -791,7 +791,7 @@ def _test_target_coverage():
         expect("test-target-coverage", "sens/crate-dropped-from-check-sh", rc, out, True,
                ["er-save-suppress", "host lib tests"])
 
-    # SENSITIVITY 2: THE RATCHET. An allowlist entry for a crate that IS covered must fail as
+    # Sensitivity 2: The ratchet. An allowlist entry for a crate that is covered must fail as
     # stale. Without this the file is append-only: every fix leaves behind a line claiming debt
     # that no longer exists, and the list stops being readable as a count of what is unrun.
     with edit_file(allow, lambda t: t + "er-save-suppress  no-host-runner  # pc probe\n"):
@@ -799,7 +799,7 @@ def _test_target_coverage():
         expect("test-target-coverage", "sens/stale-allowlist-entry", rc, out, True,
                ["er-save-suppress", "no longer an offender"])
 
-    # SENSITIVITY 3: a test file NO module tree reaches. cargo never compiles it, so these are
+    # Sensitivity 3: a test file no module tree reaches. cargo never compiles it, so these are
     # not merely unrun -- they were never built, and a `cargo test` that passes says nothing
     # about them.
     orphan = "crates/er-safe-input/src/_pc_probe_orphan.rs"
@@ -808,7 +808,7 @@ def _test_target_coverage():
         expect("test-target-coverage", "sens/orphaned-test-file", rc, out, True,
                ["_pc_probe_orphan.rs", "NO module tree reaches"])
 
-    # SPECIFICITY 1: the orphan lookalike. The SAME file, reached by a `mod` declaration, is
+    # Specificity 1: the orphan lookalike. The same file, reached by a `mod` declaration, is
     # ordinary new code in a crate that already has a runner. A gate that cannot tell those
     # apart makes every new file a finding and gets routed around.
     wired = "crates/er-safe-input/src/_pc_probe_wired.rs"
@@ -817,9 +817,9 @@ def _test_target_coverage():
             rc, out = run(g)
             expect("test-target-coverage", "spec/new-tests-in-a-covered-crate", rc, out, False)
 
-    # SPECIFICITY 2: coverage is not check.sh's alone. Drop the crate from check.sh AND name it
+    # Specificity 2: coverage is not check.sh's alone. Drop the crate from check.sh and name it
     # in the CI workflow -- one of the three RUNNER_SOURCES -- and it is still covered, so the
-    # gate must go back to GREEN. This is what stops sensitivity 1 from being satisfied by a
+    # gate must go back to green. This is what stops sensitivity 1 from being satisfied by a
     # gate that merely greps one file, and it is the parity failure that put er-soulsformats and
     # er-param-inspect in check.yml and nowhere else.
     with edit_file(sh, drop):
@@ -892,14 +892,14 @@ def _prologue_masks():
 @control("hook-targets-1170", fast=False,
          baseline=["python3", "scripts/audit-1170-hook-targets.py", "--selftest"])
 def _hook_targets_1170():
-    """The gate that decides where a detour may be written on the INSTALLED build.
+    """The gate that decides where a detour may be written on the installed build.
 
-    Its two arms fail in opposite directions and both are planted here. The ENTRY arm going
-    blind admits a hook into the middle of a function; the BRANCH-SCAN arm losing its bound
-    REFUSES correct rows instead -- which is how it failed on 2026-08-31, manufacturing a
+    Its two arms fail in opposite directions and both are planted here. The entry arm going
+    blind admits a hook into the middle of a function; the branch-scan arm losing its bound
+    refuses correct rows instead -- which is how it failed on 2026-08-31, manufacturing a
     `jno` out of two bytes of inter-function padding after a 14-byte leaf's `ret`.
 
-    The specificity control is the one that matters for the bound: widening the scan CAP must
+    The specificity control is the one that matters for the bound: widening the scan cap must
     change no verdict, because after the fix the answer is a property of the function's extent
     and not of an arbitrary window. Under the unbounded scan it was a property of the window,
     and how far past the `ret` it happened to read decided the verdict.
@@ -937,17 +937,17 @@ def _provenance():
 @control("expression-constants",
          baseline=["python3", "scripts/check-expression-constants.py"])
 def _expression_constants():
-    """Is a constant's VALUE actually visible to the gates that judge values?
+    """Is a constant's value actually visible to the gates that judge values?
 
-    This gate was unwired on 2026-08-31 (red at HEAD over SELECTOR_CTX_OFFSET_F8) and re-armed
+    This gate was unwired on 2026-08-31 (red at head over SELECTOR_CTX_OFFSET_F8) and re-armed
     on 2026-08-31 once that constant settled. Re-arming a gate is only worth anything if the
-    gate would notice something, and the specific way THIS one can go quiet is not a matcher
+    gate would notice something, and the specific way this one can go quiet is not a matcher
     that stops matching -- it is a declaration that falls out of the census, which reads
     exactly like a declaration that was checked and passed.
 
     So the sensitivity arm plants a declaration whose value is an opaque CALL: it is in the
     address population by name, it cannot be folded, and it is in no exception list. The gate
-    must NAME it. The specificity arm plants the same constant at a foldable value, where
+    must name it. The specificity arm plants the same constant at a foldable value, where
     staying green is the whole point -- a gate that went red on every new `*_RVA` would be red
     on most working trees in this repo.
     """
@@ -965,8 +965,8 @@ def _expression_constants():
         rc, out = run(g)
         expect("expression-constants", "spec/foldable-literal", rc, out, False)
 
-    # THE DEPARTURE ARM (added 2026-08-31 with the coverage floor). The other way this gate goes
-    # quiet is a declaration LEAVING the census, which until the floor existed printed nothing at
+    # The departure arm (added 2026-08-31 with the coverage floor). The other way this gate goes
+    # quiet is a declaration leaving the census, which until the floor existed printed nothing at
     # all: measured across the 22 minutes between d130b4ee and 4b4a9722, 28 names left the address
     # population and 30 arrived, so the total moved by +2 and said nothing about the 28.
     # `DLSTRING_WCHAR_SUBSTR_RVA` occurs exactly once in crates/ -- its own declaration -- so
@@ -980,11 +980,11 @@ def _expression_constants():
         expect("expression-constants", "sens/coverage-departure", rc, out, True,
                [departed, "coverage LEFT silently"])
 
-    # THE THIRD-STATE ARM. A field offset whose only number comes from a `const _: () = assert!`
-    # pin is deliberately not counted as EVALUATED -- and it is not a failure either. Reading that
+    # The third-state arm. A field offset whose only number comes from a `const _: () = assert!`
+    # pin is deliberately not counted as evaluated -- and it is not a failure either. Reading that
     # double absence as "the constant left the population" is what took this gate red on
     # 2026-08-31, demanding the deletion of five accurate `CHR_ASM_*` exceptions the day somebody
-    # pinned those offsets against the ctor disassembly. Listed + pin-valued must stay GREEN.
+    # pinned those offsets against the ctor disassembly. Listed + pin-valued must stay green.
     pin_probe = "crates/er-game-base/src/_pc_probe_pin.rs"
     pinned = (
         "pub const PC_PROBE_PIN_OFFSET: usize = core::mem::offset_of!(NotModelled, member);\n"
@@ -1012,38 +1012,38 @@ def _object_field_offsets():
     `oracle_system_step_label` read a pointer's low half, failed its `0..=20` range test and
     printed `"?"` with `oracle_system_step_state = -95247096` on every run. Nothing faulted and
     nothing drifted -- it was equally wrong on 1.16.2 -- so this is the one shape a
-    1.16.2-vs-1.17 drift comparison structurally cannot see, and the reason to prove THIS gate
+    1.16.2-vs-1.17 drift comparison structurally cannot see, and the reason to prove this gate
     catches it rather than assume the family does.
 
     The two specificity arms matter as much. A gate that went red on any second definition would
     punish the constants this tree duplicates across independently-shipped crates on purpose, and
-    one that went red on the NUMBER 0x40 anywhere would be red on a large fraction of the tree.
+    one that went red on the number 0x40 anywhere would be red on a large fraction of the tree.
     """
     g = ["python3", "scripts/check-object-field-offsets-1170.py"]
     home = "crates/er-game-base/src/rva.rs"
     real = "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;"
     dup = "crates/er-game-base/src/_pc_probe_sysstep.rs"
 
-    # SENSITIVITY 1: the historical bug, restored at its real home.
+    # Sensitivity 1: the historical bug, restored at its real home.
     with edit_file(home, lambda t: t.replace(real, real.replace("0x48", "0x40"), 1)):
         rc, out = run(g)
         expect("object-field-offsets", "sens/offset-never-a-field", rc, out, True,
                ["CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "0x48"])
 
-    # SENSITIVITY 2: a drifted COPY in another file. The gate looks for the name everywhere
+    # Sensitivity 2: a drifted copy in another file. The gate looks for the name everywhere
     # precisely so a second crate's stale duplicate cannot hide behind a correct original.
     with new_file(dup, "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x40;\n"):
         rc, out = run(g)
         expect("object-field-offsets", "sens/drifted-duplicate", rc, out, True,
                ["CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "_pc_probe_sysstep.rs"])
 
-    # SPECIFICITY 1: the same duplicate, AGREEING. Deliberate duplication across crates is how
+    # Specificity 1: the same duplicate, agreeing. Deliberate duplication across crates is how
     # this tree ships independent DLLs; it must stay green.
     with new_file(dup, "pub const CS_SYSTEM_STEP_CURRENT_STATE_OFFSET: usize = 0x48;\n"):
         rc, out = run(g)
         expect("object-field-offsets", "spec/agreeing-duplicate", rc, out, False)
 
-    # SPECIFICITY 2: an unrelated offset constant that happens to be 0x40. The gate pins NAMES to
+    # Specificity 2: an unrelated offset constant that happens to be 0x40. The gate pins names to
     # measured fields; it has no opinion about the number.
     with new_file(dup, "pub const PC_PROBE_UNRELATED_OFFSET: usize = 0x40;\n"):
         rc, out = run(g)
@@ -1063,13 +1063,13 @@ def _offset_census_kinds():
     g = ["python3", "scripts/audit-name-derived-offsets.py", "--selftest"]
     tsv = "scripts/offset-census-kinds.tsv"
 
-    # SENSITIVITY 1: a GHOST row. The named constant no longer exists, so the exclusion is
+    # Sensitivity 1: a ghost row. The named constant no longer exists, so the exclusion is
     # excusing nothing and the table has started to rot into a list of dead names.
     with edit_file(tsv, lambda t: t + "PC_PROBE_GHOST_OFFSET\tOS-ABI\tinvented = 0x10\n"):
         rc, out = run(g)
         expect("offset-census-kinds", "sens/ghost-row", rc, out, True, ["PC_PROBE_GHOST_OFFSET"])
 
-    # SENSITIVITY 2: a constant that no longer matches the published layout its row cites. An
+    # Sensitivity 2: a constant that no longer matches the published layout its row cites. An
     # OS-ABI row is only an excuse while the value is the documented one; if someone edits the
     # literal, the row must stop covering for it.
     with edit_file("crates/er-telemetry-core/src/lib.rs",
@@ -1078,14 +1078,14 @@ def _offset_census_kinds():
         expect("offset-census-kinds", "sens/value-vs-published-layout", rc, out, True,
                ["CTX_RIP_OFF", "0xf8"])
 
-    # SPECIFICITY 1: a comment change that does not touch a value. The table must not go red on
+    # Specificity 1: a comment change that does not touch a value. The table must not go red on
     # prose, or nobody will keep the reasons readable.
     with edit_file(tsv, lambda t: t.replace("# ---- Input APIs.",
                                             "# ---- Input APIs. (touched by a positive control)", 1)):
         rc, out = run(g)
         expect("offset-census-kinds", "spec/comment-edit", rc, out, False)
 
-    # SPECIFICITY 2: a NEW unprovenanced game offset. It belongs in the counted population, not
+    # Specificity 2: a new unprovenanced game offset. It belongs in the counted population, not
     # in a failure: the census is a report, and a growing number is its normal output.
     with new_file("crates/er-game-base/src/_pc_probe_census.rs",
                   "pub const PC_PROBE_SOME_OBJECT_OFFSET: usize = 0x38;\n"):
@@ -1096,14 +1096,14 @@ def _offset_census_kinds():
 @control("name-derived-offsets",
          baseline=["python3", "scripts/check-object-field-offsets-1170.py"])
 def _name_derived_offsets():
-    """The 2026-08-31 sweep's rows: offsets whose only provenance had been a NAME.
+    """The 2026-08-31 sweep's rows: offsets whose only provenance had been a name.
 
     A separate control from `object-field-offsets` because it proves a different property. That
-    one proves the gate catches a WRONG number. These prove it catches a number that is currently
-    RIGHT but unmeasured -- which is the state every constant in the sweep was in, and the state
+    one proves the gate catches a wrong number. These prove it catches a number that is currently
+    right but unmeasured -- which is the state every constant in the sweep was in, and the state
     0x40 was in for months before anyone noticed the value was also wrong.
 
-    Two of the three sensitivity arms perturb something that is not an offset at all: a MULTIPLIER
+    Two of the three sensitivity arms perturb something that is not an offset at all: a multiplier
     inside a layout walk, and an `assert!` that is a constant's only literal. Both are the ways a
     name-derived value moves in practice -- nobody edits `0xd4`, they edit the array length or the
     binding above it -- so a control that only ever flipped a hex digit would prove the gate
@@ -1114,7 +1114,7 @@ def _name_derived_offsets():
     msb = "crates/er-invasion-warp-core/src/msb_invasion_points.rs"
     probe = "crates/er-game-base/src/_pc_probe_namederived.rs"
 
-    # SENSITIVITY 1: the layout walk's MULTIPLIER. `CHR_ASM_UNKD4_OFFSET` is
+    # Sensitivity 1: the layout walk's multiplier. `CHR_ASM_UNKD4_OFFSET` is
     # `equipment_param_ids + ENTRY_COUNT * 4`, so an off-by-one in the count -- the exact shape of
     # a miscounted `#[repr(C)]` walk -- silently moves the override field onto its neighbour.
     with edit_file(chr_asm, lambda t: t.replace(
@@ -1124,8 +1124,8 @@ def _name_derived_offsets():
         expect("name-derived-offsets", "sens/layout-walk-multiplier", rc, out, True,
                ["CHR_ASM_EQUIPMENT_ENTRY_COUNT"])
 
-    # SENSITIVITY 2: an `offset_of!` constant has no literal at its definition, so its
-    # `const _: () = assert!(..)` IS the pin. Move the pin and the gate must notice, otherwise the
+    # Sensitivity 2: an `offset_of!` constant has no literal at its definition, so its
+    # `const _: () = assert!(..)` is the pin. Move the pin and the gate must notice, otherwise the
     # whole compiler-derived half of this layout sits unwatched behind an expression.
     with edit_file(chr_asm, lambda t: t.replace(
             "const _: () = assert!(CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET == 0x7c);",
@@ -1134,9 +1134,9 @@ def _name_derived_offsets():
         expect("name-derived-offsets", "sens/offset-of-pin-moved", rc, out, True,
                ["CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET", "0x7c"])
 
-    # SENSITIVITY 3: the `unkNN` walk itself. `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET` was derived by
+    # Sensitivity 3: the `unkNN` walk itself. `WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET` was derived by
     # counting members down the upstream declaration (`unk3c`, `unk40`, `unk41[7]` -> 0x48). 0x50
-    # is not an arbitrary wrong number: it is the ADJACENT witnessed field, i.e. where that walk
+    # is not an arbitrary wrong number: it is the adjacent witnessed field, i.e. where that walk
     # lands if one member is mis-sized.
     with edit_file(msb, lambda t: t.replace(
             "pub const WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET: usize = 0x48;",
@@ -1145,20 +1145,20 @@ def _name_derived_offsets():
         expect("name-derived-offsets", "sens/unk-walk-off-by-one-member", rc, out, True,
                ["WORLD_BLOCK_INFO_MSB_RES_CAP_OFFSET", "0x48"])
 
-    # SPECIFICITY 1: an unrelated constant holding one of the pinned NUMBERS. The gate pins names
+    # Specificity 1: an unrelated constant holding one of the pinned numbers. The gate pins names
     # to measured fields and has no opinion about 0xd4 appearing anywhere else.
     with new_file(probe, "pub const PC_PROBE_UNRELATED_D4_OFFSET: usize = 0xd4;\n"):
         rc, out = run(g)
         expect("name-derived-offsets", "spec/unrelated-constant-same-value", rc, out, False)
 
-    # SPECIFICITY 2: a deliberate AGREEING duplicate of a swept constant. Four crates already
+    # Specificity 2: a deliberate agreeing duplicate of a swept constant. Four crates already
     # spell `GAME_DATA_MAN_PLAYER_OFFSET` by hand; a gate that punished the second copy would be
     # punishing how this tree ships independent DLLs.
     with new_file(probe, "pub const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;\n"):
         rc, out = run(g)
         expect("name-derived-offsets", "spec/agreeing-duplicate", rc, out, False)
 
-    # SENSITIVITY 4, the same duplicate DRIFTED -- the reason specificity 2 cannot simply be
+    # Sensitivity 4, the same duplicate drifted -- the reason specificity 2 cannot simply be
     # "ignore extra definitions".
     with new_file(probe, "pub const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x10;\n"):
         rc, out = run(g)
@@ -1168,16 +1168,16 @@ def _name_derived_offsets():
 
 @control("git-hooks-content", baseline=["bash", "scripts/check-git-hooks-installed.sh"])
 def _hooks_content():
-    """Is the hook git will actually run OURS, or merely PRESENT?
+    """Is the hook git will actually run ours, or merely present?
 
-    The defect is measured, not imagined: `bd hooks install` HONOURS an existing
+    The defect is measured, not imagined: `bd hooks install` honours an existing
     `core.hooksPath` and writes its own shims into that directory. In this repo that
     directory is `scripts/hooks`, which is version-controlled -- so one `bd hooks install`
     replaces the tracked pre-commit and pre-push, and every "is a hook installed" assertion
     stays green afterwards, because a hook is still there and still executable.
 
-    WHY THIS ONE RUNS AGAINST AN ISOLATED ROOT rather than the live tree, unlike most
-    controls here. The file under mutation would be the PUSH GATE ITSELF. Every other
+    Why this one runs against an isolated root rather than the live tree, unlike most
+    controls here. The file under mutation would be the push gate itself. Every other
     control's mutant is inert for the duration of one subprocess; this one would disarm the
     gate for every agent sharing this checkout during its window, and a concurrent push is
     exactly the event it exists to stop. `check-git-hooks-installed.sh <root>` takes the
@@ -1235,17 +1235,17 @@ def _hooks_content():
             inconclusive("git-hooks-content", "fixture", "could not build the fixture commit")
             return
 
-        # SPECIFICITY 1: the fixture as installed correctly. Everything below is read off this.
+        # Specificity 1: the fixture as installed correctly. Everything below is read off this.
         rc, out = run(["bash", g, str(repo)])
         if not expect("git-hooks-content", "spec/correctly-installed", rc, out, False):
             return
 
-        # SENSITIVITY 1: THE HAZARD. The tracked hook overwritten where it stands.
+        # Sensitivity 1: The hazard. The tracked hook overwritten where it stands.
         write(repo / "scripts/hooks/pre-push", beads_shim)
         rc, out = run(["bash", g, str(repo)])
         expect("git-hooks-content", "sens/hook-overwritten-in-place", rc, out, True, ["pre-push"])
 
-        # SENSITIVITY 2: the same shim, COMMITTED, so the blob comparison agrees with it and only
+        # Sensitivity 2: the same shim, committed, so the blob comparison agrees with it and only
         # the required-invocation floor is left. This is the state the hazard reaches as soon as
         # the next agent commits the overwrite as an ordinary file change.
         commit_hook(repo)
@@ -1253,7 +1253,7 @@ def _hooks_content():
         expect("git-hooks-content", "sens/overwrite-committed", rc, out, True,
                ["no longer invokes"])
 
-        # SENSITIVITY 3: an edit that keeps every invocation and is NOT committed. Invisible to
+        # Sensitivity 3: an edit that keeps every invocation and is not committed. Invisible to
         # the floor; only the committed blob can see it.
         write(repo / "scripts/hooks/pre-push", real_hook)
         commit_hook(repo)
@@ -1261,7 +1261,7 @@ def _hooks_content():
         rc, out = run(["bash", g, str(repo)])
         expect("git-hooks-content", "sens/uncommitted-edit", rc, out, True, ["HEAD"])
 
-        # SENSITIVITY 4: core.hooksPath REDIRECTED. The tracked hook is untouched and simply
+        # Sensitivity 4: core.hooksPath redirected. The tracked hook is untouched and simply
         # stops being the file git runs -- the shape beads writes when the key is absent.
         write(repo / "scripts/hooks/pre-push", real_hook)
         commit_hook(repo)
@@ -1270,24 +1270,24 @@ def _hooks_content():
         rc, out = run(["bash", g, str(repo)])
         expect("git-hooks-content", "sens/hookspath-redirected", rc, out, True, [".beads/hooks"])
 
-        # SPECIFICITY 2: the same relocation carrying the FORWARDING SHIM. That wrapper execs the
+        # Specificity 2: the same relocation carrying the forwarding SHIM. That wrapper execs the
         # tracked hook instead of replacing it, so it must stay green -- a gate red on every
         # wrapper is a gate people route around.
         write(repo / ".beads/hooks/pre-push", shim)
         rc, out = run(["bash", g, str(repo)])
         expect("git-hooks-content", "spec/relocated-forwarding-shim", rc, out, False)
 
-        # SPECIFICITY 3: the OTHER wrapper this repo really ships. `.githooks/pre-push` is a
+        # Specificity 3: the other wrapper this repo really ships. `.githooks/pre-push` is a
         # three-line forwarder kept because clones exist configured for that directory; its bytes
-        # MUST differ from the hook's, so content identity is not assertable for it at all.
+        # must differ from the hook's, so content identity is not assertable for it at all.
         write(repo / ".githooks/pre-push",
               '#!/usr/bin/env bash\nexec bash scripts/hooks/pre-push "$@"\n')
         git(repo, "config", "core.hooksPath", ".githooks")
         rc, out = run(["bash", g, str(repo)])
         expect("git-hooks-content", "spec/legacy-githooks-forwarder", rc, out, False)
 
-        # SENSITIVITY 5: ...and the weaker property that replaces content identity there. A
-        # wrapper that stops naming scripts/hooks/ has quietly become a SECOND implementation of
+        # Sensitivity 5: ...and the weaker property that replaces content identity there. A
+        # wrapper that stops naming scripts/hooks/ has quietly become a second implementation of
         # the gate, which is how a five-week-old stub happens.
         write(repo / ".githooks/pre-push",
               "#!/usr/bin/env bash\n# no longer forwards anywhere\nexit 0\n")
@@ -1298,7 +1298,7 @@ def _hooks_content():
 
 @control("ledger-section-kind")
 def _ledger_section_kind():
-    """The gate that decides whether a ledger is talking about CODE at all.
+    """The gate that decides whether a ledger is talking about code at all.
 
     Its rules fail in opposite directions and both are planted. R1 going blind hands a hook
     licence to `.data`; R2 going blind files a code address as a global, which is how a `read`
@@ -1306,15 +1306,15 @@ def _ledger_section_kind():
     deleted on 2026-08-31 -- 87 of its 444 rows named non-executable memory while carrying
     prologue verdicts like `6B relocatable` -- and nothing in the tree could see it.
 
-    The specificity arm is against the REAL ledgers, not the selftest's synthetic ones: a
+    The specificity arm is against the real ledgers, not the selftest's synthetic ones: a
     correctly-placed `.text` row added to a code ledger must change no verdict. It is reported
-    INCONCLUSIVE rather than PASS when the gitignored 1.17 image is absent, because the gate
+    inconclusive rather than pass when the gitignored 1.17 image is absent, because the gate
     then skips R1/R2 and its green says nothing about the tree.
     """
     f = "scripts/check-ledger-section-kind.py"
     g = ["python3", f, "--selftest"]
 
-    # SENSITIVITY 1: the section comparison itself, disabled. Every planted wrong-kind row is
+    # Sensitivity 1: the section comparison itself, disabled. Every planted wrong-kind row is
     # then accepted, and the selftest's four sensitivity cases must notice.
     with edit_file(f, lambda t: t.replace(
             "            if executable != want_executable:\n",
@@ -1322,7 +1322,7 @@ def _ledger_section_kind():
         rc, out = run(g)
         expect("ledger-section-kind", "sens/kind-comparison-off", rc, out, True)
 
-    # SENSITIVITY 2: R3's tombstone removed, so the deleted ledger may come back unseen. This is
+    # Sensitivity 2: R3's tombstone removed, so the deleted ledger may come back unseen. This is
     # the arm that matters most while `audit-1170-hook-targets.py --promote` still writes it.
     with edit_file(f, lambda t: t.replace(
             "    if os.path.exists(retired):\n",
@@ -1330,7 +1330,7 @@ def _ledger_section_kind():
         rc, out = run(g)
         expect("ledger-section-kind", "sens/tombstone-removed", rc, out, True)
 
-    # SENSITIVITY 3: an unclassified ledger skipped instead of refused -- a partial view is this
+    # Sensitivity 3: an unclassified ledger skipped instead of refused -- a partial view is this
     # defect class wearing a green tick, so the selftest asserts the refusal.
     with edit_file(f, lambda t: t.replace(
             "            unknown.append(f\"{const_name} -> {relative}\")\n",
@@ -1352,15 +1352,15 @@ def _ledger_section_kind():
 @control("decode-extent-bounds",
          baseline=["python3", "scripts/check-decode-extent-bounds.py"])
 def _decode_extent_bounds():
-    """The gate that keeps instance SIX of the decode-past-the-end class from being written.
+    """The gate that keeps instance six of the decode-past-the-end class from being written.
 
     Five instances so far, and the reason a gate exists rather than a note: each one produced a
     verdict, not a crash. A phantom `jno` conjured out of two padding bytes failed a correct hook
-    target; 12 false DIVERGES deleted working addresses from the CALL map; a field-offset gate's
-    window had been TUNED to keep a read that decodes as `sar dword ptr [rax], 0x6f` out of a
-    NEIGHBOURING function, and that phantom was its headline finding.
+    target; 12 false DIVERGES deleted working addresses from the call map; a field-offset gate's
+    window had been tuned to keep a read that decodes as `sar dword ptr [rax], 0x6f` out of a
+    neighbouring function, and that phantom was its headline finding.
 
-    Narrowing a scan can only ever make a check ACCEPT MORE, so the sensitivity arms plant the
+    Narrowing a scan can only ever make a check accept more, so the sensitivity arms plant the
     defect rather than removing a rule: a new file with a byte-budget decode, the real instance 1
     put back into `audit-1170-hook-targets.py`, an objdump span, and an allowlist row pointing at
     nothing. The specificity arms are the three legitimate shapes the gate must not touch --
@@ -1370,7 +1370,7 @@ def _decode_extent_bounds():
     f = "scripts/check-decode-extent-bounds.py"
     g = ["python3", f]
 
-    # SENSITIVITY 1: a NEW byte-budget decode, exactly the shape of instance 1. This is the case
+    # Sensitivity 1: a new byte-budget decode, exactly the shape of instance 1. This is the case
     # the gate exists for -- an agent adding a sixth instance tomorrow.
     probe = "scripts/_pc_probe_decode_span.py"
     with new_file(probe, "def scan(blob, va):\n"
@@ -1382,7 +1382,7 @@ def _decode_extent_bounds():
         expect("decode-extent-bounds", "sens/new-byte-budget", rc, out, True,
                ["_pc_probe_decode_span.py", "off : off + 1024"])
 
-    # SENSITIVITY 2: the same defect reached through a local binding, which is how it is usually
+    # Sensitivity 2: the same defect reached through a local binding, which is how it is usually
     # written -- `body = blob[off : off + N]` and then `md.disasm(body, va)`. A scan that only
     # looked at the call's own argument would miss every real occurrence.
     with new_file(probe, "def scan(blob, va):\n"
@@ -1394,7 +1394,7 @@ def _decode_extent_bounds():
         expect("decode-extent-bounds", "sens/byte-budget-via-binding", rc, out, True,
                ["_pc_probe_decode_span.py", "off + BRANCH_SCAN_BYTES"])
 
-    # SENSITIVITY 3: THE REAL INSTANCE 1, put back. `patch_safe` is reverted to the flat
+    # Sensitivity 3: The real instance 1, put back. `patch_safe` is reverted to the flat
     # BRANCH_SCAN_BYTES scan that manufactured a `jno` out of a padding byte on 2026-08-31. This
     # is the arm that proves the gate would have caught the incident it was written for, rather
     # than only catching a toy.
@@ -1406,10 +1406,10 @@ def _decode_extent_bounds():
         expect("decode-extent-bounds", "sens/instance-1-replanted", rc, out, True,
                ["audit-1170-hook-targets.py", "patch_safe"])
 
-    # SENSITIVITY 4: the OTHER disassembler. objdump takes its span as a start plus a count in a
+    # Sensitivity 4: the other disassembler. objdump takes its span as a start plus a count in a
     # subprocess argument, invisible to the AST scan, so it has its own matcher and its own arm.
     shell = "scripts/_pc_probe_decode_span.sh"
-    # The flag is spelled in two pieces so that THIS harness's own source does not read as an
+    # The flag is spelled in two pieces so that this harness's own source does not read as an
     # objdump invocation to the gate it is testing -- the gate matches by text, deliberately, and
     # a control that turns its subject red just by existing proves nothing about the subject.
     stop_flag = "--stop-" + "address"
@@ -1420,8 +1420,8 @@ def _decode_extent_bounds():
         expect("decode-extent-bounds", "sens/objdump-span", rc, out, True,
                ["_pc_probe_decode_span.sh"])
 
-    # SENSITIVITY 5: an allowlist row that justifies nothing. A row whose key drifts out of date
-    # is how this gate would go quiet on a whole file -- the site becomes unjustified AND the row
+    # Sensitivity 5: an allowlist row that justifies nothing. A row whose key drifts out of date
+    # is how this gate would go quiet on a whole file -- the site becomes unjustified and the row
     # becomes stale, and only the second is visible if the site was also removed.
     with edit_file("scripts/decode-extent-allowlist.tsv", lambda t: t.replace(
             "scripts/verify-thunk-rva-1170.py\tbody\t",
@@ -1430,7 +1430,7 @@ def _decode_extent_bounds():
         expect("decode-extent-bounds", "sens/stale-allowlist-row", rc, out, True,
                ["match no live site", "pc_probe_renamed"])
 
-    # SPECIFICITY 1: an extent handed in by the caller. The commonest correct shape in the tree
+    # Specificity 1: an extent handed in by the caller. The commonest correct shape in the tree
     # (31 of the 69 sites), and a gate that reddened on it would be deleted within the week.
     with new_file(probe, "def scan(blob, va, end):\n"
                          "    for insn in md.disasm(blob[va - 0x140000000 : end], va):\n"
@@ -1438,7 +1438,7 @@ def _decode_extent_bounds():
         rc, out = run(g)
         expect("decode-extent-bounds", "spec/caller-supplied-extent", rc, out, False)
 
-    # SPECIFICITY 2: an upper bound anchored on the SITE being looked for rather than on the
+    # Specificity 2: an upper bound anchored on the site being looked for rather than on the
     # decode start (`image[func : disp_at + 16]`). It is an addition, and it is not a budget.
     with new_file(probe, "def scan(blob, func, disp_at):\n"
                          "    for insn in md.disasm(blob[func : disp_at + 16], func):\n"
@@ -1446,7 +1446,7 @@ def _decode_extent_bounds():
         rc, out = run(g)
         expect("decode-extent-bounds", "spec/site-anchored-upper-bound", rc, out, False)
 
-    # SPECIFICITY 3: the PRESCRIBED FIX. If the gate reddened on `function_extent.body_end` it
+    # Specificity 3: the prescribed fix. If the gate reddened on `function_extent.body_end` it
     # would be telling authors to do the one thing it refuses, which is worse than no gate.
     with new_file(probe, "def scan(blob, va):\n"
                          "    off = va - 0x140000000\n"

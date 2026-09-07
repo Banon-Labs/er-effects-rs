@@ -1,4 +1,4 @@
-//! Cutting a build's display name down to something Elden Ring will accept as a CHARACTER name.
+//! Cutting a build's display name down to something Elden Ring will accept as a character name.
 //!
 //! The game has no rename UI, so the only way to give an imported character the build's name is to
 //! call `CS::PlayerGameData::CopyChrName` -- and that native validates nothing it needs to. This
@@ -11,7 +11,7 @@
 ///
 /// `PlayerGameData::characterName` is a `wchar_t[17]` (`+0x9c`..`+0xbe`), and the last unit is the
 /// terminator -- but the binding number is the native writer's own gate, which is literally
-/// `if (wcslen(name) < 0x11)`. A 17-unit name would FIT the array and still be refused, silently,
+/// `if (wcslen(name) < 0x11)`. A 17-unit name would fit the array and still be refused, silently,
 /// leaving the old name in place and the caller with nothing to report.
 pub const CHR_NAME_MAX_UNITS: usize = 16;
 
@@ -20,7 +20,7 @@ pub const CHR_NAME_MAX_UNITS: usize = 16;
 pub struct ClampedName {
     /// The clamped text, for logging and for the caller's read-back comparison.
     pub text: String,
-    /// The same text as a NUL-TERMINATED UTF-16 buffer -- the argument the native takes.
+    /// The same text as a NUL-terminated UTF-16 buffer -- the argument the native takes.
     pub buffer: Vec<u16>,
     /// Whether anything was dropped for length.
     pub truncated: bool,
@@ -33,17 +33,17 @@ pub struct ClampedName {
 /// Three separate ways a name can be wrong here, and the native catches none of them:
 ///
 /// 1. **Length is counted in UTF-16 code units, not chars and not bytes.** `CopyChrName` compares
-///    `wcslen(name) < 0x11`. An emoji or any other astral character is TWO units, so a 16-character
+///    `wcslen(name) < 0x11`. An emoji or any other astral character is two units, so a 16-character
 ///    name can be a 32-unit string. Counting `chars()` would build a buffer the native silently
 ///    refuses; counting `len()` (bytes) would cut a name far shorter than it needs to be. This
-///    accumulates `char::len_utf16` and stops before the budget is exceeded, so a surrogate PAIR is
+///    accumulates `char::len_utf16` and stops before the budget is exceeded, so a surrogate pair is
 ///    never split -- a lone surrogate is not valid UTF-16, and is what a byte- or char-based cut
 ///    produces.
 /// 2. **An interior NUL truncates the name silently.** A Rust `String` may contain `U+0000`; the
 ///    native measures with `wcslen`, so everything after the first NUL would vanish without a word.
 ///    Control characters are dropped for the same class of reason -- they render as boxes, and this
 ///    name goes out to other players.
-/// 3. **The buffer must be NUL-terminated.** `CopyChrName` runs `wcslen` on the argument BEFORE it
+/// 3. **The buffer must be NUL-terminated.** `CopyChrName` runs `wcslen` on the argument before it
 ///    validates anything, so handing it an unterminated slice is an out-of-bounds read of the
 ///    caller's memory, not a rejected name. The terminator is pushed here, once, rather than left
 ///    to a caller to remember.
@@ -126,8 +126,8 @@ mod tests {
         }
     }
 
-    /// Astral characters are TWO units each. Ten of them are twenty units, so eight survive and the
-    /// cut lands BETWEEN characters -- never between a high and low surrogate, which is what a
+    /// Astral characters are two units each. Ten of them are twenty units, so eight survive and the
+    /// cut lands between characters -- never between a high and low surrogate, which is what a
     /// char-count or byte-count cut produces and which is not valid UTF-16 at all.
     #[test]
     fn a_surrogate_pair_is_never_split() {
@@ -168,7 +168,7 @@ mod tests {
         let clamped = clamp_to_field("Steelovsky Malenia Killer").expect("a usable name");
         assert_eq!(clamped.text, "Steelovsky Malen");
         assert!(clamped.truncated);
-        // The 16th unit of this one IS the space, so the trim is what makes the difference between
+        // The 16th unit of this one is the space, so the trim is what makes the difference between
         // `"Steelovsky Male"` and `"Steelovsky Male "`.
         let on_a_space = clamp_to_field("Steelovsky Male nia").expect("a usable name");
         assert_eq!(on_a_space.text, "Steelovsky Male");

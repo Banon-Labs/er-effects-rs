@@ -7,19 +7,19 @@ enough for the moveset layer, which never had to put a creature in front of a pe
 A PICKER does. `c4630` is not a thing anybody can choose from a list of four hundred;
 `Runebear` is.
 
-WHERE THE NAMES COME FROM, AND WHY IT IS NOT THE GAME'S OWN STRINGS. The obvious
+Where the names come from, and why it is not the game'S own strings. The obvious
 source is `NpcName.fmg` out of `item.msgbnd`, and it is the wrong one: it holds the
-strings the game DISPLAYS, which means bosses and named NPCs and nothing else. Measured
+strings the game displays, which means bosses and named NPCs and nothing else. Measured
 over the 408 creatures the moveset table covers, `NpcName.fmg` reaches 73. Routing
 `NpcParam.nameId` into it reaches 30. The overwhelming majority of the creatures a
 player would want to wear -- every wolf, every soldier, every knight -- have no
 displayable name in the game at all, because the game never shows one.
 
-So the names here are the PARAMDEX/SMITHBOX ROW NAMES: community-authored labels for
+So the names here are the PARAMDEX/SMITHBOX row NAMES: community-authored labels for
 param rows, which exist precisely because the rows themselves are anonymous. Two
 files, in priority order:
 
-  ChrModelParam   row id IS the chr id. 256/408, and they are the clean ones --
+  ChrModelParam   row id is the chr id. 256/408, and they are the clean ones --
                   "Flying Dragon", not "Flying Dragon Agheel (Limgrave)".
   NpcParam        row id is chrid*10000 + variant. 405/408, with location and
                   scaling qualifiers attached. Used only where ChrModelParam is blank.
@@ -27,7 +27,7 @@ files, in priority order:
 Combined: 405 of 408. The three that neither names (5194, 5261, 6240) ship as `-`,
 and the picker shows `c5194` for them rather than inventing a name.
 
-THIS IS NOT A GAME ASSET AND IS NOT A GAME BYTE. Nothing here is read out of
+This is not a game asset and is not a game byte. Nothing here is read out of
 `regulation.bin`, out of a `.dcx`, or out of the running game. The input is a JSON file
 of English labels a community wrote to make an anonymous table navigable, and the
 output is the same labels keyed by the ids this crate already ships. `regulation.bin`
@@ -68,7 +68,7 @@ TABLE_VERSION = 1
 NAME_MAX_CHARS = 56
 
 # `-` rather than an empty field, matching moveset.tbl's own spelling for "considered,
-# and there is nothing". An absent LINE would mean something different -- an id this
+# and there is nothing". An absent line would mean something different -- an id this
 # generator never looked at -- and the two must not be confusable.
 NO_NAME = '-'
 
@@ -201,7 +201,7 @@ def selftest():
     text = render([(1, 'One', 'ChrModelParam'), (2, NO_NAME, 'none')])
     assert text.endswith('1\tOne\n2\t-\n'), repr(text[-40:])
     assert f'v{TABLE_VERSION}\n' in text
-    # THE READER ITSELF, against a real file. The bug this whole module documents -- reading
+    # The reader itself, against a real file. The bug this whole module documents -- reading
     # `e['Name']` where the schema nests a second `Entries` -- lives in `load_row_names`, so a
     # selftest that re-implements one of its lines inline would pass with that bug restored. It
     # did, until this used a temp directory.
@@ -257,7 +257,7 @@ def main():
         return 0
 
     out = args.out or DEFAULT_OUT
-    # newline='\n' EXPLICITLY. Text mode with the default newline=None translates '\n' to
+    # newline='\n' explicitly. Text mode with the default newline=None translates '\n' to
     # os.linesep on write, so the same generator over the same inputs emits CRLF on Windows and LF
     # here -- a 423-line spurious diff in a file whose header says "GENERATED, do not hand-edit".
     # The Rust parser trims line ends, so it would not fail; it would just look like somebody had

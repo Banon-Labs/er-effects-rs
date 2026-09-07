@@ -9,7 +9,7 @@ use crate::save_dest_identity::save_dest_normalize_path;
 // container) because it describes the file format, not the test.
 // `save_dest_commit_runtime` scores every written container against it, so it is declared
 // once, here, rather than in both halves.
-// Its only reader is `save_dest_commit_runtime`, which is windows-only, so a HOST build sees
+// Its only reader is `save_dest_commit_runtime`, which is windows-only, so a host build sees
 // nothing use it -- the value is still a format fact this module owns, not test scaffolding.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const SAVE_DEST_BND4_MAGIC: [u8; 4] = *b"BND4";
@@ -68,7 +68,7 @@ pub fn save_dest_accepted_leaf_names(live_path: &Path) -> Vec<String> {
     names
 }
 
-/// Every directory whose `ER0000.{sl2,co2}` write-open IS the loaded save's.
+/// Every directory whose `ER0000.{sl2,co2}` write-open is the loaded save's.
 pub fn save_dest_accepted_dirs_for(
     live_path: &Path,
     native_source_dir: Option<PathBuf>,
@@ -85,7 +85,7 @@ pub fn save_dest_accepted_dirs_for(
     dirs
 }
 
-/// Normalized full paths that ARE the loaded save's container: every accepted leaf in every
+/// Normalized full paths that are the loaded save's container: every accepted leaf in every
 /// accepted directory.
 pub fn save_dest_accepted_paths_for(
     live_path: &Path,

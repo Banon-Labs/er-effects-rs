@@ -1,37 +1,37 @@
 use crate::compat::*;
 use er_game_base::fnv1a::fnv1a64;
 
-// DLC VIRTUAL ROOT SELF-HEAL -- the profile-switch reload softlock fix.
+// DLC virtual root self-heal -- the profile-switch reload softlock fix.
 //
-// PROVEN CAUSE (bd `FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30`):
-// the title start-game flow re-registers the 13 `*_dlc2` DLIO aliases with an EMPTY root on EVERY
+// Proven cause (bd `FORK-RESOLVED-refill-job-never-enqueued-on-reload-fix-is-gated-self-heal-2026-07-30`):
+// the title start-game flow re-registers the 13 `*_dlc2` DLIO aliases with an empty root on every
 // pass (`FUN_140e06490`), but the job that repopulates them (`FUN_140e05fb0` via the MenuFunctorJob
 // whose `_Do_call` is `FUN_140836f30`) is enqueued only on boot. Measured, one run:
-//     BLANK #1 (boot) -> JOB #1 -> REFILL #1 -> roots populated
-//     BLANK #2 (reload) -> no JOB #2, no REFILL #2 -> roots EMPTY
+//     Blank #1 (boot) -> job #1 -> refill #1 -> roots populated
+//     blank #2 (reload) -> no job #2, no refill #2 -> roots empty
 // A `mapstudio_dlc2:/m28_*.msb` read then resolves against an empty root and returns 0 bytes, the
 // sole `msbResCap` writer short-circuits on null content, and `WorldBlockRes` case 2 waits forever.
 //
-// WHY THIS CALLS A NATIVE FUNCTION INSTEAD OF ENQUEUEING THE NATIVE JOB: the enqueue chain is a
+// Why this calls a native function instead of ENQUEUEING the native JOB: the enqueue chain is a
 // closed loop -- `FUN_140836f30` is the `_Do_call` of a functor that `FUN_14082faf0` builds, and
-// `FUN_14082faf0` is reachable only from that same loop. Every link is DATA-dispatched with no
+// `FUN_14082faf0` is reachable only from that same loop. Every link is data-dispatched with no
 // static call site, so there is no enqueue owner to invoke (independently reproduces the July
 // finding "dynamically-built std::function, no static registration"). `FUN_140e05fb0` is
 // self-contained -- it re-queries Steam DLC ownership through `dlcPlatform` vtable[8]/[0xb]/[0xc],
 // rewrites every root 0..0x31 via `AddVirtualFileRoots`, and sets the `+0x45` valid latch -- so
 // calling it is not a private per-frame pump of a MenuJob queue.
 //
-// GATE: the observed POPULATED -> EMPTY transition, NOT a timer and NOT `CSDlcImp+0x45` alone.
+// GATE: the observed populated -> empty transition, not a timer and not `CSDlcImp+0x45` alone.
 //   * `+0x45` is legitimately 0 during early boot before the game's own first refill, so gating on
 //     it would fire before Steam DLC ownership is established.
 //   * That earliness is not cosmetic: `AddVirtualFileRoots` silently substitutes `L"system:/"` when
 //     `CS_DLC_IsEnableDlcFileMount` is false or ownership is unresolved. A too-early call would
-//     "succeed", set `+0x45 = 1`, and leave DLC content resolving to the WRONG root -- a silent
+//     "succeed", set `+0x45 = 1`, and leave DLC content resolving to the wrong root -- a silent
 //     corruption strictly worse than a visible softlock.
 // Requiring a prior good observation means we only ever act on a root the game itself had already
 // populated correctly, and only after it was destroyed.
 //
-// PROOF OBLIGATION: "we called the refill" is NOT success. The heal verifies the resulting string
+// Proof OBLIGATION: "we called the refill" is not success. The heal verifies the resulting string
 // equals the expected `map_dlc2:/mapstudio` -- `L"system:/"` is non-empty and wrong, so a
 // non-empty check would pass the exact failure this gate exists to prevent.
 
@@ -40,7 +40,7 @@ use er_game_base::fnv1a::fnv1a64;
 pub unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
     let cached = DLC_ROOT_ENTRY_ADDR.load(Ordering::SeqCst);
     if cached > 0x10000 {
-        // RE-VALIDATE, do not trust the cache blindly. The alias table GROWS (measured: the title's
+        // RE-validate, do not trust the cache blindly. The alias table grows (measured: the title's
         // registration takes it from 87 to 100 entries), and a growing vector reallocates -- which
         // would leave this pointer dangling in a per-frame game-thread path. Confirming the name
         // still reads back is one short string read and turns a potential wild write into a
@@ -86,11 +86,11 @@ pub unsafe fn dlc_roots_self_heal_tick() {
     };
 
     if length != 0 {
-        // Populated. Arm the heal AND record what "good" actually looks like, as a hash of the
-        // live string. SELF-CALIBRATING ON PURPOSE: a hard-coded literal transcribed from the
+        // Populated. Arm the heal and record what "good" actually looks like, as a hash of the
+        // live string. Self-CALIBRATING on PURPOSE: a hard-coded literal transcribed from the
         // decompile was wrong in exactly this spot -- the native stores `map_dlc2:/mapstudio/`
         // (trailing slash) while `AddVirtualRootMapEntry`'s source literal has none, so the heal
-        // reported WRONG-ROOT on roots it had restored correctly and the alarm counter became
+        // reported wrong-root on roots it had restored correctly and the alarm counter became
         // meaningless. Comparing against what the game itself produced cannot drift like that.
         DLC_ROOT_SEEN_POPULATED.store(1, Ordering::SeqCst);
         let good = unsafe { dlstring_wide_ascii(path_str) };
@@ -123,15 +123,15 @@ pub unsafe fn dlc_roots_self_heal_tick() {
     };
 
     let attempt = DLC_ROOT_HEAL_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
-    // Disarm BEFORE calling: if the call fails to populate, the next frame must not retry forever.
+    // Disarm before calling: if the call fails to populate, the next frame must not retry forever.
     // Re-arming happens naturally the moment a populated root is observed again.
     DLC_ROOT_SEEN_POPULATED.store(0, Ordering::SeqCst);
     let f: unsafe extern "system" fn(usize, u8) = unsafe { core::mem::transmute(refill) };
     unsafe { f(csdlc, 1) };
 
-    // VERIFY THE VALUE, NOT THE CALL. `L"system:/"` is non-empty and wrong, so a non-empty check
+    // Verify the value, not the call. `L"system:/"` is non-empty and wrong, so a non-empty check
     // would pass the silent-corruption case this gate exists to catch. Compare against the hash of
-    // the root the GAME populated earlier in this same process.
+    // the root the game populated earlier in this same process.
     let healed = unsafe { dlstring_wide_ascii(path_str) };
     let expected_hash = DLC_ROOT_GOOD_PATH_HASH.load(Ordering::SeqCst);
     let ok = expected_hash != 0 && fnv1a64(healed.as_bytes()) as usize == expected_hash;

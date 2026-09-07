@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Derive the 1.17 answer for a CALL SITE -- a mid-function return address.
+"""Derive the 1.17 answer for a call site -- a mid-function return address.
 
-WHY A SEPARATE TOOL
+Why a separate tool
 ===================
-`scripts/map-rvas-1162-to-1170.py` and `scripts/verify-rva-map-1170.py` both work on FUNCTION
-STARTS, because that is what `.pdata` records and what a masked signature can identify. A call
+`scripts/map-rvas-1162-to-1170.py` and `scripts/verify-rva-map-1170.py` both work on function
+starts, because that is what `.pdata` records and what a masked signature can identify. A call
 site is not a function start: it is a byte in the middle of one, and neither tool can see it.
 
 But a call site has an identity of its own that survives the move: it is the return address of
-the Nth `call` in a named function, and the OFFSET of that call within its function is stable
+the Nth `call` in a named function, and the offset of that call within its function is stable
 whenever the function body is unchanged. So the derivation is:
 
     call site  =  (containing function, offset within it)
@@ -19,11 +19,11 @@ This prints the evidence for that claim, per site:
 
   * the `.pdata` record that contains the 1.16.2 address, so "mid-function" is not an assumption;
   * the whole-image map's pair for that function;
-  * the `E8` at the claimed offset in BOTH images, with the callee each one reaches -- if the
+  * the `E8` at the claimed offset in both images, with the callee each one reaches -- if the
     call site really is the same call, both callees are the same function under the map;
   * whether the offset is identical in both, which is the load-bearing claim.
 
-USAGE
+Usage
     python3 scripts/derive-callsite-1170.py 0x744e02 0x958a20 0x958b37 0x7ad530
     python3 scripts/derive-callsite-1170.py --selftest
 
@@ -113,7 +113,7 @@ def function_map() -> dict[int, int]:
 
 
 def call_at(build: str, rva: int) -> int | None:
-    """Callee of the `E8` whose RETURN address is `rva`, or None if that is not a call return."""
+    """Callee of the `E8` whose return address is `rva`, or None if that is not a call return."""
     data = image(build)
     site = rva - 5
     if site < 0 or site + 5 > len(data) or data[site] != 0xE8:

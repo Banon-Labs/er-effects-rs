@@ -1,4 +1,4 @@
-//! Tier A: the one line that says WHICH BINARY wrote a log.
+//! Tier A: the one line that says which binary wrote a log.
 //!
 //! # The failure this exists to end
 //!
@@ -20,7 +20,7 @@
 //! The PE timestamp is the anchor: it is per-module and exact, so a run mixing DLLs built
 //! days apart (the ordinary case -- `er-crash-modules.txt` from 2026-08-23 carried a
 //! bugfixes DLL from the 21st beside a crash logger from the 5th) shows that divergence
-//! instead of hiding it behind one workspace-wide sha. It is also the SAME field
+//! instead of hiding it behind one workspace-wide sha. It is also the same field
 //! `er-crash-logging-core` prints for every loaded module, so a feature log and a crash dump can
 //! be joined on it without anyone hashing anything.
 
@@ -29,7 +29,7 @@
 ///
 /// Composed whole in `build.rs` rather than assembled here from a sha and a flag. Joining it at
 /// runtime put the suffix behind a comparison of two compile-time constants, and the optimiser
-/// resolved that branch and dropped the literal -- so a build whose tree WAS dirty shipped a
+/// resolved that branch and dropped the literal -- so a build whose tree was dirty shipped a
 /// bare sha, which reads as a clean build. Verified by grepping the emitted DLL for the exact
 /// string, which is only a meaningful check because there is exactly one of them.
 pub const GIT_DESCRIPTION: &str = env!("ER_BUILD_GIT");
@@ -37,7 +37,7 @@ pub const GIT_DESCRIPTION: &str = env!("ER_BUILD_GIT");
 /// What [`GIT_DESCRIPTION`] holds when the build tree was not a git checkout.
 pub const UNKNOWN_SHA: &str = "unknown";
 
-/// `GetModuleHandleExW`: resolve the module CONTAINING an address rather than one named by
+/// `GetModuleHandleExW`: resolve the module containing an address rather than one named by
 /// string. Passing the address of code in this crate is what makes the answer "the DLL that
 /// is doing the logging" without any caller telling us its name.
 #[cfg(windows)]
@@ -76,12 +76,12 @@ unsafe extern "system" {
     fn GetModuleFileNameW(module: usize, filename: *mut u16, size: u32) -> u32;
 }
 
-/// Base address and FULL PATH of the module this code is linked into.
+/// Base address and full path of the module this code is linked into.
 ///
 /// Returns `None` on host builds and on the (unobserved) failure of either call, so a caller
 /// degrades a field at a time instead of vanishing.
 ///
-/// `own_module` below keeps only the leaf, which is what an identity line wants. The DIRECTORY
+/// `own_module` below keeps only the leaf, which is what an identity line wants. The directory
 /// is what a DLL that ships beside its own data needs: `mushroom-man-runtime` is inert unless
 /// the model binders it depends on sit next to it, and that question cannot be asked of a leaf.
 #[cfg(windows)]
@@ -134,7 +134,7 @@ pub fn own_module() -> Option<(usize, String)> {
 /// Reads are fault-safe, so a module whose headers are not mapped (`/FILEALIGN` games, a
 /// manually mapped image) returns `None` rather than faulting the game thread.
 ///
-/// The value is NOT always a date. MSVC's `/Brepro` replaces it with a content hash, which is
+/// The value is not always a date. MSVC's `/Brepro` replaces it with a content hash, which is
 /// why callers print the raw field beside any decoded date -- several Windows system DLLs in
 /// this game's module list carry obvious non-dates like `0xfb84bf00`.
 #[cfg(windows)]
@@ -187,7 +187,7 @@ pub fn format_utc(unix_seconds: u32) -> String {
 
 /// Days since the Unix epoch -> `(year, month, day)`.
 ///
-/// Shifts the era to start in March so the leap day lands at the END of a year and needs no
+/// Shifts the era to start in March so the leap day lands at the end of a year and needs no
 /// special case; `719468` is the day count from `0000-03-01` to `1970-01-01`.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     const DAYS_FROM_MARCH_ZERO_TO_EPOCH: i64 = 719_468;
@@ -304,10 +304,10 @@ pub fn parse_identity(encoded: &str) -> Option<ModIdentity> {
 
 /// How a loaded build stands relative to `main`, and therefore how loudly it is drawn.
 ///
-/// The distinction that matters is NOT "does this sha equal the newest one" -- it is whether the
-/// build is BEHIND. A commit that was never pushed is not behind anything; it is the ordinary
+/// The distinction that matters is not "does this sha equal the newest one" -- it is whether the
+/// build is behind. A commit that was never pushed is not behind anything; it is the ordinary
 /// state of working locally, and shouting about it would train everyone to ignore the watermark.
-/// A build that IS an older published release is the one case where somebody is running code we
+/// A build that is an older published release is the one case where somebody is running code we
 /// have already moved past, which is exactly the situation that cost a day of crash triage on
 /// 2026-08-24.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,7 +317,7 @@ pub enum Standing {
     /// Built from a commit the release list has never heard of -- a local branch, an unpushed
     /// commit. Not behind, so drawn as quietly as [`Standing::AtMain`].
     Local,
-    /// A PUBLISHED release that is not the newest: this build is genuinely behind `main`, and
+    /// A published release that is not the newest: this build is genuinely behind `main`, and
     /// someone reporting a bug against it may be reporting one already fixed. Drawn red.
     BehindMain,
     /// The release list is not known yet. Never red -- see [`Standing::BehindMain`] for what red
@@ -344,7 +344,7 @@ impl Standing {
     }
 }
 
-/// Releases are tagged `main-<40 hex>`; the tag IS the commit, so no asset has to be opened to
+/// Releases are tagged `main-<40 hex>`; the tag is the commit, so no asset has to be opened to
 /// learn what a published build was cut from.
 pub const RELEASE_TAG_PREFIX: &str = "main-";
 
@@ -361,10 +361,10 @@ pub fn sha_from_release_tag(tag: &str) -> Option<&str> {
 
 /// Where this build stands against the published history of `main`.
 ///
-/// `published` is every `main-*` release sha, NEWEST FIRST -- the order GitHub's releases API
+/// `published` is every `main-*` release sha, newest first -- the order GitHub's releases API
 /// already returns. `local` is a [`GIT_DESCRIPTION`]: a 12-hex prefix, optionally `+dirty`.
 ///
-/// A dirty tree is [`Standing::AtMain`] when its sha is the tip, NOT stale. Local edits on top of
+/// A dirty tree is [`Standing::AtMain`] when its sha is the tip, not stale. Local edits on top of
 /// current `main` are how the work gets done, and the previous rule -- which called every dirty
 /// build stale -- would have painted the developer's own screen red permanently.
 ///
@@ -383,14 +383,14 @@ pub fn standing_against_main(local: &str, published: &[String]) -> Standing {
     match published.iter().position(matches) {
         Some(0) => Standing::AtMain,
         Some(_) => Standing::BehindMain,
-        // Not published at all: a local branch or an unpushed commit. Explicitly NOT behind.
+        // Not published at all: a local branch or an unpushed commit. Explicitly not behind.
         None => Standing::Local,
     }
 }
 
 /// Every `main-*` release commit, newest first, once something has looked them up.
 ///
-/// A LIST rather than just the newest, because "behind main" is a position in that list and an
+/// A list rather than just the newest, because "behind main" is a position in that list and an
 /// inequality against one sha cannot express it: a local commit that was never pushed and a
 /// published commit from last week both differ from the tip, and only one of them is behind.
 ///
@@ -421,7 +421,7 @@ pub fn published_main_shas() -> Vec<String> {
 /// One line naming every one of this workspace's DLLs in the process, and how each compares to
 /// the newest published release.
 ///
-/// This is the watermark's data in text form, and it exists separately BECAUSE the watermark is
+/// This is the watermark's data in text form, and it exists separately because the watermark is
 /// drawn: if the overlay is ever blank, this line is what says whether the roster was empty or
 /// the pixels were lost, which are different bugs with different fixes.
 pub fn roster_line(published: &[String]) -> String {
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(format_utc(1_709_251_200), "2024-03-01T00:00:00Z");
     }
 
-    /// The wire form must survive a round trip, because the parse runs in a DIFFERENT DLL from
+    /// The wire form must survive a round trip, because the parse runs in a different DLL from
     /// the one that encoded it -- there is no shared type to keep them honest, only this test.
     #[test]
     fn an_identity_round_trips_through_its_wire_form() {
@@ -595,7 +595,7 @@ mod tests {
         assert!(parse_identity("name|sha|1|extra").is_none());
     }
 
-    /// The real tag from 2026-08-25, and the semver tag that must NOT be mistaken for a build.
+    /// The real tag from 2026-08-25, and the semver tag that must not be mistaken for a build.
     #[test]
     fn only_a_main_release_tag_names_a_commit() {
         assert_eq!(
@@ -625,7 +625,7 @@ mod tests {
         .collect()
     }
 
-    /// The tip of `main` is quiet, and so is a DIRTY tree on top of it. Local edits are how the
+    /// The tip of `main` is quiet, and so is a dirty tree on top of it. Local edits are how the
     /// work gets done -- painting the developer's own screen red permanently is how a warning
     /// stops being read.
     #[test]
@@ -642,7 +642,7 @@ mod tests {
         assert!(!Standing::AtMain.is_behind());
     }
 
-    /// Deto's DLL: a PUBLISHED release that is not the newest. This is the one actionable state,
+    /// Deto's DLL: a published release that is not the newest. This is the one actionable state,
     /// and the only one drawn red.
     #[test]
     fn an_older_published_release_is_behind_main_and_loud() {
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(standing.opacity_percent(), 25);
     }
 
-    /// A commit that was never pushed is not BEHIND anything. It is the ordinary state of working
+    /// A commit that was never pushed is not behind anything. It is the ordinary state of working
     /// on a branch, and is drawn as quietly as the tip.
     #[test]
     fn an_unpublished_commit_is_local_rather_than_behind() {

@@ -21,7 +21,7 @@ pub const ROW_GAP: f32 = 4.0;
 /// than a number chosen by eye: imgui's default face is 13px, and this is a little over double.
 pub const FONT_SIZE_PX: f32 = 27.0;
 
-/// "Relatively big" was a requirement, not a preference, so it is checked at COMPILE time rather
+/// "Relatively big" was a requirement, not a preference, so it is checked at compile time rather
 /// than by a test: both sides are constants, and a runtime assertion over two constants is a test
 /// that can only ever pass or fail to build. Shrinking the font below twice imgui's 13px default
 /// stops the build.
@@ -33,7 +33,7 @@ const _: () = assert!(FONT_SIZE_PX >= 13.0 * 2.0);
 /// dark, warm palette.
 pub const QUIET_RGB: [f32; 3] = [0.92, 0.92, 0.95];
 
-/// Colour of a line whose build is an older PUBLISHED release than `main`'s tip.
+/// Colour of a line whose build is an older published release than `main`'s tip.
 pub const BEHIND_RGB: [f32; 3] = [1.0, 0.27, 0.27];
 
 /// One rendered row: the text, and the RGBA it is drawn in.
@@ -62,7 +62,7 @@ pub fn row_rgba(standing: er_game_base::build_id::Standing) -> [f32; 4] {
 
 /// Build the rows for a roster.
 ///
-/// Sorted so a BEHIND line is never buried in the middle of a quiet list: at 1% the rest of the
+/// Sorted so a behind line is never buried in the middle of a quiet list: at 1% the rest of the
 /// block is nearly invisible anyway, and the one line anybody needs to see belongs where the eye
 /// lands first.
 pub fn rows(
@@ -88,7 +88,7 @@ pub fn rows(
 
 /// Top-left position of row `index`, given the screen size and the width of that row's text.
 ///
-/// Right-ALIGNED rather than left-aligned at a fixed x: the rows differ in length, and a ragged
+/// Right-aligned rather than left-aligned at a fixed x: the rows differ in length, and a ragged
 /// right edge against the screen edge it is anchored to reads as broken.
 pub fn row_position(screen_width: f32, index: usize, row_height: f32, text_width: f32) -> [f32; 2] {
     let x = (screen_width - SCREEN_MARGIN - text_width).max(0.0);

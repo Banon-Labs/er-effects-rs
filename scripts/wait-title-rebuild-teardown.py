@@ -2,42 +2,42 @@
 """LEAN, DETERMINISTIC prompt-teardown watcher for the warm-title-rebuild A/B.
 
 Replaces the old `capture-samechar-3x.py --observe-only --observe-seconds 300` ride (deleted 2026-09-05; it tore down 45s
-AFTER settled world, so each arm is 4-5 min and lingers -- bd teardown-must-be-prompt-scoped-to-decisive-
-oracle-no-long-waits-2026-07-24). This watcher RETURNS PROMPTLY the instant THIS test's DECISIVE oracle is
-captured, letting run-vanilla-reload-agentdriven.sh's PID-scoped `cleanup()` EXIT trap do the kill. It
-NEVER kills the game itself and NEVER blanket-kills.
+after settled world, so each arm is 4-5 min and lingers -- bd teardown-must-be-prompt-scoped-to-decisive-
+oracle-no-long-waits-2026-07-24). This watcher returns promptly the instant this test's decisive oracle is
+captured, letting run-vanilla-reload-agentdriven.sh's PID-scoped `cleanup()` exit trap do the kill. It
+never kills the game itself and never blanket-kills.
 
-THE DECISIVE ORACLE (bd STEP4-BLOCKER / decoupled-diagnostics-architecture-buildplan-2026-07-24):
-`dialog+0xb78` SceneObjProxy binding at the WARM switch title, right after the first quit-to-title -- BEFORE
+The decisive oracle (bd STEP4-blocker / decoupled-diagnostics-architecture-buildplan-2026-07-24):
+`dialog+0xb78` SceneObjProxy binding at the warm switch title, right after the first quit-to-title -- Before
 load2-to-world. So teardown fires there, not after reaching settled world.
 
-WARM-title vs BOOT-title (the correctness crux -- must NOT tear down on boot-title samples):
-Two RE'd, independently-derived quit signals are REQUIRED together before any title verdict fires (defense
+Warm-title vs boot-title (the correctness crux -- must not tear down on boot-title samples):
+Two RE'd, independently-derived quit signals are required together before any title verdict fires (defense
 in depth against a boot-title false-positive; either alone is sufficient in principle, but a title verdict
-never fires unless BOTH agree):
-  1. TELEMETRY quit signal -- a title-binding line with `epoch >= 1`. `standalone_tick`
+never fires unless both agree):
+  1. Telemetry quit signal -- a title-binding line with `epoch >= 1`. `standalone_tick`
      (er-telemetry-core/src/lib.rs:525) feeds `play_time_ms = -1` while GameDataMan is null (boot title, no
      character loaded), so the load-epoch counter (read/epoch.rs) stays 0 at the boot title and only
      increments once the world has simulated. A title reached with `epoch >= 1` therefore had a prior
-     in-world session + a quit -- i.e. it is the WARM title. The boot title is always epoch 0.
-  2. HARNESS quit signal -- a `native_quit` / `quit` / `quit_teardown` phase reaching `outcome:"advanced"`
+     in-world session + a quit -- i.e. it is the warm title. The boot title is always epoch 0.
+  2. Harness quit signal -- a `native_quit` / `quit` / `quit_teardown` phase reaching `outcome:"advanced"`
      in `er-input-harness-phases.jsonl` (or the matching `... ADVANCED` line in `er-input-harness.log`).
      drive.rs advances those phases only when `world_sim` goes false (the native return-to-title teardown).
      The harness force-drives the quit in both the armed and disarmed arms, so this is present in both.
 
-DECISIVE CONDITIONS (first to hold -> prompt return; polled ~every --poll-seconds):
+Decisive conditions (first to hold -> prompt return; polled ~every --poll-seconds):
   (a) GAME_EXITED       -- eldenring.exe seen alive then gone (debounced --exit-debounce checks).
-  (b) BOUND             -- at the WARM title, title-binding `proxy_handle_nonnull=true` held for
-                           --settle-seconds (the native reload bound the proxy). ALSO BOUND: stream-overlap
+  (b) bound             -- at the warm title, title-binding `proxy_handle_nonnull=true` held for
+                           --settle-seconds (the native reload bound the proxy). Also BOUND: stream-overlap
                            reaches a reload epoch (> warm epoch) with `player_movable=true` held for
                            --settle-seconds (the reload reached world).
-  (c) DEADLOCK_NOT_BOUND-- at the WARM title, title-binding `proxy_handle_nonnull=false` SUSTAINED for
-                           --deadlock-seconds with NO progress to a reload epoch (the hypothesized armed
+  (c) DEADLOCK_NOT_BOUND-- at the warm title, title-binding `proxy_handle_nonnull=false` sustained for
+                           --deadlock-seconds with no progress to a reload epoch (the hypothesized armed
                            product hold that keeps the warm title unbound).
-  (d) CAP               -- --max-seconds backstop (a SMALL net, e.g. 180; NOT the 300s runtime cap).
+  (d) cap               -- --max-seconds backstop (a small net, e.g. 180; Not the 300s runtime cap).
 
 On return: copy er-oracle-title-binding.jsonl + er-oracle-stream-overlap.jsonl into --artifact-dir and print
-a one-line VERDICT. Exit 0 for every real verdict (so an A/B `|| true` caller keeps going); exit 2 only on
+a one-line verdict. Exit 0 for every real verdict (so an A/B `|| true` caller keeps going); exit 2 only on
 a usage/setup error. stdlib only; py_compile-clean.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ TITLE_FILE = "er-oracle-title-binding.jsonl"
 STREAM_FILE = "er-oracle-stream-overlap.jsonl"
 DIALOG_FILE = "er-oracle-dialog-active.jsonl"
 HARNESS_PHASES_FILE = "er-input-harness-phases.jsonl"
-# Epoch 0 = boot load1; a reload is epoch >= 1 (the DIP feature only cares about reload epochs).
+# Epoch 0 = boot load1; a reload is epoch >= 1 (the dip feature only cares about reload epochs).
 FIRST_RELOAD_EPOCH = 1
 HARNESS_LOG_FILE = "er-input-harness.log"
 
@@ -96,9 +96,9 @@ def harness_quit_seen(game_dir: str, artifact_dir: str | None = None) -> bool:
     """True once the harness has driven a quit-to-title to completion (RE signal #2).
 
     Primary source: the self-describing per-phase JSONL. Fallback: the human log. Both are truncated on
-    harness DLL attach, so a hit is always from THIS run.
+    harness DLL attach, so a hit is always from this run.
     """
-    # BOTH files are redirected into the run's own directory by the launcher (a game-directory
+    # Both files are redirected into the run's own directory by the launcher (a game-directory
     # artifact is single-slot, so the next launch destroys it). A watcher reading only the game
     # directory would see no quit phase for a healthy redirected run and report the harness as
     # never having driven one. `resolve_artifact` prefers the run directory, by existence, and
@@ -190,14 +190,14 @@ def main() -> int:
     seen_alive = False
     gone_count = 0
 
-    warm_confirmed_at: float | None = None  # wall time the WARM title was first confirmed (both signals)
+    warm_confirmed_at: float | None = None  # wall time the warm title was first confirmed (both signals)
     warm_epoch: int | None = None           # epoch of the warm-title samples (>=1)
     proxy_true_since: float | None = None    # wall time proxy became (and stayed) bound
     proxy_ever_true = False                   # has the warm-title proxy bound at any point?
     reload_epoch_since: float | None = None  # wall time a reload epoch (> warm) first appeared
     reload_movable_ever = False              # did the player become movable at a reload epoch?
     msgbox_active_since: float | None = None # wall time a blocking dialog first appeared (and stayed) up
-    dip_movable_since: float | None = None   # wall time a RELOAD epoch first reached player_movable (dip)
+    dip_movable_since: float | None = None   # wall time a reload epoch first reached player_movable (dip)
 
     verdict: str | None = None
     reason = ""
@@ -214,7 +214,7 @@ def main() -> int:
             )
             break
 
-        # (a) PROCESS EXIT -- deterministic, arm-independent.
+        # (a) process exit -- deterministic, arm-independent.
         if not args.no_process_check:
             alive = game_running()
             if alive is True:
@@ -228,11 +228,11 @@ def main() -> int:
                     break
             # alive is None -> can't determine; do not count toward exit.
 
-        # DIP feature-capture (bd teardown-model-only-feature-under-test-plus-backstop-user-kills-rest): the
-        # ONLY auto-teardown besides the backstop + game-exit. Tear down when a RELOAD epoch reaches
+        # Dip feature-capture (bd teardown-model-only-feature-under-test-plus-backstop-user-kills-rest): the
+        # only auto-teardown besides the backstop + game-exit. Tear down when a reload epoch reaches
         # player_movable (the moment the WorldResWait fix targets), held --settle-seconds, capturing the
-        # overlap RESULT there (overlap->0 = fix settled streaming before movable; overlap present = it did
-        # not). EVERY other state (autoload stall, boot dialog, wrong state) is left ALIVE for the user.
+        # overlap result there (overlap->0 = fix settled streaming before movable; overlap present = it did
+        # not). Every other state (autoload stall, boot dialog, wrong state) is left alive for the user.
         if args.feature == "dip":
             srows = read_jsonl(stream_path)
             reload_movable = [
@@ -262,10 +262,10 @@ def main() -> int:
             bounded_poll_wait(args.poll_seconds)
             continue
 
-        # (a2) MSGBOX BLOCKED -- a boot/title dialog (session-warning / save-retry) stuck on screen that the
+        # (a2) MSGBOX blocked -- a boot/title dialog (session-warning / save-retry) stuck on screen that the
         # harness never dismissed. The dialog_active oracle reads the live dialog regardless of build timing
         # (bd msgbox-oracle-false-negative-boot-session-dialog-masked-by-cover); a sustained msgbox_active
-        # with no title/reload progress = a blocked boot -> tear down FAST, do not ride the 180s backstop.
+        # with no title/reload progress = a blocked boot -> tear down fast, do not ride the 180s backstop.
         if not args.no_dialog_check:
             dialog_rows = read_jsonl(os.path.join(args.game_dir, DIALOG_FILE))
             msgbox_now = bool(dialog_rows) and dialog_rows[-1].get("msgbox_active") is True
@@ -287,7 +287,7 @@ def main() -> int:
                 )
                 break
 
-        # WARM-title gate: BOTH RE'd quit signals must agree before any title verdict.
+        # Warm-title gate: Both RE'd quit signals must agree before any title verdict.
         title_rows = read_jsonl(title_path)
         warm_rows = [r for r in title_rows if (_int_epoch(r) or 0) >= 1]
         quit_seen = harness_quit_seen(args.game_dir, args.artifact_dir)
@@ -307,7 +307,7 @@ def main() -> int:
             else:
                 proxy_true_since = None  # a transient during rebuild resets the hold
 
-            # Reload progress / reached-world (the alternate BOUND + the deadlock canceller).
+            # Reload progress / reached-world (the alternate bound + the deadlock canceller).
             stream_rows = read_jsonl(stream_path)
             reload_epoch_present = any(
                 (_int_epoch(r) or 0) > (warm_epoch or 0) for r in stream_rows
@@ -320,7 +320,7 @@ def main() -> int:
             ):
                 reload_movable_ever = True
 
-            # (b) BOUND via proxy: dialog+0xb78 bound and held.
+            # (b) bound via proxy: dialog+0xb78 bound and held.
             if proxy_true_since is not None and (now - proxy_true_since) >= args.settle_seconds:
                 verdict = "BOUND"
                 reason = (
@@ -329,7 +329,7 @@ def main() -> int:
                 )
                 break
 
-            # (b) BOUND via reached-world: the reload progressed past the warm title into a movable world.
+            # (b) bound via reached-world: the reload progressed past the warm title into a movable world.
             if (
                 reload_epoch_since is not None
                 and reload_movable_ever

@@ -1,6 +1,6 @@
 //! Drawing the creature list.
 //!
-//! THE PRESENT HOOK IS NOT HERE. This module used to own the host-join as well, back when the
+//! The present hook is not here. This module used to own the host-join as well, back when the
 //! picker was the only thing this DLL drew; that half moved to [`crate::overlay`] when the
 //! attack-set panel arrived, because two surfaces must share one `Present` hook and neither of
 //! them should own the other's install. What is left here is the panel itself: given a live imgui
@@ -8,8 +8,8 @@
 //!
 //! # `PANEL_DRAWS` and the reading it exists to prevent
 //!
-//! [`draw`] is called on EVERY frame and returns immediately when the list is closed, which is
-//! almost all of them. The counter therefore has to be incremented AFTER that early return, or it
+//! [`draw`] is called on every frame and returns immediately when the list is closed, which is
+//! almost all of them. The counter therefore has to be incremented after that early return, or it
 //! measures the swapchain rather than the picker -- which is exactly the confusion that made a
 //! working picker look broken for a day. See the module docs of [`crate::overlay`] for the log
 //! evidence.
@@ -24,7 +24,7 @@ use crate::overlay::FONT_SCALE;
 use crate::picker::View;
 use crate::picker::catalog::LABEL_MAX_CHARS;
 
-/// Frames the LIST ITSELF was built on -- not frames the overlay drew. Zero while the picker has
+/// Frames the list itself was built on -- not frames the overlay drew. Zero while the picker has
 /// been open is the fault worth chasing; zero while it is closed is the picker being closed.
 static PANEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Rows painted on the most recent draw.
@@ -54,7 +54,7 @@ pub(crate) fn last_rows() -> usize {
 
 /// Draw the current view onto a live imgui frame. A no-op while the list is closed.
 pub(crate) fn draw(ui: &Ui) {
-    // LOCK-FREE FAST PATH, and this is the common one: once the overlay is installed this runs on
+    // Lock-free fast path, and this is the common one: once the overlay is installed this runs on
     // every `Present` for the rest of the process, and the list is closed for almost all of them.
     // Taking the picker mutex 60-144 times a second to be told "closed" would contend with the
     // game thread's own per-frame tick for nothing.
@@ -68,9 +68,9 @@ pub(crate) fn draw(ui: &Ui) {
     };
     PANEL_DRAWS.fetch_add(1, Ordering::Relaxed);
     LAST_ROWS.store(view.rows.len(), Ordering::Relaxed);
-    // `###` PINS THE WINDOW ID, and it is not decoration. imgui derives a window's identity from
+    // `###` pins the window ID, and it is not decoration. imgui derives a window's identity from
     // its label, and this label carries the cursor position -- so without the suffix every step
-    // of the list would be a BRAND NEW window: the panel would snap back to its default place and
+    // of the list would be a brand new window: the panel would snap back to its default place and
     // size on every keypress, and imgui would accumulate a fresh saved state for each of the 408
     // titles. Everything after `###` is the id and is never drawn.
     let title = format!(
@@ -121,7 +121,7 @@ fn draw_rows(ui: &Ui, view: &View) {
     }
     ui.separator();
     match &view.selected {
-        // A mute creature in the shipped table has zero moves AND zero denials -- it is a variant
+        // A mute creature in the shipped table has zero moves and zero denials -- it is a variant
         // that owns a model but declares no animations of its own, so nothing was classified
         // rather than everything being withheld. Saying "0 animations were considered and all
         // withheld" was both self-contradictory and backwards.

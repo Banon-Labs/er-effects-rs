@@ -1,13 +1,13 @@
-// WHICH SUBMIT LATCHED THE DEVICE, AND DID ITS LANE ACCEPT.
+// Which submit LATCHED the device, and did its lane accept.
 //
 // `include!`d into `lib.rs` like the blocks around it, and built on the same observer shape as
 // `save_state_witness.rs` / `save_state_writers.rs`: forward every call unchanged, sample either
 // side, write no game memory. It adds no fifth mechanism -- it moves the vantage point.
 //
-// WHY THE VANTAGE POINT HAD TO MOVE. Four rounds of instruments watched `GameMan.saveState` and
+// Why the vantage point had to move. Four rounds of instruments watched `GameMan.saveState` and
 // asked which store took it off 1. The answer, measured on 2026-08-31 run `wedge-writers-20260831-d`
 // with all six stores in the image witnessed, was NONE: `writer_state_exits = 2`, both of them
-// healthy completions with the device CLEAR, and `exits_at_wedge = 0`. A wedge existed anyway --
+// healthy completions with the device clear, and `exits_at_wedge = 0`. A wedge existed anyway --
 // `iodev+0x10 = 0x9c9a1580`, `iodev+0x20 = 0xacc43e40`, `saveState = 0`.
 //
 // There is exactly one shape left that produces that reading with no zero-writer at all: a submit
@@ -16,52 +16,52 @@
 // is not a contradiction under that shape -- it is what that shape predicts.
 //
 // So the question this file answers is the one neither the writer witness nor the reload trace
-// carries: for the `SLSaveContent` sitting on the device at the wedge, WHICH submit put it there,
+// carries: for the `SLSaveContent` sitting on the device at the wedge, which submit put it there,
 // what did that submit's builder return, and did the lane that called it go on to accept?
 //
-// THE THREE SITES, and why these three (1.16.2 decompiles, shift 0; the 1.17 bodies are byte-equal
+// The three sites, and why these three (1.16.2 decompiles, shift 0; the 1.17 bodies are byte-equal
 // under the alignment key -- see the derivation block below):
 //
-//   `FUN_140e6ef60`  the COMBINED lane's submit builder. Sole caller `FUN_14067b940`, the lane the
-//                    2026-08-31 wedge sample names (`lane = 3`). Writes `iodev+0x10` BEFORE its
+//   `FUN_140e6ef60`  the combined lane's submit builder. Sole caller `FUN_14067b940`, the lane the
+//                    2026-08-31 wedge sample names (`lane = 3`). Writes `iodev+0x10` before its
 //                    heap-capability guard and can return 0 afterwards.
 //   `FUN_140e6ec70`  the CHARACTER/SYSTEM builder -- a 15-byte tail-call dispatcher, `cmp
 //                    byte [rcx+0x40],0 / jne FUN_140e6f760 / jmp FUN_140e6f940`, so hooking it sees
-//                    BOTH sub-builders and all three of its lanes (`FUN_14067b750`,
+//                    both sub-builders and all three of its lanes (`FUN_14067b750`,
 //                    `FUN_14067b570`, `FUN_14067bc10`) in one place.
 //   `FUN_140e6fb50`  the ENQUEUE, and the reason a negative here still means something: it is the
-//                    ONLY writer of `iodev+0x20` and every builder in the subsystem funnels through
-//                    it, including `FUN_140e6ec80` (the PREVIEW lane's builder, which is NOT
+//                    only writer of `iodev+0x20` and every builder in the subsystem funnels through
+//                    it, including `FUN_140e6ec80` (the preview lane's builder, which is not
 //                    hooked). A device holding a non-zero `+0x20` that this site never saw was
 //                    latched by something outside the whole SL submit path.
 //
-// WHAT THE STATIC READ ALREADY SETTLES, so a run is not asked to re-derive it. Every builder's
+// What the static read already settles, so a run is not asked to re-derive it. Every builder's
 // failure path was decompiled rather than assumed:
 //
 //   * `FUN_140e6fb50` stores its job into `iodev+0x20` and, when `FUN_14240ae10` hands back null,
-//     calls `FUN_140e6f200` -- the full release -- before returning false. An enqueue that FAILS
-//     therefore leaves the device CLEAN, and "the enqueue failed and stranded the content" is
+//     calls `FUN_140e6f200` -- the full release -- before returning false. An enqueue that fails
+//     therefore leaves the device clean, and "the enqueue failed and stranded the content" is
 //     false for every lane.
 //   * `FUN_140e6ec70`'s `param_3 >= 0xc` fall-out calls `FUN_140e6f200` too. bd
 //     `e6ec70-can-latch-the-device-without-accepting-so-savestate-is-never-written-2026-08-31`
 //     records that arm as a latch-without-accept hole with no release; the 1.16.2 decompile read
-//     for THIS file has the release, so that memory's rendering is wrong about this build. It is
+//     for this file has the release, so that memory's rendering is wrong about this build. It is
 //     recorded here rather than silently dropped, because the two readings disagree and the code
 //     is the one that runs.
 //   * `FUN_140e6f940`'s deferred arm (`iodev+0x28 != 0`) returns 1 with `+0x20` still null -- an
-//     ACCEPT with no job. That is a real latch shape, and it is the one the 2026-08-31 sample
+//     accept with no job. That is a real latch shape, and it is the one the 2026-08-31 sample
 //     excludes on its own evidence (`+0x28 == 0`, `+0x20` a live pointer).
 //
 // None of that names the frame. A builder that returns 0 with `+0x10` still populated is a fact
 // about one call, and the only way to have it is to be standing there when it happens.
 //
-// ADDRESS DERIVATION, and why it is not a constant. `0x140e6ef60` and `0x140e6ec70` are not rows in
+// Address derivation, and why it is not a constant. `0x140e6ef60` and `0x140e6ec70` are not rows in
 // `rva-map-1162-to-1170.verified.tsv` or `...needed-verified.tsv`, so `resolve_detour_address`
-// would REFUSE them and the hooks would silently not exist. Rather than widen a ledger this branch
-// does not own, each builder is derived FROM THE RUNNING IMAGE, which is what
+// would refuse them and the hooks would silently not exist. Rather than widen a ledger this branch
+// does not own, each builder is derived from the running image, which is what
 // `MhHook::new_runtime_derived` / `register_union_hook_runtime_derived` exist for:
 //
-//   1. its calling lane IS in the ledger and is `IDENTICAL-WHOLE` with identical `.pdata` extents
+//   1. its calling lane is in the ledger and is `IDENTICAL-WHOLE` with identical `.pdata` extents
 //      (`0x67b940 -> 0x67c790` PDATA:0x2cc/0x2cc; `0x67b750 -> 0x67c5a0` 0x1e3/0x1e3;
 //      `0x67b570 -> 0x67c3c0` 0x1d6/0x1d6; `0x67bc10 -> 0x67ca60` 0x11f/0x11f), so the offset of a
 //      call inside it survives the move;
@@ -71,33 +71,33 @@
 //   4. `write_site_is_sound` then asks the running image's own `.pdata` whether the destination is
 //      a function entry (or an unwind-less leaf) with room for MinHook's five bytes.
 //
-// The char builder is derived from all THREE of its lanes and the three answers must agree, which
+// The char builder is derived from all three of its lanes and the three answers must agree, which
 // is a check no single derivation can make on itself.
 //
-// OFFLINE EVIDENCE FOR THE PAIRS, recorded here because it cannot go in a ledger this branch may
+// Offline evidence for the pairs, recorded here because it cannot go in a ledger this branch may
 // not write. `scripts/diff-function-bodies-1162-1170.py`, `.pdata` extents from
 // `scripts/pdata-lookup-1162-1170.py`, and the `E8` decode from both images:
 //
 //   1.16.2      1.17        verdict                          entry evidence        patch site
-//   0xe6ef60    0xe70d60    IDENTICAL-WHOLE 1.000/134 insns  BOTH-ENTRIES 0x210    7B relocatable
-//   0xe6ec70    0xe70a70    IDENTICAL-LEAF  1.000/3 insns    NEITHER-ENTRY 0xf     10B relocatable
-//   0xe6fb50    0xe71950    IDENTICAL-WHOLE 1.000/59 insns   BOTH-ENTRIES 0xe2     8B relocatable
+//   0xe6ef60    0xe70d60    identical-whole 1.000/134 insns  both-entries 0x210    7B relocatable
+//   0xe6ec70    0xe70a70    identical-leaf  1.000/3 insns    neither-entry 0xf     10B relocatable
+//   0xe6fb50    0xe71950    identical-whole 1.000/59 insns   both-entries 0xe2     8B relocatable
 //
 // Both new verdicts are in `EXHAUSTIVE_VERDICTS`, so neither is a loosened score; they are recorded
 // as prose here only because the row cannot be added to `docs/recon/rva-map-*.tsv` from this branch.
 // `0xe6fb50` is already an audited row and resolves through the table like any other constant.
 //
-// THE PREVIEW LANE IS DELIBERATELY NOT HOOKED. `FUN_140e6ec80` (`0xe70a80` on 1.17) is the fourth
+// The preview lane is deliberately not hooked. `FUN_140e6ec80` (`0xe70a80` on 1.17) is the fourth
 // builder, called only by `FUN_14067b4e0`. Its 1.17 entry sits exactly 0x10 bytes past the char
-// stub's, which is the OVERLAP window `scripts/audit-1170-hook-targets.py` refuses -- two detours
+// stub's, which is the overlap window `scripts/audit-1170-hook-targets.py` refuses -- two detours
 // that close together share MinHook's patch/relocation neighbourhood. The enqueue observer covers
 // its `+0x20` write instead, and a latch that reaches no site at all is reported as
 // [`LATCH_MATCH_NO_OBSERVATION`] rather than as an absence.
 
-/// `FUN_14067b940` (1.16.2), the COMBINED save dispatch lane; `0x67c790` on 1.17.
+/// `FUN_14067b940` (1.16.2), the combined save dispatch lane; `0x67c790` on 1.17.
 const SUBMIT_LANE_COMBINED_RVA: usize = 0x67b940;
 /// Offset of `call FUN_140e6ef60` inside it (`0x14067bb2e - 0x14067b940`). Decodes to `0x140e6ef60`
-/// in 1.16.2 and `0x140e70d60` in 1.17 at the SAME offset, checked against both image files.
+/// in 1.16.2 and `0x140e70d60` in 1.17 at the same offset, checked against both image files.
 const SUBMIT_LANE_COMBINED_CALL_OFFSET: usize = 0x1ee;
 
 /// `FUN_14067b750` (1.16.2), the character-slot lane; `0x67c5a0` on 1.17.
@@ -123,7 +123,7 @@ const CALL_REL32_LEN: usize = 5;
 
 /// No submit site has been observed latching anything.
 pub const SUBMIT_SITE_NONE: usize = 0;
-/// `FUN_140e6ef60`, the COMBINED lane's builder.
+/// `FUN_140e6ef60`, the combined lane's builder.
 pub const SUBMIT_SITE_COMBINED_BUILDER: usize = 1;
 /// `FUN_140e6ec70`, the CHARACTER/SYSTEM builder (both tail-call arms).
 pub const SUBMIT_SITE_CHAR_BUILDER: usize = 2;
@@ -149,14 +149,14 @@ pub const SUBMIT_STATE_UNOBSERVED: u32 = u32::MAX;
 
 /// The wedge has not been reached, so there is nothing to attribute.
 pub const LATCH_MATCH_UNRECORDED: usize = 0;
-/// A wedge was born and NO latch had ever been observed at any installed site. With sites
+/// A wedge was born and no latch had ever been observed at any installed site. With sites
 /// installed that is a finding in its own right: the content on the device was put there by
 /// something outside the SL submit path this file watches.
 pub const LATCH_MATCH_NO_OBSERVATION: usize = 1;
-/// The content on the device at the wedge IS the one the last observed latch installed. The
+/// The content on the device at the wedge is the one the last observed latch installed. The
 /// builder/lane fields beside it describe that submit.
 pub const LATCH_MATCH_SAME: usize = 2;
-/// A latch was observed, but for a DIFFERENT content pointer than the one wedged -- so the wedged
+/// A latch was observed, but for a different content pointer than the one wedged -- so the wedged
 /// content was latched before the observers installed, or by an unwatched path, and the recorded
 /// builder/lane fields describe a different submit and must not be read as its attribution.
 pub const LATCH_MATCH_DIFFERENT: usize = 3;
@@ -172,7 +172,7 @@ pub fn latch_match_label(code: usize) -> &'static str {
 }
 
 /// How many of the three submit sites chained. **Zero means nothing was watching**, and every other
-/// counter in this block reads zero for that reason rather than for a measured one. Read it FIRST.
+/// counter in this block reads zero for that reason rather than for a measured one. Read it first.
 static SUBMIT_SITES_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Calls forwarded through `FUN_140e6ef60`.
 static SUBMIT_COMBINED_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -182,7 +182,7 @@ static SUBMIT_CHAR_CALLS: AtomicU64 = AtomicU64::new(0);
 static SUBMIT_ENQUEUE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Observed transitions of `iodev+0x10` from 0 to a pointer -- the latch itself.
 static SUBMIT_LATCHES: AtomicU64 = AtomicU64::new(0);
-/// Latches whose builder then returned 0 with the content STILL on the device. **This is the shape
+/// Latches whose builder then returned 0 with the content still on the device. **This is the shape
 /// the whole file exists to count**: a submit that owns the device and whose lane will therefore
 /// never write `saveState = 1`.
 static SUBMIT_LATCHES_WITHOUT_ACCEPT: AtomicU64 = AtomicU64::new(0);
@@ -200,7 +200,7 @@ static LATCH_JOB: AtomicUsize = AtomicUsize::new(0);
 static LATCH_SITE: AtomicUsize = AtomicUsize::new(SUBMIT_SITE_NONE);
 /// The site's own return value at that latch ([`SUBMIT_RETURN_UNOBSERVED`] = none seen).
 static LATCH_BUILDER_RETURN: AtomicU64 = AtomicU64::new(SUBMIT_RETURN_UNOBSERVED);
-/// `GameMan.saveState` immediately after the site returned. The lane writes 1 AFTER the builder
+/// `GameMan.saveState` immediately after the site returned. The lane writes 1 after the builder
 /// returns, so a healthy accept reads 0 here and 1 in [`LATCH_LANE_STATE`].
 static LATCH_BUILDER_STATE: AtomicU32 = AtomicU32::new(SUBMIT_STATE_UNOBSERVED);
 /// Host-epoch milliseconds of that latch ([`ELAPSED_MS_UNAVAILABLE`] = unstamped).
@@ -208,9 +208,9 @@ static LATCH_MS: AtomicU64 = AtomicU64::new(ELAPSED_MS_UNAVAILABLE);
 /// `SAVE_LANE_*` of the dispatch lane that closed that latch ([`SAVE_LANE_NONE`] = the lane was
 /// not one of the three `observe_dispatch` wraps, so the close never happened).
 static LATCH_LANE: AtomicUsize = AtomicUsize::new(SAVE_LANE_NONE);
-/// The LANE's return value ([`SUBMIT_RETURN_UNOBSERVED`] = the lane never closed this latch).
+/// The lane's return value ([`SUBMIT_RETURN_UNOBSERVED`] = the lane never closed this latch).
 static LATCH_LANE_RETURN: AtomicU64 = AtomicU64::new(SUBMIT_RETURN_UNOBSERVED);
-/// `GameMan.saveState` sampled after the LANE returned. **This is the accept**: the lane's commit
+/// `GameMan.saveState` sampled after the lane returned. **This is the accept**: the lane's commit
 /// tail writes 1 there, so `1` means it accepted and anything else means it did not.
 static LATCH_LANE_STATE: AtomicU32 = AtomicU32::new(SUBMIT_STATE_UNOBSERVED);
 
@@ -230,14 +230,14 @@ static WEDGE_LATCH_CONTENT: AtomicUsize = AtomicUsize::new(0);
 /// [`LATCH_MS`] frozen at the wedge's birth.
 static WEDGE_LATCH_MS: AtomicU64 = AtomicU64::new(ELAPSED_MS_UNAVAILABLE);
 
-/// Did the lane that called this submit ACCEPT it?
+/// Did the lane that called this submit accept it?
 ///
 /// The whole question in one rule, so it can be exercised with no game attached. A lane accepts by
 /// running its commit tail, which is guarded on the builder's return and ends `saveState = 1`; so
-/// an accept is a non-zero lane return AND `saveState` reading `SAVE_OWNS` afterwards. Either half
+/// an accept is a non-zero lane return and `saveState` reading `SAVE_OWNS` afterwards. Either half
 /// alone is not enough:
 ///
-/// * a non-zero return with `saveState` still IDLE means the tail did not run (or ran and was
+/// * a non-zero return with `saveState` still idle means the tail did not run (or ran and was
 ///   immediately undone), which is precisely the state that strands a latched device;
 /// * `SAVE_OWNS` with a zero return would mean something else owns the mutex, not this submit.
 ///
@@ -252,7 +252,7 @@ pub fn lane_accepted(lane_return: u64, lane_state: u32) -> Option<bool> {
 
 /// Classify a wedge sample against the latch record.
 ///
-/// Pure and total: it is the rule that decides whether the recorded builder/lane fields DESCRIBE
+/// Pure and total: it is the rule that decides whether the recorded builder/lane fields describe
 /// the wedged request or merely happen to be the last thing that ran, and getting that wrong would
 /// attribute a wedge to an unrelated submit. `wedge_content` is `iodev+0x10` at the wedge;
 /// `latched_content` is the last content this file observed being latched, or `None` when it never
@@ -317,7 +317,7 @@ pub fn submit_sites_installed() -> usize {
     SUBMIT_SITES_INSTALLED.load(Ordering::SeqCst)
 }
 
-/// Calls forwarded through `FUN_140e6ef60`, the COMBINED lane's builder.
+/// Calls forwarded through `FUN_140e6ef60`, the combined lane's builder.
 pub fn submit_combined_calls() -> u64 {
     SUBMIT_COMBINED_CALLS.load(Ordering::SeqCst)
 }
@@ -453,7 +453,7 @@ pub fn submit_latch_verdict() -> &'static str {
 
 /// Record one site call: sample the device either side and latch the transition when there is one.
 ///
-/// Cold relative to the forwarding itself, and it takes the SECOND device read only when the first
+/// Cold relative to the forwarding itself, and it takes the second device read only when the first
 /// said the device was free -- so an ordinary declining frame (device already latched) costs one
 /// read, the same as `observe_dispatch` already pays.
 #[cfg(windows)]
@@ -492,7 +492,7 @@ fn note_submit_call(site: usize, before: Option<SlRequestSlot>, answer: usize) {
     LATCH_LANE_STATE.store(SUBMIT_STATE_UNOBSERVED, Ordering::SeqCst);
     if answer & 0xff == 0 {
         let stranded = SUBMIT_LATCHES_WITHOUT_ACCEPT.fetch_add(1, Ordering::SeqCst) + 1;
-        // ALWAYS logged. A submit that owns the SL device and told its lane "no" is the exact
+        // Always logged. A submit that owns the SL device and told its lane "no" is the exact
         // shape four rounds of writer hunting could not see, and it is rare enough that a
         // throttle would be a way of missing it.
         log_message(format_args!(
@@ -528,7 +528,7 @@ fn note_submit_call(site: usize, before: Option<SlRequestSlot>, answer: usize) {
     }
 }
 
-/// Close the most recent latch with the LANE's return and the `saveState` it left behind.
+/// Close the most recent latch with the lane's return and the `saveState` it left behind.
 ///
 /// Called from `observe_dispatch` when a latch happened inside the lane call it just forwarded --
 /// which is how "did its lane accept" is measured rather than inferred. It records, never repairs.
@@ -565,7 +565,7 @@ fn snapshot_latch_at_wedge(wedge_content: usize) {
     let code = classify_wedge_latch(wedge_content, observed);
     WEDGE_LATCH_MATCH.store(code, Ordering::SeqCst);
     WEDGE_LATCH_CONTENT.store(observed.unwrap_or(0), Ordering::SeqCst);
-    // Only a MATCH may publish the submit's own fields; on a mismatch they belong to a different
+    // Only a match may publish the submit's own fields; on a mismatch they belong to a different
     // request, and copying them across is exactly how a wedge gets attributed to the wrong submit.
     if code == LATCH_MATCH_SAME {
         WEDGE_LATCH_SITE.store(LATCH_SITE.load(Ordering::SeqCst), Ordering::SeqCst);
@@ -595,7 +595,7 @@ static ORIG_SUBMIT_ENQUEUE: AtomicUsize = AtomicUsize::new(0);
 
 /// `FUN_140e6ef60`'s real shape, checked at the call site rather than taken from the decompiler.
 ///
-/// Ghidra types the callee with FIVE parameters; `FUN_14067b940` passes SIX --
+/// Ghidra types the callee with five parameters; `FUN_14067b940` passes six --
 /// `mov [rsp+0x28], r12d` and `mov dword [rsp+0x20], 0xa` sit immediately before the `call` in both
 /// images. The callee only reads the fifth (`param_5 == 10` is one of its five preconditions), so
 /// a five-argument detour would have worked by luck; forwarding both stack slots means the
@@ -604,7 +604,7 @@ static ORIG_SUBMIT_ENQUEUE: AtomicUsize = AtomicUsize::new(0);
 type SubmitCombinedBuilderFn =
     unsafe extern "system" fn(usize, usize, u32, usize, u32, u32) -> usize;
 
-/// Observe `FUN_140e6ef60`, the COMBINED lane's submit builder. Forwards all six arguments and the
+/// Observe `FUN_140e6ef60`, the combined lane's submit builder. Forwards all six arguments and the
 /// full return value; writes nothing.
 ///
 /// # Safety
@@ -667,10 +667,10 @@ unsafe extern "system" fn submit_char_builder_observer(
 
 /// Observe `FUN_140e6fb50`, the enqueue -- the only writer of `iodev+0x20`.
 ///
-/// It runs INSIDE a builder, after that builder has already written `iodev+0x10`, so its "before"
+/// It runs inside a builder, after that builder has already written `iodev+0x10`, so its "before"
 /// sample almost always shows the content already latched and [`note_submit_call`] returns without
 /// attributing anything. That is correct: this site's value is coverage of the builders that are
-/// NOT hooked (the preview lane's `FUN_140e6ec80`), where it is the only observer that will see the
+/// not hooked (the preview lane's `FUN_140e6ec80`), where it is the only observer that will see the
 /// request at all.
 ///
 /// # Safety
@@ -698,11 +698,11 @@ unsafe extern "system" fn submit_enqueue_observer(
     answer
 }
 
-/// Decode the callee of one `call rel32` in the RUNNING image.
+/// Decode the callee of one `call rel32` in the running image.
 ///
 /// The containing function is translated through the CALL/READ table (`resolve_call_site_rva`),
 /// the offset rides along because the body is `IDENTICAL-WHOLE` with identical `.pdata` extents,
-/// and then the displacement is READ rather than assumed. Every step refuses rather than guesses:
+/// and then the displacement is read rather than assumed. Every step refuses rather than guesses:
 /// a non-`E8` opcode means the offset no longer points at the call and the answer is `None`.
 #[cfg(windows)]
 fn decode_call_target(lane_rva: usize, call_offset: usize, what: &str) -> Option<usize> {
@@ -779,7 +779,7 @@ fn derive_char_builder() -> Option<usize> {
 
 /// Chain the three submit observers. Never fatal: a failure costs attribution, not saving.
 ///
-/// The two builders are RUNTIME-DERIVED (`decode_call_target` above), so they go through the
+/// The two builders are runtime-derived (`decode_call_target` above), so they go through the
 /// entry points that audit against the running image's own `.pdata` instead of the 1.16.2
 /// translation table, which has no row for either. The enqueue is an audited ledger row and takes
 /// the ordinary translating path.
@@ -790,8 +790,8 @@ pub fn install_save_submit_latch() {
         SUBMIT_LANE_COMBINED_CALL_OFFSET,
         "combined submit builder via FUN_14067b940",
     ) {
-        // A BARE hook, not the union: `FUN_140e6ef60` takes SIX arguments and the union's shared
-        // shape forwards four, which would leave the callee's two STACK operands -- including the
+        // A bare hook, not the union: `FUN_140e6ef60` takes six arguments and the union's shared
+        // shape forwards four, which would leave the callee's two stack operands -- including the
         // `param_5 == 10` precondition -- reading whatever the dispatcher's frame happened to hold.
         // That is not an observer, it is a save-breaking rewrite of the arguments.
         match unsafe {
@@ -854,7 +854,7 @@ pub fn install_save_submit_latch() {
         }
     }
 
-    // NON-RESOLVING on purpose (`game_rva_for_hook`): `register_union_hook` owns the single
+    // Non-resolving on purpose (`game_rva_for_hook`): `register_union_hook` owns the single
     // resolve, and resolving twice can land the detour on a third function in silence.
     match er_game_base::mem::game_rva_for_hook(SL_ENQUEUE_SAVE_JOB_RVA as u32) {
         Ok(address) => match unsafe {
@@ -871,7 +871,7 @@ pub fn install_save_submit_latch() {
                      (0x{address:x}) -- observer only"
                 ));
             }
-            // Expected when suppression is ARMED: `install` binds a BARE MinHook detour on this
+            // Expected when suppression is ARMED: `install` binds a bare MinHook detour on this
             // same prologue, and MinHook answers ALREADY_CREATED to the union. Said plainly
             // rather than counted as an install, so `sites_installed` stays honest.
             Err(status) => log_message(format_args!(
@@ -887,7 +887,7 @@ pub fn install_save_submit_latch() {
     }
 }
 
-// The rules this file adds are decisions about what a set of samples MEANS, not readings of a
+// The rules this file adds are decisions about what a set of samples means, not readings of a
 // runtime value, so they are exercised with no game attached -- the same reason
 // `poll_abandoned_a_save` and `dispatch_sample_is_wedged` are.
 #[cfg(test)]
@@ -903,7 +903,7 @@ mod save_submit_latch_tests {
             lane_accepted(1, GAME_MAN_SAVE_STATE_SAVE_OWNS),
             Some(true)
         );
-        // THE WEDGE SHAPE: the lane said yes but the mutex is still free, so nothing will poll the
+        // The wedge SHAPE: the lane said yes but the mutex is still free, so nothing will poll the
         // device it just latched.
         assert_eq!(lane_accepted(1, GAME_MAN_SAVE_STATE_IDLE), Some(false));
         // A refusal, whatever the mutex says afterwards.
@@ -982,17 +982,17 @@ mod save_submit_latch_tests {
             )
             .contains("nothing to attribute")
         );
-        // THE FINDING, first shape: the builder itself refused after latching.
+        // The finding, first shape: the builder itself refused after latching.
         assert!(
             wedge_latch_verdict(3, LATCH_MATCH_SAME, 0, 0, GAME_MAN_SAVE_STATE_IDLE)
                 .contains("THE FINDING")
         );
-        // THE FINDING, second shape: the builder accepted and the lane did not commit.
+        // The finding, second shape: the builder accepted and the lane did not commit.
         assert!(
             wedge_latch_verdict(3, LATCH_MATCH_SAME, 1, 1, GAME_MAN_SAVE_STATE_IDLE)
                 .contains("THE FINDING")
         );
-        // NOT a finding: the submit was accepted all the way through, so the wedge needs a writer
+        // Not a finding: the submit was accepted all the way through, so the wedge needs a writer
         // after all and the search goes back to the writer set.
         let accepted = wedge_latch_verdict(
             3,
@@ -1031,7 +1031,7 @@ mod save_submit_latch_tests {
         );
     }
 
-    /// Every field here must read as ABSENT before anything runs, never as a measured zero -- the
+    /// Every field here must read as absent before anything runs, never as a measured zero -- the
     /// property the writer block carries, restated for the fields this one adds. A control run
     /// proved these read as absent rather than as zero and that has to survive.
     #[test]
@@ -1053,7 +1053,7 @@ mod save_submit_latch_tests {
         assert_ne!(SUBMIT_STATE_UNOBSERVED, GAME_MAN_SAVE_STATE_SAVE_OWNS);
         assert_ne!(SUBMIT_STATE_UNOBSERVED, GAME_MAN_SAVE_STATE_LOAD_OWNS);
         assert_ne!(SUBMIT_STATE_UNOBSERVED, GAME_MAN_SAVE_STATE_LOAD_RESIDENT);
-        // ...and the verdict SAYS it is silent for lack of an instrument.
+        // ...and the verdict says it is silent for lack of an instrument.
         assert!(submit_latch_verdict().contains("no submit site installed"));
     }
 

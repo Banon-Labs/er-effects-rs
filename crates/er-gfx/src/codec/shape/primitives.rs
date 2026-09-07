@@ -44,7 +44,7 @@ impl Rect {
 ///
 /// `scale_x/y` and `rotate_skew0/1` are 16.16 fixed-point; `translate_x/y` are
 /// twips. All are stored as their raw signed integers. The `*_nbits` fields hold
-/// the SOURCE's bit widths; they are reproduced verbatim because the exporter is
+/// the source's bit widths; they are reproduced verbatim because the exporter is
 /// not minimal (see the primitive-layer module comment).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Matrix {
@@ -318,7 +318,7 @@ pub enum Filter {
 impl Filter {
     /// Read one filter: a `u8` id followed by its body. Returns `Ok(None)` for an
     /// unmodelled filter id so the caller can fall the whole `PlaceObject3` back
-    /// to [`Tag::Unknown`] (the id byte is NOT consumed in that case, but the
+    /// to [`Tag::Unknown`] (the id byte is not consumed in that case, but the
     /// caller discards `r` anyway and re-emits the raw body).
     fn read(r: &mut GfxReader) -> Result<Option<Filter>, GfxError> {
         let id = r.read_u8()?;

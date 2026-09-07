@@ -59,7 +59,7 @@ def acceptable(jp, en):
         return False
     if any(ord(c) > 0x7F for c in en):
         return False
-    # Runaway value for a SHORT key is garbage (で -> a Facebook ad); long sentences legitimately
+    # Runaway value for a short key is garbage (で -> a Facebook ad); long sentences legitimately
     # have long translations, so gate on the key being short too.
     if len(en) > 40 and len(en) > 5 * len(jp):
         return False

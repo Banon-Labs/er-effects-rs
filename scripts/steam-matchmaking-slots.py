@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Name the `ISteamMatchmaking` vtable slots in a `frida-steam-vtable-trace.py` capture.
 
-WHY SLOT NUMBERS AND NOT NAMES AT CAPTURE TIME
+Why slot numbers and not names at capture time
 ----------------------------------------------
 Seamless reaches Steam through the C++ interface vtable, never the flat `SteamAPI_ISteam*_*`
 exports (measured 2026-08-04: 33 flat exports hooked at boot, a full invasion, zero calls). So the
-tracer hooks vtable SLOTS, and a slot index only means something once you know the interface
-VERSION -- which the accessor reports at runtime. This maps one to the other, after the fact,
+tracer hooks vtable slots, and a slot index only means something once you know the interface
+version -- which the accessor reports at runtime. This maps one to the other, after the fact,
 which is also why it can be corrected without re-running the game.
 
-PROVENANCE, STATED PLAINLY: the table below is the PUBLIC Steamworks SDK declaration order for
-`ISteamMatchmaking` ("SteamMatchMaking009"). It is NOT byte-verified against this machine's
+Provenance, stated PLAINLY: the table below is the public Steamworks SDK declaration order for
+`ISteamMatchmaking` ("SteamMatchMaking009"). It is not byte-verified against this machine's
 `steamclient64.dll`. That matters, so every naming is CORROBORATED against the observed call shape
 rather than trusted: `SetLobbyData` must carry two printable strings, `RequestLobbyList` must carry
-none, and so on. A slot whose observed arguments contradict its name is reported as a CONFLICT
+none, and so on. A slot whose observed arguments contradict its name is reported as a conflict
 instead of being labelled -- because a mis-named slot here would become a false claim about what
 Seamless publishes.
 
-USAGE
+Usage
     python3 scripts/steam-matchmaking-slots.py <trace.jsonl>
     python3 scripts/steam-matchmaking-slots.py --selftest
 """
@@ -76,7 +76,7 @@ SLOTS = {
     37: "SetLinkedLobby",
 }
 
-#: Minimum number of printable-string arguments each method MUST show if the naming is right.
+#: Minimum number of printable-string arguments each method must show if the naming is right.
 #: Only methods with an unambiguous signature are listed; the rest are not corroborated either way.
 EXPECTED_STRINGS = {
     "AddRequestLobbyListStringFilter": 2,   # pchKeyToMatch, pchValueToMatch
@@ -92,8 +92,8 @@ EXPECTED_STRINGS = {
     "GetLobbyDataCount": 0,
 }
 
-#: The methods that answer the question this capture exists for: what a host PUBLISHES and what an
-#: invader FILTERS on. Surfaced separately so they are not lost in the volume of polling calls.
+#: The methods that answer the question this capture exists for: what a host publishes and what an
+#: invader filters on. Surfaced separately so they are not lost in the volume of polling calls.
 DECISIVE = {
     "SetLobbyData",
     "SetLobbyMemberData",
@@ -177,7 +177,7 @@ def _selftest() -> int:
     check(f["request_filters"] == [("lobby_key", "abc123")],
           "AddRequestLobbyListStringFilter is recovered with key and value")
 
-    # THE HONESTY GATE. The slot table is SDK knowledge, not measurement. A slot whose observed
+    # The honesty gate. The slot table is SDK knowledge, not measurement. A slot whose observed
     # arguments contradict the name must be reported as a conflict, never labelled -- a wrong label
     # here would become a false claim about what Seamless publishes.
     c = decode([call(20)])  # SetLobbyData with no strings at all

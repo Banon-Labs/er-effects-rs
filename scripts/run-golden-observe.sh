@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# USER-DRIVEN golden/observe launcher: launches the approved offline eldenring.exe
+# User-driven golden/observe launcher: launches the approved offline eldenring.exe
 # via me3 (the observer DLL loaded as an me3 native; LazyLoader removed 2026-07-04),
-# and runs NO readiness watcher -- so the user can drive a normal load at their own
+# and runs no readiness watcher -- so the user can drive a normal load at their own
 # pace while the DLL's recurring observer logs world-stream state to
 # OBSERVE_DIR/er-quickload-autoload-debug.log (redirected there; the game directory's
 # copy is single-slot and the next launch destroys it).
@@ -18,7 +18,7 @@ SAFETY_SECONDS="${SAFETY_SECONDS:-300}"
 OBSERVE_DIR="${OBSERVE_DIR:-$REPO_ROOT/target/runtime-probe/golden-observe-$(date +%Y%m%d-%H%M%S)}"
 
 fatal() { echo "run-golden-observe: $*" >&2; exit 2; }
-# THE SANCTIONED STEAM CHECK. This was a raw `pgrep -x steam`, which AGENTS.md forbids: it
+# The sanctioned Steam check. This was a raw `pgrep -x steam`, which AGENTS.md forbids: it
 # false-negatives on this setup and the OPA guard blocks it outright, so the script refused to run
 # with "Steam is not running" while Steam was running.
 # shellcheck source=scripts/steam-running.sh disable=SC1091
@@ -29,7 +29,7 @@ me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GA
 [[ -f "$GAME_DIR/eldenring.exe" ]] || fatal "missing eldenring.exe: $GAME_DIR/eldenring.exe"
 [[ -f "$DLL" ]] || fatal "missing DLL (build it first): $DLL"
 # Name-grepping for the game is guard-denied here and, worse, blind: a Wine process's `comm` is the
-# WINDOWS executable name while its `exe` symlink points at wine64-preloader, so a naive scan misses
+# Windows executable name while its `exe` symlink points at wine64-preloader, so a naive scan misses
 # the Proton container stack entirely -- scripts/er-teardown.py's docstring records a sweep that
 # reported itself clean and left 93 processes alive. Ask that tool instead; it also tells a live game
 # from a two-thread husk at 0% CPU, which a bare pid check cannot.
@@ -62,9 +62,9 @@ echo "run-golden-observe: launching offline eldenring.exe (observer-only, no wat
 ) &
 SAFETY_PID=$!
 
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT:
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT:
 # the DLL rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run
-# before last, and several sessions launch concurrently here. `me3_launch` is a shell FUNCTION,
+# before last, and several sessions launch concurrently here. `me3_launch` is a shell function,
 # so an `env VAR=... me3_launch` prefix would not work -- the redirects are exported instead.
 # `ER_RUN_ARTIFACT_DIR` is what a watcher reads to find this run rather than the game directory.
 export ER_RUN_ARTIFACT_DIR="$OBSERVE_DIR"

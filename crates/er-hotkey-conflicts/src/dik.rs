@@ -7,7 +7,7 @@
 //! The caller picks its own key out of the buffer afterwards, in its own code. Hooking the call
 //! therefore says *that* a module reads the keyboard and never *which key* it is bound to.
 //!
-//! But several of those mods do something observable: they ZERO their trigger key in the buffer on
+//! But several of those mods do something observable: they zero their trigger key in the buffer on
 //! the way back, so the game does not also act on it. That is visible. A key that
 //! `GetAsyncKeyState` says is physically held, while the DirectInput buffer the game receives says
 //! it is up, has been taken by somebody in the chain.
@@ -17,9 +17,9 @@
 //!
 //! # What it cannot see, stated plainly
 //!
-//! * A mod that merely READS its key without blanking it consumes nothing and leaves no trace
+//! * A mod that merely reads its key without blanking it consumes nothing and leaves no trace
 //!   here. It still shows up as a whole-keyboard reader; its key stays unknown.
-//! * The buffer is snapshotted at THIS DLL's position in the handler chain. A handler that
+//! * The buffer is snapshotted at this DLL's position in the handler chain. A handler that
 //!   registered before us blanks the byte after we have already looked, so its key is invisible.
 //!   Handlers that registered after us are seen.
 //! * The consumer is not named. Every module that hooks the DirectInput slot is a candidate, and

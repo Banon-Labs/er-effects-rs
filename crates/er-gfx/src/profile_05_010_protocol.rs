@@ -564,10 +564,10 @@ mod tests {
         assert_eq!(parsed.selected_name, "ActivePathEditor");
     }
 
-    /// EVERY chrome section the schema knows must survive a live-control round trip.
+    /// Every chrome section the schema knows must survive a live-control round trip.
     ///
     /// The channel fails closed on one unknown key, so a section present in the schema but missing
-    /// from the protocol rejects the WHOLE control file. That happened when `hit_area` was added
+    /// from the protocol rejects the whole control file. That happened when `hit_area` was added
     /// (2026-08-12): the game ran fine, the editor showed no ack, and the only evidence was an
     /// `unknown key row_chrome.hit_area.editable` line inside `status.txt`.
     #[test]

@@ -9,11 +9,11 @@ the name was taken. This migration resolves that the other way round:
     er-telemetry       (library)  ->  er-telemetry-core
     er-telemetry-dll   (shell)    ->  er-telemetry        ->  er_telemetry.dll
 
-The ten shells with no sibling just drop the suffix. The result is that EVERY
+The ten shells with no sibling just drop the suffix. The result is that every
 ME3-loadable artifact is `er_<feature>.dll` with no suffix at all, and no package,
 lib target, or exported symbol carries `_dll`.
 
-Substitution is a SINGLE pass with a longest-alternative-first alternation. Two passes
+Substitution is a single pass with a longest-alternative-first alternation. Two passes
 (or a naive per-token sed) would rename `er-telemetry-dll` -> `er-telemetry` and then
 `er-telemetry` -> `er-telemetry-core`, silently collapsing the shell into the library.
 The lookarounds also refuse to match a longer name that merely starts with a renamed
@@ -29,8 +29,8 @@ import re
 import subprocess
 import sys
 
-# 9 shells that have a sibling library crate of the same base name. The LIBRARY takes a
-# -core suffix; the SHELL takes the plain name.
+# 9 shells that have a sibling library crate of the same base name. The library takes a
+# -core suffix; the shell takes the plain name.
 PAIRS = [
     "build-import", "build-watermark", "crash-logging", "invasion-warp",
     "loading-bar", "loading-portrait", "quit-menu", "save-picker", "telemetry",
@@ -43,7 +43,7 @@ STANDALONE = [
     "save-disable", "seamless-bugfixes",
 ]
 
-# Files renamed because their NAME embeds a crate name that ceases to exist.
+# Files renamed because their name embeds a crate name that ceases to exist.
 FILE_RENAMES = [
     ("scripts/deploy-er-net-effects-dll.ps1", "scripts/deploy-er-net-effects.ps1"),
     ("scripts/check-reload-trace-dll-policy.py", "scripts/check-reload-trace-policy.py"),
@@ -62,7 +62,7 @@ SKIP_DIRS = {".git", "target", ".worktrees", "node_modules"}
 
 
 def token_map():
-    """Ordered (token, replacement) pairs, most specific FIRST."""
+    """Ordered (token, replacement) pairs, most specific first."""
     m = list(EXTRA)
     # 1. exported host-stub symbols: er_X_dll_host_stub -> er_X_host_stub
     for b in PAIRS + STANDALONE:
@@ -87,7 +87,7 @@ def token_map():
 
 def build_regex(mapping):
     # `[\w-]` on both sides: a hyphen is part of a crate name, so `er-invasion-warp`
-    # must NOT match inside `er-invasion-warp-telemetry`. An underscore is already \w.
+    # must not match inside `er-invasion-warp-telemetry`. An underscore is already \w.
     alts = "|".join(re.escape(t) for t, _ in mapping)
     return re.compile(rf"(?<![\w-])(?:{alts})(?![\w-])")
 
@@ -160,7 +160,7 @@ def main() -> int:
     rx = build_regex(mapping)
 
     if apply_changes:
-        # Directory moves FIRST, so the text pass sees the final paths. Libraries before
+        # Directory moves first, so the text pass sees the final paths. Libraries before
         # shells: `er-telemetry` must vacate the name before `er-telemetry-dll` takes it.
         print("== git mv: library crates -> -core ==")
         for b in PAIRS:

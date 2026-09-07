@@ -52,13 +52,13 @@ CONTINUE_DOCALL = 0x00764B80
 CONTINUE_DOCALL_IMPL = 0x00763FC0
 CONTINUE_DOCALL_TABLE_SLOT = 0x02A9B9D8
 
-# Disabled Continue row builder provenance (traced statically; NOT a product readiness
+# Disabled Continue row builder provenance (traced statically; Not a product readiness
 # predicate). The idle/constant-false-accept Continue row is built by the function at
 # 0x140764290, which uses the Continue descriptor/vtable table at 0x142a9b808/958/9c8.
-# Its SOLE caller is the title step-update method 0x140766980 (installed as a CSMenu
+# Its sole caller is the title step-update method 0x140766980 (installed as a CSMenu
 # step at 0x1407651cf with step vtable 0x142a9be20). The build is gated by two booleans
 # on the title-step object: this+0x6b0 (build-request) and this+0x6b1 (suppress). The
-# disabled row handle is stored at this+0x708. These offsets describe the DISABLED build
+# disabled row handle is stored at this+0x708. These offsets describe the disabled build
 # path only; they are diagnostic provenance, not a Continue-armed/ready oracle.
 DISABLED_CONTINUE_BUILDER = 0x00764290
 DISABLED_CONTINUE_BUILDER_PROLOGUE = bytes.fromhex("40555657488d6c24b9")
@@ -75,7 +75,7 @@ DISABLED_CONTINUE_STEP_VTABLE = 0x02A9BE20
 # RTTI identities for the disabled-Continue builder chain (from
 # docs/recon/deobf-rtti-classmap.tsv). They prove this region is CSMenuManImp's title
 # MenuWindow-building update task and that the row's accept is a constant-false (idle)
-# std::function lambda -- i.e. the idle row the product must NOT promote, and which is
+# std::function lambda -- i.e. the idle row the product must not promote, and which is
 # unrelated to title+0x2610 LangSelect readiness.
 #   0x142a9be20 = CSEzUpdateTask<CSEzTask, CSMenuManImp>  (the step; owner this = CSMenuManImp menu obj)
 #   0x142a9b958 = _Func_base<MenuWindow*, SceneProxy&>    (Continue row docall functor base)
@@ -91,14 +91,14 @@ NULL_PLAYER_MENU_CTRL_VTABLE = 0x02A9BCB8
 BACKSCREEN_DATA_INSTALL = 0x00765152
 BACKSCREEN_DATA_VTABLE = 0x02A9BE00
 
-# REAL native Load-Game job (the zero-input autoload target). A menu Continue/Load action
+# Real native Load-Game job (the zero-input autoload target). A menu Continue/Load action
 # enqueues a std::function LoadJob of type MenuJobResult(LoadJobContext&). The callback at
 # 0x14082c240 allocates a 0x280000-byte buffer (== ER save-slot size) via vtable [rax+0x50]
 # and reads/scans the slot -- this is the actual save read, reached through the MenuJob/
 # LoadJob factory (functor vtable 0x142ac7728 built at 6 sites in 0x140827xxx-0x14082axxx),
-# NOT the CSMenuManImp idle/disabled Continue row above. measure.sh's required runtime
+# not the CSMenuManImp idle/disabled Continue row above. measure.sh's required runtime
 # trace hits (0x14082c240/0x14082c2c8/0x14082c374/0x14067a810/0x14082c521) all live here.
-# Our own stepper must drive THIS job zero-input; pin its identity so the path is not lost.
+# Our own stepper must drive this job zero-input; pin its identity so the path is not lost.
 #   0x142ac7188 = _Func_base<MenuJobResult, LoadJobContext&>
 #   0x142ac7728 = _Func_impl<MenuJobResult(*)(LoadJobContext&), ...>
 LOADJOB_CALLBACK = 0x0082C240
@@ -111,9 +111,9 @@ LOADJOB_SAVE_SLOT_SIZE_BYTES = bytes.fromhex("ba00002800")  # mov edx, 0x280000
 
 # Startup ToS/legal modal that the zero-input path must not build unnecessarily. The
 # title flow builds TosMultiLangDialog (the multi-language Terms-of-Service modal) via the
-# wrapper 0x9b6070 -> ctor 0x9b5970, UNCONDITIONALLY once invoked (no accept-gate at the
+# wrapper 0x9b6070 -> ctor 0x9b5970, unconditionally once invoked (no accept-gate at the
 # build site). The accept-gate predicate 0x9b72b0 returns "ToS satisfied" if the global
-# gate 0x140e4fda0 is true OR owner+0x29c0->[0] != 0 -- but run-243 telemetry shows it is
+# gate 0x140e4fda0 is true or owner+0x29c0->[0] != 0 -- but run-243 telemetry shows it is
 # never consulted before the build (oracle_policy_status_predicate_hits=0), so the modal is
 # constructed even though the accepted flag is already 1. RTTI (deobf-rtti-classmap.tsv):
 #   0x142b28100 = TosMultiLangDialog   (the ToS modal -- ctor 0x9b5970 / wrapper 0x9b6070)

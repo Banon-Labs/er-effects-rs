@@ -10,7 +10,7 @@
 #   step "<instruction>"          → show instruction, wait for Enter
 #   capture VAR "<question>"      → show question, read response into VAR
 #
-# At the end, captured values are printed as KEY=VALUE for the agent to parse.
+# At the end, captured values are printed as key=value for the agent to parse.
 
 set -euo pipefail
 

@@ -3,10 +3,10 @@
 use super::*;
 
 pub(crate) fn install_profile_and_system_quit_hooks() {
-    // Portrait-renderer teardown SPARE hook: keep the loaded character's portrait renderer alive past the
+    // Portrait-renderer teardown spare hook: keep the loaded character's portrait renderer alive past the
     // Continue teardown so we can drive realtime look-at + render it post-Continue (the persistent-model
     // path -- the cycling menu can't show a stable portrait). The hook self-gates on product_autoload and
-    // only spares a renderer whose model is BUILT (the blank-renderer misfire is guarded in the hook).
+    // only spares a renderer whose model is built (the blank-renderer misfire is guarded in the hook).
     START_PROFILE_RENDERER_TEARDOWN_SPARE.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-portrait-spare".to_owned())
@@ -14,7 +14,7 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
     });
 
     // Profile-renderer table guard (er-effects-rs-j3r): before the native per-slot thumbnail
-    // builder runs, log a degraded 10-slot table, REBUILD a fully-empty one via the engine's own
+    // builder runs, log a degraded 10-slot table, rebuild a fully-empty one via the engine's own
     // table setup (only the TitleTopDialog ctor ever calls it natively, so nothing repopulates it
     // across our in-world ProfileSelect reopens -- the 3rd open crashed on the empty table), and
     // fail-soft skip the builder if a slot would still null-deref at [entry+0x754].
@@ -34,18 +34,18 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
     });
 
     // Title Continue confirm guard (0x140b0e180): while a System->Quit->Load-Profile switch is
-    // active, drive ONE fresh feed-deserialize of the PICKED slot before the confirm streams, so
+    // active, drive one fresh feed-deserialize of the picked slot before the confirm streams, so
     // the clean-title reload loads the picked character instead of re-streaming the stale
     // pre-switch state (bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
     // Installed unconditionally (single MinHook per address -- this detour also carries the
-    // continue-trace CAP logging); pure passthrough outside an active switch.
+    // continue-trace cap logging); pure passthrough outside an active switch.
     START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-quickload-system-quit-continue-confirm".to_owned())
             .spawn(install_system_quit_continue_confirm_hook);
     });
 
-    // READ-ONLY teardown-requester trace: EzChildStepBase::RequestFinish. Identifies WHO requests
+    // Read-only teardown-requester trace: EzChildStepBase::RequestFinish. Identifies who requests
     // the in-world MoveMapStep child's finish -- the post-switch reload bounce is a stale finish
     // request hitting the freshly-created map session (er-effects-rs-qwj investigation).
     START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK.call_once(|| {
@@ -57,8 +57,8 @@ pub(crate) fn install_profile_and_system_quit_hooks() {
 
 pub(crate) fn install_boot_diagnostics_and_trace_hooks() {
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
-    // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
-    // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
+    // splash-skip / online-disable patches, from a thread, so it lands before the title state
+    // machine builds the title dialog during boot. On each valid call it latches rdx (the engine-
     // verified host MenuWindow*) for the live-dialog Load-Game path; pure latch + passthrough.
     if product_autoload_enabled() {
         START_MENU_WINDOW_LATCH.call_once(|| {

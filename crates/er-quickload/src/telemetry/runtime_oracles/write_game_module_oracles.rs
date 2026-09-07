@@ -1,6 +1,6 @@
 // The game-module oracle emission spine.
 //
-// This file used to hold the whole 3,206-line emission as a single function. It is now the ORDER
+// This file used to hold the whole 3,206-line emission as a single function. It is now the order
 // that emission happens in, and nothing else: each subsystem lives in its own `oracles_*.rs`
 // sibling and is called from here. Order is load-bearing -- the telemetry JSON is read positionally
 // by nothing, but a reader diffing two runs relies on the field order being stable -- so the calls

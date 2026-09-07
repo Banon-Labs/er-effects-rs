@@ -1,7 +1,7 @@
 //! End-to-end: a real planner payload becomes a complete, correct grant list.
 //!
 //! The fixture is the exact 6871-byte body returned by
-//! `GET https://er-inventory-api.nyasu.business/inventories/af97a9da874151`,
+//! `get https://er-inventory-api.nyasu.business/inventories/af97a9da874151`,
 //! captured unauthenticated. Its catalog rows come from the planner's public
 //! item database.
 
@@ -303,7 +303,7 @@ fn an_out_of_range_position_is_reported_rather_than_silently_clamped() {
 
 /// The exact block `er-quickload`'s `boilerplate_config` writes into a fresh `er-quickload.toml`,
 /// minus the picker block. This is the file a player actually edits, so the scanner is held to it
-/// rather than to a convenient shape: the commented example must NOT be read as a value, and the
+/// rather than to a convenient shape: the commented example must not be read as a value, and the
 /// key must survive being surrounded by the other keys' comments.
 const PRODUCT_BOILERPLATE: &str = "\
 # er-quickload runtime config (auto-created next to the game executable).
@@ -381,7 +381,7 @@ fn the_configured_url_feeds_the_share_id_extractor() {
 
 use er_build_import_core::{BUILD_URL_PREFIX, UrlRejection, validate_build_url};
 
-/// The editor opens pre-filled with the prefix, so the untouched field must REFUSE. If it did not,
+/// The editor opens pre-filled with the prefix, so the untouched field must refuse. If it did not,
 /// pressing Accept without typing would start a fetch for a build id that is the empty string.
 #[test]
 fn the_untouched_prefill_is_refused() {
@@ -436,7 +436,7 @@ fn every_rejection_has_a_distinct_code_and_a_sentence() {
     assert_eq!(codes.len(), 4, "rejection codes must be distinct");
 }
 
-/// The gate and the fetcher must never disagree: anything this accepts has to yield the SAME id to
+/// The gate and the fetcher must never disagree: anything this accepts has to yield the same id to
 /// `share_id_from_url`, which is what actually builds the request path. A link that validates but
 /// does not resolve would be refused by nothing and then fetch nothing.
 #[test]
@@ -461,7 +461,7 @@ fn acceptance_agrees_with_the_share_id_the_fetch_will_use() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// THE EXPORT DIRECTION. Every helper below is used by the Generate Build Link row to turn the LIVE
+// The export direction. Every helper below is used by the Generate Build Link row to turn the live
 // character back into a planner document, and every one of them is the inverse of something the
 // importer does. An inverse that is subtly wrong does not fail loudly -- it produces a build that
 // looks right and comes back a different weapon, or hand-swapped. So the pairs are tested as pairs.
@@ -487,11 +487,11 @@ fn every_affinity_the_importer_adds_the_exporter_can_subtract() {
             "{name} affinity row"
         );
         assert_eq!(split.level, 0, "{name} level");
-        // Standard is index 0 and is spelled as an ABSENT field, never as the word.
+        // Standard is index 0 and is spelled as an absent field, never as the word.
         let expected = (index != 0).then_some(name);
         assert_eq!(split.infusion, expected, "{name} round trip");
 
-        // AND THE SAME ID AT EVERY UPGRADE LEVEL. The level lives in the id's last two digits, so
+        // And the same ID at every upgrade level. The level lives in the id's last two digits, so
         // an exporter that does not take it off asks the message repository about a row that does
         // not exist -- which answers nothing, drops the slot, and empties the build.
         for level in 0..=25u16 {
@@ -530,7 +530,7 @@ fn the_somber_scale_matches_the_planners_own_table() {
 
     // Transcribed from the live bundle's `lr`, which is what `getWeaponUpgradeLevel` maps a
     // character's `weaponUpgrade` through for any armament taking Somber Smithing Stones. It maps
-    // the CHARACTER-WIDE number only: a per-slot `upgrade` is already on the game's scale, because
+    // the character-wide number only: a per-slot `upgrade` is already on the game's scale, because
     // the planner's slot editor caps that input at `getWeaponUpgradeLevel(weapon)` -- 10 for a
     // somber armament -- and stores the typed number unchanged.
     const PLANNER_TABLE: [u16; 26] = [
@@ -567,7 +567,7 @@ fn a_per_slot_upgrade_and_the_character_default_are_told_apart() {
     .expect("valid build document");
     let result = plan(&doc, &catalog);
 
-    // The slot with no `upgrade` carries the character's number AND says so, because that one has
+    // The slot with no `upgrade` carries the character's number and says so, because that one has
     // to be mapped down for a somber armament and the other one must not be.
     assert_eq!(result.grants[0].reinforce_lv, 17);
     assert!(result.grants[0].upgrade_is_character_default);
@@ -615,7 +615,7 @@ fn the_armament_hand_map_is_a_bijection_in_both_directions() {
     assert_eq!(armament_planner_index(6), None);
     assert_eq!(armament_planner_index(-1), None);
 
-    // The hand convention itself: planner 0..2 is the RIGHT hand (odd slots), 3..5 the LEFT.
+    // The hand convention itself: planner 0..2 is the right hand (odd slots), 3..5 the left.
     // If imported builds ever come out hand-swapped, this assertion is the one to invert, together
     // with `ARMAMENT_CHR_ASM_SLOTS` -- and inverting the table alone will fail here first.
     assert!(
@@ -691,7 +691,7 @@ fn occupied_is_exactly_the_position_count() {
 
 #[test]
 fn a_position_nobody_visits_is_unaccounted_not_absent() {
-    // THE REGRESSION. A pass that writes only the gear it attempted must not be able to print a
+    // The regression. A pass that writes only the gear it attempted must not be able to print a
     // perfect score: the four tools stay in the denominator with no result at all.
     let plan = with_tools();
     let mut ledger = EquipLedger::new(&plan);
@@ -794,7 +794,7 @@ fn the_users_build_plans_twelve_positions_and_none_are_tools() {
 
 #[test]
 fn an_ash_of_war_is_encoded_as_a_gem_item_id() {
-    // The bug this pins: `weaponSkill` must carry an `EquipParamGem` row under the GAME's gem
+    // The bug this pins: `weaponSkill` must carry an `EquipParamGem` row under the game's gem
     // category nibble (8). The planner's own database tags ashes with nibble 2, and a runtime
     // catalog that resolved the ash name to its `SwordArtsParam` row instead produced a
     // well-formed value naming a row that does not exist -- every ash "resolved" and no weapon
@@ -827,7 +827,7 @@ fn an_ash_of_war_is_encoded_as_a_gem_item_id() {
 
 #[test]
 fn armaments_are_granted_in_payload_order_even_when_a_later_one_is_worn() {
-    // THE ORDER THE PLAYER SEES. A build lists its armaments in `order`, and that is the order the
+    // The order the player sees. A build lists its armaments in `order`, and that is the order the
     // planner page shows and the only one they can check their inventory against.
     //
     // This test replaces `the_worn_copy_of_a_duplicated_armament_is_granted_first`, which asserted
@@ -901,13 +901,13 @@ fn the_read_back_target_names_the_slot_and_the_gem() {
     assert_eq!(bare.weapon_skill, NO_SKILL);
 }
 
-// ------------------------------------------- one item name is SEVERAL item rows
+// ------------------------------------------- one item name is several item rows
 
 use er_build_import_core::catalog::{MapCatalog, entry};
 
-/// The flask rows exactly as the LIVE catalog enumerated them, printed by the import's own
+/// The flask rows exactly as the live catalog enumerated them, printed by the import's own
 /// `COLLIDING NAME [tool]` lines on 2026-08-31: each upgrade level is its own `EquipParamGoods`
-/// row PAIR under its own `+N` name.
+/// row pair under its own `+N` name.
 fn flask_catalog() -> MapCatalog {
     let mut catalog = MapCatalog::new();
     for (name, ids) in [
@@ -926,7 +926,7 @@ fn flask_catalog() -> MapCatalog {
 #[test]
 fn an_upgraded_flask_is_the_same_item_under_a_row_the_name_does_not_reach() {
     let catalog = flask_catalog();
-    // What `alternates` can see: the second row of the IDENTICAL name, and nothing else. This is
+    // What `alternates` can see: the second row of the identical name, and nothing else. This is
     // the whole answer the grant path was given, and it is why the equip kept missing.
     assert_eq!(
         Catalog::alternates(&catalog, Kind::Tool, "Flask of Crimson Tears"),
@@ -953,8 +953,8 @@ fn an_upgraded_flask_is_the_same_item_under_a_row_the_name_does_not_reach() {
 
 #[test]
 fn a_pouch_position_carries_every_row_of_its_item() {
-    // THE REGRESSION, in the shape the live run had it: pouch position 2 (ChrAsmSlot 34) asking
-    // for a flask. Two consecutive imports recorded it NOT-IN-INVENTORY -- once for each row of
+    // The regression, in the shape the live run had it: pouch position 2 (ChrAsmSlot 34) asking
+    // for a flask. Two consecutive imports recorded it not-in-inventory -- once for each row of
     // the unupgraded name -- while the character's upgraded flask sat in the pouch.
     let doc = model::parse(
         r#"{"items":{"tools":{"slots":[
@@ -1023,7 +1023,7 @@ fn the_balance_line_reconciles_or_names_its_own_casualties() {
 }
 
 // ---------------------------------------------------------------------------
-// AMMUNITION -- the category whose shape is not a slot list.
+// Ammunition -- the category whose shape is not a slot list.
 // ---------------------------------------------------------------------------
 
 /// A build that equips ammunition, in the exact shape the planner writes.
@@ -1033,7 +1033,7 @@ fn the_balance_line_reconciles_or_names_its_own_casualties() {
 /// feature entirely. The shape below is transcribed from the planner's own code, not guessed --
 /// its picker does `character.items.ammo[slot] = ammo.name` for `slot` in `['arrow1','arrow2']`
 /// and `['bolt1','bolt2']`, and its equip view reads each back as `e.arrow1 ? {name: e.arrow1} : null`.
-/// So the value is a bare NAME and the KEY is the equip position: no `order`, no `equipIndex`, no
+/// So the value is a bare name and the key is the equip position: no `order`, no `equipIndex`, no
 /// `upgrade`, no nesting.
 const AMMO_BUILD: &str = r#"{
     "id": "ammotest",
@@ -1048,7 +1048,7 @@ const AMMO_BUILD: &str = r#"{
     }
 }"#;
 
-/// Every captured fixture parses with NO ammunition, whether it says `{}` or says nothing.
+/// Every captured fixture parses with no ammunition, whether it says `{}` or says nothing.
 ///
 /// Both spellings are real and they must not be distinguishable: the planner writes `{}` into a
 /// new character, DELETES the whole object when the last slot is emptied, and only grew the key at
@@ -1085,7 +1085,7 @@ fn the_captured_builds_equip_no_ammunition() {
     );
 }
 
-/// `items.ammo` carries names keyed by position, and NOTHING that looks like a quantity.
+/// `items.ammo` carries names keyed by position, and nothing that looks like a quantity.
 ///
 /// The counterpart to `the_payload_states_no_quantities` for the one category whose shape differs
 /// from every other. If the planner ever gives an ammo entry a body -- a count, a `slots` array,
@@ -1132,7 +1132,7 @@ fn the_ammo_positions_are_in_chr_asm_slot_order() {
 /// `maxNum` behind every consumable. The numbers below are the installed 1.17 regulation's:
 /// ordinary arrows and bolts 99, Great Arrows 30, Ballista Bolts 20.
 ///
-/// `armament: false` is the load-bearing half. Ammunition carries the WEAPON category nibble, so
+/// `armament: false` is the load-bearing half. Ammunition carries the weapon category nibble, so
 /// the runtime's old `item_id & 0xF0000000 == 0` test would send a quiver of arrows down the
 /// armament mint path -- one `GaItemHandle`, an upgrade level, a gem mount -- none of which an
 /// arrow has.
@@ -1163,7 +1163,7 @@ fn ammunition_is_granted_by_the_quiver_limit_and_never_as_an_armament() {
     }
 }
 
-/// A row that declares no quiver limit is granted ONE, not the engine's fallback.
+/// A row that declares no quiver limit is granted one, not the engine's fallback.
 ///
 /// Same rule as a consumable whose `maxNum` is zero: handing a player a pile of something the
 /// table has no opinion about is the over-grant this avoids.
@@ -1220,7 +1220,7 @@ fn the_ammo_equip_positions_land_on_the_native_ammo_slots() {
     assert_eq!(slots, vec![9]);
 }
 
-/// An unresolvable ammo name is REPORTED, and named by the position the author sees.
+/// An unresolvable ammo name is reported, and named by the position the author sees.
 #[test]
 fn unresolvable_ammunition_is_rejected_by_its_planner_key() {
     let doc = model::parse(r#"{"items":{"ammo":{"bolt1":"Nonexistent Bolt"}}}"#).expect("parses");
@@ -1338,7 +1338,7 @@ fn only_the_active_armament_set_is_equipped() {
 #[test]
 fn the_contested_armament_positions_go_the_way_the_planner_shows_them() {
     // Three rows claim armament position 0 and three claim position 4, all inside
-    // the ACTIVE set. The planner's own `WeaponEquipSlots` folds them with a
+    // the active set. The planner's own `WeaponEquipSlots` folds them with a
     // `reduce` that overwrites, so the last row in the list is what its author
     // sees, and that is what gets equipped.
     let plan = equip_plan(
@@ -1433,7 +1433,7 @@ fn a_losing_claimant_is_rejected_so_no_caller_can_miss_the_collision() {
 
 #[test]
 fn the_contest_winner_keeps_its_own_affinity() {
-    // Position 1 is claimed by two Miséricordes that differ ONLY by affinity:
+    // Position 1 is claimed by two Miséricordes that differ only by affinity:
     // a Keen one earlier in the list and a Lightning one later. Asserting on the
     // name alone would pass either way, so pin the id: last-wins must bring the
     // Lightning row's `+600`, not the Keen row's `+200`.
@@ -1576,7 +1576,7 @@ fn a_row_equipped_only_in_an_inactive_set_is_left_carried() {
 #[test]
 fn armour_takes_the_first_claimant_the_way_the_planner_does() {
     // `ProtectorEquipSlots` resolves with `find`, not a fold, so armour breaks a
-    // tie the opposite way to armaments. And the VALUE is meaningless: the planner
+    // tie the opposite way to armaments. And the value is meaningless: the planner
     // writes a constant `1` for every worn piece, so it is membership that counts.
     let doc = model::parse(
         r#"{"sets":{"protectors":[{"name":"Default","active":true}]},
@@ -1597,7 +1597,7 @@ fn armour_takes_the_first_claimant_the_way_the_planner_does() {
 
 #[test]
 fn the_rest_of_the_real_build_still_imports_whole() {
-    // Everything the sets machinery does NOT touch: tools carry no `equipSet` at
+    // Everything the sets machinery does not touch: tools carry no `equipSet` at
     // all, and spells, tears and the great rune are set-free too.
     let plan = equip_plan(
         &sets_build(),
@@ -1633,8 +1633,8 @@ fn the_rest_of_the_real_build_still_imports_whole() {
     assert!(plan.two_handing);
 }
 
-/// THE +0 BUG, 2026-08-23. A merged import handed the player thirty armaments at +0 while its own
-/// read-back reported `+25 -> +25`, because the level was written ONLY to
+/// The +0 bug, 2026-08-23. A merged import handed the player thirty armaments at +0 while its own
+/// read-back reported `+25 -> +25`, because the level was written only to
 /// `CSWepGaitemIns::reinforcement` and never folded into the item id.
 ///
 /// The id is the half the player sees. `CSGaitemImp::GetGaItemHandleWeapon` stores whatever id it
@@ -1660,7 +1660,7 @@ fn the_upgrade_level_rides_in_the_item_id() {
 }
 
 /// The shape the reference exporter emits, and the reason the id half was missed: the record
-/// carries the level TWICE, and porting only the `reinforceLv` field looks complete.
+/// carries the level twice, and porting only the `reinforceLv` field looks complete.
 #[test]
 fn a_planned_armament_keeps_its_level_in_the_separate_field_too() {
     let (_doc, plan) = planned();
@@ -1680,7 +1680,7 @@ fn a_planned_armament_keeps_its_level_in_the_separate_field_too() {
 }
 
 // ---------------------------------------------------------------------------
-// HOW MANY OF EACH -- the half of a grant the payload does not carry.
+// How many of each -- the half of a grant the payload does not carry.
 // ---------------------------------------------------------------------------
 
 /// The payload has no count field, on tools or on anything else.
@@ -1717,7 +1717,7 @@ fn the_payload_states_no_quantities() {
     }
 }
 
-/// A consumable is granted the number the GAME declares, not one.
+/// A consumable is granted the number the game declares, not one.
 ///
 /// Fingerprint Nostrum's `EquipParamGoods.maxNum` is 10 in the installed regulation, and ten is
 /// what a build listing it is asking for. One was the bug: `max_stored` was declared and never
@@ -1808,7 +1808,7 @@ fn a_thousand_wide_hold_limit_is_capped_at_the_engines_own_ceiling() {
     );
     assert_eq!(quantity_for(Some(99)), 99, "at the ceiling, untouched");
     assert_eq!(quantity_for(Some(10)), 10, "under the ceiling, untouched");
-    // A row that declares nothing gets ONE, not the 99 the engine would hand out for it. Handing
+    // A row that declares nothing gets one, not the 99 the engine would hand out for it. Handing
     // a player ninety-nine of something the game itself has no opinion about is the over-grant
     // this path exists to avoid.
     assert_eq!(quantity_for(None), 1, "no declared limit means one");
@@ -1826,7 +1826,7 @@ fn a_crystal_tear_is_granted_once() {
         "Opaline Hardtear",
         Entry {
             full_item_id: 0x40002B03,
-            // Deliberately a number the tear does NOT have: if the tear path ever started
+            // Deliberately a number the tear does not have: if the tear path ever started
             // reading `max_stored`, this test would catch it handing out fifty.
             max_stored: Some(50),
             somber: false,

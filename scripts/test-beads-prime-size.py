@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Gate: the SessionStart / PreCompact prime hook must stay small enough to be SEEN.
+"""Gate: the SessionStart / PreCompact prime hook must stay small enough to be seen.
 
 Claude Code inlines a hook's stdout only up to a few KB. Past that it writes the whole
 thing to `tool-results/hook-<uuid>-stdout.txt` and shows a 2 KB preview -- so an
 oversized prime hook is worse than no prime hook: the content does not reach the agent
-AND it costs a large chunk of every session, PreCompact included. That is exactly what
+and it costs a large chunk of every session, PreCompact included. That is exactly what
 happened at 2452 memories: 157.4 KB, persisted, unread.
 
-The size therefore has to be a GATE, not a habit. This drives the real
+The size therefore has to be a gate, not a habit. This drives the real
 scripts/gen-beads-prime.py against a synthetic store far larger than the live one and
 asserts (a) the output fits the budget, (b) it still teaches memory discovery, (c) the
 full title list is preserved on disk, and (d) a broken/absent bd degrades instead of

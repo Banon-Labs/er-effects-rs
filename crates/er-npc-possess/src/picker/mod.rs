@@ -1,4 +1,4 @@
-//! THE PICKER -- choosing which creature you are about to become, from inside the game.
+//! The PICKER -- choosing which creature you are about to become, from inside the game.
 //!
 //! # What it is for
 //!
@@ -6,14 +6,14 @@
 //! `er-npc-possess.toml`. That works, it hot-reloads, and it is genuinely a picker -- but it is
 //! one you drive by alt-tabbing to a text editor and typing a four-digit number you have to know
 //! in advance. This layer puts the same choice on screen: a list of all 408 creatures the moveset
-//! table covers, by NAME, with what each can do, driven by the keyboard, and it stages exactly
+//! table covers, by name, with what each can do, driven by the keyboard, and it stages exactly
 //! what the `chr_id` key would have staged. The TOML path is unchanged and still works.
 //!
-//! # WHY IT IS NOT ON THE GAME'S OWN `05_010_ProfileSelect` LIST
+//! # why it is not on the game'S own `05_010_ProfileSelect` list
 //!
 //! That was the recommended host, it is the one native widget in the game built for a long
 //! scrolling list with per-row text, and this repo already drives it. It is still the wrong host
-//! for THIS feature, on three independent counts, each of which is fatal on its own:
+//! for this feature, on three independent counts, each of which is fatal on its own:
 //!
 //! 1. **Its prologues are already claimed, with bare hooks.** `er-quickload` detours the
 //!    ProfileSelect list builder (`0x875590`), the row-populate (`0x8757e0`), the row-model build
@@ -40,7 +40,7 @@
 //! # Where it draws instead
 //!
 //! `er_build_watermark_core::overlay_host` -- the process's single imgui context, the same
-//! surface `er-invasion-path` and `er-net-effects` draw on. This module HOSTS it if nothing else
+//! surface `er-invasion-path` and `er-net-effects` draw on. This module hosts it if nothing else
 //! has, and registers a guest callback otherwise; either way there is exactly one `Present` hook
 //! in the process, which is the whole reason that arbitration exists. It costs no game function
 //! address and claims no game prologue.
@@ -52,13 +52,13 @@
 //! other shells in this profile already share -- the exact collision
 //! `scripts/me3-dll-conflicts.toml` exists to prevent, and a claim this layer deliberately does
 //! not make. The shipped defaults are F10 plus the four arrow keys, and every pad binding ships
-//! EMPTY -- a judgement about where a collision is least likely rather than a reading of the
+//! empty -- a judgement about where a collision is least likely rather than a reading of the
 //! game's binding table, which is why all of them are rebindable while the game runs. A key that
 //! never fires is reported rather than left silent; see [`crate::settings::PickerSettings`].
 //!
 //! **It does not summon anything.** Choosing writes `[target] mode = "chr_id"`, and that mode
-//! searches the characters ALREADY LOADED in the map -- `possess::game` reports `no loaded enemy
-//! matches chr_id` when there is none. So the list is every creature the MOD knows, which is a
+//! searches the characters already loaded in the map -- `possess::game` reports `no loaded enemy
+//! matches chr_id` when there is none. So the list is every creature the mod knows, which is a
 //! larger set than the creatures you can become where you are standing. That gap closes when the
 //! spawn layer lands; until then the honest statement is this one, and it is also in the shipped
 //! config file where a player will read it before they blame the picker.
@@ -116,7 +116,7 @@ pub(crate) struct RepeatLatch {
 }
 
 impl RepeatLatch {
-    /// Advance one frame. Returns true on the frame the input should ACT -- once on the press,
+    /// Advance one frame. Returns true on the frame the input should act -- once on the press,
     /// then every [`REPEAT_INTERVAL_TICKS`] after [`REPEAT_DELAY_TICKS`] of holding.
     pub(crate) const fn feed(&mut self, down: bool) -> bool {
         if !down {
@@ -136,7 +136,7 @@ impl RepeatLatch {
         (self.ticks_held - REPEAT_DELAY_TICKS).is_multiple_of(REPEAT_INTERVAL_TICKS)
     }
 
-    /// Re-seat the latch from the CURRENT input state without producing a press.
+    /// Re-seat the latch from the current input state without producing a press.
     ///
     /// Called when a binding moves under a held key. Without it, rebinding `down` onto a key the
     /// player happens to be holding reads as a fresh press and the cursor jumps -- the same
@@ -170,7 +170,7 @@ struct State {
     /// resulting complaint has already been made. See [`DEAD_NAV_TICKS`].
     idle_ticks: u32,
     warned_about_dead_nav: bool,
-    /// Where the cursor was when the list last closed, for ANY reason -- chosen, cancelled,
+    /// Where the cursor was when the list last closed, for any reason -- chosen, cancelled,
     /// closed by a possession starting, or disabled mid-list.
     ///
     /// Process-lifetime and deliberately not written to disk: it is a convenience about the last
@@ -238,13 +238,13 @@ pub(crate) fn is_open() -> bool {
 
 /// The current frame's rows, for the renderer. `None` when the picker is closed.
 ///
-/// Check [`is_drawing`] FIRST -- it answers the same question without a lock, and the answer is
+/// Check [`is_drawing`] first -- it answers the same question without a lock, and the answer is
 /// "closed" on nearly every frame.
 pub(crate) fn view() -> Option<View> {
     state().as_ref().and_then(|state| state.view.clone())
 }
 
-/// Lock-free "is there anything to draw". False negatives are impossible; a false POSITIVE can
+/// Lock-free "is there anything to draw". False negatives are impossible; a false positive can
 /// last one frame after a close, and costs one lock that finds `None`.
 pub(crate) fn is_drawing() -> bool {
     OPEN.load(Ordering::Relaxed)
@@ -254,22 +254,22 @@ pub(crate) fn is_drawing() -> bool {
 ///
 /// `pad_buttons` is the raw XInput `wButtons` word the caller already sampled this frame.
 ///
-/// CALL THIS AFTER the possess hotkey's own edge has been sampled. Both read `GetAsyncKeyState`,
+/// Call this after the possess hotkey's own edge has been sampled. Both read `GetAsyncKeyState`,
 /// whose low bit means "pressed since the previous call ON THIS THREAD" and is cleared by
 /// whichever call gets there first; the possess key is the one whose taps must not be lost, so it
 /// reads first.
 ///
-/// And call it UNCONDITIONALLY, folding the mod's master switch into `settings.enabled` rather
+/// And call it unconditionally, folding the mod's master switch into `settings.enabled` rather
 /// than skipping the call. The panel is drawn from a snapshot this function republishes; a frame
 /// that does not run it leaves the last snapshot on screen, and a caller that stops running it
 /// leaves the list up forever with no key able to close it.
 ///
-/// Returns whether this frame OPENED the list, which is the caller's cue that the overlay now has
+/// Returns whether this frame opened the list, which is the caller's cue that the overlay now has
 /// to exist. The install is not done here because it must not happen under this module's lock --
 /// see [`crate::overlay::install_once`].
 #[must_use]
 pub(crate) fn tick(settings: PickerSettings, pad_buttons: u16) -> bool {
-    // BOTH READ BEFORE THE LOCK, deliberately. Taking the config or engine lock while holding
+    // Both read before the lock, deliberately. Taking the config or engine lock while holding
     // this module's would be the only place in the crate where two locks are held at once, and a
     // lock order that exists in exactly one function is the kind nobody remembers to preserve.
     let staged = crate::config::staged_chr_id();
@@ -285,13 +285,13 @@ pub(crate) fn tick(settings: PickerSettings, pad_buttons: u16) -> bool {
         crate::input::chord_held,
         possess_log,
     );
-    // Published for the RENDER thread, which runs every frame for the life of the process once
+    // Published for the render thread, which runs every frame for the life of the process once
     // the overlay is installed. Without it that thread would take this mutex 60-144 times a
     // second forever just to be told the list is closed, contending with the game thread's own
     // per-frame tick. Set here rather than inside `drive` so `drive` stays free of globals and
     // the tests can drive a local `State`.
     OPEN.store(state.open.is_some(), Ordering::Relaxed);
-    // THE LOCK IS RELEASED BEFORE THE CALLER INSTALLS ANYTHING. `install_once` waits on the
+    // The lock is released before the caller INSTALLS anything. `install_once` waits on the
     // game's window, takes a named mutex, walks every loaded module and can end in
     // `Hudhook::apply()`, which creates a D3D12 device and suspends every thread in the process
     // to write its detours. Doing that here would hold this mutex across all of it -- and the
@@ -301,11 +301,11 @@ pub(crate) fn tick(settings: PickerSettings, pad_buttons: u16) -> bool {
 }
 
 /// The whole of [`tick`] over a caller-owned state, with the keyboard reader and the log sink
-/// injected. Returns whether this call OPENED the list.
+/// injected. Returns whether this call opened the list.
 ///
-/// Split out for the tests: they drive a LOCAL [`State`] rather than the process-wide one, so
+/// Split out for the tests: they drive a local [`State`] rather than the process-wide one, so
 /// they need no game and cannot interfere with each other when `cargo test` runs them in
-/// parallel. THE LOG SINK IS INJECTED FOR THE SAME REASON AND IT IS NOT COSMETIC -- `possess_log`
+/// parallel. The log sink is injected for the same reason and it is not cosmetic -- `possess_log`
 /// opens a CWD-relative `er-npc-possess.log`, so a test that let it through wrote that file into
 /// the crate root and then had several test threads interleave appends into it. It did, until
 /// this parameter existed.
@@ -328,7 +328,7 @@ fn drive(
     let prev = down(settings.prev_group, settings.pad_prev_group);
     let next = down(settings.next_group, settings.pad_next_group);
 
-    // A REBIND RE-SEATS EVERY LATCH FROM THIS FRAME'S INPUT and produces no press. Seating from
+    // A REBIND RE-seats every latch from this frame'S input and produces no press. Seating from
     // the live state rather than clearing to "not held" is the whole point: clearing would make
     // the next frame read a still-held key as a fresh press. The very first tick of the process
     // takes this branch too, which is why a key already down at load does not open the picker.
@@ -342,7 +342,7 @@ fn drive(
         return false;
     }
 
-    // The toggle deliberately does NOT repeat: holding the picker key must not flap the list open
+    // The toggle deliberately does not repeat: holding the picker key must not flap the list open
     // and shut sixty times a second.
     let toggle_fired = state.latches.toggle.feed(toggle);
     let toggle_pressed = toggle_fired && !state.latches.toggle.repeating();
@@ -365,8 +365,8 @@ fn drive(
         return false;
     }
 
-    // THE LIST IS CLOSED WHILE YOU ARE WEARING SOMETHING, and this is the invariant that keeps
-    // the possess hotkey unambiguous. That key CONFIRMS while the list is up and RELEASES while
+    // The list is closed while you are wearing something, and this is the invariant that keeps
+    // the possess hotkey unambiguous. That key confirms while the list is up and releases while
     // a possession is running, and if both could be true at once it would have to mean two
     // things on the same press -- with the wrong one, silently, being "you are still a dragon".
     // Refusing to open here makes them mutually exclusive by construction rather than by a rule
@@ -389,7 +389,7 @@ fn drive(
             return false;
         }
         let creatures = catalog::creatures();
-        // WHERE IT WAS BEATS WHAT IS STAGED. Re-opening lands exactly where you left the cursor,
+        // Where it was beats what is staged. Re-opening lands exactly where you left the cursor,
         // including after choosing something -- browsing away from the staged creature and
         // closing is a position worth keeping, and the staged id is only a starting guess for the
         // first open of the session. Clamped, because the catalogue could in principle be shorter
@@ -425,7 +425,7 @@ fn drive(
     let snapshot = *model;
     state.view = Some(build_view(snapshot, settings.visible_rows as usize));
 
-    // THE DEAD-BINDING COMPLAINT. See `DEAD_NAV_TICKS`.
+    // The dead-binding complaint. See `DEAD_NAV_TICKS`.
     if moved {
         state.idle_ticks = 0;
     } else {
@@ -455,14 +455,14 @@ fn chord_text(chord: Option<Chord>) -> String {
 
 /// Take the picker's answer, if it has one.
 ///
-/// Called from the possess hotkey's edge: while the list is up, that key CONFIRMS rather than
+/// Called from the possess hotkey's edge: while the list is up, that key confirms rather than
 /// possesses. Reusing it is deliberate -- it means the whole feature costs the player one new key
 /// to learn instead of two, and "the key that starts a possession also chooses what to possess"
 /// is the sentence the config file can print.
 ///
 /// That the key means two things is safe only because the two states are mutually exclusive:
 /// [`drive`] refuses to open the list while a possession is running and closes it if one starts,
-/// so this can never fire on the press that was meant to RELEASE.
+/// so this can never fire on the press that was meant to release.
 ///
 /// Returns the chosen creature and closes the list. `None` when the picker is not open, in which
 /// case the caller possesses as it always did.
@@ -473,7 +473,7 @@ pub(crate) fn take_confirm() -> Option<Creature> {
     chosen
 }
 
-/// Close the list, remembering where the cursor was. EVERY close goes through here.
+/// Close the list, remembering where the cursor was. Every close goes through here.
 ///
 /// Returns whether anything was open, which is what the callers used to get from `Option::take`.
 /// A close path that reached for `state.open.take()` directly would compile and would silently
@@ -628,14 +628,14 @@ mod tests {
     struct Rig {
         state: State,
         settings: PickerSettings,
-        /// What `[target]` has staged, INJECTED rather than read from the process-wide config.
+        /// What `[target]` has staged, injected rather than read from the process-wide config.
         /// Reading the real one would build it, and building it writes `er-npc-possess.toml`
         /// into whatever directory `cargo test` happens to run in -- which it did, into the
         /// crate root, before this field existed.
         staged: Option<u32>,
         /// Whether a possession is running, injected for the same reason.
         possessing: bool,
-        /// Whether the last tick OPENED the list -- the signal the real caller uses to install
+        /// Whether the last tick opened the list -- the signal the real caller uses to install
         /// the overlay.
         opened: bool,
         /// Every log line the picker emitted, captured instead of written. See `drive`'s docs for
@@ -804,7 +804,7 @@ mod tests {
     }
 
     /// The invariant that keeps the possess hotkey meaning one thing: no list while wearing
-    /// something, so that key is CONFIRM or RELEASE and never both.
+    /// something, so that key is confirm or release and never both.
     #[test]
     fn a_possession_closes_the_list_and_refuses_to_open_a_new_one() {
         let mut rig = Rig::new();
@@ -856,7 +856,7 @@ mod tests {
         );
     }
 
-    /// ...and a list that IS being driven never complains.
+    /// ...and a list that is being driven never complains.
     #[test]
     fn a_list_being_navigated_never_complains() {
         let mut rig = Rig::new();

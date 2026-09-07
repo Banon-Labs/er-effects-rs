@@ -4,7 +4,7 @@
 //!
 //! The list is long and the input is four directions, so the whole design question is how few
 //! presses it takes to reach an arbitrary row. Stepping one at a time is 204 presses on average
-//! and nobody would use it. The answer here is a SECOND axis on the same four buttons: up and
+//! and nobody would use it. The answer here is a second axis on the same four buttons: up and
 //! down step one row, left and right jump to the previous or next initial. The catalogue is
 //! sorted by the name on screen, so "jump by initial" is the index a reader already has in their
 //! head -- to reach Runebear you press right until the R rows appear and then step.
@@ -13,13 +13,13 @@
 //! creatures, so the worst case is 24 group jumps plus 60 steps and the typical one is a small
 //! fraction of that. The tests below guard LOOSER bounds than those two numbers on purpose -- a
 //! regenerated name table that shifts them by a few should not go red for nothing, but one that
-//! collapses the alphabet into three groups should. It is also why the group axis is by NAME
+//! collapses the alphabet into three groups should. It is also why the group axis is by name
 //! rather than by chr-id band: the `c4xxx` band alone holds 137 creatures with nothing to aim at
 //! inside it.
 //!
 //! # One variable, so the window cannot desync from the cursor
 //!
-//! A list widget usually stores a cursor AND a scroll offset, and then has to keep them
+//! A list widget usually stores a cursor and a scroll offset, and then has to keep them
 //! consistent on every operation -- which is where list widgets go wrong. Here the window is
 //! DERIVED: it is centred on the cursor and clamped to the ends. There is no second variable to
 //! get out of step, every operation is "move the cursor", and [`Window`] is a pure function of
@@ -87,7 +87,7 @@ impl PickerModel {
         // but a clamp here is one line and the alternative is an index panic in a draw.
         self.cursor = self.cursor.min(groups.len() - 1);
         self.cursor = match nav {
-            // WRAPPING, both ends. Every list in the game wraps, and the alternative is a cursor
+            // Wrapping, both ends. Every list in the game wraps, and the alternative is a cursor
             // that silently refuses a press at row 0.
             Nav::Up => {
                 if self.cursor == 0 {
@@ -153,7 +153,7 @@ fn next_group(groups: &[u8], index: usize) -> usize {
     0
 }
 
-/// First row of the previous group -- or the first row of THIS group when the cursor is somewhere
+/// First row of the previous group -- or the first row of this group when the cursor is somewhere
 /// in the middle of it.
 fn prev_group(groups: &[u8], index: usize) -> usize {
     let start = group_start(groups, index);

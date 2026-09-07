@@ -82,8 +82,8 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 
-# Tool discovery. Env override first, then PATH, then the CURRENT user's home; the /mnt/...
-# entries are the retired WSL2 layout and are LAST-resort only, so on a native Linux box they
+# Tool discovery. Env override first, then path, then the current user's home; the /mnt/...
+# entries are the retired WSL2 layout and are last-resort only, so on a native Linux box they
 # cost one failed stat instead of masking a real install as "the tool is missing".
 locate_me3() {
 	if [[ -n "$me3_exe" ]]; then

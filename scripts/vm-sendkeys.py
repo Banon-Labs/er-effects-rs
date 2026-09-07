@@ -10,7 +10,7 @@ Usage:
   vm-sendkeys.py text "some string"     # type a literal string (maps chars -> keycodes)
   vm-sendkeys.py key KEY_ENTER          # one keycode
   vm-sendkeys.py chord KEY_LEFTMETA KEY_R   # keys pressed together (Win+R)
-Env: DOMAIN (default er-quickload-win11), LIBVIRT_DEFAULT_URI (default qemu:///system), HOLDTIME ms.
+Env: Domain (default er-quickload-win11), LIBVIRT_DEFAULT_URI (default qemu:///system), HOLDTIME ms.
 """
 import os, subprocess, sys, time
 

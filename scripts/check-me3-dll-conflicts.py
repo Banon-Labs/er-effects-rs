@@ -20,8 +20,8 @@ So this gate asserts five things:
 4. **No double classification.** A package in a `[[conflict]]` pair must not also claim to
    be `[compatible]`, which would let the closure walk read whichever it liked.
 5. **`[[shared]]` rows are checkable.** A `[[shared]]` pair is the one thing that licenses two
-   DLLs to detour ONE prologue and still share a profile, so it must carry the `target`, the
-   `mechanism`, and BOTH handler symbols -- those are what `check-shared-hook-rvas.py` uses to
+   DLLs to detour one prologue and still share a profile, so it must carry the `target`, the
+   `mechanism`, and both handler symbols -- those are what `check-shared-hook-rvas.py` uses to
    prove each detour reaches a union registrar and never an `MhHook::new`. A pair may not be
    declared shared and conflicting at once: the closure walk reads `[[conflict]]` only, and would
    co-load a pair it had been told to keep apart.
@@ -50,14 +50,14 @@ VALID_KINDS = {
     "present-compositor",
     "drives-input",
     "diagnostic-drive",
-    # Two DLLs statically linking the SAME feature crate. A linked crate's statics are per-DLL, so
+    # Two DLLs statically linking the same feature crate. A linked crate's statics are per-DLL, so
     # each gets its own copy of that feature's state machine, its own worker threads and its own
     # game tasks -- all driving one piece of game state with no shared lock. Nothing is detoured,
     # so it looks harmless to every other check here; the damage is two owners of one mutation.
     "duplicate-owner",
-    # A function-pointer slot the game later CALLS holds a value that is not a function entry.
-    # Distinct from `hook-collision`, which corrupts CODE at a hooked prologue and presents as
-    # silent inertness: this corrupts DATA and presents as a hard fault at a fixed address, with
+    # A function-pointer slot the game later calls holds a value that is not a function entry.
+    # Distinct from `hook-collision`, which corrupts code at a hooked prologue and presents as
+    # silent inertness: this corrupts data and presents as a hard fault at a fixed address, with
     # `rcx == rip` at the fault because the call went through the pointer. Added 2026-09-02 for
     # er-quickload X er-invasion-warp rather than mislabel it `hook-collision`, which is what it
     # was first recorded as and what the register capture then falsified. Use this kind when the
@@ -70,8 +70,8 @@ VALID_KINDS = {
 # spelled out rather than left free-text so a future "we looked at it and it seemed fine" cannot be
 # written into the field that licenses two DLLs to hook one prologue.
 VALID_MECHANISMS = {
-    # Both handlers register through ONE MinHook instance -- the product's union, reached from a
-    # companion image through the `er_effects_union_register` export -- and CHAIN.
+    # Both handlers register through one MinHook instance -- the product's union, reached from a
+    # companion image through the `er_effects_union_register` export -- and chain.
     "hook-union",
 }
 
@@ -126,7 +126,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             )
         conflicted.update(name for name in (a, b) if name)
 
-    # [[shared]]: two DLLs that DO detour one prologue but were made co-loadable by routing both
+    # [[shared]]: two DLLs that do detour one prologue but were made co-loadable by routing both
     # handlers through a single MinHook instance (the hook union). It is a third answer alongside
     # conflict/compatible, and the loosest one, so its fields are mandatory: without `target` and
     # the two handler symbols, `check-shared-hook-rvas.py` cannot prove the mechanism and the row
@@ -238,7 +238,7 @@ def selftest() -> int:
         entry.update(overrides)
         return entry
 
-    # `prod` is classified by appearing in the conflict pair, so it must NOT also be
+    # `prod` is classified by appearing in the conflict pair, so it must not also be
     # listed compatible -- exactly the shape the real table uses.
     sound = {"conflict": [pair("prod", "bad")], "compatible": {"safe": "installs no detour"}}
     check(audit(sound, packages) == [], "a sound table produces no failures")

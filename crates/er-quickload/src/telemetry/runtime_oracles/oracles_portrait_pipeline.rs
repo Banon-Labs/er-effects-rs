@@ -9,10 +9,10 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     const NULL_PTR: usize = 0;
     let format_optional_ptr = format_optional_oracle_ptr;
     write_portrait_bridge_hold_oracles(body);
-    // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
-    // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
+    // Cross-slot SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
+    // how many times the pin moved after first latch (>0 in one load window = unstable content source,
     // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
-    // was never requested), and the max count of NON-target renderers seen holding a live model during
+    // was never requested), and the max count of non-target renderers seen holding a live model during
     // the feed window (>0 = a foreign character built on the loading screen -- the swap precondition).
     push_json_usize(
         body,
@@ -34,13 +34,13 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_foreign_models",
         PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
     );
-    // NUDE-PORTRAIT ARMOR ORACLE (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
-    // Sampled every game tick off the profile renderer's LIVE stage-0 ChrAsm (+0x130 -- NOT the
+    // NUDE-portrait armor oracle (bd er-effects-rs-wncc root cause, er-effects-rs-91l5 Layer 1).
+    // Sampled every game tick off the profile renderer's live stage-0 ChrAsm (+0x130 -- Not the
     // +0x548 inbox), replicating FUN_1409e6fb0's override arithmetic, so these are the
     // EquipParamProtector rows the model build actually requests.
     //
-    // READ IT LIKE THIS. `bad_frames > 0` = FAIL, and no later frame can erase it.
-    // `sampled_frames == 0` = ALSO FAIL: the oracle never got to look. `capture_verdict` is
+    // Read it like this. `bad_frames > 0` = fail, and no later frame can erase it.
+    // `sampled_frames == 0` = also FAIL: the oracle never got to look. `capture_verdict` is
     // tri-state on purpose -- 0 means "no capture-frame sample", which is not a pass. The raw
     // unk0/unkd4/unkd8 must all read -1; any non-negative value is the whole-outfit override that
     // rendered the character nude. Param-id fields read -2147483648 when never sampled, which is
@@ -90,12 +90,12 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_equip_capture_verdict",
         PORTRAIT_EQUIP_CAPTURE_VERDICT.load(Ordering::SeqCst),
     );
-    // THE REPAIR'S OWN SEMAPHORES. `restore_kicks` counts build kicks where the write-back ran;
+    // The repair'S own SEMAPHORES. `restore_kicks` counts build kicks where the write-back ran;
     // `restore_failures > 0` means at least one portrait was built from the native feed's stripped
     // ChrAsm and the run's picture is not evidence for anything. `restore_noop_kicks` is the
     // honest-zero case -- a character genuinely holding nothing and wearing nothing on arms or legs
-    // -- and is why a zero in the three slot counters is NOT by itself a failure. The four
-    // `restore_record_*` ids are what the SAVE says the character has, so a portrait that still
+    // -- and is why a zero in the three slot counters is not by itself a failure. The four
+    // `restore_record_*` ids are what the save says the character has, so a portrait that still
     // renders bare against non-negative ids here is a downstream defect, not a missing input.
     push_json_usize(
         body,
@@ -112,7 +112,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_equip_inbox_arm_style_writes",
         PORTRAIT_EQUIP_INBOX_ARM_STYLE_WRITES.load(Ordering::SeqCst),
     );
-    // The SWITCH's own record repair. Zero on a run whose portrait showed the previous character
+    // The switch's own record repair. Zero on a run whose portrait showed the previous character
     // means the records were never put back after the game's return-title save (see
     // `reapply_profile_summary_after_return_title_save`); the mask says which slots it covered.
     push_json_usize(
@@ -203,7 +203,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_scaleform_handler_dtors",
         SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
     );
-    // Game-Options pane VISIBILITY oracle (READ-ONLY, blank Game Options pane detector): on
+    // Game-Options pane visibility oracle (read-only, blank Game Options pane detector): on
     // OptionSetting re-entry the DLL reads each option pane's DisplayInfo.Visible. blank_detected
     // > 0 = the WindowList container resolved in the tree but its pane was not visible (tabs/footer
     // render, row list black); resolved/visible masks + last_datatype + guard_skips give context.
@@ -252,7 +252,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_optionsetting_pane_blank_detected_count",
         OPTIONSETTING_PANE_BLANK_DETECTED_COUNT.load(Ordering::SeqCst),
     );
-    // REAL row-pane signal: current tab dialog (composite+0xb8) and its pane proxy (dialog+0x1200)
+    // Real row-pane signal: current tab dialog (composite+0xb8) and its pane proxy (dialog+0x1200)
     // DisplayInfo.Visible -- the object the game's tab-select actually toggles. real_blank_detected
     // fires only after a healthy (visible) pane was seen and then the actively-shown pane went hidden,
     // so it cannot false-fire on boot/preload (unlike the named-child mask above).
@@ -405,14 +405,14 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_profile_renderer_spare_hits",
         PROFILE_RENDERER_SPARE_HITS.load(Ordering::SeqCst),
     );
-    // Ownership-ledger conservation oracle: violations MUST stay 0 (nonzero == a native-owned
+    // Ownership-ledger conservation oracle: violations must stay 0 (nonzero == a native-owned
     // object taken without a paired release -- the spared-renderer leak class). spared_outstanding
     // and its high-water should track the bound (1); a climbing value is the early leak signal.
-    // `oracle_ownership_ledger_violations` is DELETED, not merely unwired (2026-09-05). Its only
+    // `oracle_ownership_ledger_violations` is deleted, not merely unwired (2026-09-05). Its only
     // writer was `ownership_ledger_check`, which ran at the sq-repro autopilot's switch boundary and
     // went with it. Left in place the field would have published a constant 0 -- a spared-renderer
     // leak detector that reports "no leaks" because it never runs, which is strictly worse than an
-    // absent field. Reinstating the detector means calling the check from the LIVE switch boundary in
+    // absent field. Reinstating the detector means calling the check from the live switch boundary in
     // `system_quit_arm_quickload_autoload` and validating it there; that is a deliberate change with
     // its own proof, not something to leave implied by a zero.
     push_json_usize(
@@ -427,7 +427,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             .load(Ordering::SeqCst),
     );
     // Loading-portrait select-then-show: retargets = confirm-time swaps to the newly-selected
-    // character; skipped_unkeyed = frames NOT published because the depth mask was not applied yet
+    // character; skipped_unkeyed = frames not published because the depth mask was not applied yet
     // (never render an unmasked model); have_keyed = a masked frame is available to display.
     push_json_usize(
         body,
@@ -439,7 +439,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_publish_skipped_unkeyed",
         PROFILE_PUBLISH_SKIPPED_UNKEYED.load(Ordering::SeqCst),
     );
-    // HARNESS-FAILURE semaphore (user directive 2026-07-06): windows that drove the model but
+    // Harness-failure semaphore (user directive 2026-07-06): windows that drove the model but
     // published no portrait. The readiness watcher fails the run when this is non-zero -- the
     // publish gates must never silently degrade the product; drive this to 0 by fixing the root
     // render (per-cause in `..._fail_cause`: 1=torn 2=unkeyed 3=badiou 4=lowmask).
@@ -448,7 +448,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_window_publish_failures",
         PORTRAIT_WINDOW_PUBLISH_FAILURES.load(Ordering::SeqCst),
     );
-    // READBACK STALL SPLIT (diagnostic): average microseconds per coherent readback for the GPU-WAIT
+    // READBACK stall split (diagnostic): average microseconds per coherent readback for the GPU-wait
     // (removable by an async ring buffer) vs the CPU de-swizzle + mask/key (stay on the render
     // thread). Decides how close to the ~7.5s floor an async readback can get before the CPU pass
     // becomes the residual bottleneck.
@@ -488,7 +488,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
     );
     // Torn-readback semaphore: tear score of the last publish attempt + the run max, plus how many
     // keyed frames were skipped as torn vs published clean. A high max with clean>0 means clean
-    // frames DO land (gate suffices); clean==0 with high max means every driven frame tears (the
+    // frames do land (gate suffices); clean==0 with high max means every driven frame tears (the
     // readback needs real GPU sync). clean_min is the lowest clean score seen (baseline).
     push_json_usize(
         body,
@@ -538,7 +538,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         PROFILE_DISPLAY_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
     );
     // Teardown-fence protocol (freeze relaxation): skips = pump frames yielded to a live
-    // teardown; waits = teardowns that paused for a mid-drive pump; timeouts MUST stay 0
+    // teardown; waits = teardowns that paused for a mid-drive pump; timeouts must stay 0
     // (nonzero == one frame of the old TOCTOU exposure leaked past the 10ms cap).
     push_json_usize(
         body,
@@ -640,17 +640,17 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
             "  \"oracle_delaydelete_highwater\": {dd_highwater},\n"
         ));
     }
-    // RENDER-RESOURCE-RELEASE oracles (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips-real-
+    // Render-resource-release oracles (bd AC-2-answered-native-reload-no-dip-mod-ownload-dips-real-
     // divergence-phase3 + PHASE3-render-release-is-CommonFinalize). The switch reload renders ~+40ms/
-    // frame heavier than firstload at IDLE with FLAT GX cmdqueue fill and FLAT entity counts, so the
-    // extra cost is render EXECUTION the reload leaves live: own_load_switch_reload_fire SKIPS the native
+    // frame heavier than firstload at idle with flat GX cmdqueue fill and flat entity counts, so the
+    // extra cost is render execution the reload leaves live: own_load_switch_reload_fire skips the native
     // return-title render-resource release that `CS::InGameStep::_Common_Finalize` (RVA 0xaed380)
     // performs -- that teardown resets g_GxDrawContext's per-window render outputs (FUN_1419eaf90) and
     // frees GLOBAL_CSDistViewManager / GLOBAL_WorldChrMan / GLOBAL_MapItemMan / bullet+dmg managers.
-    // These are PASSIVE reads (no hooks -- per bd gpu-frame-us-ecl-piggyback-oracle-crashes-native-path
-    // NO per-ECL/per-draw hooks) that expose the live render-output vector plus the render managers the
+    // These are passive reads (no hooks -- per bd gpu-frame-us-ecl-piggyback-oracle-crashes-native-path
+    // no per-ECL/per-draw hooks) that expose the live render-output vector plus the render managers the
     // skipped teardown would have freed, so a heavier reload frame can be told apart from a clean control
-    // by STRUCTURE (extra render outputs / leftover managers) rather than only the _Common_Finalize hook
+    // by structure (extra render outputs / leftover managers) rather than only the _Common_Finalize hook
     // counter (oracle_common_finalize_count). RE grounding (dump pc_eldenring_runtime.1.16.2.exe, base
     // 0x140000000): the 0xaed380 disasm loads these exact GLOBAL_* data globals; the GxDrawContext
     // render-output container layout is confirmed by its ctor GXSR::GxDrawContext::GxDrawContext
@@ -665,7 +665,7 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         const GXDC_OUTPUT_VEC_END_OFFSET: usize = 0x130;
         const GXDC_OUTPUT_VEC_CAP_OFFSET: usize = 0x138;
         // Per-window render-output entry stride (prior RE, present_overlay: each inline entry is 0x170
-        // bytes, first qword = the per-window output object). Used ONLY to derive a human-readable count;
+        // bytes, first qword = the per-window output object). Used only to derive a human-readable count;
         // the raw byte span is emitted alongside so the signal survives if the stride is ever corrected.
         const GXDC_OUTPUT_ENTRY_STRIDE: usize = 0x170;
         // GLOBAL_* render managers _Common_Finalize frees (data RVAs read straight off the 0xaed380
@@ -735,13 +735,13 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_multi_model_publish_skips",
         PROFILE_MULTI_MODEL_PUBLISH_SKIPS.load(Ordering::SeqCst),
     );
-    // IDLE-ANIM BIND semaphores (bd portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03):
+    // Idle-ANIM BIND semaphores (bd portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03):
     // bind_state 1 = an engine-grounded idle anim bound (handle real), 2 = no candidate resolved;
     // handle_before != sentinel proves the native static-pose anim-0 bind had resolved (anim
-    // resources ARE loaded); sentinel is the DAT_143b39470 null-handle global (constant if the
-    // corrected RE is right). MOTION vs FLICKER: motion_metric diffs the depth-keyed ALPHA
+    // resources are loaded); sentinel is the DAT_143b39470 null-handle global (constant if the
+    // corrected RE is right). Motion vs FLICKER: motion_metric diffs the depth-keyed alpha
     // silhouette (lighting-immune), luma_flicker diffs luma on the same grid (quantifies the
-    // per-frame lighting change). Product proof of "portrait animates" = bind_state 1 AND
+    // per-frame lighting change). Product proof of "portrait animates" = bind_state 1 and
     // motion_metric_max clearly above 0 with luma_flicker as the lighting control.
     push_json_usize(
         body,
@@ -753,10 +753,10 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_facedata_neq_ticks",
         PORTRAIT_FACEDATA_NEQ_TICKS.load(Ordering::SeqCst),
     );
-    // FACE-IDENTITY semaphore (user directive 2026-07-06): at each build kick for a slot owned by a
+    // Face-identity semaphore (user directive 2026-07-06): at each build kick for a slot owned by a
     // foreign-save preview, the record's inner FaceDataBuffer is re-hashed against the fingerprint
     // stored when the preview wrote it. `mismatches > 0` == the portrait was about to render a
-    // DIFFERENT character's face than the one the user picked -- fail-fast signal for probe watchers.
+    // different character's face than the one the user picked -- fail-fast signal for probe watchers.
     push_json_usize(
         body,
         "oracle_portrait_face_identity_checks",
@@ -767,10 +767,10 @@ fn write_portrait_pipeline_oracles(body: &mut String, base: usize) {
         "oracle_portrait_face_identity_mismatches",
         PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
     );
-    // PUBLISHED-vs-LOADED identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
+    // Published-vs-loaded identity (bd er-effects-rs-qoqc defect 6 / er-effects-rs-91zb).
     // Asserted at every loading-window close. The face-identity pair above catches a record
-    // whose FACE was rewritten under a slot; these catch the portrait being built for the
-    // WRONG SLOT entirely -- the class that put slot 9's head on screen for 29.7s while slot 5
+    // whose face was rewritten under a slot; these catch the portrait being built for the
+    // wrong slot entirely -- the class that put slot 9's head on screen for 29.7s while slot 5
     // loaded with every other oracle reporting ok. Read `_checks` first: 0 mismatches with 0
     // checks is an unexercised path, not a pass.
     push_json_usize(

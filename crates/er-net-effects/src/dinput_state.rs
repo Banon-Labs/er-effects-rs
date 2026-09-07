@@ -1,10 +1,10 @@
-//! Which `IDirectInputDevice8::GetDeviceState` calls are KEYBOARD reads.
+//! Which `IDirectInputDevice8::GetDeviceState` calls are keyboard reads.
 //!
-//! THE BUG THIS EXISTS TO KILL. Every DirectInput device of a class shares one vtable, so hooking
+//! The bug this exists to kill. Every DirectInput device of a class shares one vtable, so hooking
 //! the keyboard's `GetDeviceState` slot also intercepts the mouse when both resolve to the same
 //! implementation -- the install path already detects that case. A mouse read hands the hook a
 //! 16-byte `DIMOUSESTATE`, and reading DIK offsets out of it finds nothing, so the arrow keys all
-//! look RELEASED. That wipes the held-key mask, and the next genuine keyboard read -- same frame,
+//! look released. That wipes the held-key mask, and the next genuine keyboard read -- same frame,
 //! key still physically down -- looks like a brand new press.
 //!
 //! The result is one queued step per interleaved poll for as long as the key is held: the
@@ -24,7 +24,7 @@ pub(crate) const KEYBOARD_STATE_BYTES: usize = 256;
 
 /// Is this state buffer the keyboard's DIK table?
 ///
-/// EXACT, not `>=`: `DIJOYSTATE2` is 272 bytes and would pass a lower bound while containing
+/// Exact, not `>=`: `DIJOYSTATE2` is 272 bytes and would pass a lower bound while containing
 /// axis and POV data at the offsets we would read as arrow keys.
 pub(crate) fn is_keyboard_state(size: u32) -> bool {
     size as usize == KEYBOARD_STATE_BYTES
@@ -42,7 +42,7 @@ pub(crate) const MOUSE_BUTTON0_OFFSET: usize = 12;
 
 /// Is this state buffer a mouse read?
 ///
-/// EXACT sizes again, for the same reason: a lower bound would let `DIJOYSTATE`'s axis bytes be
+/// Exact sizes again, for the same reason: a lower bound would let `DIJOYSTATE`'s axis bytes be
 /// rewritten as if they were mouse buttons.
 pub(crate) fn is_mouse_state(size: u32) -> bool {
     matches!(size as usize, MOUSE_STATE_BYTES | MOUSE_STATE2_BYTES)
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn the_left_button_sits_after_the_three_axes() {
-        // Both layouts open with LONG lX, lY, lZ.
+        // Both layouts open with long lX, lY, lZ.
         assert_eq!(MOUSE_BUTTON0_OFFSET, 3 * size_of::<i32>());
         // The narrower of the two layouts still has room for the byte we blank.
         const { assert!(MOUSE_BUTTON0_OFFSET < MOUSE_STATE_BYTES) };

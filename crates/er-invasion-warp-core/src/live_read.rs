@@ -1,4 +1,4 @@
-//! FAIL-CLOSED read of the live `CSAutoInvadePoint` red-black tree.
+//! Fail-closed read of the live `CSAutoInvadePoint` red-black tree.
 //!
 //! # Why this is not `for entry in &singleton.entries`
 //!
@@ -7,10 +7,10 @@
 //! `slice::from_raw_parts(head, count)`. That is correct once the container is mounted and
 //! catastrophic before it: a half-initialised node, a torn `count`, or a stale pointer becomes
 //! an access violation inside the user's live game. A cyclic/corrupt tree is worse still --
-//! the successor walk never terminates and the GAME THREAD hangs.
+//! the successor walk never terminates and the game thread hangs.
 //!
 //! This module reads the same structure through a fault-tolerant [`CatalogMemory`] (in the DLL,
-//! `ReadProcessMemory` against our own process, which returns FALSE instead of raising on
+//! `ReadProcessMemory` against our own process, which returns false instead of raising on
 //! unmapped memory) and refuses anything implausible. Every failure mode is a `Result`, never a
 //! fault and never an unbounded loop:
 //!
@@ -20,14 +20,14 @@
 //! * more nodes visited than the tree claims to hold (a cycle, or a torn rotation) -> the same
 //! * a non-finite coordinate -> the same
 //! * the tree structurally empty (`size == 0`, or the root is the sentinel) -> `CatalogEmpty`,
-//!   which is a TIMING answer: the `.aipbnd` files have not been processed yet, ask again later
+//!   which is a timing answer: the `.aipbnd` files have not been processed yet, ask again later
 //!
 //! The walk is an explicit-stack DFS with a hard visit budget, so it cannot recurse and cannot
-//! spin. It ends by asserting that the number of value nodes it visited EQUALS the `size` the
+//! spin. It ends by asserting that the number of value nodes it visited equals the `size` the
 //! map itself carries -- the cheapest available check that the read did not race the loader.
 //!
 //! That last check is load-bearing rather than belt-and-braces: the `.aipbnd` entries are fed in
-//! one `AddForBlockId` at a time while the game boots, so a walk CAN overlap an insert and the
+//! one `AddForBlockId` at a time while the game boots, so a walk can overlap an insert and the
 //! rebalancing rotations it performs. Nothing is freed during a build-up, so the worst a
 //! concurrent rotation can do is make the walk visit a node twice or miss one -- and both show
 //! up as `value_nodes != count`, which returns an error the sampler simply retries. It cannot
@@ -59,7 +59,7 @@
 //! ([`crate::aip::AIP_POINT_LEN`]) because `AddForBlockId` (`0x140a69550`) `memcpy`s the file
 //! payload verbatim into a `fileSize - 0x10` allocation.
 //!
-//! # `pointCount` IS 32 BITS, and its upper dword is uninitialised stack
+//! # `pointCount` is 32 BITS, and its upper dword is uninitialised stack
 //!
 //! This resolves the open risk `docs/plans/world-map-invasion-warp.md` §6 flagged as "not proven
 //! either way offline". It is proven now, statically, and it decides how the field is read.
@@ -79,12 +79,12 @@
 //! reads the low dword: `_GetCurBreakInPointVecFromAutoIntrudePoint` (`0x140a0c4f0`) tests
 //! `0 < (int)count` and loops `while ((int)i < (int)count)`.
 //!
-//! So this module reads `pointCount` as a **u32** and IGNORES the upper dword. Two consequences
+//! So this module reads `pointCount` as a **u32** and ignores the upper dword. Two consequences
 //! worth stating plainly:
 //!
 //! * reading it as the `usize` the `fromsoftware-rs` binding declares would pick up that garbage
 //!   and reject every block (or, via that binding's `slice::from_raw_parts`, fault immediately);
-//! * a stale-stack upper dword is normal engine behaviour here, NOT evidence of corruption, so
+//! * a stale-stack upper dword is normal engine behaviour here, not evidence of corruption, so
 //!   it must not fail the read.
 
 use crate::aip::AIP_POINT_LEN;
@@ -95,7 +95,7 @@ use crate::invasion_warp::{
 /// A fault-tolerant view of the address space the catalog is read out of.
 ///
 /// The whole safety argument of this module rests on the implementation's contract: `read`
-/// MUST return `false` for an unmapped/unreadable range rather than faulting. The DLL satisfies
+/// must return `false` for an unmapped/unreadable range rather than faulting. The DLL satisfies
 /// it with `ReadProcessMemory` on the current-process pseudo-handle; the host tests satisfy it
 /// with an in-memory image, which is why every branch below is reachable from `cargo test`.
 pub trait CatalogMemory {
@@ -115,7 +115,7 @@ pub const MAP_HEADER_LEN: usize = 0x18;
 
 /// `CSAutoInvadePointTreeNode::left`.
 pub const NODE_LEFT_OFFSET: usize = 0x00;
-/// `CSAutoInvadePointTreeNode::parent` (on the sentinel, this is the ROOT).
+/// `CSAutoInvadePointTreeNode::parent` (on the sentinel, this is the root).
 pub const NODE_PARENT_OFFSET: usize = 0x08;
 /// `CSAutoInvadePointTreeNode::right`.
 pub const NODE_RIGHT_OFFSET: usize = 0x10;
@@ -394,7 +394,7 @@ impl CatalogMemory for ProcessMemory {
             return false;
         };
         // SAFETY: `read_bytes` is itself the fault-tolerant primitive -- it forwards to
-        // `ReadProcessMemory`, which validates the range in the kernel and returns FALSE for
+        // `ReadProcessMemory`, which validates the range in the kernel and returns false for
         // anything unmapped rather than faulting in our thread.
         unsafe { er_game_base::mem::read_bytes(addr, out) }
     }
@@ -704,7 +704,7 @@ mod tests {
     fn a_block_with_zero_points_contributes_nothing_and_does_not_read_its_pointer() {
         let mut memory = healthy_map();
         memory.put_u64(NODE_1 + NODE_POINT_COUNT_OFFSET as u64, 0);
-        // A null array pointer alongside count==0 must NOT be treated as corruption.
+        // A null array pointer alongside count==0 must not be treated as corruption.
         memory.put_u64(NODE_1 + NODE_POINTS_OFFSET as u64, 0);
         let catalog = read_catalog(&memory, SINGLETON).expect("zero-point block is legal");
         assert_eq!(catalog.summary().block_count, 2);

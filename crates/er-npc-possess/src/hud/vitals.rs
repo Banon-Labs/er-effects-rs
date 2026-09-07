@@ -1,4 +1,4 @@
-//! THE ARITHMETIC, with no game in the room.
+//! The arithmetic, with no game in the room.
 //!
 //! Eight values come out of the possessed creature's `CSChrDataModule` and eight go into the
 //! HUD's `FrontEndViewValues`. Six of those are a straight copy; two are computed, and both
@@ -9,7 +9,7 @@
 //! # The two computed fields, and where they come from
 //!
 //! `UpdatePlayerComponents` does not read `maxRecoverableHp` or `hpMax` out of the data module --
-//! it CALLS for them. Both callees are two-instruction leaves, byte-identical in 1.16.2 and 1.17,
+//! it calls for them. Both callees are two-instruction leaves, byte-identical in 1.16.2 and 1.17,
 //! so this crate performs the loads instead of resolving two more game addresses:
 //!
 //! | callee | 1.16.2 | 1.17 | whole body |
@@ -20,11 +20,11 @@
 //! That keeps the mod's address budget where layer 3 left it: one resolved function, and it is
 //! not one of these.
 //!
-//! # `hpMax` is a DEFICIT
+//! # `hpMax` is a deficit
 //!
 //! The single most misreadable thing here. The game computes the view's `hpMax` as
 //! `GethpMaxUncapped(data) - data.hpMax`, i.e. **uncapped minus capped** -- how much maximum HP
-//! has been taken away, which the HUD draws as the darkened tail of the bar. The bar's WIDTH is
+//! has been taken away, which the HUD draws as the darkened tail of the bar. The bar's width is
 //! `hpMaxUncapped`. On a character with no reduction the two are equal and the field is zero.
 //! For a possessed creature they are equal too, because `FUN_140438a50` writes both from the same
 //! `NpcParam.hp`, so a boss shows a full undarkened bar. Reproducing the subtraction faithfully is
@@ -50,7 +50,7 @@
 //!
 //! # What an empty pool is turned into, and why not zero
 //!
-//! An empty pool is rendered as **`0` current out of a max clamped up to 1** -- an EMPTY bar.
+//! An empty pool is rendered as **`0` current out of a max clamped up to 1** -- an empty bar.
 //! The two rejected alternatives:
 //!
 //! * Passing `1/1` through unchanged draws a full one-point bar, which reads as a bug rather than
@@ -64,7 +64,7 @@
 // Pure; ungated so `cargo test` proves it on the host with no game running.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-/// At or below this, a pool is treated as ABSENT rather than nearly empty.
+/// At or below this, a pool is treated as absent rather than nearly empty.
 ///
 /// One rather than zero because there are two ways to be empty and this catches both: the
 /// `CSChrDataModule` constructor's default of `1`, and the `0` that `FUN_140438a50` writes from
@@ -80,7 +80,7 @@ const EMPTY_POOL_FLOOR: i32 = 1;
 pub(crate) struct Source {
     /// `+0x138 hp`.
     pub(crate) hp: i32,
-    /// `+0x13c hpMax` -- the effective maximum, the CAPPED one.
+    /// `+0x13c hpMax` -- the effective maximum, the capped one.
     pub(crate) hp_max: i32,
     /// `+0x140 hpMaxUncapped` -- the bar's width.
     pub(crate) hp_max_uncapped: i32,
@@ -101,7 +101,7 @@ pub(crate) struct Source {
 pub(crate) struct View {
     pub(crate) player_hp: i32,
     pub(crate) max_recoverable_hp: i32,
-    /// The LOST max, not the max. See the module docs.
+    /// The lost max, not the max. See the module docs.
     pub(crate) hp_max: i32,
     pub(crate) hp_max_uncapped: i32,
     pub(crate) fp: i32,
@@ -147,7 +147,7 @@ impl Source {
         View {
             player_hp: self.hp,
             max_recoverable_hp: self.max_recoverable_hp(),
-            // `sub` on two i32s, exactly as the game does it. WRAPPING rather than saturating,
+            // `sub` on two i32s, exactly as the game does it. Wrapping rather than saturating,
             // because the instruction wraps: a saturating stand-in would diverge from the game on
             // exactly the inputs where the difference could be noticed, and this field's whole
             // job is to be what the game would have computed.
@@ -177,7 +177,7 @@ impl Source {
     const fn pool(current: i32, max: i32) -> (i32, i32) {
         match Pool::of(max) {
             Pool::Populated => (current, max),
-            // Current zeroed so the bar reads EMPTY; max floored so nothing downstream divides by
+            // Current zeroed so the bar reads empty; max floored so nothing downstream divides by
             // zero. `max` here is <= 1 by construction, so the floor only ever raises 0 to 1 and
             // leaves 1 alone -- it can never shrink a real pool.
             Pool::Empty => (0, EMPTY_POOL_FLOOR),
@@ -215,7 +215,7 @@ mod tests {
         }
     }
 
-    /// The straight copies, and that possessing a boss puts ITS numbers on the bar.
+    /// The straight copies, and that possessing a boss puts its numbers on the bar.
     #[test]
     fn a_boss_drives_the_hp_and_stamina_bars_with_its_own_numbers() {
         let view = a_boss().view();
@@ -228,12 +228,12 @@ mod tests {
         assert_eq!(view.stamina_max, 50);
     }
 
-    /// THE DEFICIT. Equal capped and uncapped maxima must give ZERO, i.e. no darkened tail --
+    /// The deficit. Equal capped and uncapped maxima must give zero, i.e. no darkened tail --
     /// which is the case for every creature, because both come from `NpcParam.hp`.
     #[test]
     fn hp_max_is_the_lost_maximum_and_is_zero_when_nothing_is_lost() {
         assert_eq!(a_boss().view().hp_max, 0);
-        // ...and it reports the shortfall when there IS one, the way a cursed player's bar does.
+        // ...and it reports the shortfall when there is one, the way a cursed player's bar does.
         let cursed = Source {
             hp_max: 1800,
             hp_max_uncapped: 2521,
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(a_boss().view().max_recoverable_hp, 2100);
     }
 
-    /// THE EMPTY-POOL RULE, on the value the params actually carry. `mp` is 0 for every boss, so
+    /// The empty-pool rule, on the value the params actually carry. `mp` is 0 for every boss, so
     /// this is the common case rather than an edge case.
     #[test]
     fn an_fp_pool_of_zero_becomes_an_empty_bar_and_never_a_zero_maximum() {
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(a_boss().fp_pool(), Pool::Empty);
     }
 
-    /// The OTHER way to be empty: the constructor default of 1, which would otherwise draw a
+    /// The other way to be empty: the constructor default of 1, which would otherwise draw a
     /// full one-point bar. Both routes must land on the same emptied result.
     #[test]
     fn a_pool_left_at_the_constructor_default_of_one_is_also_emptied() {
@@ -316,7 +316,7 @@ mod tests {
     }
 
     /// Stamina is populated for 7,043 of the 7,045 shipped rows, so the ordinary outcome is that
-    /// the rule does NOT fire on it -- and the two degenerate rows still land somewhere sane.
+    /// the rule does not fire on it -- and the two degenerate rows still land somewhere sane.
     #[test]
     fn stamina_is_normally_populated_and_the_degenerate_rows_still_behave() {
         assert_eq!(a_boss().stamina_pool(), Pool::Populated);
@@ -349,7 +349,7 @@ mod tests {
             stamina_max: i32::MAX,
         };
         let view = nonsense.view();
-        // No assertion about WHICH wrapped value comes out -- only that producing it is not a
+        // No assertion about which wrapped value comes out -- only that producing it is not a
         // panic, which is the property the detour depends on.
         assert_eq!(view.hp_max_uncapped, i32::MAX);
         assert_eq!(view.fp_max, i32::MAX, "a huge max is still a real pool");

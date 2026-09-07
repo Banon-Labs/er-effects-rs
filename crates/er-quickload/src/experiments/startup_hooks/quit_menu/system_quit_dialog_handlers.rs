@@ -1,6 +1,6 @@
 use super::*;
 
-// Row TEXT facade. The fixed-capacity wide label/help buffers, the compile-time widener behind
+// Row text facade. The fixed-capacity wide label/help buffers, the compile-time widener behind
 // them, the two live build-url help lines and the Wine path-spelling helpers moved verbatim to
 // `er_quit_menu_core::row_text`; they touch no game state, so they crossed with no seam entry.
 pub(crate) use er_quit_menu_core::row_text::*;
@@ -80,7 +80,7 @@ pub(crate) unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usiz
     };
     let job_slot = &SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT as *const AtomicUsize as usize;
     SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.store(NULL, Ordering::SeqCst);
-    // Latch the profile-load flow as active NOW (before the ProfileSelect job/Run hook runs) so the native
+    // Latch the profile-load flow as active now (before the ProfileSelect job/Run hook runs) so the native
     // load-confirm MessageBox the own_stepper self-pump triggers is suppressed and cannot crash the game.
     // Cleared on ProfileSelect reset (system_quit_reset_profile_select_state).
     SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(1, Ordering::SeqCst);
@@ -169,13 +169,13 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     ret
 }
 
-/// Route one Quit-tab row ACTION thunk (`FUN_140961640` for the first native row, `FUN_1409610d0`
+/// Route one Quit-tab row action thunk (`FUN_140961640` for the first native row, `FUN_1409610d0`
 /// for the second and every row cloned from it).
 ///
-/// `action_obj` is the thunk's `this`, and it is ONLY `controller + 0x70` -- the controller's own
+/// `action_obj` is the thunk's `this`, and it is only `controller + 0x70` -- the controller's own
 /// inline `std::function` storage (see `system_quit_row_identity.rs`). It therefore cannot name a
 /// row, so the row is resolved positively from the row table + the live label at the dialog's list
-/// cursor. An unresolvable row is SUPPRESSED rather than forwarded, because the native action behind
+/// cursor. An unresolvable row is suppressed rather than forwarded, because the native action behind
 /// the second row is the irreversible Return to Desktop.
 pub(crate) unsafe fn system_quit_route_button_action_or_forward(
     action_obj: usize,
@@ -195,7 +195,7 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
         -1
     };
     // This `_Func_impl` thunk vtable (dump 0x142b125d0 slot +0x10) is shared by several construction
-    // sites, so the hook also sees cancel/confirm rows of dialogs that are NOT the patched Quit tab.
+    // sites, so the hook also sees cancel/confirm rows of dialogs that are not the patched Quit tab.
     // Forward those untouched -- and before resolving, so foreign dialogs never pollute the row
     // oracles.
     let table_dialog = SYSTEM_QUIT_ROW_TABLE_DIALOG.load(Ordering::SeqCst);
@@ -289,8 +289,8 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
             0
         }
         Some(QuitRow::ReturnToDesktop) => {
-            // The genuine Return to Desktop, positively identified. Make quit an INSTANT ALT+F4:
-            // persist the save, release the cursor clip, and ExitProcess(0) BEFORE the world
+            // The genuine Return to Desktop, positively identified. Make quit an instant ALT+F4:
+            // persist the save, release the cursor clip, and ExitProcess(0) before the world
             // teardown renders a loading screen. The old clean-kill (system_quit_ownership_repro)
             // fired mid-teardown, so the loading cover was already visible.
             //
@@ -322,9 +322,9 @@ pub(crate) unsafe fn system_quit_route_button_action_or_forward(
             unsafe { ExitProcess(0) }
         }
         None => {
-            // The patched Quit dialog, row NOT identified. Suppress instead of forwarding:
+            // The patched Quit dialog, row not identified. Suppress instead of forwarding:
             // forwarding this thunk runs the native action, and for the second Quit row that action
-            // IS Return to Desktop. A row press that does nothing is a nuisance; a row press that
+            // is Return to Desktop. A row press that does nothing is a nuisance; a row press that
             // terminates the process is not shippable.
             system_quit_row_gate_instant_quit(verdict, hook_name);
             append_autoload_debug(format_args!(
@@ -385,10 +385,10 @@ pub(crate) unsafe fn system_quit_controller_should_invoke_action(
 }
 
 /// `PropertyNewButtonController::Activate` (dump `FUN_1409749f0`, vtable slot 2). Called once per
-/// frame per DISPATCHED row with the live event; the controller's own should-invoke predicate decides
+/// frame per dispatched row with the live event; the controller's own should-invoke predicate decides
 /// whether that event is a real confirm.
 ///
-/// The controller is used ONLY to scope the hook to the patched Quit tab. It cannot name a row: the
+/// The controller is used only to scope the hook to the patched Quit tab. It cannot name a row: the
 /// dispatch collapses cloned buttons onto the native Return-to-Desktop controller, and the pointer at
 /// `controller + 0xa8` is merely `controller + 0x70`. Row identity comes from
 /// `system_quit_resolve_row_now`, i.e. the dialog's own list cursor.
@@ -467,11 +467,11 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             ));
         }
         Some(QuitRow::ReturnToDesktop) => {
-            // Positively the genuine Return to Desktop. Make quit an INSTANT ALT+F4: persist the
-            // save, release the cursor, and ExitProcess(0) BEFORE the world teardown renders any
+            // Positively the genuine Return to Desktop. Make quit an instant ALT+F4: persist the
+            // save, release the cursor, and ExitProcess(0) before the world teardown renders any
             // loading screen / our isolated overlay.
             //
-            // Require that NO profile switch is in flight: the native return-desktop controller is
+            // Require that no profile switch is in flight: the native return-desktop controller is
             // dispatched again from ProfileSelect (observed: 12 activations carried it during one
             // switch), so without this gate a switch's activation would ExitProcess mid-switch. And
             // never exit mid save-flow, where a commit may be armed or in flight.
@@ -527,8 +527,8 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
     }
 }
 
-/// The ACTIVE save file the character-switch feature snapshots + restores + writes to. Resolved from
-/// runtime GROUND TRUTH via `active_save_file_for_system_quit()`: a direct-file save selected in the
+/// The active save file the character-switch feature snapshots + restores + writes to. Resolved from
+/// runtime ground truth via `active_save_file_for_system_quit()`: a direct-file save selected in the
 /// missing-save picker is a read-only source copied into the private redirected native save tree, so
 /// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
 /// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
@@ -564,7 +564,7 @@ pub(crate) fn system_quit_env_save_dir() -> Result<String, &'static str> {
 /// staging, and last-picked-directory persistence. Menu-thread only (preview writes + renderer
 /// refresh).
 /// The caller is responsible for the pre-pick work (`system_quit_save_swap_restore_profile_summary`
-/// + `system_quit_save_swap_arm_original`), which happens at picker OPEN time.
+/// + `system_quit_save_swap_arm_original`), which happens at picker open time.
 pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     // Extension policy: vanilla only accepts `.sl2`; Seamless accepts its native `.co2` plus
     // vanilla `.sl2` sources so a vanilla save can be loaded/imported while ERSC owns the session.
@@ -583,7 +583,7 @@ pub(crate) unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool
         ));
         return false;
     }
-    // THE shared extension filter (`save_picker.rs`), not a second copy: the in-game listing, the
+    // The shared extension filter (`save_picker.rs`), not a second copy: the in-game listing, the
     // OS dialog's post-return check and this ingest gate must not be able to disagree about which
     // container flavors the active runtime accepts.
     let ext_ok = crate::experiments::save_picker::save_picker_extension_accepted(
@@ -818,16 +818,16 @@ pub(crate) unsafe fn system_quit_save_game_request_save_only() {
 
 /// Fire the native save request pair FORCED: `throttled = false` for both calls.
 ///
-/// The bool is PINNED (1.16.2 Ghidra decompile, 2026-07-28; see the RVA consts):
+/// The bool is pinned (1.16.2 Ghidra decompile, 2026-07-28; see the RVA consts):
 /// `RequestSave(true)` runs a 60-second throttle against `GameMan+0xb98` whose early
-/// return sets NO flags, and `SaveRequest_Profile(true)` the same against `+0xb88`
+/// return sets no flags, and `SaveRequest_Profile(true)` the same against `+0xb88`
 /// (`SetSeconds(0x3c)`). Under boot-time global suppression the dispatchers still run
 /// their commit tails for swallowed autosaves, so those throttle timestamps stay warm --
 /// a throttled user press within 60 s of any swallowed autosave would silently set
 /// nothing and strand the armed one-shot bypass token. The Save Game commit therefore
 /// always fires with `false`. The quit-to-desktop sites deliberately keep
 /// `system_quit_save_game_request_save_only` (true/true): under suppression those become
-/// intentional no-op saves -- the Save Game row is the ONLY path that really writes.
+/// intentional no-op saves -- the Save Game row is the only path that really writes.
 pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
     const FORCED_NOT_THROTTLED: u8 = false as u8;
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
@@ -853,7 +853,7 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
 
 /// Call one of the game's own save-request retractions after verifying its whole body.
 ///
-/// Fails CLOSED through `save_flow_verify_rva`: an unresolvable address or a single drifted
+/// Fails closed through `save_flow_verify_rva`: an unresolvable address or a single drifted
 /// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
 /// the process.
 pub(crate) unsafe fn call_verified_retract(
@@ -903,10 +903,10 @@ pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (
 /// stage 5 CLOSING_ABORT (the user declined; the tick returns to the world having written
 /// nothing).
 ///
-/// CLOSE-THEN-FIRE (save-game-flow WP1, 2026-07-28): the save request is never fired here.
+/// Close-then-fire (save-game-flow WP1, 2026-07-28): the save request is never fired here.
 /// Firing while menus are open is a dispatch-split hazard -- `ShouldSave` (the b72 lane)
 /// requires `!CanShowSaveMenu()` (`CSMenuMan+0x13c == 0`) but the b73 gate `FUN_140679370`
-/// does NOT, so an open-menu fire lets the b73-only lane dispatch a system-only submit first,
+/// does not, so an open-menu fire lets the b73-only lane dispatch a system-only submit first,
 /// that submit consumes the one-shot suppression-bypass token, and the later char-slot submit
 /// is swallowed. Staging the commit and firing at stage 7 produces a single combined
 /// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
@@ -925,7 +925,7 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
     }
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
-    // Stage the outcome BEFORE the close sequence so the save-flow tick owns the flow
+    // Stage the outcome before the close sequence so the save-flow tick owns the flow
     // from the next game-task frame onward.
     SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
@@ -970,24 +970,24 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
     closed_option || closed_top
 }
 
-/// Enter the Save Game flow from the row press: STRAIGHT TO THE DESTINATION LIST.
+/// Enter the Save Game flow from the row press: Straight to the destination list.
 ///
 /// Captures the System/Quit dialog the whole flow is anchored on, then hands the browser open to
 /// the menu pump via `SAVE_DEST_OPEN_PICKER_PENDING` and parks in stage 3. Nothing is asked here
 /// and nothing is written here.
 ///
-/// WHY THE PUMP AND NOT AN INLINE OPEN. Opening the destination browser stages ProfileSummary row
+/// Why the pump and not an inline open. Opening the destination browser stages ProfileSummary row
 /// records and submits an `05_010` MenuJob; `system_quit_menu_window_run_post` is the context that
 /// was runtime-proven to own that submit (2026-07-29, three consecutive commits), and it is the
 /// same hand-off the OS surface needs in order to block inside comdlg32 off the row-action stack.
 /// The row press therefore stages the request rather than performing it, and stage 3's
 /// `SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS` bounds a pump that never picks it up.
 ///
-/// THERE IS NO "DEGRADE TO AN IMMEDIATE COMMIT" PATH ANY MORE, and its removal is a safety fix
+/// There is no "DEGRADE TO AN IMMEDIATE COMMIT" path any more, and its removal is a safety fix
 /// rather than a simplification. It existed because the old flow could not ask its first question
 /// without the MessageBoxBuilder recipe, so a build that failed the prologue check wrote to the
-/// loaded save with NO confirm at all. Opening a list needs no message box, so a broken recipe now
-/// costs only the overwrite confirm -- and an unconfirmable overwrite is REFUSED at the pick
+/// loaded save with no confirm at all. Opening a list needs no message box, so a broken recipe now
+/// costs only the overwrite confirm -- and an unconfirmable overwrite is refused at the pick
 /// (`save_dest_handle_picked_target`), never performed silently. A free destination name still
 /// commits, because it never needed a confirm in the first place.
 pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
@@ -1003,13 +1003,13 @@ pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     save_dest_reset("save game row press");
     SAVE_FLOW_DIALOG.store(dialog, Ordering::SeqCst);
     SAVE_FLOW_STAGE_TICKS.store(0, Ordering::SeqCst);
-    // The overwrite confirm is only answerable if the MessageBoxDialog BUILDER hook is live --
+    // The overwrite confirm is only answerable if the MessageBoxDialog builder hook is live --
     // that detour is what captures the dialog pointer the stage machine polls. It is normally
     // installed at boot (`online_disable_enabled()` path in the game task), but make sure:
     // this call is idempotent, and the row press is the menu thread, i.e. the one context in
     // which no other thread can be executing the builder while MinHook patches it.
     install_auto_accept_hook();
-    // Same reasoning for the answer observer: `CS::MenuJob::EmitResult` is what tells us WHICH
+    // Same reasoning for the answer observer: `CS::MenuJob::EmitResult` is what tells us which
     // button the user pressed on the branch where the dialog never stores its result. Install
     // is idempotent; if it is not live the poll falls back to `dialog+0x1e8` and reports
     // UNDECIDABLE rather than guessing, so log the state here where the run can see it.
@@ -1025,7 +1025,7 @@ pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
         MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst)
     ));
     if !save_flow_box_recipe_available() || !capture_live {
-        // NOT fatal to the press, and deliberately so: the list needs no message box. Only a pick
+        // Not fatal to the press, and deliberately so: the list needs no message box. Only a pick
         // that would clobber an existing file needs one, and that pick is refused rather than
         // written blind. Say it once here so a run can attribute a later refusal.
         append_autoload_debug(format_args!(
@@ -1059,18 +1059,18 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
     }
 }
 
-/// A 1.16.2-only stack band, and one that CANNOT be carried forward.
+/// A 1.16.2-only stack band, and one that cannot be carried forward.
 ///
 /// The pair below is a 4 KB window of `.text`, not a function plus an offset, so there is nothing
 /// for the 1.16.2 -> 1.17 map to key on. That is not a gap in the map; it is a property of the
 /// band. Measured across the 33 `.pdata` functions it overlaps: 12 are unmapped outright and the
-/// 21 that map move by SEVEN different deltas (`+0xdf0`, `+0xe20`, `+0xe30`, `+0xe40`, `+0xe80`,
+/// 21 that map move by seven different deltas (`+0xdf0`, `+0xe20`, `+0xe30`, `+0xe40`, `+0xe80`,
 /// `+0xe90`, `+0x1560`). A band whose contents move apart has no translated width, so no anchor
 /// rescues it -- unlike the GX transport band, whose 12 functions all move `+0x1e00` together and
 /// which is therefore anchored rather than refused.
 ///
 /// It is also the weakest-evidenced comparison in the tree. `SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA`
-/// (`0x67a3a0`) has exactly ONE direct caller in the whole 1.16.2 image, at `0x59d90e` inside
+/// (`0x67a3a0`) has exactly one direct caller in the whole 1.16.2 image, at `0x59d90e` inside
 /// `FUN_14059d8b0`, which is nowhere near this band; nothing records what the band was measured
 /// from. So the honest treatment is to decline on any build it was not measured on and say so,
 /// rather than invent a 1.17 window. The branch it guards is documented dormant -- the product row
@@ -1159,7 +1159,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     }
     let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    // BOTH return addresses come from ONE resolution of the containing function
+    // Both return addresses come from one resolution of the containing function
     // (`FUN_140958910`), because they are two offsets into it. Reached raw, these were 1.16.2
     // RVAs compared against live stack frames: on 1.17 neither ever matched, nothing was hooked
     // or resolved so nothing was logged, and all three cloned rows silently vanished from the
@@ -1222,7 +1222,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             0
         };
         if native_action != 0 && first_row_call {
-            // The FIRST native row starts a fresh row table: this is the Quit tab building its
+            // The first native row starts a fresh row table: this is the Quit tab building its
             // dialog, and every index/controller from an earlier build is now stale (a heap address
             // may even have been reused by this build).
             system_quit_row_table_reset(dialog);
@@ -1256,13 +1256,13 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         };
         let label_dtor: unsafe extern "system" fn(usize) =
             unsafe { std::mem::transmute(label_dtor_addr) };
-        // THE CLONED ROWS, AS DATA. Each is the same five steps -- build a `MenuHelpLabelComponent`
+        // The cloned rows, as data. Each is the same five steps -- build a `MenuHelpLabelComponent`
         // over this DLL's own process-lifetime label/help arrays, call the native AddCancelButton
         // with it, destruct the component, read back the row the call appended, and record that
         // row's controller + property index. They were two hand-expanded copies of those steps
         // until the third row arrived; a table walked once is what stops the copies drifting.
         //
-        // ORDER IS THE PRODUCT CONTRACT, not a detail: the property index a row lands at IS its
+        // Order is the product contract, not a detail: the property index a row lands at is its
         // grid cell (`row * cols + col`), so this order is what puts Load Character at `Item_1_0`,
         // Load Character from File at `Item_1_1`, Load Build from URL at `Item_2_0` and Generate
         // Build Link at `Item_2_1`. It must match `er_gfx::options_02_040::QUIT6_GRID_CELL_NAMES`.
@@ -1271,7 +1271,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             label: &'static [u16; SYSTEM_QUIT_ROW_TEXT_CAPACITY],
             help: &'static [u16],
             /// Where to record the row's action alias and its `PropertyNewButtonController`. Both
-            /// are telemetry: the row IDENTITY is the list cursor, never these pointers.
+            /// are telemetry: the row identity is the list cursor, never these pointers.
             action_slot: &'static AtomicUsize,
             controller_slot: &'static AtomicUsize,
         }
@@ -1299,7 +1299,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             ClonedRow {
                 row: QuitRow::LoadBuildFromUrl,
                 label: &SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W,
-                // The LIVE buffer, not a constant: the link field rewrites it to say why an
+                // The live buffer, not a constant: the link field rewrites it to say why an
                 // accept was refused, and the row behind the field shows that.
                 help: build_url_row_help_wide(),
                 action_slot: &SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
@@ -1308,7 +1308,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             ClonedRow {
                 row: QuitRow::GenerateBuildLink,
                 label: &SYSTEM_QUIT_GENERATE_BUILD_LINK_LABEL_W,
-                // Also a LIVE buffer, for a different reason: this row opens no field, so when its
+                // Also a live buffer, for a different reason: this row opens no field, so when its
                 // export finishes there is no other surface to report on. The row reports on itself.
                 help: generate_build_link_row_help_wide(),
                 action_slot: &SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
@@ -1319,8 +1319,8 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         let mut any_row_added = false;
         let mut row_log = String::new();
         for cloned in &cloned_rows {
-            // The scratch component lives on THIS stack frame for exactly as long as the native
-            // call needs it: `CS::MenuString` keeps the label POINTER (which is why the arrays are
+            // The scratch component lives on this stack frame for exactly as long as the native
+            // call needs it: `CS::MenuString` keeps the label pointer (which is why the arrays are
             // `const`/process-lifetime), while the component wrapper itself is destructed the
             // instant AddCancelButton returns.
             let mut label_storage =
@@ -1356,7 +1356,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             if action != 0 {
                 cloned.action_slot.store(action, Ordering::SeqCst);
             }
-            // The property INDEX is only recorded once a controller was actually read back. A row
+            // The property index is only recorded once a controller was actually read back. A row
             // whose controller is 0 was not really appended, and recording its index would complete
             // the row table with a lie -- which the resolver would then trust.
             if controller != 0 {
@@ -1372,8 +1372,8 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         if any_row_added {
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
         }
-        // Raise the list widget's item count through the NATIVE setter, not by poking the field.
-        // `GridControl::SetItemCount` writes `+0xd0` AND recomputes the scroll/page row count on the
+        // Raise the list widget's item count through the native setter, not by poking the field.
+        // `GridControl::SetItemCount` writes `+0xd0` and recomputes the scroll/page row count on the
         // embedded scroll control at `+0x1a8` -- exactly what the native rebuild `FUN_140975040`
         // calls. A raw field write left that scroll control still describing the two-row list, which
         // is the state the vertical movement clamp reads.
@@ -1396,7 +1396,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         let bound_after =
             unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         unsafe { system_quit_record_grid_geometry(dialog) };
-        // The row TABLE is the identity from here on: index + live label per row. Log it, and log the
+        // The row table is the identity from here on: index + live label per row. Log it, and log the
         // label actually readable at each captured index so a run shows the table agreeing with
         // memory rather than being trusted.
         let table = SYSTEM_QUIT_ROW_TABLE_ROWS
@@ -1449,8 +1449,8 @@ pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(
 
 /// Scaleform handler inner DESTRUCTOR hook (`FUN_1411a8920`, deobf 0x1411a8900). rcx = the object.
 /// If the object is in our live-set -> a normal teardown: remove it and forward to the original.
-/// If it is NOT live -> a DOUBLE-FREE (the repeated-switch ProfileSelect UAF): the original would
-/// walk this object's now-garbage intrusive list and crash. Log it and RETURN WITHOUT forwarding,
+/// If it is not live -> a double-free (the repeated-switch ProfileSelect UAF): the original would
+/// walk this object's now-garbage intrusive list and crash. Log it and return without forwarding,
 /// so the freed list is never dereferenced. Safe: an already-destructed object needs no second
 /// teardown. This both names the bug (counter + last-obj oracle + debug line) and stops the crash.
 pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
@@ -1466,7 +1466,7 @@ pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
             false
         }
     } else {
-        // Lock poisoned/unavailable: fail SAFE toward forwarding (treat as live) so we never skip a
+        // Lock poisoned/unavailable: fail safe toward forwarding (treat as live) so we never skip a
         // legitimate destructor on a lock hiccup -- the crash is rarer than the lock being fine.
         true
     };

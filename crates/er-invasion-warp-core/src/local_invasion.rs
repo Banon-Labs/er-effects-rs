@@ -5,26 +5,26 @@
 //! Seamless decides the destination server-side and pushes it to the client in a
 //! `ServerPushJoinData`; the block id is at `+0x00` of that struct, and it is written to
 //! `GameMan+0xAC8` by `CS::SosSignMan::SetMultiplayJoinData` (`0x1406FB520`). Measured live
-//! 2026-08-05: `+0x00` was the ONLY offset in all 128 bytes whose u32 equalled the destination, so
+//! 2026-08-05: `+0x00` was the only offset in all 128 bytes whose u32 equalled the destination, so
 //! the field is identified by correlation, not by the reversed field name (`matchPlayerCount`,
 //! which would have pointed elsewhere).
 //!
 //! That is the whole basis for a location filter: at the moment `SetMultiplayJoinData` runs, the
-//! destination is decided and the player has NOT moved. A predicate there can accept or reject
+//! destination is decided and the player has not moved. A predicate there can accept or reject
 //! with certainty. Rejecting means cancelling the match, which was measured non-destructive -- the
 //! session walks `0x22 -> 0x00` and a fresh search works afterwards.
 //!
-//! It also encodes a NEGATIVE result, so nobody re-attempts it: the pre-match candidate table does
-//! NOT predict the destination. Its block-shaped fields were the LOCAL character's own map
+//! It also encodes a negative result, so nobody re-attempts it: the pre-match candidate table does
+//! not predict the destination. Its block-shaped fields were the local character's own map
 //! (`0x1c000000`, matching this save's `c30`) while the match that followed went to `0x3c353800`.
 //! Filtering before connecting is therefore not available, and accept-then-reject is the shape
 //! that works.
 //!
 //! # The anchor
 //!
-//! Every decision is relative to where the player IS. There is always a nearest invasion map point
+//! Every decision is relative to where the player is. There is always a nearest invasion map point
 //! for the player's current position -- that is what `nearest_place_name_text_id` resolves against
-//! the shipped warp rows, same-area only. The anchor carries the block AND the place-name text ids
+//! the shipped warp rows, same-area only. The anchor carries the block and the place-name text ids
 //! valid at that location, because a single warp destination can sit under more than one place
 //! name: one name means one acceptable location, five names mean five.
 //!
@@ -36,7 +36,7 @@
 //! "somewhere in the Haligtree". [`LocalInvasionMode::NamedOnly`] ignores the anchor entirely and
 //! honours a user-supplied list, for hunting a place you are not standing in.
 //!
-//! Disabled is the DEFAULT. This filter cancels real matches, and a mod that silently rejects
+//! Disabled is the default. This filter cancels real matches, and a mod that silently rejects
 //! other players' invasions because a config file appeared is worse than one that does nothing
 //! until asked.
 
@@ -128,7 +128,7 @@ pub struct InvasionCandidate {
     pub block: u32,
     /// Place names resolved for that destination. Empty when none resolved.
     ///
-    /// # Why this is a SET and not one id
+    /// # Why this is a set and not one id
     ///
     /// It used to be a single `PlaceNameTextId`, taken as `.first()` of the resolved list. A block
     /// can sit under several place names -- [`InvasionAnchor`] has always modelled that correctly
@@ -222,7 +222,7 @@ pub enum RejectReason {
     /// than waved through: an unnamed destination is unknown, not universal.
     CandidateUnnamed,
     /// Name-based judging with nothing to judge against -- an anchor with no names, or an empty
-    /// list. Fails CLOSED, because the alternative is accepting everything while appearing to
+    /// list. Fails closed, because the alternative is accepting everything while appearing to
     /// filter.
     NothingToMatchAgainst,
     /// The user excluded this exact location with Delete.
@@ -234,14 +234,14 @@ pub enum RejectReason {
 pub struct LocalInvasionConfig {
     /// Master switch. Off by default.
     pub enabled: bool,
-    /// HUNT MODE: narrow the outgoing lobby query to ONE location instead of rejecting answers.
+    /// Hunt MODE: narrow the outgoing lobby query to one location instead of rejecting answers.
     ///
     /// Off by default and separate from `enabled` because the two do opposite things to your reach.
     /// The reject filter declines matches and still sees every host; hunt asks Steam for a key only
     /// this DLL's users publish, so while it is on a host without the DLL is invisible to you. That
     /// is a trade the user must choose, never a default.
     pub hunt: bool,
-    /// Match ONLY other players running this DLL with this option on.
+    /// Match only other players running this DLL with this option on.
     ///
     /// Rewrites Seamless's `lobby_key` into a pool of our own (see
     /// [`crate::lobby_pool`]). One value drives both the search filter and the publish, so the
@@ -254,16 +254,16 @@ pub struct LocalInvasionConfig {
     /// Announce a rejection on the game's own system-message banner.
     ///
     /// Off by default: it is a notification, and a notification nobody asked for is spam. When on,
-    /// only a CHANGE of wrong destination is announced -- consecutive rejections at the same place
+    /// only a change of wrong destination is announced -- consecutive rejections at the same place
     /// stay silent, because Seamless retries roughly every 20 seconds and the same wrong place
     /// recurs constantly.
     pub reject_notice: bool,
     /// Inject invasion pins into the world map.
     ///
-    /// ON by default -- the pins are the feature. It is configurable because the map path is the
+    /// On by default -- the pins are the feature. It is configurable because the map path is the
     /// crate's largest interaction with live engine memory (it appends 467 rows into the
     /// `WorldMapViewModel`'s row buffer from that object's own constructor), and until this key
-    /// existed there was no way to run the DLL WITHOUT that surgery. That made a whole class of
+    /// existed there was no way to run the DLL without that surgery. That made a whole class of
     /// question unanswerable: a fault that follows opening the map could not be attributed,
     /// because the only A/B available was "this DLL or no DLL", which changes nine other things
     /// at the same time.
@@ -274,9 +274,9 @@ pub struct LocalInvasionConfig {
     pub map_pins: bool,
     /// Install the three Steam-matchmaking detours.
     ///
-    /// ON by default -- location publishing, hunt mode and the pool filter all need them. It is
+    /// On by default -- location publishing, hunt mode and the pool filter all need them. It is
     /// configurable for the same reason as [`Self::map_pins`]: these are the only detours this
-    /// crate installs at addresses it did not derive statically. Each is read out of a LIVE
+    /// crate installs at addresses it did not derive statically. Each is read out of a live
     /// `ISteamMatchmaking` vtable slot at runtime and handed straight to MinHook, and the
     /// installers retry every tick until a read succeeds, so whatever the slot happens to hold at
     /// that instant becomes a five-byte patch target inside `steamclient64.dll`.
@@ -287,11 +287,11 @@ pub struct LocalInvasionConfig {
     pub steam_hooks: bool,
     /// Install the two read-only observers on Seamless Co-op's own code.
     ///
-    /// ON by default -- the `show` observer is the only way this DLL learns the Seamless menu
+    /// On by default -- the `show` observer is the only way this DLL learns the Seamless menu
     /// object's address, and the lobby-key observer reports the one string that decides whether
     /// two Seamless players can see each other at all.
     ///
-    /// It is configurable because these two are the ONLY always-on detours this crate places
+    /// It is configurable because these two are the only always-on detours this crate places
     /// inside `ersc.dll`, and they were the only always-on hooks on the stack of the
     /// `0x140010043` illegal-instruction crash: the fault's frames read
     /// `ersc.dll -> er_invasion_warp -> ersc.dll -> lsteamclient.dll`, and it did not reproduce at
@@ -300,7 +300,7 @@ pub struct LocalInvasionConfig {
     /// what is left to isolate.
     ///
     /// Worth knowing while that A/B is open: both are installed through
-    /// `er_hook::register_union_hook`, the entry point for a 1.16.2 GAME constant, even though
+    /// `er_hook::register_union_hook`, the entry point for a 1.16.2 game constant, even though
     /// their addresses are derived from the running `ersc.dll`. That path audits the destination
     /// by translating it through a table keyed by eldenring.exe RVAs, which has nothing to say
     /// about a module based at 0x180000000 -- so unlike every runtime-derived hook in this crate,
@@ -312,8 +312,8 @@ pub struct LocalInvasionConfig {
     pub ersc_observers: bool,
     /// Install the `show` observer specifically, when [`Self::ersc_observers`] is on.
     ///
-    /// The master switch proved the PAIR is what crashes; these two split that pair so the next
-    /// run names which one. Both default ON, so turning the master on restores the previous
+    /// The master switch proved the pair is what crashes; these two split that pair so the next
+    /// run names which one. Both default on, so turning the master on restores the previous
     /// behaviour exactly. Both patch sites were checked statically against
     /// `vendor-archive/seamless/ersc-2.0.1.dll` and are mechanically sound -- MinHook's five bytes
     /// land exactly on `push rbp; push r15; push r14`, a clean instruction boundary with nothing
@@ -361,16 +361,16 @@ pub struct LocalInvasionConfig {
     /// deriving the third from [`Self::judge`] against the player's current position made the map
     /// answer a question it should not: standing in a hub, every destination is a `WrongPlaceName`
     /// reject, so the whole map rendered one uniform tier and conveyed nothing. Chosen / untouched
-    /// / excluded are properties OF A LOCATION, so they read the same from anywhere.
+    /// / excluded are properties of a location, so they read the same from anywhere.
     pub blocked_blocks: BTreeSet<u32>,
 }
 
 impl Default for LocalInvasionConfig {
     fn default() -> Self {
         Self {
-            // OFF. See the module docs: this cancels real matches, so it must be asked for.
+            // Off. See the module docs: this cancels real matches, so it must be asked for.
             enabled: false,
-            // OFF, and for a different reason than `enabled`. Hunt narrows the QUERY to a key only
+            // Off, and for a different reason than `enabled`. Hunt narrows the query to a key only
             // this DLL's users publish, so while it is on a host without the DLL cannot be seen at
             // all. Losing reach is not something to inherit from a default.
             hunt: false,
@@ -382,18 +382,18 @@ impl Default for LocalInvasionConfig {
             map_pins: true,
             // ON: location publishing and hunt mode both need these detours.
             steam_hooks: true,
-            // OFF BY DEFAULT, on measured evidence rather than caution. These two detours are the
-            // ONLY thing this DLL writes into `ersc.dll`, and arming them kills the game in ~25s.
+            // Off by default, on measured evidence rather than caution. These two detours are the
+            // only thing this DLL writes into `ersc.dll`, and arming them kills the game in ~25s.
             // Measured 2026-09-04 on the autoload route with everything else already ON: with them
             // off the process ran 251s and 110s with zero fault records across two arms; with them
-            // on and NOTHING ELSE CHANGED it died at 24.9s with a fault at 0x140010043, no input
+            // on and nothing else changed it died at 24.9s with a fault at 0x140010043, no input
             // given. Five earlier faults at that address land in a 43.8-56.1s window, so this is
             // the same bug rather than a new one.
             //
             // Turning them off costs the local-invasion filter its session lookup and the lobby-key
-            // line, both of which are inert anyway while `enabled` is false. It does NOT cost the
+            // line, both of which are inert anyway while `enabled` is false. It does not cost the
             // warp keys, the catalog or the map pins, which is what a user of this DLL is here for.
-            // Set it back to true only once the mechanism is identified -- it is still UNKNOWN, and
+            // Set it back to true only once the mechanism is identified -- it is still unknown, and
             // a switch is a mitigation, not a fix.
             ersc_observers: false,
             // ON: both halves of the pair, so the master switch alone reproduces the old behaviour.
@@ -417,7 +417,7 @@ impl Default for LocalInvasionConfig {
 
 /// Which of the three persistent states a location is in, independent of where the player stands.
 ///
-/// This is what the world map colours by, and it is deliberately NOT derived from [`Verdict`]:
+/// This is what the world map colours by, and it is deliberately not derived from [`Verdict`]:
 /// a verdict answers "would this match land right now, from here", which changes as the player
 /// walks. A map needs an answer that does not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn a_destination_matches_on_any_of_its_names_not_just_the_lowest_numbered_one() {
-        // THE TRUNCATION BUG, fixed 2026-08-06. The candidate used to carry ONE name, taken as
+        // The TRUNCATION bug, fixed 2026-08-06. The candidate used to carry one name, taken as
         // `.first()` of the resolved list -- over a `BTreeSet` that is the numerically smallest id,
         // which has no meaning. A destination sitting under two names, only the higher of which the
         // anchor shares, was rejected as `WrongPlaceName` while the anchor side compared against
@@ -571,7 +571,7 @@ mod tests {
             ..LocalInvasionConfig::default()
         };
         let anchor = InvasionAnchor::new(0x0f00_0000, [900]);
-        // 100 is the lower id and does NOT match; 900 does. Truncation would have kept only 100.
+        // 100 is the lower id and does not match; 900 does. Truncation would have kept only 100.
         let two_names = InvasionCandidate::new(0x2000_0000, [100, 900]);
         assert_eq!(
             config.judge(&anchor, &two_names),
@@ -682,7 +682,7 @@ mod tests {
             config.judge(&anchor(), &InvasionCandidate::named(0x0f00_0000, 100)),
             Verdict::Keep(KeepReason::ExactBlock)
         );
-        // Same NAME, different block: exact mode still refuses.
+        // Same name, different block: exact mode still refuses.
         assert_eq!(
             config.judge(&anchor(), &InvasionCandidate::named(0x0f01_0000, 100)),
             Verdict::Reject(RejectReason::WrongBlock)

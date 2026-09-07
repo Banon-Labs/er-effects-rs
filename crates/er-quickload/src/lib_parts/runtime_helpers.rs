@@ -16,7 +16,7 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
         game_module_base,
         title_handoff_complete: TITLE_HANDOFF_COMPLETE.load(Ordering::SeqCst)
             != TITLE_HANDOFF_INCOMPLETE,
-        // BYPASS arming signal: engine filled enough to build the LoadGame job at the title (GameDataMan
+        // Bypass arming signal: engine filled enough to build the LoadGame job at the title (GameDataMan
         // -> mss -> plausible TitleFlowContext), without waiting for the press-any-button handoff.
         loadgame_build_ctx_ready: unsafe {
             crate::experiments::loadgame_build_ctx_ready(game_module_base)

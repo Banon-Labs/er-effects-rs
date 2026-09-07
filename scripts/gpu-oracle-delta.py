@@ -4,7 +4,7 @@
 Implements the precise §3/§4 measurement the coarse analyze-reload-fps-oracle-diff.py approximates:
 
   §3.1 steady-state window W(epoch) = samples from T+10s to T+30s after that epoch first reaches
-       WORLD-STABLE (oracle_player_present AND oracle_play_time_live truthy for >=3 consecutive
+       world-stable (oracle_player_present and oracle_play_time_live truthy for >=3 consecutive
        samples). T is the t_ms of that first world-stable sample.
   §3.2 frame_ms(epoch) = median over W of 1000/oracle_fps  (cross-checked vs qpc_delta_us/1000 and
        the DLL's own oracle_frame_ms).
@@ -17,7 +17,7 @@ The confound-controlled cross-run quantity is Delta = D_mod - D_van; run this on
 vanilla run and subtract (this script reports each run's D; a --van <D_frame_ms> arg does the subtraction).
 
 AC-1 (oracle valid, §3.3): across the run's distinct fps levels (epochs), gpu_frame_us must move
-MONOTONICALLY OPPOSITE to oracle_fps -- printed as the monotonicity check.
+MONOTONICALLY opposite to oracle_fps -- printed as the monotonicity check.
 
 Usage:
   python3 scripts/gpu-oracle-delta.py <telemetry-timeseries.jsonl> [--first-epoch N] [--reload-epoch M]
@@ -30,7 +30,7 @@ import json
 import statistics as st
 from pathlib import Path
 
-WORLD_STABLE_CONSEC = 3  # §3.1: player_present AND play_time_live for >=3 consecutive samples
+WORLD_STABLE_CONSEC = 3  # §3.1: player_present and play_time_live for >=3 consecutive samples
 W_START_MS = 10_000  # §3.1: window starts T+10s
 W_END_MS = 30_000  # §3.1: window ends T+30s
 
@@ -74,7 +74,7 @@ def load_rows(path: Path) -> list[dict]:
 
 
 def world_stable_t(epoch_rows: list[dict]):
-    """t_ms of the first sample after which player_present AND play_time_live are truthy for
+    """t_ms of the first sample after which player_present and play_time_live are truthy for
     WORLD_STABLE_CONSEC consecutive samples; None if never reached."""
     consec = 0
     for r in epoch_rows:

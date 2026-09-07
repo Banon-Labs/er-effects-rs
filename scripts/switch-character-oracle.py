@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Fail-fast oracle: did the System-Quit->Load-Profile character SWITCH load the
-character of the PICKED slot, or the wrong (usually original/most-recent) one?
+"""Fail-fast oracle: did the System-Quit->Load-Profile character switch load the
+character of the picked slot, or the wrong (usually original/most-recent) one?
 
 Motivation (2026-07-02, user-reported + ground-truth confirmed): after selecting a
-DIFFERENT save slot in the in-world System->Quit->Load-Profile menu, the world
-reloads the ORIGINAL most-recent character instead of the picked slot's character.
+different save slot in the in-world System->Quit->Load-Profile menu, the world
+reloads the original most-recent character instead of the picked slot's character.
 The picked slot is recorded (`system_quit_quickload_selected_slot`) but the actual
 title-time load commits via native Continue (loads GameMan+0xac0 = the most-recent
 slot), so the pick never reaches the load.
 
-This oracle turns that into a run-stopping semaphore so a probe fails FAST instead
+This oracle turns that into a run-stopping semaphore so a probe fails fast instead
 of burning the whole runtime cap and eyeballing a screenshot:
 
-  * EXPECTED identity = the PICKED slot decoded from the staged save (the same save
+  * Expected identity = the picked slot decoded from the staged save (the same save
     the probe copies in), via the proven `save-slot-oracle.py` decoder.
-  * OBSERVED identity = the loaded character read from RAM by the DLL and published
+  * Observed identity = the loaded character read from RAM by the DLL and published
     in telemetry (`oracle_char_name`, `oracle_saved_map_c30`, `oracle_char_runes`,
     `oracle_char_level`, `oracle_char_stats`). These are CS::PlayerGameData reads.
-  * The check ARMS only after the switch has handed off (a return-title was
-    requested) AND a real, complete character is resident -- so it never fires on
-    the FIRST (correct) load or mid-teardown.
+  * The check arms only after the switch has handed off (a return-title was
+    requested) and a real, complete character is resident -- so it never fires on
+    the first (correct) load or mid-teardown.
 
 Verdict + exit code:
-  0  -> match, OR not-yet-armed (keep waiting)          [no failure]
-  2  -> ARMED and the loaded character is NOT the picked slot's character
-        (fail fast: switch loaded the wrong character)  [FAILURE]
+  0  -> match, or not-yet-armed (keep waiting)          [no failure]
+  2  -> armed and the loaded character is not the picked slot's character
+        (fail fast: switch loaded the wrong character)  [failure]
   1  -> usage / IO / decode error
 
 The loaded side is a RAM semaphore; the expected side is the exact save staged into
@@ -105,7 +105,7 @@ def observed_identity(telemetry: dict[str, Any]) -> dict[str, Any]:
 # a multi-slot save differ on at least one of these (verified for the 25-invades
 # gold save: e.g. slot 4 'Speed Bean' c30=0x200b0000 runes=994451292 vs slot 5
 # 'Patches' c30=0xe000000 runes=994431680). Level/stats are corroborating only
-# (many slots share level 139), so they are NOT used to declare a mismatch.
+# (many slots share level 139), so they are not used to declare a mismatch.
 def identity_matches(expected: dict[str, Any], observed: dict[str, Any]) -> bool:
     return bool(
         observed.get("name") == expected.get("name")
@@ -116,14 +116,14 @@ def identity_matches(expected: dict[str, Any], observed: dict[str, Any]) -> bool
 
 
 def stable_world_loaded(telemetry: dict[str, Any]) -> bool:
-    """A real character is resident in a STABLE, finished-loading world -- not a
+    """A real character is resident in a stable, finished-loading world -- not a
     loading screen and not the lingering pre-teardown character mid-transition.
 
     Judging identity only here is what makes this a reliable fix-gate: during the
     switch's return-title->reload window the original character is briefly still
     resident (world tearing down) and `oracle_now_loading` is 1; if we judged then,
-    a CORRECT fix whose reload is still on the loading screen would false-fail.
-    Requiring `oracle_now_loading == 0` means we only score the FINAL loaded world."""
+    a correct fix whose reload is still on the loading screen would false-fail.
+    Requiring `oracle_now_loading == 0` means we only score the final loaded world."""
     player_seen = telemetry.get("oracle_player_present") is True or telemetry.get("player_available") is True
     not_loading = _as_int(telemetry.get("oracle_now_loading"), 1) == 0
     loaded_signal = (
@@ -136,9 +136,9 @@ def stable_world_loaded(telemetry: dict[str, Any]) -> bool:
 
 
 def switch_handed_off(telemetry: dict[str, Any]) -> bool:
-    """The switch requested a return-to-title (so the SECOND load is the one under
+    """The switch requested a return-to-title (so the second load is the one under
     test). Before this, the resident character is the first/correct load and must
-    NOT be judged against the picked slot."""
+    not be judged against the picked slot."""
     return (
         _as_int(telemetry.get("system_quit_quickload_return_title_request_count"), 0) > 0
         or _as_int(telemetry.get("system_quit_return_title_final_functor_call_count"), 0) > 0
@@ -154,7 +154,7 @@ def evaluate(save_path: Path, telemetry: dict[str, Any]) -> dict[str, Any]:
     stable = stable_world_loaded(telemetry)
     observed = observed_identity(telemetry)
 
-    # Decode every real slot so the failure can name the ACTUALLY-loaded slot, and so
+    # Decode every real slot so the failure can name the actually-loaded slot, and so
     # a visual-cursor/profile-id mapping surprise is visible rather than assumed.
     all_slots = [decode_slot_identity(decoder, save_bytes, save_path, s) for s in range(10)]
     matched_loaded_slots = [s["slot"] for s in all_slots if identity_matches(s, observed)]
@@ -192,7 +192,7 @@ def evaluate(save_path: Path, telemetry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _selftest() -> int:
-    """Validate both branches against synthetic telemetry derived from THIS save,
+    """Validate both branches against synthetic telemetry derived from this save,
     so the oracle is proven before it gates any run."""
     import tempfile
 
@@ -229,7 +229,7 @@ def _selftest() -> int:
         }
 
     failures = []
-    # Case A: picked slot 4 but slot 5 loaded in a STABLE world -> wrong_character (the real bug).
+    # Case A: picked slot 4 but slot 5 loaded in a stable world -> wrong_character (the real bug).
     a = evaluate(save_env, telem_for(s5, picked=4))
     if not (a["armed"] and a["wrong_character"] and not a["match"] and a["actual_loaded_slots"] == [5]):
         failures.append(f"A wrong-char not detected: {a}")
@@ -244,7 +244,7 @@ def _selftest() -> int:
     c = evaluate(save_env, c_tel)
     if c["armed"] or c["wrong_character"]:
         failures.append(f"C armed before handoff: {c}")
-    # Case D: handed off but still on the loading screen (now_loading=1) -> NOT armed,
+    # Case D: handed off but still on the loading screen (now_loading=1) -> not armed,
     # so a correct fix mid-reload can't be false-failed on the lingering original char.
     d = evaluate(save_env, telem_for(s5, picked=4, now_loading=1))
     if d["armed"] or d["wrong_character"]:
@@ -299,8 +299,8 @@ def main(argv: list[str]) -> int:
             f"loaded='{obs.get('name')}'(c30={obs.get('saved_map_c30')}) "
             f"actual_loaded_slots={verdict['actual_loaded_slots']}"
         )
-    # Exit codes: 2 = wrong character loaded (FAIL, stop the run); 0 = correct
-    # character loaded (SUCCESS, stop the run); 10 = not armed yet (keep polling).
+    # Exit codes: 2 = wrong character loaded (fail, stop the run); 0 = correct
+    # character loaded (success, stop the run); 10 = not armed yet (keep polling).
     if verdict["wrong_character"]:
         return 2
     if verdict["correct_character"]:

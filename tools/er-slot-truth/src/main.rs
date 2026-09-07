@@ -1,7 +1,7 @@
 //! Print which character slots a save container actually holds -- the same question, and the same
 //! parser, the DLL now asks before it will wait on a Continue slot.
 //!
-//! WHY THIS EXISTS. On 2026-09-03 `er-quickload.toml` named `slot=1`, Seamless was loaded so the
+//! Why this exists. On 2026-09-03 `er-quickload.toml` named `slot=1`, Seamless was loaded so the
 //! game read `ER0000.co2`, and that container holds exactly one character, in slot 0. Slot 1 could
 //! never fill, but the boot could not tell "vacant" from "still filling" and spent 1800 ticks of
 //! patience finding out; the run reached the intro cutscene first. The DLL now asks the container
@@ -58,7 +58,7 @@ fn main() {
                     );
                 }
             }
-            // A refusal is NOT "no characters": it means the question was not answered, which is
+            // A refusal is not "no characters": it means the question was not answered, which is
             // exactly the `None` the DLL treats as "keep waiting" rather than "reject the slot".
             Err(err) => println!("   parse refused (DLL would keep waiting): {err:?}"),
         }

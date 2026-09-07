@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""External, READ-ONLY title-portrait pointer-chain walker for offline Elden Ring.
+"""External, read-only title-portrait pointer-chain walker for offline Elden Ring.
 
 Contamination-proof: reads the live game's address space via /proc/<pid>/mem
 (no writes, no ptrace stop of game threads beyond the kernel's copy, no input
-injection). It CANNOT affect the user's manual menu driving. Use while the USER
-holds a ProfileSelect / LOAD GAME slot highlighted (highlighting alone renders
-the portrait; the user must NOT confirm/load the slot).
+injection). It cannot affect the user's manual menu driving. Use while the user
+holds a ProfileSelect / load game slot highlighted (highlighting alone renders
+the portrait; the user must not confirm/load the slot).
 
 Chain (deobf RVAs/offsets sourced from crates/er-quickload/src/constants.rs):
   table   = base + 0x3d6d8d0            DAT_143d6d8d0[slot]  (CSMenuProfModelRend* per slot)

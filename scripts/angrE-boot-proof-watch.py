@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove angrE (100-Lilbro save) reaches a clean, SUSTAINED in-world load via the DLL autoload.
+"""Prove angrE (100-Lilbro save) reaches a clean, sustained in-world load via the DLL autoload.
 
 Watches the DLL debug log for the world-enter / MoveMap-complete semaphores, confirms the loaded
 character is angrE, then verifies the game stays alive with no stall/crash for a sustain window (a
@@ -46,7 +46,7 @@ def kill(n):
 def main():
     t0 = time.time()
     offset = START
-    world_enter = 0          # MMS-FINISH / MoveMap complete count
+    world_enter = 0          # MMS-finish / MoveMap complete count
     world_enter_at = None
     angrE_seen = False
     in_world = False
@@ -82,7 +82,7 @@ def main():
                         world_enter_at = el
                 if "in-world" in line.lower() and ("reached" in line.lower() or "settled" in line.lower()):
                     in_world = True
-        # sustained clean load: world entered + angrE + game still alive SUSTAIN seconds later
+        # sustained clean load: world entered + angrE + game still alive sustain seconds later
         if world_enter_at is not None and (el - world_enter_at) >= SUSTAIN:
             if alive():
                 verdict = f"CLEAN LOAD PROVEN: angrE world-enter, sustained {SUSTAIN}s in-world, game alive"

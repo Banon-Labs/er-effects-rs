@@ -1,48 +1,48 @@
 #!/usr/bin/env python3
-"""Pair 1.16.2 -> 1.17 ELDEN RING functions by CALL-GRAPH TOPOLOGY, to a fixpoint.
+"""Pair 1.16.2 -> 1.17 ELDEN RING functions by call-graph topology, to a fixpoint.
 
-Every prior 1.16.2 -> 1.17 map in this repo pairs a function by what its BYTES look like:
+Every prior 1.16.2 -> 1.17 map in this repo pairs a function by what its bytes look like:
 masked signatures, `.pdata` extents, prologue shapes. That has a structural ceiling -- `.pdata`
 declares nothing for 5.55 MB of `.text`, and thousands of ELDEN RING getters are byte-identical
 to each other, so the evidence that would separate them is exactly the evidence a byte method
 does not have. The leaf pass measured the ceiling: 27,160 of 96,218 leaves paired, 28.2%.
 
-This pairs on POSITION IN THE CALL GRAPH instead. Two Ghidra function lists (366k nodes each,
+This pairs on position in the call graph instead. Two Ghidra function lists (366k nodes each,
 from the 1.16.2 and 1.17 runtime dumps served on :8765 and :8767) supply the node sets that
 `.pdata` could not; `build-callgraph-from-ghidra-funcs.py` supplies the edges. A confident pair
 then constrains its neighbours, and the constraint propagates.
 
-THREE RULES, all of which refuse rather than guess:
+Three rules, all of which refuse rather than guess:
 
-  DOWN   the i-th direct branch of `a` pairs with the i-th of `b`, once the already-paired
+  Down   the i-th direct branch of `a` pairs with the i-th of `b`, once the already-paired
          callees of both have been aligned as a monotone anchor sequence. A caller whose paired
-         callees do NOT align is discarded whole -- it is describing a different function.
-  UP     `a` and `b` are called by the same (already-paired) set of callers, that set has at
+         callees do not align is discarded whole -- it is describing a different function.
+  Up     `a` and `b` are called by the same (already-paired) set of callers, that set has at
          least MIN_KEY members, and no other node on either side has that caller set.
   DSET   `a` and `b` call the same (already-paired) set of callees, same two conditions.
-  ORDER  both images emit functions in the same order, so a run of unpaired nodes bracketed by
+  Order  both images emit functions in the same order, so a run of unpaired nodes bracketed by
          two consecutive pairs has a counterpart run bracketed by their images. When the two runs
-         are the same length AND each candidate agrees on body shape, the run is paired
-         positionally. Position alone is NOT enough -- ELDEN RING has thousands of interchangeable
+         are the same length and each candidate agrees on body shape, the run is paired
+         positionally. Position alone is not enough -- ELDEN RING has thousands of interchangeable
          3-instruction getters, and the shape gate is what stops the bracket pairing all of them.
-  BRKT   inside the same bracket, a node whose numeric-blanked BODY HASH occurs exactly once on
-         each side. Run before ORDER, because it is what catches the two ways position lies: a
+  BRKT   inside the same bracket, a node whose numeric-blanked body HASH occurs exactly once on
+         each side. Run before order, because it is what catches the two ways position lies: a
          run of near-identical functions where the whole bracket slid by one, and two adjacent
          functions the two builds emitted in opposite order. Both were observed and both were
-         decided against ORDER by the bytes.
+         decided against order by the bytes.
 
-A proposal becomes a pair only when it is UNANIMOUS (no caller proposes a different target) and
+A proposal becomes a pair only when it is unanimous (no caller proposes a different target) and
 INJECTIVE (no other source claims the same target). Two sources claiming one target both lose;
 the more-voted one does not win. Iterating those three to a fixpoint is the whole method.
 
-WHY THIS IS THE RIGHT TOOL FOR THE KNOWN HAZARDS
-  * `GAME_HEAP_ALLOC` is one of two BYTE-IDENTICAL 19-byte functions 0xe0 apart. No byte method
+Why this is the right tool for the known hazards
+  * `GAME_HEAP_ALLOC` is one of two byte-identical 19-byte functions 0xe0 apart. No byte method
     can separate them; a caller vote separated them 3766 to 0.
-  * An impostor at 0xaec480 verified IDENTICAL over 56 instructions while the correct pair
+  * An impostor at 0xaec480 verified identical over 56 instructions while the correct pair
     verified over 9. Instruction count is not confidence. Graph position is not fooled by a
     longer look-alike.
 
-MEASURED, NOT ASSERTED
+Measured, not asserted
   --holdout F withholds a random fraction of the seed ledger, runs to fixpoint without it, and
   reports how often the topology re-derived the withheld answer. That number, per rule and per
   shape tier, is the only reason to believe any row below.
@@ -63,14 +63,14 @@ BASE = 0x140000000
 FUNCTIONS_TSV = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.functions.tsv")
 VERIFIED_TSV = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.verified.tsv")
 
-# A caller/callee SET has to be big enough that agreeing on it is not a coincidence. With
+# A caller/callee set has to be big enough that agreeing on it is not a coincidence. With
 # MIN_KEY=1 every function called from exactly one paired place matches every other such
 # function; the uniqueness test then throws all of them away, so the only effect of lowering it
 # is noise. 2 is the smallest set that is a claim.
-# The only two 1.16.2 -> 1.17 mappings in this workspace established by reading the LIVE 1.17
+# The only two 1.16.2 -> 1.17 mappings in this workspace established by reading the live 1.17
 # process rather than inferred from an image. `--assert-known` fails the run if the pairing cannot
 # reproduce them: a method that cannot re-derive a known answer has no business proposing unknown
-# ones. The second is a CALL SITE 0x28 inside `GetWwiseSettings`, so it is checked by carrying the
+# ones. The second is a call site 0x28 inside `GetWwiseSettings`, so it is checked by carrying the
 # offset through that function's pair -- which also exercises the offset carry the repo needs for
 # its mid-function constants.
 KNOWN_LIVE = {0x14025F5F0: 0x14025F5D0}
@@ -81,9 +81,9 @@ MIN_KEY = 2
 # region, and positional pairing inside a region is guessing. Measured: the error rate climbs
 # with gap width, so the cut is reported per width bucket rather than assumed.
 MAX_GAP = 64
-# BRKT's body hash is evidence at any bracket width. ORDER's position is not: it is a guess whose
+# BRKT's body hash is evidence at any bracket width. Order's position is not: it is a guess whose
 # only support is that nothing else moved, and the wider the undecided residue the less that is
-# worth. Measured on two disjoint-seed runs, ORDER over unbounded residues disagreed with itself
+# worth. Measured on two disjoint-seed runs, order over unbounded residues disagreed with itself
 # on 2.0% of the population `functions.tsv` cannot check -- eight times its rate on the population
 # it can. Bounding the residue is the difference between those two numbers.
 MAX_ORDER_RESIDUE = 4
@@ -133,7 +133,7 @@ def load_verified_tsv(path=VERIFIED_TSV):
 
 
 def shape_ok(sa, sb):
-    """Body-shape agreement, used only to TIER a pair, never to make one.
+    """Body-shape agreement, used only to tier a pair, never to make one.
 
     n_direct / n_indirect are counts of branch instructions, which a relocated-but-unchanged
     function preserves exactly. Instruction count is allowed to drift a little because the two
@@ -178,7 +178,7 @@ def longest_increasing(pts):
 
 
 def shape_key(st, size):
-    """The whole measurable body shape, used ONLY inside an already-bracketed gap."""
+    """The whole measurable body shape, used only inside an already-bracketed gap."""
     if st is None:
         return None
     return (st[0], st[1], st[2], st[3], st[4], size)
@@ -188,7 +188,7 @@ def align_callees(ca, cb, pair):
     """Monotone anchor alignment of two callee sequences.
 
     Returns (segments, missing) where `segments` is a list of (a_slice, b_slice) index ranges
-    between consecutive matched anchors that have EQUAL length -- the only places a positional
+    between consecutive matched anchors that have equal length -- the only places a positional
     proposal is defensible -- and `missing` counts paired callees of `a` whose image could not
     be found in order in `b`.
     """
@@ -274,7 +274,7 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
             claims.setdefault(b, set()).add(a)
             rule_of.setdefault((a, b), rule)
 
-        # ---- DOWN -------------------------------------------------------------
+        # ---- Down -------------------------------------------------------------
         sweep = [a for a in dirty_callers if a in pair]
         for a in sweep:
             b = pair[a]
@@ -288,7 +288,7 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
             for ta, tb in propose_down(ca, cb, anchors, missing, allow_open_ends=(missing == 0)):
                 offer(ta, tb, "DOWN")
 
-        # ---- UP / DSET --------------------------------------------------------
+        # ---- Up / DSET --------------------------------------------------------
         # Keyed indexes over the whole unpaired population; cheap enough to rebuild each round
         # and it keeps the rule honest (uniqueness is measured against everything, not a frontier).
         for keyfn, rule in ((("up"), "UP"), (("dset"), "DSET")):
@@ -326,9 +326,9 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
                     continue
                 offer(alist[0], blist[0], rule)
 
-        # ---- ORDER / BRKT -----------------------------------------------------
+        # ---- Order / BRKT -----------------------------------------------------
         # Both linkers emit in source order, so consecutive pairs bracket each other's gaps. A
-        # gap only qualifies when EVERY node strictly inside it is unpaired on BOTH sides: a
+        # gap only qualifies when every node strictly inside it is unpaired on both sides: a
         # paired node inside a gap whose image is outside it means the local order broke, and
         # pairing across that is how a bracket invents an answer.
         if use_order:
@@ -336,7 +336,7 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
             bhA, bhB = A.get("bodyhash", {}), B.get("bodyhash", {})
             ia = {v: i for i, v in enumerate(eaL)}
             ib = {v: i for i, v in enumerate(ebL)}
-            # The anchor spine must be the LONGEST increasing run of (A index, B index), not a
+            # The anchor spine must be the longest increasing run of (A index, B index), not a
             # greedy left-to-right one. Greedy is catastrophically wrong here: one early pair
             # whose B index is large swallows everything after it, and measured on a real run it
             # cut 124,188 pairs down to 384 anchors -- which silently turned the whole bracket
@@ -381,7 +381,7 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
                         offer(al[0], bl[0], "BRKT")
                         taken_a.add(al[0])
                         taken_b.add(bl[0])
-                # ORDER on the residue only. Removing the hash-decided nodes from both sides
+                # Order on the residue only. Removing the hash-decided nodes from both sides
                 # first is what lets a bracket survive an insertion or a swap instead of
                 # sliding every remaining node by one.
                 ra = [v for v in ga if v not in taken_a]
@@ -391,7 +391,7 @@ def run_fixpoint(A, B, seeds, max_rounds=40, strict_callers=True, verbose=True,
                         if shape_ok(stA.get(av), stB.get(bv)):
                             offer(av, bv, "ORDER")
 
-        # ---- accept: unanimous AND injective ----------------------------------
+        # ---- accept: unanimous and injective ----------------------------------
         accepted = 0
         new_dirty = set()
         for a, bs in proposals.items():
@@ -585,7 +585,7 @@ def selftest():
     p, o, _ = run_fixpoint(A, B, {1: 101}, verbose=False)
     check("DOWN pairs positionally", p.get(10) == 110 and p.get(11) == 111)
 
-    # DOWN must NOT cross a length change with no anchors.
+    # Down must not cross a length change with no anchors.
     A = mk({1: [10, 11], 10: [], 11: []})
     B = mk({101: [110, 111, 112], 110: [], 111: [], 112: []})
     p, _, _ = run_fixpoint(A, B, {1: 101}, verbose=False)
@@ -609,14 +609,14 @@ def selftest():
     p, _, _ = run_fixpoint(A, B, {1: 101, 2: 102}, verbose=False)
     check("byte-identical siblings separate by caller", p.get(10) == 110 and p.get(11) == 111)
 
-    # UP: same paired caller SET of size >= MIN_KEY, unique on both sides.
+    # UP: same paired caller set of size >= MIN_KEY, unique on both sides.
     A = mk({1: [10], 2: [10], 3: [12], 10: [], 12: []})
     B = mk({101: [110], 102: [110], 103: [112], 110: [], 112: []})
     p, o, _ = run_fixpoint(A, B, {1: 101, 2: 102, 3: 103}, verbose=False)
     check("UP pairs on a caller set", p.get(10) == 110)
 
-    # MIN_KEY: a single paired caller is not a key (that case is DOWN's job, and DOWN needs
-    # positional agreement); with a length change DOWN refuses and UP must not rescue it.
+    # MIN_KEY: a single paired caller is not a key (that case is down's job, and down needs
+    # positional agreement); with a length change down refuses and up must not rescue it.
     A = mk({1: [10, 20], 10: [], 20: []})
     B = mk({101: [110, 120, 130], 110: [], 120: [], 130: []})
     p, _, _ = run_fixpoint(A, B, {1: 101}, verbose=False)
@@ -628,7 +628,7 @@ def selftest():
     p, _, _ = run_fixpoint(A, B, {10: 110, 11: 111}, verbose=False)
     check("DSET pairs on a callee set", p.get(1) == 101)
 
-    # A caller whose paired callee is ABSENT from the 1.17 side is discarded whole.
+    # A caller whose paired callee is absent from the 1.17 side is discarded whole.
     A = mk({1: [10, 11], 10: [], 11: []})
     B = mk({101: [999, 111], 110: [], 111: [], 999: []})
     p, _, _ = run_fixpoint(A, B, {1: 101, 10: 110}, verbose=False)
@@ -640,13 +640,13 @@ def selftest():
     p, o, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
     check("ORDER pairs inside a bracket", p.get(5) == 105 and o[5][0] == "ORDER")
 
-    # ORDER must refuse when the shapes disagree -- position alone is not evidence.
+    # Order must refuse when the shapes disagree -- position alone is not evidence.
     A = mk({1: [], 5: [], 9: []}, {5: (5, 0, 0, 0, 16)})
     B = mk({101: [], 105: [], 109: []}, {105: (5, 0, 3, 0, 16)})
     p, _, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
     check("ORDER refuses a shape mismatch", 5 not in p)
 
-    # ORDER must not run positionally across gaps of different length.
+    # Order must not run positionally across gaps of different length.
     A = mk({1: [], 5: [], 9: []})
     B = mk({101: [], 104: [], 105: [], 109: []})
     p, _, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
@@ -665,7 +665,7 @@ def selftest():
     p, _, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
     check("BRKT refuses an ambiguous body hash", 5 not in p and 6 not in p)
 
-    # THE REGRESSION THAT CAUSED THIS RULE. Two adjacent functions the two builds emitted in the
+    # The regression that caused this rule. Two adjacent functions the two builds emitted in the
     # opposite order. Position says 5->105, 6->106; the bytes say 5->106, 6->105, and the bytes
     # are right. Observed for real at 0x1407d9550 / 0x1407d95c0.
     A = mk({1: [], 5: [], 6: [], 9: []}, bodies={5: b"P", 6: b"Q"})
@@ -674,14 +674,14 @@ def selftest():
     check("a swapped pair follows the bytes, not the position",
           p.get(5) == 106 and p.get(6) == 105)
 
-    # ...and ORDER still finishes the residue the hashes could not decide.
+    # ...and order still finishes the residue the hashes could not decide.
     A = mk({1: [], 5: [], 6: [], 9: []}, bodies={5: b"P"})
     B = mk({101: [], 105: [], 106: [], 109: []}, bodies={105: b"P"})
     p, o, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
     check("ORDER finishes the residue after BRKT",
           p.get(5) == 105 and p.get(6) == 106 and o[6][0] == "ORDER")
 
-    # ORDER must refuse a residue wider than the cap -- position over a long undecided run is
+    # Order must refuse a residue wider than the cap -- position over a long undecided run is
     # a guess, and it measured eight times worse than the same rule over a short one.
     A = mk({0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 9: []})
     B = mk({100: [], 101: [], 102: [], 103: [], 104: [], 105: [], 109: []})
@@ -690,7 +690,7 @@ def selftest():
     p, _, _ = run_fixpoint(A, B, {0: 100, 9: 109}, verbose=False, max_order_residue=8)
     check("...and accepts it under a wider cap", p.get(3) == 103)
 
-    # A pair carries whether the BYTES agreed, independently of which rule made it.
+    # A pair carries whether the bytes agreed, independently of which rule made it.
     A = mk({1: [], 5: [], 9: []}, bodies={5: b"X"})
     B = mk({101: [], 105: [], 109: []}, bodies={105: b"X"})
     p, o, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
@@ -700,13 +700,13 @@ def selftest():
     p, o, _ = run_fixpoint(A, B, {1: 101, 9: 109}, verbose=False)
     check("byte disagreement is recorded too", o[5][3] == "BYTE-DIFF")
 
-    # A bracket containing a node already paired OUTSIDE it is not a bracket.
+    # A bracket containing a node already paired outside it is not a bracket.
     A = mk({1: [], 5: [], 6: [], 9: []})
     B = mk({101: [], 105: [], 106: [], 109: [], 200: []})
     p, _, _ = run_fixpoint(A, B, {1: 101, 9: 109, 5: 200}, verbose=False)
     check("ORDER refuses a gap with an out-of-order pair in it", 6 not in p)
 
-    # The anchor spine is the LONGEST increasing run, not a greedy one. One early out-of-order
+    # The anchor spine is the longest increasing run, not a greedy one. One early out-of-order
     # pair must not blind the bracket rule to everything after it.
     got = [j for _i, j in longest_increasing([(0, 900), (1, 1), (2, 2), (3, 3), (4, 4)])]
     check("anchor spine is LIS, not greedy", got == [1, 2, 3, 4])
@@ -714,13 +714,13 @@ def selftest():
           len(longest_increasing([(i, i) for i in range(50)])) == 50)
 
     # ...and the whole-pipeline consequence: a pair that sorts out of order early must not stop
-    # ORDER pairing a bracket later on.
+    # order pairing a bracket later on.
     A = mk({1: [], 2: [], 5: [], 9: []})
     B = mk({50: [], 101: [], 105: [], 109: []})
     p, _, _ = run_fixpoint(A, B, {1: 50, 2: 101, 9: 109}, verbose=False)
     check("an out-of-order pair does not disable later brackets", p.get(5) == 105)
 
-    # Shape tier: equal branch counts -> STRICT, different -> LOOSE.
+    # Shape tier: equal branch counts -> strict, different -> loose.
     check("shape_ok separates on n_direct", not shape_ok((5, 2, 0, 0, 16), (5, 3, 0, 0, 16)))
     check("shape_ok separates on n_indirect", not shape_ok((5, 2, 0, 0, 16), (5, 2, 1, 0, 16)))
     check("shape_ok tolerates small insn drift", shape_ok((50, 2, 0, 0, 16), (51, 2, 0, 0, 16)))

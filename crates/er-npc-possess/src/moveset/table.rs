@@ -16,9 +16,9 @@
 //! precisely what this file exists to have already resolved.
 //!
 //! ...and that is only half of it. The field write formats `W_Event%04d`, but `W_Event` is a broad
-//! alias layer rather than a total one, so an id can be perfectly fireable under a DIFFERENT name
+//! alias layer rather than a total one, so an id can be perfectly fireable under a different name
 //! and unreachable by that field -- every dodge in the game is exactly that. The generator
-//! therefore also resolves WHICH spelling reaches each id on each creature, from that creature's
+//! therefore also resolves which spelling reaches each id on each creature, from that creature's
 //! own event table; see [`Prefix`].
 //!
 //! # What is in the file
@@ -32,13 +32,13 @@
 //! # The one animation that lies about its own name
 //!
 //! `W_Event3110` plays clip `a000_003000`, not 3110 -- confirmed on every one of the eleven bosses
-//! checked. So a row carries BOTH ids: [`Move::fire`] is what gets written into the request field,
+//! checked. So a row carries both ids: [`Move::fire`] is what gets written into the request field,
 //! [`Move::played`] is what actually appears on screen. They are equal everywhere else, which is
 //! why the format spells the second one only when it differs.
 //!
 //! # The grab, and the animation everybody mistakes for it
 //!
-//! A grab is not a 4000-band animation and it is not TimeAct event 304. It is an ORDINARY,
+//! A grab is not a 4000-band animation and it is not TimeAct event 304. It is an ordinary,
 //! already-fireable attack whose `AtkParam_Npc` row has `throwTypeId != 0`: when that hit lands,
 //! `ApplyDamage` hands it to the throw system before calculating any damage, and the throw system
 //! -- not the event layer -- drives both parties into the 4000-band clips. That is exactly why no
@@ -63,7 +63,7 @@ pub(crate) const TABLE_TEXT: &str = include_str!("../../data/moveset.tbl");
 /// change cannot silently be read with the old column meanings.
 pub(crate) const TABLE_VERSION: u32 = 4;
 
-/// WHICH SPELLING OF AN ANIMATION ID THIS CREATURE ACTUALLY ANSWERS TO.
+/// Which spelling of an animation ID this creature actually answers to.
 ///
 /// `W_Event` is a broad alias layer, not a total one -- 88.4% num==anim-id across the corpus
 /// against 100% for `W_Step` in 6000-6023 -- so an id can be perfectly fireable and still have no
@@ -74,7 +74,7 @@ pub(crate) const TABLE_VERSION: u32 = 4;
 /// **This is the one thing in the crate that costs a game function address**, and only for the
 /// non-`Event` variants. [`Self::Event`] is fired by writing `CSChrEventModule+0x18`, which is a
 /// field; everything else needs `PlayAnimationByBehaviorName` with a name built from the id. The
-/// generator therefore PREFERS `Event` wherever it resolves, so the address is on the fallback
+/// generator therefore prefers `Event` wherever it resolves, so the address is on the fallback
 /// path only and the great majority of moves never touch it.
 ///
 /// The variant is resolved per creature from that creature's own event table, never from the
@@ -138,23 +138,23 @@ impl Prefix {
     }
 }
 
-/// ONE WAY THIS ATTACK CAN TURN INTO A GRAB.
+/// One way this attack can turn into a grab.
 ///
 /// A grab is not an animation you play. `CS::ChrDamageModule::ApplyDamage` reads
 /// `AtkParam.throwTypeId` off the hit that just landed and, before it calculates any damage,
 /// calls `CSChrThrowModule::InitThrow(attackerThrowModule, victimChrIns, throwTypeId)`.
 /// `CSThrowNode::ValidateAttemptAndReturnParamId` then walks `ThrowParam` looking for a row whose
 /// `AtkChrId` is the attacker's `ChrIns::npcId`, whose `DefChrId` is the victim's, and whose
-/// `throwTypeId` matches. On a match the throw system drives BOTH parties into that row's
+/// `throwTypeId` matches. On a match the throw system drives both parties into that row's
 /// `atkAnimId`/`defAnimId` -- the 4000-band clips, reached through the bare behaviour names
 /// `W_ThrowAtk`/`W_ThrowDef` and never by id.
 ///
-/// So this type is the ROW's half of that match: who has to be on the receiving end, and how far
+/// So this type is the row's half of that match: who has to be on the receiving end, and how far
 /// away they may be. It is what makes a grab refusable for a stated reason rather than a swing
 /// that mysteriously never grabs anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Throw {
-    /// `ThrowParam.DefChrId` -- the victim's `ChrIns::npcId`, matched EXACTLY, not as a wildcard.
+    /// `ThrowParam.DefChrId` -- the victim's `ChrIns::npcId`, matched exactly, not as a wildcard.
     /// `0` is the player, and it is `0` for 189 of the 190 creature rows in the shipped
     /// regulation; the single exception is c4280 grabbing c3300.
     pub(crate) victim_chr: u32,
@@ -180,7 +180,7 @@ impl Throw {
     }
 }
 
-/// EVERY `ThrowParam` ROW ONE ATTACK CAN COMPLETE, inline and `Copy`.
+/// Every `ThrowParam` row one attack can complete, inline and `Copy`.
 ///
 /// Fixed-size rather than a `Vec` because [`Move`] is `Copy` and is copied per press. Four slots
 /// against a measured maximum of TWO: swept over all 409 creatures, exactly one attack
@@ -221,13 +221,13 @@ impl Throws {
     /// `None` for the distance means nothing is loaded nearby. The two cases are genuinely
     /// different and are kept apart on purpose:
     ///
-    /// * a throw whose victim is the PLAYER is always reachable, because the possession keeps the
+    /// * a throw whose victim is the player is always reachable, because the possession keeps the
     ///   player's body co-located with the creature -- the hostile distance is measuring somebody
     ///   else entirely and must not be allowed to veto;
-    /// * a throw whose victim is another CREATURE needs that creature within `ThrowParam.Dist`,
+    /// * a throw whose victim is another creature needs that creature within `ThrowParam.Dist`,
     ///   and the nearest-hostile distance is the best reading the crate has of it.
     ///
-    /// This is a NECESSARY condition, not a sufficient one. It does not check the victim's chr id
+    /// This is a necessary condition, not a sufficient one. It does not check the victim's chr id
     /// (the crate does not read `ChrIns::npcId`), nor the angle and vertical gates
     /// `ThrowPoseChecks` applies. The game re-checks all of it; this only stops the dispatcher
     /// from spending a press on a grab that provably cannot land.
@@ -285,7 +285,7 @@ const fn bucket_from_code(code: u8) -> Option<Bucket> {
     }
 }
 
-/// Why an animation the generator looked at is NOT offered.
+/// Why an animation the generator looked at is not offered.
 ///
 /// Every one of these reaches the player: [`crate::moveset::derived`] writes the whole list, with
 /// the reason spelled out, into `er-npc-possess.derived.toml` on every possession. Withholding a
@@ -307,7 +307,7 @@ pub(crate) enum Denial {
     SpEffectOnly,
     /// The TimeAct names a behaviour id that `BehaviorParam` does not have a row for.
     UnresolvedBehavior,
-    /// It is the animation the THROW SYSTEM plays once a grab has been accepted, not one anybody
+    /// It is the animation the throw system plays once a grab has been accepted, not one anybody
     /// can fire. `CSChrThrowModule::PlayThrowAnim` reaches these through the two bare, un-numbered
     /// behaviour names `W_ThrowAtk` and `W_ThrowDef`; which clip that lands on is decided by the
     /// `ThrowParam` row, so there is no id to ask for. 108 animations across the corpus carry
@@ -318,7 +318,7 @@ pub(crate) enum Denial {
     ThrowResultClip,
     // RETIRED: reason 7, `PrefixUnreachable`. It meant "the graph can play this but the
     // `W_Event%04d` field write cannot spell it", and it covered every dodge in the game. The
-    // class no longer exists: those ids are FIRED now, through `PlayAnimationByBehaviorName`
+    // class no longer exists: those ids are fired now, through `PlayAnimationByBehaviorName`
     // with the prefix the generator resolved -- see [`Prefix`]. An id no prefix reaches is
     // `NotFireable`, which is what it always was. The code is left unused rather than recycled,
     // so a table written before the fallback cannot be misread by this parser.
@@ -372,10 +372,10 @@ pub(crate) struct Move {
     pub(crate) reach: Reach,
     /// The `ThrowParam` rows this attack can complete, empty for an ordinary one.
     ///
-    /// Non-empty means this is a GRAB INITIATOR: an ordinary, already-fireable attack whose
-    /// `AtkParam_Npc` row carries a non-zero `throwTypeId` AND for which a `ThrowParam` row pairs
+    /// Non-empty means this is a grab INITIATOR: an ordinary, already-fireable attack whose
+    /// `AtkParam_Npc` row carries a non-zero `throwTypeId` and for which a `ThrowParam` row pairs
     /// this creature with a victim. Landing it is what starts a grab. See [`Throw`] for the
-    /// mechanism and [`Denial::ThrowResultClip`] for the 4000-band clips that are NOT this.
+    /// mechanism and [`Denial::ThrowResultClip`] for the 4000-band clips that are not this.
     ///
     /// 153 of the 9426 shipped moves across 78 creatures, every one of them in the 3000 band.
     /// (169 counting `(animation, throwTypeId)` pairs -- a few attacks carry two.)
@@ -392,7 +392,7 @@ pub(crate) struct Move {
     ///
     /// `None` means the generator could not measure one -- a move with no resolvable ability
     /// event, which after the fireability gate is almost always a step or a dodge. Those are
-    /// treated as committed for their whole length: a press during one WAITS. Centiseconds rather
+    /// treated as committed for their whole length: a press during one waits. Centiseconds rather
     /// than a float because this table is integers only, and 10 ms is finer than a 60 Hz frame.
     pub(crate) chain_from_cs: Option<u16>,
 }
@@ -431,7 +431,7 @@ impl Moveset {
         self.moves.iter().find(|m| m.fire == fire)
     }
 
-    /// The move behind an animation the creature is OBSERVED to be playing.
+    /// The move behind an animation the creature is observed to be playing.
     ///
     /// [`Move::played`] first, [`Move::fire`] second, and the order is the whole reason this is
     /// not [`Self::find`]. What comes back from `CSChrTimeActModule` is what is on screen, and
@@ -439,7 +439,7 @@ impl Moveset {
     /// by `fire` would miss exactly the one animation this crate already knows lies about its own
     /// name, and miss it silently.
     pub(crate) fn playing(&self, animation: i32) -> Option<&Move> {
-        // THE RUNTIME ID IS RAW AND THIS TABLE'S IS COLLAPSED, so the lookup has to try both.
+        // The runtime ID is raw and this table'S is collapsed, so the lookup has to try both.
         //
         // `TAE_Callback` hands `CSChrTimeActModule::animQueue[].animId` the id Havok is running,
         // ungrouped -- and a creature's TimeAct numbers the same animation once per group, as
@@ -478,7 +478,7 @@ impl Moveset {
 
     /// Re-admit a denied animation, for the `[chr.*] usable` override.
     ///
-    /// It comes back in [`Bucket::Light`] at the END of the rank order with [`Reach::Unknown`],
+    /// It comes back in [`Bucket::Light`] at the end of the rank order with [`Reach::Unknown`],
     /// because the generator declined to classify it and this crate has no way to do better: the
     /// numbers that would decide bucket and reach live in `regulation.bin`, not in the process.
     /// The player asked for it by animation id, so it is offered by animation id.
@@ -509,7 +509,7 @@ impl Moveset {
             // the field write can ask for. If it needed a different prefix the generator would
             // have offered it already.
             prefix: Prefix::Event,
-            // Unmeasured, which for a chain window means COMMITTED for the whole clip: a press
+            // Unmeasured, which for a chain window means committed for the whole clip: a press
             // during a move the player forced back on waits for it to finish rather than
             // cancelling it on a number nobody measured.
             chain_from_cs: None,
@@ -521,7 +521,7 @@ impl Moveset {
 /// The version the compiled-in table declares, read at compile time.
 ///
 /// A `const fn` rather than a runtime check so that regenerating the table with a newer generator
-/// and forgetting to update the parser is a BUILD failure, not a silently mis-columned moveset.
+/// and forgetting to update the parser is a build failure, not a silently mis-columned moveset.
 const fn declared_version(text: &str) -> u32 {
     let bytes = text.as_bytes();
     let mut index = 0;
@@ -582,7 +582,7 @@ fn parse_move(field: &str) -> Option<Move> {
     let bucket = bucket_from_code(parts.next()?.parse().ok()?)?;
     let rank = parts.next()?.parse().ok()?;
     let reach = Reach::from_code(parts.next()?.parse().ok()?)?;
-    // The prefix column is OMITTED for `W_Event`, which is both the common case and the one that
+    // The prefix column is omitted for `W_Event`, which is both the common case and the one that
     // costs no game address -- so a four-field entry reads as "fired by the field write" and a
     // five-field one as "fired by name".
     let prefix = match parts.next() {
@@ -598,7 +598,7 @@ fn parse_move(field: &str) -> Option<Move> {
         Some((rest, spec)) => (rest, parse_throws(spec)?),
         None => (head, Throws::NONE),
     };
-    // ...and the chain window is `w` and the digits after it, stripped BEFORE the grab spec has
+    // ...and the chain window is `w` and the digits after it, stripped before the grab spec has
     // been removed above, so `3006w45g0,100` reads as (3006, window 0.45s, grab). It is a suffix
     // rather than a seventh colon-separated column because the prefix column is already optional:
     // a positional window would force every `W_Event` move to spell a prefix it does not have.
@@ -635,7 +635,7 @@ fn parse_denial(field: &str) -> Option<(i32, Denial)> {
 
 /// Parse one creature's line. `None` for a comment, the version marker, or a blank.
 ///
-/// A field that does not parse is SKIPPED rather than failing the line: one malformed entry
+/// A field that does not parse is skipped rather than failing the line: one malformed entry
 /// costing one move is better than costing the creature its whole moveset.
 pub(crate) fn parse_line(line: &str) -> Option<(u32, Moveset)> {
     let line = line.trim();
@@ -839,7 +839,7 @@ mod tests {
         assert!(parse_move("3000w:0:0:1").is_none());
     }
 
-    /// `Moveset::playing` is keyed on what is ON SCREEN, and `W_Event3110` is the one animation
+    /// `Moveset::playing` is keyed on what is on screen, and `W_Event3110` is the one animation
     /// where that differs from the id the table is keyed on. Looking the window up by `fire`
     /// would miss it, and miss it quietly.
     #[test]
@@ -850,7 +850,7 @@ mod tests {
         assert!(moveset.playing(9999).is_none());
     }
 
-    /// c4280's a3006 is the ONLY attack in the game that matches two `ThrowParam` rows, and the
+    /// c4280's a3006 is the only attack in the game that matches two `ThrowParam` rows, and the
     /// only creature-victim grab there is. It is the reason [`Throws`] is a list.
     #[test]
     fn a_grab_can_name_more_than_one_victim() {
@@ -911,7 +911,7 @@ mod tests {
         assert!(creature.reachable(Some(9.9)), "9.9 m is inside a 10 m Dist");
         assert!(!creature.reachable(Some(10.1)));
         assert!(!creature.reachable(None), "nothing loaded is not a victim");
-        // Exactly at the range is INCLUSIVE here and EXCLUSIVE in the game -- `ThrowPoseChecks`
+        // Exactly at the range is inclusive here and exclusive in the game -- `ThrowPoseChecks`
         // is `if (distance < GetDist(row))`. Deliberate: this gate is a filter in front of the
         // game's own check, and being a hair generous costs a swing that misses rather than a
         // grab silently withheld. The reading it compares is coarser than that anyway: the game
@@ -997,8 +997,8 @@ mod tests {
         }
     }
 
-    /// THE GRABS, ASSERTED AGAINST THE SHIPPED DATA rather than against the finding that produced
-    /// it. Before the `ThrowParam` join the table carried ZERO grab-marked moves, so `allow_grabs`
+    /// The grabs, asserted against the shipped data rather than against the finding that produced
+    /// it. Before the `ThrowParam` join the table carried zero grab-marked moves, so `allow_grabs`
     /// gated nothing and said so in its own doc comment. If this goes back to zero the join broke
     /// and the setting is dead again.
     #[test]
@@ -1013,7 +1013,7 @@ mod tests {
             }
             grabs += here;
             for entry in moveset.moves.iter().filter(|entry| entry.grab()) {
-                // THE WHOLE POINT. A grab initiator is an ordinary attack; the 4000-band clip it
+                // The whole point. A grab initiator is an ordinary attack; the 4000-band clip it
                 // leads to is the throw system's, and is never on offer.
                 assert!(
                     (3000..4000).contains(&entry.fire),
@@ -1041,7 +1041,7 @@ mod tests {
         );
     }
 
-    /// The other half: the 4000-band clips are REPORTED, with a reason that is true of them,
+    /// The other half: the 4000-band clips are reported, with a reason that is true of them,
     /// instead of vanishing or being mislabelled `not-fireable`.
     #[test]
     fn the_throw_result_clips_are_denied_with_their_own_reason() {
@@ -1093,7 +1093,7 @@ mod tests {
         }
     }
 
-    /// THE FALLBACK, ASSERTED AGAINST THE SHIPPED DATA. Dodges have no `W_Event` name, so if any
+    /// The FALLBACK, asserted against the shipped data. Dodges have no `W_Event` name, so if any
     /// step in the table claimed to be a field write the runtime would write an id the request
     /// field cannot spell and the button would silently do nothing.
     #[test]
@@ -1178,13 +1178,13 @@ mod tests {
     /// authors no attack-cancel window -- and it is exactly what the runtime falls back on: a
     /// press during a windowless move waits for the animation to end.
     ///
-    /// The floor is what makes this a gate. If the generator ever reads FlagType 4 (the PLAYER
+    /// The floor is what makes this a gate. If the generator ever reads FlagType 4 (the player
     /// combo flag, 0.3% of creature attack animations) instead of 86, or the wrong param index,
     /// the table still parses and every attack silently becomes uncancellable.
-    /// A CREATURE WITH NO ATTACKS IS THE FAILURE THIS TABLE IS MOST LIKELY TO SHIP SILENTLY.
+    /// A creature with no attacks is the failure this table is most likely to ship silently.
     ///
     /// It shipped exactly that way once. The generator joined the behaviour graph (what a creature
-    /// can FIRE) against `<chr>.tae` (what the animation DOES) by chr id on both sides, and a
+    /// can fire) against `<chr>.tae` (what the animation does) by chr id on both sides, and a
     /// third of the roster does not own its TimeAct: c4351 Godrick Knight's `.anibnd` is a
     /// skeleton and nothing else, because the whole 435x knight family plays out of `c4350.tae`.
     /// Those 133 creatures reached the classifier with an empty TimeAct, had every attack denied

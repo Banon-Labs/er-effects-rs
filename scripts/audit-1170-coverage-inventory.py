@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""The complete STATIC inventory of 1.17 exposure, per cdylib.
+"""The complete static inventory of 1.17 exposure, per cdylib.
 
-WHY A STATIC INVENTORY AND NOT THE LOGS
+Why a static inventory and not the logs
 ---------------------------------------
 `er-game-base` refuses any 1.16.2 address with no verified 1.17 mapping and logs the refusal.
 That log is the obvious work list and it is the wrong one: a refusal is only written when the
-code path actually RUNS. One 25-hour session logged 679,812 refusals across eight DLL logs, and
-that is a FLOOR -- every feature nobody triggered is silent, and some cannot easily be triggered
-at all. So the work list has to come from the SOURCE.
+code path actually runs. One 25-hour session logged 679,812 refusals across eight DLL logs, and
+that is a floor -- every feature nobody triggered is silent, and some cannot easily be triggered
+at all. So the work list has to come from the source.
 
-WHAT IT COUNTS
+What it counts
 --------------
 Every game address a cdylib can resolve, found in four declaration forms. Missing any one of
 them under-reports, and the third form has already cost a black screen:
@@ -22,35 +22,35 @@ them under-reports, and the third form has already cost a black screen:
      carries no `_RVA` name at all. er-reload-trace declares 39 addresses this way and
      er-invasion-warp's `MapSeam` table another 13.
 
-WHOSE MODULE IS IT
+Whose module is it
 ------------------
-An address is a GAME address because of the BASE it is added to, NOT because its name ends in
+An address is a game address because of the base it is added to, not because its name ends in
 `_RVA`. One DLL's address list can name several modules: `er-invasion-warp` resolves Seamless
 Co-op with `GetModuleHandleA("ersc.dll")` and adds four RVAs to that base. Classifying by name
-put all four on the unmapped GAME work list, where translating one through the 1.17 map and
+put all four on the unmapped game work list, where translating one through the 1.17 map and
 detouring the result would have written five bytes of jmp into an unrelated `eldenring.exe`
 function. Those are reported under `foreign`, and literals that are not addresses at all --
 `*_RVA_LIMIT` plausibility bounds, the two ends of a `callstack_contains_game_rva(start, end)`
-RANGE -- under `not_addresses`. Both classes have `--selftest` cases, with real game addresses
+range -- under `not_addresses`. Both classes have `--selftest` cases, with real game addresses
 as the control so an exclusion that ate real work fails too.
 
-HOW IT CLASSIFIES
+How it CLASSIFIES
 -----------------
 The authority is not a TSV; it is the two tables `er-game-base/build.rs` generates, which this
 script reproduces exactly (asserted by --selftest against the built `address_map_1170.rs`):
 
   call_ok    the address is in VERIFIED_1162_TO_1170, so `game_rva` / `resolve_game_address`
              will translate it. Assembled from the DETOURABLE rows of
-             rva-map-1162-to-1170.verified.tsv, ALL rows of .needed.tsv, ALL rows of .data.tsv,
+             rva-map-1162-to-1170.verified.tsv, all rows of .needed.tsv, all rows of .data.tsv,
              minus the quarantine and minus every DIVERGES verdict.
   detour_ok  the address is in DETOUR_SAFE_1162_TO_1170 -- the stricter licence, which needs
-             both a body comparison and BOTH-ENTRIES/NEITHER-ENTRY evidence from .pdata.
-  prov       where the row came from: VERIFIED / DATA / FUNCTION / HELD-BACK / NONE.
+             both a body comparison and both-ENTRIES/NEITHER-entry evidence from .pdata.
+  prov       where the row came from: Verified / data / function / held-back / none.
 
-An address with `call_ok = false` WILL be refused the moment its path runs.
+An address with `call_ok = false` will be refused the moment its path runs.
 
     python3 scripts/audit-1170-coverage-inventory.py --report      # the markdown inventory
-    python3 scripts/audit-1170-coverage-inventory.py --json OUT
+    python3 scripts/audit-1170-coverage-inventory.py --json out
     python3 scripts/audit-1170-coverage-inventory.py --selftest
 """
 
@@ -91,44 +91,44 @@ DETOUR_FIELD = re.compile(r"\bdetour\s*:")
 SIGCHECK = re.compile(r"prologue|signature|EXPECTED|expected_", re.I)
 
 MIN_VERIFIED_INSNS = 12
-# Verdicts whose comparison covered the WHOLE of both bodies, and so take no instruction floor.
+# Verdicts whose comparison covered the whole of both bodies, and so take no instruction floor.
 # The same list lives in er-game-base/build.rs as EXHAUSTIVE_VERDICTS and in
 # verify-rva-map-1170.py, which writes the strings; this file exists to report what build.rs will
 # do, so it is wrong the moment the three disagree.
 EXHAUSTIVE_VERDICTS = {"BYTE-IDENTICAL", "IDENTICAL-WHOLE", "IDENTICAL-LEAF"}
-# The other floor-exempt class: verdicts where the two bodies DIFFER and the patch site does not,
+# The other floor-exempt class: verdicts where the two bodies differ and the patch site does not,
 # so the difference is somewhere the five bytes MinHook writes never reach. Also mirrored from
 # er-game-base/build.rs (`PATCH_SITE_VERDICTS`); same drift risk, same reason it is listed.
 PATCH_SITE_VERDICTS = {"PATCH-SITE-IDENTICAL"}
-# The CALL-ONLY class: whole-body proof plus a hook MinHook itself refuses, so the row reaches
+# The call-only class: whole-body proof plus a hook MinHook itself refuses, so the row reaches
 # VERIFIED_1162_TO_1170 and never DETOUR_SAFE_1162_TO_1170. Mirrored from
 # er-game-base/build.rs (`CALLABLE_ONLY_VERDICTS`); same drift risk, and the same guard catches it
 # -- --selftest compares this reproduction against the table cargo really generated, which is what
-# caught this file modelling 497 CALL rows against a generated 499 on 2026-08-30.
+# caught this file modelling 497 call rows against a generated 499 on 2026-08-30.
 CALLABLE_ONLY_VERDICTS = {"IDENTICAL-LEAF-NOPATCH"}
 # Below the first page of the image nothing is a game address; a discriminant that small is a
 # mis-parse, not an RVA.
 MIN_PLAUSIBLE_RVA = 0x1000
-# Names that describe a RANGE, not an address -- `AV_GAME_TEXT_RVA_MAX`, `GX_CMD_QUEUE_WRAPPER_RVA_MIN`.
+# Names that describe a range, not an address -- `AV_GAME_TEXT_RVA_MAX`, `GX_CMD_QUEUE_WRAPPER_RVA_MIN`.
 # Translating a bound is a category error, and left in they outrank real work by sitting in hot
 # comparison code. Same filter `select-needed-1170-rows.py` applies, for the same reason.
 BOUND = re.compile(r"_(MIN|MAX|LIMIT|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DETOURABLE_ENTRY = ("BOTH-ENTRIES", "NEITHER-ENTRY")
 
-# ---------------------------------------------------------------- WHOSE base is it added to?
-# An address is a GAME address because of the BASE it is added to -- never because its name ends
+# ---------------------------------------------------------------- Whose base is it added to?
+# An address is a game address because of the base it is added to -- never because its name ends
 # in `_RVA`. One cdylib's address list can name several modules: `er-invasion-warp` resolves
-# Seamless Co-op with `GetModuleHandleA("ersc.dll")` and adds four RVAs to THAT base (image base
+# Seamless Co-op with `GetModuleHandleA("ersc.dll")` and adds four RVAs to that base (image base
 # 0x180000000, v1.9.9). An ELDEN RING patch does not move them, so they are not migration work --
 # and worse, translating one through the game map and detouring the result puts five bytes of jmp
 # into an unrelated `eldenring.exe` function. Classifying by name reported all four as unmapped
 # game addresses; two agents caught it by reading the code and no checker did.
 #
-# The stem must be one the FILE ITSELF resolves by name, so the game's own
+# The stem must be one the file itself resolves by name, so the game's own
 # `GetModuleHandleA(NULL)` / `game_module_base()` can never be mistaken for a foreign module.
 FOREIGN_HANDLE = re.compile(r'GetModuleHandle[AW]\s*\(\s*c?"([A-Za-z0-9_+.\-]+)\.dll"')
 MODBLOCK = re.compile(r"\bmod\s+(\w+)\s*\{")
-# The SAME module, declared in its own file instead of as an inline block: `mod ersc;` beside
+# The same module, declared in its own file instead of as an inline block: `mod ersc;` beside
 # `ersc.rs`. Measured 2026-09-02 -- `local_invasion_filter.rs` crossed the file-size limit, its
 # `mod ersc { ... }` block moved to `local_invasion_filter/ersc.rs`, and eight ersc.dll RVAs
 # silently became eldenring.exe migration work because the block form was the only one recognised.
@@ -139,7 +139,7 @@ GAME_MODULE = "eldenring.exe"
 # `<stem>_module_base()` / `game_module_base()` -- what a nearby `base + 0x...` literal was added
 # to. Only consulted for the literal forms, which have no declaration site to attribute.
 BASE_FN_CALL = re.compile(r"\b([a-z0-9_]+)_module_base\s*\(")
-# How far above a literal a base binding still counts as ITS base.
+# How far above a literal a base binding still counts as its base.
 BASE_BIND_WINDOW_LINES = 40
 
 # ---------------------------------------------------------------- literals that are not addresses
@@ -148,21 +148,21 @@ BASE_BIND_WINDOW_LINES = 40
 # the same reason `BOUND` drops `*_RVA_MIN` / `*_RVA_MAX` / `*_RVA_LIMIT` by name.
 RANGE_ARG = re.compile(
     r"\bcallstack_contains_game_rva\s*\(\s*(0x[0-9a-fA-F_]+)\s*,\s*(0x[0-9a-fA-F_]+)")
-# The same window, spelled as a Rust range instead of as two call arguments. MEASURED 2026-08-30:
+# The same window, spelled as a Rust range instead of as two call arguments. Measured 2026-08-30:
 # `callstack_contains_game_rva(0x7a3000, 0x7a4000)` was refactored into
 # `const LEGACY_CONFIRM_CALLER_BAND: core::ops::Range<usize> = 0x7a3000..0x7a4000;`, the
 # call-shaped pattern above stopped matching (this scan is line by line, and the call arguments now
 # name the const's fields), and the two bounds were about to be inventoried as addresses to
-# translate. A literal `A..B` of two hex constants is a WINDOW by construction: its ends are
+# translate. A literal `A..B` of two hex constants is a window by construction: its ends are
 # compared against a return address, never called and never hooked. Recognising the range form
 # means the exclusion survives the next such refactor instead of being re-broken by rustfmt.
 LITERAL_RANGE = re.compile(r"(0x[0-9a-fA-F_]+)\s*\.\.=?\s*(0x[0-9a-fA-F_]+)")
 
 
 def foreign_module_files(paths):
-    """`{path: "ersc.dll"}` for every file that IS a foreign module, declared `mod <stem>;`.
+    """`{path: "ersc.dll"}` for every file that is a foreign module, declared `mod <stem>;`.
 
-    The safety property is the same one the inline-block form relies on: the DECLARING file must
+    The safety property is the same one the inline-block form relies on: the declaring file must
     resolve `<stem>.dll` by name itself, so the game's own `GetModuleHandleA(NULL)` can never
     promote a sibling file to foreign. Only the two paths rustc itself would look at are accepted
     (`<dir>/<stem>.rs` and `<dir>/<stem>/mod.rs`), so this cannot reach a same-named file
@@ -192,9 +192,9 @@ def foreign_module_files(paths):
 
 def foreign_module_spans(text, whole_file_module=None):
     """`[(first_line, last_line, "ersc.dll")]` -- the `mod <stem> { ... }` blocks holding a
-    NON-game module's addresses, plus the set of foreign stems the file resolves by name.
+    non-game module's addresses, plus the set of foreign stems the file resolves by name.
 
-    `whole_file_module` is set when the file itself IS such a module (see
+    `whole_file_module` is set when the file itself is such a module (see
     [`foreign_module_files`]); then the span is the whole file and no block search is needed.
     """
     stems = {m.group(1).lower() for m in FOREIGN_HANDLE.finditer(text)}
@@ -226,7 +226,7 @@ def base_bindings(text, stems):
     """`[(line, module)]` for every `*_module_base()` call, foreign or the game's own.
 
     A file that resolves `ersc.dll` also resolves the game, so a literal is attributed to
-    whichever base was bound NEAREST above it -- not to "this file mentions ersc somewhere".
+    whichever base was bound nearest above it -- not to "this file mentions ersc somewhere".
     """
     out = []
     for i, line in enumerate(text.splitlines(), 1):
@@ -237,7 +237,7 @@ def base_bindings(text, stems):
 
 
 def module_of_line(line, spans, binds):
-    """Which module's base a LITERAL on this line is added to, or None for the game's."""
+    """Which module's base a literal on this line is added to, or None for the game's."""
     for lo, hi, module in spans:
         if lo <= line <= hi:
             return module
@@ -262,13 +262,13 @@ def rs_files(root):
 def build_symbol_table(paths):
     """`name -> rva`, over all four declaration forms. Enum variants are keyed `Enum::Variant`.
 
-    Also returns `name -> "ersc.dll"` for every constant DECLARED inside a foreign module's block.
+    Also returns `name -> "ersc.dll"` for every constant declared inside a foreign module's block.
     The declaration site is the authoritative attribution: wherever such a constant is later used,
     it is still added to that module's base, so it is never eldenring.exe migration work.
     """
     consts, aliases, by_enum, any_variant, decl = {}, {}, {}, {}, {}
     foreign = {}
-    # A pre-pass, because a module in its own file is attributed by its PARENT and the two are
+    # A pre-pass, because a module in its own file is attributed by its parent and the two are
     # separate paths -- relying on the walk reaching the parent first would make the answer depend
     # on sort order.
     module_files = foreign_module_files(paths)
@@ -287,7 +287,7 @@ def build_symbol_table(paths):
 
         for m in ENUMHEAD.finditer(text):
             name, depth, i = m.group(1), 0, m.end() - 1
-            # ONLY `*Rva` enums. Every `pub enum` with hex discriminants was taken at first, and
+            # Only `*Rva` enums. Every `pub enum` with hex discriminants was taken at first, and
             # `MenuEventId::MoveA = 0x0` then entered the inventory as game address 0x0 -- an
             # address that is not one, ranked above real work by the sheer count of its references.
             if not name.endswith("Rva"):
@@ -360,10 +360,10 @@ def _rva(s):
 
 
 def verdict_table(path):
-    """(every source RVA, the DETOURABLE ones, the CALL-ONLY ones, the DIVERGES ones).
+    """(every source RVA, the DETOURABLE ones, the call-only ones, the DIVERGES ones).
 
-    build.rs's own filters -- both of them. The CALL-only set is separate because build.rs reads it
-    with a separate function: such a verdict is admitted to the CALL map and refused the detour
+    build.rs's own filters -- both of them. The call-only set is separate because build.rs reads it
+    with a separate function: such a verdict is admitted to the call map and refused the detour
     map, and folding the two together is what would report a three-byte body as hookable.
     """
     allr, det, only, div = set(), set(), set(), set()
@@ -417,7 +417,7 @@ def load_maps(extra_observed=None):
                     observed.add(int(line, 16))
                 except ValueError:
                     pass
-    # A SECOND source of "this path demonstrably runs". The tracked refusal file is a snapshot of
+    # A second source of "this path demonstrably runs". The tracked refusal file is a snapshot of
     # one boot; a fresh scan of the current DLL logs sees whatever the last runs reached, and the
     # 14.9 GB autoload log has to be scanned out-of-band anyway. Either VA or RVA form is accepted.
     if extra_observed and os.path.isfile(extra_observed):
@@ -434,7 +434,7 @@ def load_maps(extra_observed=None):
         "ver_all": ver_all, "ver_det": ver_det, "nv_all": nv_all, "nv_det": nv_det,
         "ver_only": ver_only,
         "func": func, "data": data, "held": held, "observed": observed,
-        # The CALL map takes the verified table's detourable rows AND its CALL-only ones. The
+        # The call map takes the verified table's detourable rows and its call-only ones. The
         # detour map takes only the first kind, from either table -- `ver_only` appears in one of
         # these two lines and deliberately not in the other.
         "call": (ver_det | ver_only | func | data) - held,
@@ -446,7 +446,7 @@ def provenance(rva, maps):
     if rva in maps["held"]:
         return "HELD-BACK"
     if rva in maps["ver_det"] or rva in maps["nv_det"] or rva in maps["ver_only"]:
-        # VERIFIED covers the CALL-only rows too: their identity was proved over the whole of both
+        # Verified covers the call-only rows too: their identity was proved over the whole of both
         # bodies, which is what this word describes. Whether a detour is licensed is `detour_ok`,
         # reported separately, and False for them.
         return "VERIFIED"
@@ -482,7 +482,7 @@ def collect(maps):
     syms, _decl, foreign_syms = build_symbol_table(all_paths)
     ident = re.compile(r"\b(" + "|".join(sorted((re.escape(k) for k in syms), key=len, reverse=True)) + r")\b")
 
-    # Literals and named constants that are NOT game addresses, kept as their own class rather
+    # Literals and named constants that are not game addresses, kept as their own class rather
     # than silently dropped -- an excluded thing nobody can see is indistinguishable from a
     # missed one, and both of these classes were being reported as unmapped migration work.
     not_addresses = {}
@@ -528,7 +528,7 @@ def collect(maps):
             stripped = line.lstrip()
             if stripped.startswith("//") or stripped.startswith("*"):
                 continue
-            # A RANGE, not two addresses. Recorded so the exclusion is visible and testable.
+            # A range, not two addresses. Recorded so the exclusion is visible and testable.
             for m in RANGE_ARG.finditer(line):
                 for end in (m.group(1), m.group(2)):
                     not_an_address(int(end.replace("_", ""), 16), "(callstack range bound)",
@@ -552,9 +552,9 @@ def collect(maps):
             for m in RVA_FIELD.finditer(line):
                 rva = int(m.group(1).replace("_", ""), 16)
                 block = "\n".join(lines[max(0, i - 12): i + 12])
-                # The NEAREST label ABOVE the `rva:` line, not the first one in the window. A
+                # The nearest label above the `rva:` line, not the first one in the window. A
                 # hook table is a run of adjacent `HookSpec { name, rva, detour }` records, so
-                # taking the first match in a +/-12 line block reads the PREVIOUS entry's name:
+                # taking the first match in a +/-12 line block reads the previous entry's name:
                 # 0xafbad0 was reported as `movemap_dispatcher2_afb880`, which is 0xafb880.
                 above = "\n".join(lines[max(0, i - 12): i + 1])
                 cn = (re.findall(r"const\s+([A-Z0-9_]+)\s*:", above)
@@ -567,7 +567,7 @@ def collect(maps):
                     module=module_of_line(i + 1, spans, binds))
             for m in BASE_PLUS_LIT.finditer(line):
                 rva = int(m.group(1).replace("_", ""), 16)
-                # Page-aligned means a RANGE bound, not a function: `openfile >= base + 0x0800_0000`
+                # Page-aligned means a range bound, not a function: `openfile >= base + 0x0800_0000`
                 # is a sanity check on a runtime-resolved pointer, and it entered the inventory as
                 # game address 0x8000000. No real RVA in this tree is page-aligned.
                 if MIN_PLAUSIBLE_RVA <= rva <= 0x8000000 and rva & 0xFFF:
@@ -629,16 +629,16 @@ def collect(maps):
 
 
 # The classification cases every future edit must keep answering the same way. Each was a real
-# misclassification: the first four were reported as unmapped GAME addresses and are Seamless
+# misclassification: the first four were reported as unmapped game addresses and are Seamless
 # Co-op's, the next three are bounds that were being ranked as migration work above real
 # functions, and the last two are the control -- an exclusion that also ate real addresses would
 # look like progress.
 # The supported build's four addresses. This mod drives the latest Seamless Co-op only, and a build
-# that is no longer latest leaves NOTHING behind -- no second ABI entry, no fingerprint, no pinned
+# that is no longer latest leaves nothing behind -- no second ABI entry, no fingerprint, no pinned
 # address -- so there is exactly one build's worth of rows here and there never needs to be more.
 # They are here because each is as plausible-looking a game `.text` address as any, and misfiling
 # one would put Seamless work into the 1.17 game-migration queue it does not belong in.
-# What these rows assert is ATTRIBUTION -- "this address belongs to ersc.dll, not eldenring.exe" --
+# What these rows assert is attribution -- "this address belongs to ersc.dll, not eldenring.exe" --
 # never "this is what still lives at that offset in the DLL on your disk". Seamless is third-party
 # and updates on its own schedule: run scripts/ersc_identify.py to see which build is installed and
 # scripts/locate-ersc-entry-points.py to re-measure before trusting a name here.
@@ -666,7 +666,7 @@ def selftest(maps):
     import glob
     generated = sorted(glob.glob(os.path.join(REPO, "target", "**", "address_map_1170.rs"), recursive=True),
                        key=os.path.getmtime)
-    # Only a build NEWER than every map file proves anything. The maps are edited constantly while
+    # Only a build newer than every map file proves anything. The maps are edited constantly while
     # the migration is in progress, and comparing against a table generated before the last TSV
     # edit reports a difference that is real and means nothing about this script.
     newest_map = max((os.path.getmtime(os.path.join(RECON, f)) for f in os.listdir(RECON)
@@ -711,7 +711,7 @@ def selftest(maps):
             failures.append(
                 f"a constant declared inside `mod ersc` is not attributed to ersc.dll: {name}"
             )
-    # BOTH spellings of "this module is not the game", on synthetic text. The live tree only
+    # Both spellings of "this module is not the game", on synthetic text. The live tree only
     # exercises one of them at a time -- `mod ersc` was an inline block until 2026-09-02 and is a
     # separate file now -- and the day it moved, the file form was not recognised and eight
     # ersc.dll RVAs became eldenring.exe migration work. Whichever form the tree happens to use,
@@ -735,7 +735,7 @@ def selftest(maps):
             "name -- the game's own module could be mistaken for a foreign one"
         )
 
-    # --- classification by BASE, not by name -------------------------------------------------
+    # --- classification by base, not by name -------------------------------------------------
     inv = collect(maps)
     game = {r for a in inv["crates"].values() for r in a}
     for rva, module, why in FOREIGN_CASES:
@@ -838,12 +838,12 @@ def per_address(inv):
 
 
 def detour_licence_only(inv):
-    """Addresses a call TRANSLATES and a detour REFUSES: `call_ok` yet not `detour_ok`.
+    """Addresses a call translates and a detour REFUSES: `call_ok` yet not `detour_ok`.
 
     Mapping cannot fix these -- the row already exists. What it lacks is the stricter evidence
-    `er-game-base/build.rs` demands before a row may carry a detour: an EXHAUSTIVE verdict
-    (BYTE-IDENTICAL, IDENTICAL-WHOLE, IDENTICAL-LEAF -- the whole of both bodies compared), or
-    IDENTICAL over at least `MIN_VERIFIED_INSNS` instructions, AND `BOTH-ENTRIES` /
+    `er-game-base/build.rs` demands before a row may carry a detour: an exhaustive verdict
+    (byte-identical, identical-whole, identical-leaf -- the whole of both bodies compared), or
+    identical over at least `MIN_VERIFIED_INSNS` instructions, and `BOTH-ENTRIES` /
     `NEITHER-ENTRY` from `.pdata`. A detour overwrites five bytes, so a wrong answer corrupts a
     live function rather than losing a feature; the gate is the point, not the obstacle.
 
@@ -875,7 +875,7 @@ def rank(inv, maps):
                "ndlls": len(v["dlls"]), "observed": int(rva, 16) in maps["observed"]}
         score = 8 * row["ndlls"]
         if row["observed"]:
-            score += 100          # its path demonstrably RUNS; everything else is a guess
+            score += 100          # its path demonstrably runs; everything else is a guess
         if "exec" in row["kinds"]:
             score += 80           # a stale transmute target is a dead process, not a dead feature
         if "write" in row["kinds"]:

@@ -2,7 +2,7 @@
 //!
 //! # What `lobby_key` actually is
 //!
-//! Reversed 2026-08-06 out of `ersc.dll`. It is NOT the co-op password, which was the
+//! Reversed 2026-08-06 out of `ersc.dll`. It is not the co-op password, which was the
 //! working assumption for most of a day and was wrong twice over — a player with a different
 //! password matched us live, and the derivation never contains a password:
 //!
@@ -11,7 +11,7 @@
 //! ctx[0xB8] <- a regulation/param-table fingerprint                            fn 0x0A8930
 //! ```
 //!
-//! So it is a REGULATION FINGERPRINT: everyone running the same params and the same Seamless build
+//! So it is a regulation FINGERPRINT: everyone running the same params and the same Seamless build
 //! derives the same key, which is why five strangers shared ours. It is consumed at exactly two
 //! places, both Steam calls, both fed the same value:
 //!
@@ -23,7 +23,7 @@
 //! # The lever that follows
 //!
 //! Because one value drives both halves, rewriting it at the Steam boundary moves a player into a
-//! different pool ENTIRELY and SYMMETRICALLY. They cannot see vanilla lobbies and vanilla cannot see
+//! different pool entirely and SYMMETRICALLY. They cannot see vanilla lobbies and vanilla cannot see
 //! theirs — the exclusivity applies to hosting as much as to invading, with no host-side accept hook
 //! required, because a vanilla invader's query simply asks for a different string.
 //!
@@ -35,7 +35,7 @@
 //! [`POOL_NAMESPACE`] is a constant compiled into a DLL anyone can download. The derived key is
 //! therefore public: it separates pools, it does not protect one. That is the whole requirement for
 //! "only match other DLL users" — there is nobody to keep out, only a different room to stand in.
-//! FNV is used accordingly. If a PRIVATE pool is ever added (a user-chosen passphrase), that changes
+//! FNV is used accordingly. If a private pool is ever added (a user-chosen passphrase), that changes
 //! the requirement to secrecy and this must become a real digest, because FNV is trivially
 //! invertible for short inputs.
 //!
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(pooled_lobby_key(false, VANILLA), None);
     }
 
-    /// The whole mechanism: the pooled key must DIFFER from vanilla, or DLL users stay in the
+    /// The whole mechanism: the pooled key must differ from vanilla, or DLL users stay in the
     /// general population and the option does nothing while appearing to work.
     #[test]
     fn the_pooled_key_differs_from_the_vanilla_one() {
@@ -104,7 +104,7 @@ mod tests {
         assert_ne!(pooled, VANILLA);
     }
 
-    /// Two DLL users derive the SAME key from the same vanilla input, which is what makes them
+    /// Two DLL users derive the same key from the same vanilla input, which is what makes them
     /// find each other. This is the property the feature is.
     #[test]
     fn two_players_on_the_same_game_derive_the_same_pooled_key() {
@@ -165,12 +165,12 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    /// THE "GLOBAL DLL COMMUNITY" MODE, pinned because it is a config COMBINATION rather than a
+    /// The "GLOBAL DLL COMMUNITY" mode, pinned because it is a config combination rather than a
     /// feature with its own switch, and combinations are what refactors quietly break.
     ///
     /// `enabled = false` + `dll_users_only = true` means: no location filtering at all, invade
     /// anywhere exactly as unmodded play, but the only people in your matchmaking pool are other
-    /// DLL users. That requires the pool to be INDEPENDENT of the reject filter's master switch.
+    /// DLL users. That requires the pool to be independent of the reject filter's master switch.
     /// Gating the pool on `enabled` -- an easy tidy-up, since both live in the same config -- would
     /// kill this mode while every existing test still passed.
     #[test]

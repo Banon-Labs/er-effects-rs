@@ -10,14 +10,14 @@
 //!
 //! # What a DLL gets from here
 //!
-//! * [`keys`] -- one table of key NAMES (`"F7"`, `"]"`, `"KP_Plus"`, `"Insert"`) carrying both
+//! * [`keys`] -- one table of key names (`"F7"`, `"]"`, `"KP_Plus"`, `"Insert"`) carrying both
 //!   numbering schemes a key reaches this process by: Win32 virtual keys and DirectInput
 //!   scancodes.
-//! * [`reload`] -- [`reload::HotFile`], which notices a config file changed by comparing its TEXT
+//! * [`reload`] -- [`reload::HotFile`], which notices a config file changed by comparing its text
 //!   (not its mtime, which has one-second resolution on the filesystems a Wine prefix tends to sit
 //!   on) and throttles itself to roughly one read per second.
 //! * [`binding`] -- [`binding::Binding`], which turns "the file changed" into one of exactly three
-//!   outcomes: the key moved (reset your edge detector), the key did not move (do NOT reset it), or
+//!   outcomes: the key moved (reset your edge detector), the key did not move (do not reset it), or
 //!   the value was junk and the last working key is still in force.
 //! * [`pad`] -- the controller half of the same vocabulary: [`pad::PadChord`], a BITMASK over
 //!   `XINPUT_GAMEPAD.wButtons` (a pad has no modifiers and no scancodes, so it is a different
@@ -25,11 +25,11 @@
 //!   rule is the pad's version of the phantom-press fix in [`binding`].
 //! * [`live`] -- [`live::AtomicChord`], a binding the detour that actually reads the keyboard can
 //!   load without touching a lock the reload path also wants.
-//! * [`persist`] -- the other direction: writing ONE setting back into a file the player also
+//! * [`persist`] -- the other direction: writing one setting back into a file the player also
 //!   owns, by rewriting a single line in place and renaming it over the original, so a state a
 //!   hotkey changes in-game survives a relaunch without the DLL eating their comments.
 //!
-//! # What it deliberately does NOT do
+//! # What it deliberately does not do
 //!
 //! It does not read the keyboard, own a config file's schema, or know what a key means. Each DLL
 //! keeps its own file, its own key names, and its own hook -- this crate is the vocabulary and the

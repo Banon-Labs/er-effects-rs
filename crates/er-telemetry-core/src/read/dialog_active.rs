@@ -1,26 +1,26 @@
-//! ORACLE-3 / SEMAPHORE-D: currently-displayed `CS::MessageBoxDialog` /
-//! `CS::SaveRetryDialog` modal -- a PASSIVE read that catches a box built at ANY
+//! Oracle-3 / SEMAPHORE-D: currently-displayed `CS::MessageBoxDialog` /
+//! `CS::SaveRetryDialog` modal -- a passive read that catches a box built at any
 //! time (including the boot "session not ended / loss of progress" warning that
 //! appears before the product hook installs and in telemetry-only mode).
 //!
-//! WHY THIS EXISTS: historical build-counter telemetry could not prove a visible dialog was
+//! Why this EXISTS: historical build-counter telemetry could not prove a visible dialog was
 //! currently blocking the product path. This reader inspects live dialog objects directly,
 //! installed late (from the recurring game task, gated by online-disable/product
 //! autoload). Any dialog built before that install -- or in a run where the product
 //! hook never arms (telemetry-only, or the standalone er-telemetry which has no
 //! product hooks at all) -- is never counted, so the counter reports 0 even while a
-//! box is on screen (the observed FALSE NEGATIVE, bd
+//! box is on screen (the observed false negative, bd
 //! msgbox-oracle-false-negative-boot-session-dialog-masked-by-cover-user-image-2026-07-24).
-//! A currently-displayed dialog is instead detected here by reading LIVE game RAM:
+//! A currently-displayed dialog is instead detected here by reading live game RAM:
 //! a fault-safe, vtable-gated address-space scan (the exact pattern
 //! `title_binding::scan_for_owner` uses for the title owner) finds an object whose
-//! first qword is the base MessageBoxDialog vtable OR the SaveRetryDialog subclass
+//! first qword is the base MessageBoxDialog vtable or the SaveRetryDialog subclass
 //! vtable, then confirms it is genuinely on screen (not tearing down) with the same
 //! `closing_latch`/`state` fields the product's own `blocking_modal_present` uses.
 //!
-//! All reads are passive `safe_read_*` / `ReadProcessMemory` / `VirtualQuery`; NO
-//! hooks, NO vtable-fn calls, NO D3D12 -- RenderDoc-safe. Independent marker gate
-//! (`er-oracle-dialog-active.on`, DEFAULT OFF); no cross-dependency on the other
+//! All reads are passive `safe_read_*` / `ReadProcessMemory` / `VirtualQuery`; No
+//! hooks, no vtable-fn calls, no D3D12 -- RenderDoc-safe. Independent marker gate
+//! (`er-oracle-dialog-active.on`, default off); no cross-dependency on the other
 //! read/ oracles.
 
 use core::ffi::c_void;
@@ -28,19 +28,19 @@ use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{safe_read_i32, safe_read_u8, safe_read_usize, vtable_in_game_image};
 
-// --- Dialog vtable RVAs off the game image base (0x140000000). DATA RVAs are
+// --- Dialog vtable RVAs off the game image base (0x140000000). Data RVAs are
 // version-stable between the dump and the live/deobf image (the piecewise .text
 // shift does not apply to .rdata vtables), so these live RVAs are used directly. ---
 /// `CS::MessageBoxDialog` base vftable RVA. Source: product
-/// constants/autoload_state.rs `MsgBoxRva::DialogVtable`; RE-CONFIRMED in the
+/// constants/autoload_state.rs `MsgBoxRva::DialogVtable`; RE-confirmed in the
 /// 1.16.2 dump -- the builder `FUN_1409275b0` writes `*obj =
 /// CS::MessageBoxDialog::vftable` at this RVA (dump 0x142b03550, xref from
 /// 0x140927601/0x140927608).
 use er_game_base::rva::MSGBOX_DIALOG_VTABLE_RVA;
-/// `CS::SaveRetryDialog` vftable RVA -- a MessageBoxDialog SUBCLASS whose wrapper
-/// overrides the base vtable AFTER the builder runs; it is the offline title flow's
+/// `CS::SaveRetryDialog` vftable RVA -- a MessageBoxDialog subclass whose wrapper
+/// overrides the base vtable after the builder runs; it is the offline title flow's
 /// "save/load failed -- Retry?" boot prompt. Source: product
-/// constants/autoload_state.rs `SAVE_RETRY_DIALOG_VTABLE_RVA`; RE-CONFIRMED in the
+/// constants/autoload_state.rs `SAVE_RETRY_DIALOG_VTABLE_RVA`; RE-confirmed in the
 /// 1.16.2 dump -- referenced by the SaveRetry wrapper `FUN_1407af8b0` (dump
 /// 0x142aaabf8), which is also a caller of the base builder `FUN_1409275b0`.
 const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
@@ -53,11 +53,11 @@ const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
 /// this is exactly the field write_game_module_oracles' `blocking_modal_present`
 /// reads.
 const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
-/// `button_count` (i32, `dialog+0x25e8`). CORRECTED 2026-07-28: this is NOT a
+/// `button_count` (i32, `dialog+0x25e8`). Corrected 2026-07-28: this is not a
 /// "decided" state. The ctor (`FUN_1409275b0`) writes it as
 /// `(*(i64*)(cfg+0x38) - *(i64*)(cfg+0x30)) / 0x210`, the length of the button
 /// descriptor vector, so a Yes/No confirm reads 2 here from the frame it is built.
-/// The old `state >= 2 == decided` test therefore REJECTED every two-button confirm
+/// The old `state >= 2 == decided` test therefore rejected every two-button confirm
 /// as "not active" (false negative). Kept as a shape check only: a real dialog has
 /// at least one button. Source: product constants/autoload_state.rs
 /// `MSGBOX_BUTTON_COUNT_25E8_OFFSET`.
@@ -75,9 +75,9 @@ const MSGBOX_JOB_RESULT_STATE_1E8_OFFSET: usize = 0x1e8;
 /// `MenuJobResult::ShouldContinue` (0x1407a9200) is `cmp [rcx],1; seta al`.
 const MENU_JOB_RESULT_STATE_CONTINUE_MAX: i32 = 1;
 
-// --- CSMenuMan singleton diagnostics (SUPPORTING evidence only, NOT the
+// --- CSMenuMan singleton diagnostics (supporting evidence only, not the
 // authoritative msgbox_active signal). The builder sets a build-time "dialog mode"
-// flag in the CSMenuMan singleton; teardown-clear semantics are NOT verified, so
+// flag in the CSMenuMan singleton; teardown-clear semantics are not verified, so
 // these are logged for corroboration/future RE but never gate the result. ---
 /// `CSMenuMan.popupMenu` (`CSMenuMan+0x80`, CSPopupMenu*). Source: 1.16.2 dump
 /// CSMenuManImp struct + `showPopupMenu` (`GLOBAL_CSMenuMan->popupMenu`).
@@ -97,10 +97,10 @@ const SCAN_CHUNK: usize = 0x10000;
 const SCAN_MAX: usize = 1usize << 47;
 /// Lowest plausible heap/image pointer -- filters null + small sentinels.
 const HEAP_LO: usize = 0x10000;
-/// Write-ticks to skip between full rescans while NO active dialog is cached. A
+/// Write-ticks to skip between full rescans while no active dialog is cached. A
 /// dialog is transient, so (unlike the persistent title owner) we cannot cache once
 /// forever; this bounds the full-scan cost to a few per second while still catching
-/// the seconds-long boot warning. When a dialog IS cached it is re-validated
+/// the seconds-long boot warning. When a dialog is cached it is re-validated
 /// cheaply every tick with zero scanning until it tears down.
 const SCAN_THROTTLE: u64 = 4;
 
@@ -196,9 +196,9 @@ struct ActiveDialog {
     state: i32,
 }
 
-/// Fault-safe test: is `obj` a currently-DISPLAYED (blocking, not-tearing-down)
+/// Fault-safe test: is `obj` a currently-displayed (blocking, not-tearing-down)
 /// MessageBoxDialog/SaveRetryDialog? Mirrors the product's `blocking_modal_present`
-/// (vtable match AND `closing_latch != 1`), tightened with `state < decided` so a
+/// (vtable match and `closing_latch != 1`), tightened with `state < decided` so a
 /// decided/closing box does not count. Returns the evidence when active.
 fn validate_active(obj: usize, base: usize) -> Option<ActiveDialog> {
     if obj < HEAP_LO {
@@ -284,7 +284,7 @@ fn scan_chunk(
 /// Bounded, fault-safe full address-space walk for a currently-displayed dialog.
 /// Only called on the throttle boundary while no active dialog is cached.
 fn scan_for_dialog(base: usize) -> Option<ActiveDialog> {
-    // BOTH vtable addresses go through the resolver. `want_a` used to be a raw
+    // Both vtable addresses go through the resolver. `want_a` used to be a raw
     // `base + <1.16.2 RVA>`, which never reaches `er-game-base` and therefore never logs a
     // refusal: on 1.17 `MSGBOX_DIALOG_VTABLE_RVA` moved 0x2b03550 -> 0x2b065d0, so the scan was
     // comparing every qword against an address that is not the object any more and this oracle
@@ -372,7 +372,7 @@ pub fn tick(base: usize, epoch: u64, play_time_ms: i64) {
 
     let (active, scanned) = find_active_dialog(base);
 
-    // Supporting singleton diagnostics (NOT authoritative): the CSMenuMan build-time
+    // Supporting singleton diagnostics (not authoritative): the CSMenuMan build-time
     // dialog flags, for corroboration + future RE. Their teardown-clear semantics
     // are unverified, so they never gate `msgbox_active`.
     let cs_menu_man = unsafe {

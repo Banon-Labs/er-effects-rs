@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Keep the ELDEN RING window focused while an agent-driven run needs input to reach the game.
 
-WHY. ER only accepts input while its window has focus. Measured on run br-20260905-031000-5ac5:
+Why. ER only accepts input while its window has focus. Measured on run br-20260905-031000-5ac5:
 the product's move-probe wrote the forward stick into the live pad device for 150 frames, the
 character moved for 5, `oracle_can_move` stayed False, and the window was mapped and visible on
-DP-1 with `focusHistoryID = 2` -- i.e. not focused. The product's movement proof is ONE-SHOT per
+DP-1 with `focusHistoryID = 2` -- i.e. not focused. The product's movement proof is one-shot per
 load epoch (it gives up at ~900 frames and switches the probe off), so focusing the window after
 it has already given up does nothing: focus has to be held from the moment the window appears.
 
 This is the stop-gap. The durable fix is a shell that removes the focus requirement inside the
 game; while that does not exist, an agent-driven run has to actually own the focus.
 
-PRIVACY: the window is located by CLASS ONLY (`steam_app_1245620`). AGENTS.md forbids enumerating
+PRIVACY: the window is located by class only (`steam_app_1245620`). AGENTS.md forbids enumerating
 or printing the user's window list, so nothing about any other window is read or reported.
 """
 import argparse
@@ -43,7 +43,7 @@ def er_focus_state():
 
 
 def focus(address):
-    """Focus by ADDRESS. `focuswindow class:^...$` is rejected by this machine's non-legacy Lua
+    """Focus by address. `focuswindow class:^...$` is rejected by this machine's non-legacy Lua
     config parser, which reads the bare `class:` selector as Lua and errors on it."""
     try:
         subprocess.run(
@@ -63,7 +63,7 @@ def main() -> int:
 
     # A bounded `select` to spend each quiet interval on. There is no file to watch here --
     # the compositor is queried, not signalled -- so this watches nothing and simply times
-    # out, which is the point: a wait that CANNOT accidentally become a sync primitive.
+    # out, which is the point: a wait that cannot accidentally become a sync primitive.
     idle = er_run_lib.DirectoryWatch(pathlib.Path(__file__).resolve().parent)
     deadline = time.time() + args.seconds
     appeared = False

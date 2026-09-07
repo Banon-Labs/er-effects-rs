@@ -16,10 +16,10 @@
 //! On a build where the singleton turns up promptly that loop runs a handful of times and nobody
 //! notices. On 1.17 it does not turn up promptly, and the loop becomes an unbounded stream of
 //! `NtYieldExecution` calls. Under Wine every one of those is a round trip to the wineserver,
-//! which is shared and serialising, so a couple of these threads is enough to starve every OTHER
+//! which is shared and serialising, so a couple of these threads is enough to starve every other
 //! thread in the process -- including the game's.
 //!
-//! MEASURED, 2026-08-29. Full profile, eighteen DLLs. Three minutes after launch the game had
+//! Measured, 2026-08-29. Full profile, eighteen DLLs. Three minutes after launch the game had
 //! accumulated 104 CPU ticks -- about one second of work -- while `er-telemetry-standalone` and
 //! `er-invasion-path` had 19,380 and 19,348 each, roughly half of it system time. Fifty-nine game
 //! threads sat in `S`, the main thread blocked in `anon_pipe_read` on the wineserver, and around
@@ -29,7 +29,7 @@
 //!
 //! # What this does instead
 //!
-//! [`poll_until`] spins in USER SPACE between attempts -- `core::hint::spin_loop()`, which is a
+//! [`poll_until`] spins in user space between attempts -- `core::hint::spin_loop()`, which is a
 //! `pause` instruction and reaches no kernel and no wineserver -- and backs that budget off
 //! exponentially, so a wait that does not resolve quickly settles into yielding a few thousand
 //! times a second rather than a million. And it is BOUNDED: after [`MAX_YIELDS`] rounds it
@@ -78,11 +78,11 @@ pub fn poll_until<T>(mut probe: impl FnMut() -> Option<T>) -> Option<T> {
 /// [`poll_until`] is the better shape and should be preferred. This exists for the loops whose
 /// bodies do real work on every miss -- throttled progress logging, counters other code reads --
 /// where hoisting them into a closure would be a bigger change than the fix warrants. It supplies
-/// the half that matters: the spin happens in USER SPACE, and only one kernel-visible yield
+/// the half that matters: the spin happens in user space, and only one kernel-visible yield
 /// happens per call, so a loop using it cannot saturate the wineserver the way a bare
 /// `yield_now()` per attempt did.
 ///
-/// It does NOT bound anything. A caller that can spin forever still can; use [`poll_until`] there.
+/// It does not bound anything. A caller that can spin forever still can; use [`poll_until`] there.
 pub fn back_off(attempt: u64) {
     // Doubling, capped. `attempt` is a u64 that a long wait can push past any shift width, so the
     // shift amount is clamped before it is applied rather than after.

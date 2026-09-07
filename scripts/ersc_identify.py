@@ -9,12 +9,12 @@ This is the read-only check that notices.
 
 It answers three questions and nothing else:
 
-  * WHICH build is installed -- size, PE timestamp, and the `Seamless Co-op vX.Y.Z`
+  * Which build is installed -- size, PE timestamp, and the `Seamless Co-op vX.Y.Z`
     string read out of the image, not guessed from a path;
-  * WHAT the section layout is -- because v2.0.0 renamed the WinLicense VM section
-    `.themida` -> `ERSC`, so any code that matched that section BY NAME is broken, and
+  * What the section layout is -- because v2.0.0 renamed the WinLicense VM section
+    `.themida` -> `ERSC`, so any code that matched that section by name is broken, and
     the durable discriminator is "executable AND writable", which both builds share;
-  * WHETHER a given byte needle is present, and in which section -- so a pinned
+  * Whether a given byte needle is present, and in which section -- so a pinned
     signature can be re-tested against a new build in one command instead of by hand.
 
 The DLL is opened read-only and never copied, moved, or staged: `AGENTS.md` forbids
@@ -127,7 +127,7 @@ class Section:
 
     @property
     def is_vm(self) -> bool:
-        """A packer's VM section: executable AND writable.
+        """A packer's VM section: executable and writable.
 
         This is the property to test, never the name. v1.9.9 called it `.themida`
         and v2.0.0 calls it `ERSC`; both are RWX, and the original `.text` is RX in
@@ -187,7 +187,7 @@ class ErscImage:
         return out
 
     def code_sections(self) -> list[Section]:
-        """Executable sections that are NOT the packer's writable VM."""
+        """Executable sections that are not the packer's writable VM."""
         return [s for s in self.sections if s.executable and not s.writable]
 
 

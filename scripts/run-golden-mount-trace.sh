@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GOLDEN mount-trace scout.
+# Golden mount-trace scout.
 #
-# Launches the approved direct/offline eldenring.exe runtime path with NO autoload request, so the
-# game boots to the title and WAITS for the USER to drive a NATIVE menu load (Title -> Load Game ->
+# Launches the approved direct/offline eldenring.exe runtime path with no autoload request, so the
+# game boots to the title and waits for the user to drive a native menu load (Title -> Load Game ->
 # select save -> confirm). A software INT3 breakpoint armed at MountEblArchive (RVA 0x1efc00, deobf
-# VA 0x1401efc00) fires DURING that native load; the DLL's VEH logs every hit's register/stack/caller
-# context to the GAME DIR er-quickload-crash.log. That caller chain is the evidence we need to replicate
+# VA 0x1401efc00) fires during that native load; the DLL's VEH logs every hit's register/stack/caller
+# context to the game DIR er-quickload-crash.log. That caller chain is the evidence we need to replicate
 # the m28 EBL mount on the menu-free SetState5 path.
 #
-# SAVE-SAFE: no SetState5, no own-load, no autoload, no input block. The user loads their own save the
+# Save-SAFE: no SetState5, no own-load, no autoload, no input block. The user loads their own save the
 # normal way; we add only a read-only INT3 logger (plus the anti-anti-debug patch the INT3 needs to
 # reach our handler). Mirrors run-product-continue-direct-probe.sh's preflight + direct-Proton launch +
 # teardown trap, minus the autoload request and the world-stable readiness watcher (the user drives the
 # menu by hand, so a fixed bounded wait replaces the early-teardown watcher).
 #
-# This script does NOT launch the game by itself unless the authorization gates are set; with --dry-run
+# This script does not launch the game by itself unless the authorization gates are set; with --dry-run
 # it only validates and reports. The orchestrator + user run the real launch.
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -32,7 +32,7 @@ BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 DEPLOYED_DLL="${DEPLOYED_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
 
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last --
 # and several sessions launch concurrently in this repo, which makes that the normal case rather
 # than a race. A copy at teardown cannot fix it (this run already clobbered the last one's file at
@@ -57,7 +57,7 @@ LOADING_PORTRAIT_CRASH_LOG_PATH="${LOADING_PORTRAIT_CRASH_LOG_PATH:-$ARTIFACT_DI
 # Game-dir control files this scout writes/manages.
 BREAKPOINTS_FILE="$GAME_DIR/er-quickload-breakpoints.txt"
 CRASH_LOG_ON_FILE="$GAME_DIR/er-quickload-crash-log.txt"
-# THE SW-BP EVIDENCE FILE, AND IT WAS READING THE WRONG NAME. This was `$GAME_DIR/er-quickload-
+# The SW-BP evidence file, and it was reading the wrong name. This was `$GAME_DIR/er-quickload-
 # crash.log` -- a name the DLL stopped writing on 2026-06-22, when `crash_log_path()` settled on the
 # canonical `er-quickload-crash-log.txt`. Every `grep -a 'sw-bp'` below therefore ran against a file
 # that does not exist and reported nothing rather than failing. It now follows the redirect, so the
@@ -68,12 +68,12 @@ AUTOLOAD_BACKUP="$GAME_DIR/er-quickload-autoload.txt.golden-mount-trace.bak"
 BLOCK_INPUT_FILE="$GAME_DIR/er-quickload-block-input.txt"
 
 # Breakpoint RVA (deobf base 0x140000000): MountEblArchive 0x1401efc00. The DLL's sw-bp VEH now dumps
-# a DEEP RAW stack (40 qwords) at each hit, so the user-load mount's full caller chain -- including the
+# a deep raw stack (40 qwords) at each hit, so the user-load mount's full caller chain -- including the
 # map-load ORCHESTRATOR our menu-free path skips -- is captured from this single BP (no need to arm
 # each frame; in-image return addresses show as 0x140xxxxxxx in the stack=[...] dump).
 MOUNT_EBL_ARCHIVE_RVA="${MOUNT_EBL_ARCHIVE_RVA:-1efc00}"
 
-# Single source of truth for the runtime wall-clock cap (seconds). The user needs the FULL window to
+# Single source of truth for the runtime wall-clock cap (seconds). The user needs the full window to
 # navigate the menu and trigger the load, so default to the cap (120) rather than a shorter probe value.
 RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
@@ -128,8 +128,8 @@ runtime_pids() {
 }
 
 preflight() {
-  # Steam MUST be running: the offline launch reuses Steam's environment (wineprefix, CWD, account/
-  # save-dir id). With Steam down the game boots in a DIFFERENT environment and the run is degraded.
+  # Steam must be running: the offline launch reuses Steam's environment (wineprefix, CWD, account/
+  # save-dir id). With Steam down the game boots in a different environment and the run is degraded.
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
@@ -143,8 +143,8 @@ preflight() {
   fi
 }
 
-# Arm the scout's GAME-DIR control files. Idempotent. Backs up (does not delete) the user's existing
-# autoload.txt so this run boots to the title with NO menu-free load; restores it on exit.
+# Arm the scout's game-DIR control files. Idempotent. Backs up (does not delete) the user's existing
+# autoload.txt so this run boots to the title with no menu-free load; restores it on exit.
 arm_scout_files() {
   # 1) Breakpoint file: one hex RVA per line -> sw_breakpoints_enabled() true -> anti-anti-debug auto-on.
   #    Default = MountEblArchive; override via BREAKPOINTS_RVAS (space-separated) for a different trace
@@ -159,10 +159,10 @@ arm_scout_files() {
   : > "$GAME_DIR/er-quickload-no-overlay.txt"
   # 2) Crash log on (file channel; reliable through Proton). The sentinel is vestigial --
   #    `crash_logger_enabled()` has returned an unconditional `true` since 2026-07-08 -- but the file
-  #    is still touched so an older staged DLL behaves the same. The LOG itself is redirected into
+  #    is still touched so an older staged DLL behaves the same. The log itself is redirected into
   #    this run's directory, so there is nothing of the user's to preserve or truncate here.
   [[ -f "$CRASH_LOG_ON_FILE" ]] || : > "$CRASH_LOG_ON_FILE"
-  # 3) No autoload: the USER drives the native menu. Move the existing autoload request aside so our
+  # 3) No autoload: the user drives the native menu. Move the existing autoload request aside so our
   #    own-load/SetState5 path never arms; restore on exit so the user's config survives.
   if [[ -f "$AUTOLOAD_PATH" ]]; then
     mv -f "$AUTOLOAD_PATH" "$AUTOLOAD_BACKUP"
@@ -174,7 +174,7 @@ arm_scout_files() {
 }
 
 restore_scout_files() {
-  # Restore the user's autoload.txt that we moved aside (only if we created the backup AND the user
+  # Restore the user's autoload.txt that we moved aside (only if we created the backup and the user
   # did not write a new one in the meantime).
   if [[ -f "$AUTOLOAD_BACKUP" && ! -f "$AUTOLOAD_PATH" ]]; then
     mv -f "$AUTOLOAD_BACKUP" "$AUTOLOAD_PATH"
@@ -238,22 +238,22 @@ me3_write_profile "$ARTIFACT_DIR/er-quickload-trace.me3" "$ARTIFACT_DIR/er_quick
 
 arm_scout_files
 
-# Record the live crash log size BEFORE launch so the post-run grep can focus on the new tail.
+# Record the live crash log size before launch so the post-run grep can focus on the new tail.
 wc -l < "$CRASH_LOG" > "$ARTIFACT_DIR/crash-log-lines-before.txt" 2>/dev/null || echo 0 > "$ARTIFACT_DIR/crash-log-lines-before.txt"
 
 echo "***** GOLDEN MOUNT-TRACE SCOUT: launching eldenring.exe (NATIVE, user-driven) -- window <=${RUNTIME_TIMEOUT_SECONDS}s *****"
 echo "***** USER: at the title, do Continue (or Load Game -> pick your save -> confirm). The INT3 at MountEblArchive logs to: $CRASH_LOG *****"
 
-# TRUE T0 = the closest bash timestamp to eldenring.exe process start, written to launch-epoch.txt so
+# True T0 = the closest bash timestamp to eldenring.exe process start, written to launch-epoch.txt so
 # golden runs report the same headline metric (world-loaded - bash launch) as the product probe. The
-# user drives the native menu by hand here; the DLL's own load-timeline markers (EVENT ... ms=) plus
+# user drives the native menu by hand here; the DLL's own load-timeline markers (event ... ms=) plus
 # the [+Nms] DLL-log prefix carry the in-process offsets, and this file anchors the bash launch epoch.
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 export ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH"
 
 # Direct/offline me3 launch, no autoload request. Bounded by RUNTIME_TIMEOUT_SECONDS so the run can
-# never overrun the cap even if the user walks away; the EXIT trap tears the game + restores state.
+# never overrun the cap even if the user walks away; the exit trap tears the game + restores state.
 (
   cd "$GAME_DIR"
   ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \

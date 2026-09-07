@@ -4,7 +4,7 @@
 //!
 //! # Goal
 //!
-//! Read ANY such `.gfx` and re-serialize it **byte-for-byte identical**. We do
+//! Read any such `.gfx` and re-serialize it **byte-for-byte identical**. We do
 //! that by structurally modelling the file header, the `DefineSprite` (code 39)
 //! nesting, the `End` (code 0) terminator, plus a growing set of **Tier-1**
 //! "trivial" tags that carry no bitstream and re-encode losslessly from typed
@@ -34,7 +34,7 @@
 //!
 //! Measured over the real corpus, the exporter is **not** length-deterministic:
 //! 14,766 tags use the long form even though their body is `<= 0x3e` (e.g. tag
-//! codes 26 `PlaceObject2` and 70 `PlaceObject3` appear in BOTH forms with the
+//! codes 26 `PlaceObject2` and 70 `PlaceObject3` appear in both forms with the
 //! same small length, so the choice is not even per-tag-code). To guarantee
 //! byte-identity we therefore record a per-tag [`force_long`](Tag) bit at parse
 //! time and reproduce the exact form on write. We never shorten a source's
@@ -73,7 +73,7 @@ pub const TWIPS_PER_PIXEL: i32 = 20;
 pub const TWIPS_PER_PIXEL_F32: f32 = TWIPS_PER_PIXEL as f32;
 
 // Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
-// then a NESTED tag stream parsed with the same parser and terminated by its
+// then a nested tag stream parsed with the same parser and terminated by its
 // own `End(0)`. (A plain comment, not a doc comment: `include!` takes no docs.)
 include!("codec/tag_codes.rs");
 include!("codec/types.rs");

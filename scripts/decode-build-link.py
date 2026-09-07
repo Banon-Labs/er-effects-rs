@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Decode an er-build-planner ``?i=`` share link back into its build JSON.
 
-This is the OFFLINE ORACLE for the System>Quit "Generate Build Link" row. The row writes the URL it
+This is the offline oracle for the System>Quit "Generate Build Link" row. The row writes the URL it
 produced into ``er-build-import.log`` beside the game executable; this reads that URL back and
 prints what the planner will actually see, so a runtime run is checked against the character it was
 supposed to describe rather than against "a link appeared".
 
 It is deliberately self-contained -- no node, no network, no dependency on the planner's bundle --
-because the thing being verified is precisely whether OUR encoder produces something the planner's
+because the thing being verified is precisely whether our encoder produces something the planner's
 decoder accepts, and an oracle that shared code with the encoder would agree with it by
 construction.
 
@@ -54,7 +54,7 @@ class DecodeError(Exception):
 def lzutf8_decompress(data: bytes) -> str:
     """Expand an LZ-UTF8 stream.
 
-    A byte >= 0xC0 is a match header ONLY when the byte after it has its top bit clear; otherwise
+    A byte >= 0xC0 is a match header only when the byte after it has its top bit clear; otherwise
     it is a literal UTF-8 lead byte. That one rule is the whole format, and getting it backwards
     silently produces different text rather than an error -- which is why it is spelled out here
     rather than folded into a lookup table.
@@ -90,7 +90,7 @@ def lzutf8_decompress(data: bytes) -> str:
         if distance == 0 or distance > len(out):
             raise DecodeError(f"match distance {distance} outside the {len(out)} bytes emitted")
         start = len(out) - distance
-        # Copied ONE BYTE AT A TIME on purpose: an LZ77 match may overlap its own output (that is
+        # Copied one byte at a time on purpose: an LZ77 match may overlap its own output (that is
         # how a run is encoded), so a slice copy would be wrong for exactly the common case.
         for step in range(length):
             out.append(out[start + step])
@@ -152,7 +152,7 @@ def summarise(doc: dict) -> str:
             stats.get("rl"),
             stats.get("vig"),
             stats.get("mnd"),
-            # The planner's "vit" key IS Endurance. Labelled correctly here so a reader checking
+            # The planner's "vit" key is Endurance. Labelled correctly here so a reader checking
             # this against the game's own Status screen is not quietly misled.
             stats.get("vit"),
             stats.get("str"),
@@ -202,7 +202,7 @@ def summarise(doc: dict) -> str:
     tears = [t for t in (doc.get("items", {}).get("crystalTears") or []) if t]
     lines.append(f"physick       {', '.join(tears) if tears else '(empty)'}")
     lines.append(f"great rune    {doc.get('greatRune') or '(none)'}")
-    # The appearance, which is OURS and not the planner's: the site has no such key, so a link that
+    # The appearance, which is ours and not the planner's: the site has no such key, so a link that
     # carries one was written by this repository's exporter. Printed as a length plus the magic
     # rather than 576 characters of hex, with the whole AOB one line further down so it can still
     # be copied into a save editor.
@@ -217,7 +217,7 @@ def summarise(doc: dict) -> str:
 
 
 def lzutf8_compress_reference(text: str) -> bytes:
-    """A minimal LZ-UTF8 encoder, used ONLY by ``--selftest``.
+    """A minimal LZ-UTF8 encoder, used only by ``--selftest``.
 
     Deliberately not the one the DLL ships: the point of the self-test is to prove the DECODER in
     this file expands a stream built independently of it, including overlapping matches, which is

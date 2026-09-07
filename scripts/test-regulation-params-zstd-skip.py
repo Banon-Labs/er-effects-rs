@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Prove scripts/regulation-params.py imports on an interpreter with no `compression.zstd`.
 
-WHY THIS EXISTS AS A GATE RATHER THAN A COMMENT. `compression.zstd` is stdlib only from
+Why this exists as a gate rather than a comment. `compression.zstd` is stdlib only from
 Python 3.14 (PEP 784). This machine runs 3.14, GitHub's ubuntu-latest does not, and the
 import in regulation-params.py used to be bare -- so the failure was invisible to every
 local run by construction and only ever appeared in CI. Measured on PR #388, run
 33793058851: `ModuleNotFoundError: No module named 'compression'` took down
-check-moveset-table.py AND its own `--selftest`, through the import chain
+check-moveset-table.py and its own `--selftest`, through the import chain
 check-moveset-table -> er-moveset-table-gen -> er-param-read:16 -> regulation-params:25.
 
 A regression here cannot be caught by running the module on this box, because on this box
-the import works. So the check BLINDS the interpreter instead: a `sys.meta_path` finder
+the import works. So the check blinds the interpreter instead: a `sys.meta_path` finder
 that raises ModuleNotFoundError for `compression` reproduces an older interpreter's answer
 exactly, on the interpreter we have. Each case runs in its own subprocess because the
 blinding has to be installed before the module is first imported.
@@ -24,7 +24,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 TARGET = os.path.join(HERE, "regulation-params.py")
 
-# Installed before the import under test. Blocking at the FINDER is what an older
+# Installed before the import under test. Blocking at the finder is what an older
 # interpreter actually does -- unlike stubbing sys.modules['compression'] = None, which
 # raises ImportError rather than ModuleNotFoundError and would let a too-broad `except
 # ImportError` pass a test the real runner fails.
@@ -69,7 +69,7 @@ def expect(ok, label, detail=""):
 def main():
     load = LOAD.format(target=TARGET)
 
-    # 1. Blinded: the module must still IMPORT. This is the whole defect -- the old bare
+    # 1. Blinded: the module must still import. This is the whole defect -- the old bare
     #    import made every consumer of the PARAM readers die even when nothing was
     #    decompressed.
     rc, out, label = run(
@@ -79,7 +79,7 @@ def main():
     expect(rc == 0, label, out)
     expect("IMPORTED True" in out, label, out)
 
-    # 2. Blinded: the one function that genuinely needs zstd must raise the DISTINCT type,
+    # 2. Blinded: the one function that genuinely needs zstd must raise the distinct type,
     #    so a caller can tell "could not look" from "looked, answer is no". A bare
     #    SystemExit or AttributeError here would be indistinguishable from a real failure.
     rc, out, label = run(
@@ -102,7 +102,7 @@ else:
     expect("RAISED ZstdUnavailable" in out, label, out)
     expect("3.14" in out or "PEP 784" in out, label + " (message names the cause)", out)
 
-    # 3. NOT blinded: on an interpreter that HAS it, the sentinel must be clear. Without
+    # 3. Not blinded: on an interpreter that has it, the sentinel must be clear. Without
     #    this the whole guard could be permanently "unavailable" and every case above would
     #    still pass -- a gate that only proves the failure path is half a gate.
     rc, out, label = run(
@@ -121,8 +121,8 @@ else:
     else:
         expect(False, label, out)
 
-    # 4. THE ACTUAL CHAIN, not just the leaf. The defect reached a gate through
-    #    er-param-read.py, which imports this module at MODULE scope for its PARAM readers
+    # 4. The actual chain, not just the leaf. The defect reached a gate through
+    #    er-param-read.py, which imports this module at module scope for its PARAM readers
     #    and does not decompress anything to do it. Testing regulation-params alone would
     #    leave the path that actually broke unguarded.
     consumer = os.path.join(HERE, "er-param-read.py")

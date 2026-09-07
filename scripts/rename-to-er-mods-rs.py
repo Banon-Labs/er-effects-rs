@@ -6,21 +6,21 @@ which now lives in its own crate (`er-net-effects`) and is the smallest thing he
 repo actually holds is ~20 ME3-loadable DLLs plus the host-side Rust libraries they are built
 from. So the name splits in two, and every reference has to be classified as one or the other:
 
-    the REPOSITORY   er-effects-rs  ->  er-mods-rs     (GitHub, clone dir, sibling-path prose)
-    the PRODUCT DLL  er-effects-rs  ->  er-quickload   (crate, er_quickload.dll, .toml, .log)
+    the repository   er-effects-rs  ->  er-mods-rs     (GitHub, clone dir, sibling-path prose)
+    the product DLL  er-effects-rs  ->  er-quickload   (crate, er_quickload.dll, .toml, .log)
 
 A single blind substitution cannot do this: `crates/er-effects-rs` and
 `github.com/Banon-Labs/er-effects-rs` are the same 13 characters meaning different things.
-Hence an ORDERED, longest-alternative-first alternation resolved in ONE pass (two passes would
+Hence an ordered, longest-alternative-first alternation resolved in one pass (two passes would
 let an earlier rewrite feed a later rule), with the context baked into the token itself.
 
-THREE CLASSES MUST SURVIVE UNCHANGED, and are identity-mapped so the alternation matches them
+Three classes must survive unchanged, and are identity-mapped so the alternation matches them
 first and rewrites them to themselves:
 
   1. Beads issue IDs (`er-effects-rs-wncc`). Database keys for 2500+ memories and 100 issues.
-     Renaming them orphans every cross-reference in the tree AND in the Dolt database, which
+     Renaming them orphans every cross-reference in the tree and in the Dolt database, which
      this pass does not touch.
-  2. `er_effects_union_register`. The cross-DLL hook-union export, resolved BY NAME through
+  2. `er_effects_union_register`. The cross-DLL hook-union export, resolved by name through
      GetProcAddress by seven crates. A user running an already-released `er_invasion_warp.dll`
      next to a freshly built product DLL would silently lose union coordination and get two
      MinHook instances on one prologue. This is the exact class bd
@@ -51,7 +51,7 @@ PROTECT_LITERAL = [
     "doltremoteapi.dolthub.com/chozandrias/er-effects-rs",
 ]
 
-# Repo-scoped references that are NOT a bare path: they name the repository inside a longer
+# Repo-scoped references that are not a bare path: they name the repository inside a longer
 # identifier, so they must be listed before the generic bd-ID protection would swallow them.
 REPO_COMPOUND = [
     ("er-effects-rs-build-watermark", "er-mods-rs-build-watermark"),   # outbound User-Agent
@@ -62,7 +62,7 @@ REPO_COMPOUND = [
 REPO_CONTEXT = [
     ("Banon-Labs/er-effects-rs", f"Banon-Labs/{REPO_NEW}"),
     ("projects/er-effects-rs", f"projects/{REPO_NEW}"),
-    # Windows/Wine checkout paths. The Rust literal holds DOUBLED backslashes, the bare
+    # Windows/Wine checkout paths. The Rust literal holds doubled backslashes, the bare
     # script path a single one, so both separators are spelled out rather than matched
     # by a character class the escaping would have to survive.
     ("\\\\er-effects-rs", f"\\\\{REPO_NEW}"),
@@ -81,9 +81,9 @@ CRATE_CONTEXT = [
     ("-p er-effects-rs", f"-p {CRATE_NEW}"),
 ]
 
-# Product-scoped tails. `er-effects` is a PREFIX of many runtime filenames
+# Product-scoped tails. `er-effects` is a prefix of many runtime filenames
 # (er-effects.toml, er-effects-autoload-debug.log, er-effects-telemetry.json), so unlike the
-# previous migration these deliberately carry NO trailing boundary -- the whole point is to
+# previous migration these deliberately carry no trailing boundary -- the whole point is to
 # rewrite the longer names too.
 PRODUCT_TAIL = [
     ("ER_EFFECTS_", "ER_QUICKLOAD_"),
@@ -140,7 +140,7 @@ PROFILE_SUFFIXES = (".me3", ".sh", ".fish")
 
 
 def profile_files(profiles_dir):
-    """Top level of the profiles dir ONLY. Subdirectories there hold captured run logs and
+    """Top level of the profiles dir only. Subdirectories there hold captured run logs and
     SHA256SUMS attestations, which are historical records of runs that really did load a DLL
     by its old name -- rewriting those would forge the evidence."""
     if not os.path.isdir(profiles_dir):

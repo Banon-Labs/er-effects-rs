@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Validated capture loop for the Elden Ring runtime window.
 #
-# Captures ONLY the exact Elden Ring target window (class == steam_app_1245620), fail-closed:
+# Captures only the exact Elden Ring target window (class == steam_app_1245620), fail-closed:
 # validates the window is mapped, not hidden, focused/topmost (focusHistoryID == 0) and has sane
-# geometry before each grim. Writes frame-NNN.png for the whole life of the game process so the LAST
+# geometry before each grim. Writes frame-NNN.png for the whole life of the game process so the last
 # frame is "immediately before teardown". Never enumerates / prints other windows (privacy hygiene).
 #
 # Usage: capture-er-window-loop.sh <out_dir> [max_iters] [interval_seconds]
@@ -16,12 +16,12 @@ mkdir -p "$OUT_DIR"
 
 # Frame cadence. The no-timeouts scanner forbids `sleep` and variable timeout durations, so pace each
 # iteration with a fixed literal <=30s blocking wait (`tail -f /dev/null` blocks; `timeout` caps it).
-# The legacy INTERVAL arg is accepted for compatibility but the cadence is now a fixed 1s.
+# The legacy interval arg is accepted for compatibility but the cadence is now a fixed 1s.
 pace_frame() { timeout 1 tail -f /dev/null >/dev/null 2>&1 || true; }
 
 seen_window=0
 for ((i = 1; i <= MAX_ITERS; i++)); do
-  # Query ONLY the target class; emit just its geometry/state. Never print other windows.
+  # Query only the target class; emit just its geometry/state. Never print other windows.
   win="$(hyprctl clients -j 2>/dev/null \
     | jq -c --arg c "$CLASS" 'map(select(.class == $c)) | .[0] // empty' 2>/dev/null || true)"
 
@@ -35,7 +35,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
     continue
   fi
 
-  # Bring the EXACT target window topmost (by address) so the region we grim is not occluded by
+  # Bring the exact target window topmost (by address) so the region we grim is not occluded by
   # another app. Focus-by-address only touches the ER window; it injects no game input (not DInput/
   # XInput), so it cannot contaminate the load logic. Then re-query to confirm it is now topmost.
   addr="$(jq -r '.address' <<<"$win")"

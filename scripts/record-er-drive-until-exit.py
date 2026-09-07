@@ -5,7 +5,7 @@ Companion to record-er-window-wf.py (whose window-validation logic is reused via
 - waits for the stable, focused, sane-geometry class=steam_app_1245620 window (fail-closed);
 - records that exact geometry with wf-recorder at the requested fps (constant framerate, -D);
 - stops the recording the moment no eldenring.exe process exists in /proc (the human quit),
-  or at --max-seconds as a hard cap (the game is NEVER touched; only the recording stops);
+  or at --max-seconds as a hard cap (the game is never touched; only the recording stops);
 - then extracts every frame (native rate, -vsync 0) to <out_dir>/frames/ as JPEG q2
   (a multi-minute 60fps PNG dump would be tens of GB; the .mkv is kept for lossless re-extract);
 - writes <out_dir>/drive-recording-result.json with the full outcome.

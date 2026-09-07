@@ -313,6 +313,9 @@ def docstring_spans(text: str) -> list[tuple[int, str]]:
     return spans
 
 
+SHEBANG = re.compile(r"^#!")
+
+
 def drop_code(spans: list[tuple[int, str]], doctests: bool = False) -> list[tuple[int, str]]:
     """Drop fenced blocks, and doctests where they can occur: both are code that happens to
     live in prose, and lowercasing an identifier inside one changes what the example does.
@@ -323,6 +326,8 @@ def drop_code(spans: list[tuple[int, str]], doctests: bool = False) -> list[tupl
     out, fenced, doctest = [], False, False
     for line, body in spans:
         stripped = body.strip()
+        if line == 1 and SHEBANG.match(stripped):
+            continue  # `#!/usr/bin/env bash` is an interpreter directive, not a sentence
         if FENCE.match(body):
             fenced = not fenced
             continue
@@ -391,6 +396,11 @@ def newly_shouted(now: list[Finding], head: list[Finding] | None) -> list[Findin
     return added
 
 
+# Vendored upstream source. Their prose belongs to their authors, and rewriting it makes every
+# future diff against upstream noisy for no gain here.
+VENDORED = ("third_party/",)
+
+
 def tracked_files(root: Path) -> list[Path]:
     out = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-z"],
@@ -402,29 +412,71 @@ def tracked_files(root: Path) -> list[Path]:
     return [
         root / p
         for p in out.split("\0")
-        if p and Path(p).suffix in SCANNED_SUFFIXES and (root / p).is_file()
+        if p
+        and Path(p).suffix in SCANNED_SUFFIXES
+        and not p.startswith(VENDORED)
+        and (root / p).is_file()
     ]
 
 
-def replacement_for(span: str, start: int, word: str) -> str:
-    """The lowercase form, capitalised when the word opens a sentence or is a proper noun."""
-    lead = re.sub(r"^\s*(//+!?|/\*+|#+)\s*", "", span[:start])
+LONE_A = re.compile(r"(?<![A-Za-z0-9_])A(?![A-Za-z0-9_])")
+
+
+def shouted_spans_for_fix(comment: str, words: frozenset[str]) -> list[tuple[int, int, str]]:
+    """`shouted_spans`, plus any lone `A` standing inside a shouted run.
+
+    The gate cannot flag a bare `A` -- `Category A` is a name and this is a one-letter word --
+    but the fixer knows more: an `A` whose neighbour is being downcased was part of the same
+    shouted phrase, and leaving it produces `indistinguishable from A gate`."""
+    hits = shouted_spans(comment, words)
+    if not hits:
+        return hits
+    scrubbed = scrub(comment)
+    extra = []
+    for m in LONE_A.finditer(scrubbed):
+        if any(
+            (m.end() + 1 == start and scrubbed[m.end() : start] == " ")
+            or (end + 1 == m.start() and scrubbed[end : m.start()] == " ")
+            for start, end, _ in hits
+        ):
+            extra.append((m.start(), m.end(), "A"))
+    return sorted(hits + extra)
+
+
+def replacement_for(span: str, start: int, word: str, opens_sentence: bool = True) -> str:
+    """The lowercase form, capitalised when the word opens a sentence or is a proper noun.
+
+    `opens_sentence` is what the caller knows and this function cannot: whether the previous
+    comment line finished its sentence. A shouted word first on its line is usually mid-sentence
+    -- the sentence started one line up -- and capitalising it produces `is Indistinguishable
+    from`, which is worse than the shouting was."""
+    lead = re.sub(r"^\s*(//+!?|/\*+|\*+|#+)\s*", "", span[:start])
     out = word.lower()
-    if out in PROPER_NOUNS or not lead.strip() or SENTENCE_END.search(lead):
+    if out in PROPER_NOUNS:
         return out.capitalize()
-    return out
+    if lead.strip():
+        return out.capitalize() if SENTENCE_END.search(lead) else out
+    return out.capitalize() if opens_sentence else out
 
 
-def fix_comment(comment: str, words: frozenset[str]) -> str:
+def fix_comment(comment: str, words: frozenset[str], opens_sentence: bool = True) -> str:
     """Downcase shouted words in one span. `apply_fix` is the file-level path; this is the
     single-span form the selftest reads and the two share `replacement_for`."""
     out, last = [], 0
-    for start, end, word in shouted_spans(comment, words):
+    for start, end, word in shouted_spans_for_fix(comment, words):
         out.append(comment[last:start])
-        out.append(replacement_for(comment, start, word))
+        out.append(replacement_for(comment, start, word, opens_sentence))
         last = end
     out.append(comment[last:])
     return "".join(out)
+
+
+def opens_a_sentence(previous: tuple[int, str] | None, line_no: int) -> bool:
+    """Does a word first on `line_no` start a sentence? Only if the line above it ended one."""
+    if previous is None or previous[0] != line_no - 1:
+        return True
+    body = re.sub(r"^\s*(//+!?|/\*+|\*+|#+)\s*", "", previous[1]).rstrip()
+    return not body or bool(SENTENCE_END.search(body))
 
 
 def span_offset(source_line: str, span: str) -> int:
@@ -450,19 +502,22 @@ def apply_fix(path: Path, words: frozenset[str]) -> int:
         return 0
     lines = text.splitlines(keepends=True)
     changed = 0
+    previous: tuple[int, str] | None = None
     for line_no, span in spans:
         idx = line_no - 1
         if idx >= len(lines):
             raise RuntimeError(f"{path}:{line_no}: past the end of the file")
         source = lines[idx]
-        hits = shouted_spans(span, words)
+        hits = shouted_spans_for_fix(span, words)
+        opens = opens_a_sentence(previous, line_no)
+        previous = (line_no, span)
         if not hits:
             continue
         base = span_offset(source, span)
         rewritten, last = [], 0
         for start, end, word in hits:
             rewritten.append(source[last : base + start])
-            rewritten.append(replacement_for(span, start, word))
+            rewritten.append(replacement_for(span, start, word, opens))
             last = base + end
         rewritten.append(source[last:])
         lines[idx] = "".join(rewritten)
@@ -653,6 +708,40 @@ def selftest() -> int:
         [(2, "/* ONE"), (3, "TWO */")],
     )
 
+    check(
+        "a word first on a continuation line stays lowercase",
+        replacement_for("// ONWARD to the next line", 3, "ONWARD", opens_sentence=False),
+        "onward",
+    )
+    check(
+        "...and is capitalised when the line above ended its sentence",
+        replacement_for("// ONWARD to the next line", 3, "ONWARD", opens_sentence=True),
+        "Onward",
+    )
+    check(
+        "a lone A inside a shouted run goes with it",
+        fix_comment("// it is NOT A gate", words),
+        "// it is not a gate",
+    )
+    check(
+        "...but a lone A on its own is left alone",
+        fix_comment("// Category A is checked first", words),
+        "// Category A is checked first",
+    )
+    check(
+        "a shebang is not prose",
+        [c for _, c in prose_spans("#!/usr/bin/env bash\n# THE rest is\n", "hash")],
+        ["# THE rest is"],
+    )
+    check(
+        "a first line after a shebang opens its own sentence",
+        fix_comment("# THE rest is", words, opens_a_sentence(None, 2)),
+        "# The rest is",
+    )
+    check("continuation is detected", opens_a_sentence((4, "// a sentence that runs"), 5), False)
+    check("full stop opens the next", opens_a_sentence((4, "// a sentence that ends."), 5), True)
+    check("a gap opens the next", opens_a_sentence((4, "//"), 5), True)
+    check("a distant line opens the next", opens_a_sentence((2, "// unfinished"), 5), True)
     check("fix mid-sentence", fix_comment("// it is NOT live", words), "// it is not live")
     check("fix sentence start", fix_comment("// NOT live", words), "// Not live")
     check("fix after period", fix_comment("// live. NOT dead", words), "// live. Not dead")
@@ -669,6 +758,12 @@ def selftest() -> int:
             'let s = "a\nb\nc";\n// it is NOT live\n/// a doc THAT shouts\n',
             'let s = "a\nb\nc";\n// it is not live\n/// a doc that shouts\n',
         ),
+        # The continuation case, end to end: the second line's first word belongs to the first
+        # line's sentence, the fourth line's does not.
+        "wrapped.rs": (
+            "// a sentence that runs\n// ONWARD and ends here.\n//\n// ONWARD again\n",
+            "// a sentence that runs\n// onward and ends here.\n//\n// Onward again\n",
+        ),
         "sample.py": (
             '"""A COMPLETELY shouted docstring."""\n\n\ndef f():\n    """AND another."""\n    return 1  # THE end\n',
             '"""A completely shouted docstring."""\n\n\ndef f():\n    """And another."""\n    return 1  # The end\n',
@@ -682,6 +777,12 @@ def selftest() -> int:
             apply_fix(path, words)
             check(f"--fix on {name}", path.read_text(encoding="utf-8"), want)
             check(f"{name} is clean afterwards", scan_file(path, words, name), [])
+
+    check(
+        "vendored source is out of scope",
+        [str(p) for p in tracked_files(REPO_ROOT) if "/third_party/" in str(p)],
+        [],
+    )
 
     for f in failures:
         print(f"selftest FAILURE {f}", file=sys.stderr)

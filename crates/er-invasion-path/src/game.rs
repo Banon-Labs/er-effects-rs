@@ -3,7 +3,7 @@
 //!
 //! Read-only throughout. This DLL never writes a byte of game memory, never patches a param
 //! (which is what breaks Seamless invasions -- bd `param-patching-dlls-break-seamless-invasions`)
-//! and installs no detour. The only game FUNCTIONS it calls are the navmesh query in
+//! and installs no detour. The only game functions it calls are the navmesh query in
 //! [`crate::navpath`] and the physics raycast below, both of which the engine treats as queries.
 
 #![cfg(windows)]
@@ -21,7 +21,7 @@ const ARROW_ORIGIN_HEIGHT_METERS: f32 = 1.1;
 
 /// How far above a waypoint the drawn line floats.
 ///
-/// The navmesh sits ON the collision surface, and a line drawn exactly on it z-fights with the
+/// The navmesh sits on the collision surface, and a line drawn exactly on it z-fights with the
 /// ground it is describing. A few centimetres reads as painted on the ground; more reads as
 /// hovering above it.
 const PATH_LIFT_METERS: f32 = 0.06;
@@ -29,7 +29,7 @@ const PATH_LIFT_METERS: f32 = 0.06;
 /// One other player in the session, reduced to what the overlay needs.
 ///
 /// There is deliberately no `ChrIns` pointer here. The route is planned for a body the size of
-/// YOURS -- you are the one who has to walk it -- so the navmesh agent is always the local
+/// yours -- you are the one who has to walk it -- so the navmesh agent is always the local
 /// player, and keeping a remote pointer around would only invite planning the route for the wrong
 /// body.
 pub(crate) struct RemotePlayer {
@@ -88,7 +88,7 @@ fn is_live(chr_ins: &ChrIns) -> bool {
 
 /// `ChrIns::chr_type`, read as the raw `i32` the field actually holds.
 ///
-/// Deliberately NOT read as the `ChrType` enum. That enum names 0..=22 and `-1`, and constructing
+/// Deliberately not read as the `ChrType` enum. That enum names 0..=22 and `-1`, and constructing
 /// one from a value outside that set is undefined behaviour -- which is exactly the risk here,
 /// because the whole reason this function exists is that a Seamless session may type a character
 /// in a way the vanilla enum never anticipated. Reading the raw integer can be surprised; it
@@ -100,14 +100,14 @@ fn chr_type_raw(chr_ins: &ChrIns) -> i32 {
 
 /// The live local player, or `None` until one really exists.
 ///
-/// `WorldChrMan::instance()` returning `Ok` does NOT mean there is a player: during boot the
+/// `WorldChrMan::instance()` returning `Ok` does not mean there is a player: during boot the
 /// singleton is up long before the world is, and `main_player` holds a non-null pointer to
 /// nothing. Dereferencing it is an access violation on the game thread, every frame, from the
 /// first tick -- which is exactly how this DLL killed the game at ~100ms on 2026-08-25, before
 /// its overlay had rendered a single frame (`draws=0` in its own log, so the render path was
 /// never even reached).
 ///
-/// So the pointer is screened before ANY field of it is read: plausibly heap-aligned, and its
+/// So the pointer is screened before any field of it is read: plausibly heap-aligned, and its
 /// vtable inside the game image. That is the same discipline the product DLL uses for early-boot
 /// reads, and it is not optional here.
 ///
@@ -197,7 +197,7 @@ pub(crate) unsafe fn roster(max_targets: usize) -> Option<Roster> {
     // own enemy sweep already hedges that a co-op session may put other players in a set that is
     // not `player_chr_set` (`er-enemynpc-effects`), and a roster that trusts one set and finds
     // nobody looks exactly like a navmesh that found no route. So when the player set comes back
-    // empty, walk every ChrSet the world holds and pick characters by KIND instead.
+    // empty, walk every ChrSet the world holds and pick characters by kind instead.
     //
     // The wide walk is the fallback rather than the default because it is the expensive one: the
     // per-block sets are where the map's hundreds of enemies live, and paying for that sweep six
@@ -264,7 +264,7 @@ enum Origin {
     /// accepted, because a session kind this build has not seen is likelier than a mistake.
     PlayerSet,
     /// Every other ChrSet in the world, walked only when the player set came back empty. An
-    /// unfamiliar type here is map furniture, so only NAMED player kinds are accepted.
+    /// unfamiliar type here is map furniture, so only named player kinds are accepted.
     WideSweep,
 }
 
@@ -310,7 +310,7 @@ fn collect(
 
 /// The nearest ordinary map character, as a destination to ask the navmesh about.
 ///
-/// This exists so the navmesh call chain can be PROVEN without a second player. Every address in
+/// This exists so the navmesh call chain can be proven without a second player. Every address in
 /// [`crate::navpath`] is byte-verified static RE, and none of it had ever executed: the request is
 /// only ever issued for a remote player, so the first time eleven raw function pointers and a
 /// container walk ran for real would have been in the middle of an invasion, where an access

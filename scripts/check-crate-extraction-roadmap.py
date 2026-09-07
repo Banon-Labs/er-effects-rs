@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""RATCHET `crates/er-quickload/src/experiments/**` and verify the critical caller ledger.
+"""Ratchet `crates/er-quickload/src/experiments/**` and verify the critical caller ledger.
 
-`er-quickload` is being extracted INTO crates until it is a thin shim that bundles them, so
-the line count under `experiments/**` is a number that may SHRINK but must never GROW. The
+`er-quickload` is being extracted into crates until it is a thin shim that bundles them, so
+the line count under `experiments/**` is a number that may shrink but must never grow. The
 ledger row in the roadmap is the high-water mark; this gate fails when measured source has
 climbed past it.
 
-It is a ratchet, NOT a freeze. Edits are free -- a bug fix that rewrites 300 lines in place
-passes untouched, and so does a refactor that moves lines between files. Only NET GROWTH in
+It is a ratchet, not a freeze. Edits are free -- a bug fix that rewrites 300 lines in place
+passes untouched, and so does a refactor that moves lines between files. Only net growth in
 the total is refused, and `--refresh` accepts growth in one command. The value is not that
 growth is impossible; it is that growth becomes a reviewable diff to the ledger instead of
 the invisible default.
 
 Why growth, not equality: measured across the four commits of PR #367, 62% of 1,553 added
 lines already landed in extracted crates with no enforcement at all, because the host-seam
-pattern pulls them there. The leak that pattern does NOT catch is a NEW MODULE born inside
+pattern pulls them there. The leak that pattern does not catch is a new module born inside
 the shim -- `experiments/continue_load/picked_summary_refresh.rs` arrived as 187 fresh lines
 with no reason to start there, while a same-sized chunk of the same PR correctly landed in
 `er-save-redirect`. (That file is gone: this gate named it, and it was extracted into
@@ -45,7 +45,7 @@ FORBIDDEN_OWNERSHIP = re.compile(
     r"UNANALYSED|UNANALYZED|UNCLASSIFIED|APPROXIMATE(?:LY)?|ESTIMAT(?:E|ED|ES)|~",
     re.IGNORECASE,
 )
-# Matched by PATTERN, not by literal text, because the heading carries the file count and the
+# Matched by pattern, not by literal text, because the heading carries the file count and the
 # count changes every time a file enters or leaves `experiments/**`. A literal match makes a
 # truthful heading update break the gate, which pressures the next person to leave the number
 # stale instead. Nothing is lost: the count is separately and exactly validated against
@@ -129,19 +129,19 @@ def ratchet(
     ledger_count: int,
     text: str,
 ) -> tuple[list[str], list[str]]:
-    """Compare measured `experiments/**` against the ledger as a RATCHET, not an equality.
+    """Compare measured `experiments/**` against the ledger as a ratchet, not an equality.
 
     Returns `(errors, notes)`. Notes are printed and do not fail the gate.
 
-    HARD FAILURES:
-      * total measured lines EXCEED the ledger total (the ratchet itself);
+    Hard FAILURES:
+      * total measured lines exceed the ledger total (the ratchet itself);
       * a file under `experiments/**` with no ledger row (a module born in the shim carrying
         no ownership claim -- the exact leak this gate exists for, and the one case the line
         total can miss when a large extraction has left slack);
       * the roadmap's own integrity: a missing total row, a duplicated ledger heading, a
         non-exact ownership marker, a missing partition term.
 
-    DELIBERATELY NOT FAILURES, because they are edits and extraction rather than growth:
+    Deliberately not failures, because they are edits and extraction rather than growth:
       * per-file line drift in either direction -- a 300-line in-place bug fix must pass;
       * a file shrinking, or the total shrinking (that is the point of the whole refactor);
       * a ledger row whose file has left `experiments/**` (it was extracted; `--refresh`
@@ -276,18 +276,18 @@ def selftest() -> int:
 
     # (label, ledger rows, measured tree, ledger total override, expect failure)
     cases: list[tuple[str, dict[str, int], dict[str, int], tuple[int, int] | None, bool]] = [
-        # THE RATCHET ITSELF.
+        # The ratchet itself.
         ("exact match passes", ledger, dict(ledger), None, False),
         ("growth fails", ledger, {"a.rs": 2, "b.rs": 4}, None, True),
         ("shrink passes", ledger, {"a.rs": 1, "b.rs": 3}, None, False),
         ("file removed (extracted) passes", ledger, {"a.rs": 2}, None, False),
-        # An EDIT is not growth: lines move between files, the total is unchanged.
+        # An edit is not growth: lines move between files, the total is unchanged.
         ("net-neutral reshuffle passes", ledger, {"a.rs": 4, "b.rs": 1}, None, False),
-        # A stale-high ledger leaves slack. Growth INTO that slack is allowed by design; the
+        # A stale-high ledger leaves slack. Growth into that slack is allowed by design; the
         # note telling you to re-baseline is what stops the slack becoming permanent.
         ("growth within slack passes", ledger, {"a.rs": 4, "b.rs": 4}, (2, 9), False),
         ("growth past a slack ledger fails", ledger, {"a.rs": 5, "b.rs": 5}, (2, 9), True),
-        # A NEW MODULE BORN IN THE SHIM -- the leak this gate exists for. It fails twice: on
+        # A new module born in the SHIM -- the leak this gate exists for. It fails twice: on
         # the total, and on having no ownership row. The second one still fires under slack.
         ("new file fails", ledger, {**ledger, "c.rs": 1}, None, True),
         ("new file under slack still fails", ledger, {"a.rs": 1, "b.rs": 1, "c.rs": 1}, (2, 9), True),
@@ -314,7 +314,7 @@ def selftest() -> int:
     code, after = _refresh_fixture(ledger, grown)
     if code != 0 or after:
         failures.append(f"refresh accepts growth: expected clean pass, got exit={code} errors={after}")
-    # ...and prove it does NOT paper over a new file: refresh refuses to invent the ownership
+    # ...and prove it does not paper over a new file: refresh refuses to invent the ownership
     # row, so the born-in-the-shim failure survives the escape hatch.
     code, after = _refresh_fixture(ledger, {**ledger, "c.rs": 1})
     if code == 0 or not after:
@@ -336,7 +336,7 @@ def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
     baseline after an extraction is the same command. What it buys is that either decision
     lands as a diff a reviewer can see.
 
-    The ledger is a MEASURED MIRROR of `experiments/**`, not a plan of intent -- a row exists
+    The ledger is a measured mirror of `experiments/**`, not a plan of intent -- a row exists
     if and only if the file exists, with an exact line count, and the total row must match
     (file count, summed lines). So there is no judgement to apply and the refresh is mechanical,
     which is exactly why it belongs in the tool rather than in an ad-hoc script written from
@@ -344,7 +344,7 @@ def refresh(roadmap: Path = ROADMAP, root: Path = EXPERIMENTS) -> int:
     the 2026-08-21 lint-parity sweep, where any edit that adds or removes a line silently rots
     the gate) before this mode existed.
 
-    Only the COUNT column is rewritten. The description and R-number columns are authored
+    Only the count column is rewritten. The description and R-number columns are authored
     judgement and are preserved verbatim; a row whose file has left `experiments/**` is dropped,
     and a file with no row is reported rather than invented, because inventing one would mean
     inventing the ownership claim next to it.

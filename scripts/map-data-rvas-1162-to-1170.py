@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Carry a 1.16.2 DATA address (a global, a vtable, a table) onto 1.17.
+"""Carry a 1.16.2 data address (a global, a vtable, a table) onto 1.17.
 
-WHY THE FUNCTION MAP CANNOT DO THIS
+Why the function map cannot do this
 -----------------------------------
 `build-1162-1170-function-map.py` pairs functions, and it works because a
 function has content to compare. A global has no content: at rest it is eight
 zero bytes like every other global, so nothing about the datum itself says
 which one it is.
 
-And they DID move. Every `.data` global in the sibling's RVA bundle shifted
+And they did move. Every `.data` global in the sibling's RVA bundle shifted
 between 2.6.2.0 and 2.7.0.0 -- most by +0x4070, `runtime_heap_allocator` by
-+0x4080, `multiplay_properties` by +0x4000, and `cs_system_step` BACKWARDS by
++0x4080, `multiplay_properties` by +0x4000, and `cs_system_step` backwards by
 -0x17408. So a constant delta is not merely unproven, it is wrong, and the one
 that breaks it is not an outlier anybody would have guessed.
 
@@ -20,16 +20,16 @@ went unread-and-unnoticed into `CreateTpfResCap`, which divided by zero at
 2026-08-29 -- with a perfectly correct, freshly translated function address
 sitting one frame up, which is what made it look like the translation's fault.
 
-HOW THIS WORKS INSTEAD
+How this works instead
 ----------------------
-A global has no content, but the CODE THAT USES IT does. So: find every
+A global has no content, but the code that uses it does. So: find every
 instruction in 1.16.2 `.text` that references the address rip-relatively, map
 each of those functions onto 1.17 with the function map, decode the instruction
-at the same position in the 1.17 function, and read where ITS displacement
+at the same position in the 1.17 function, and read where its displacement
 points. Every reference casts a vote.
 
 Agreement across independent call sites is the evidence. A single unopposed
-vote is reported as WEAK rather than silently promoted, because one reference
+vote is reported as weak rather than silently promoted, because one reference
 inside a function that happens to have been edited is exactly how a confident
 wrong address gets produced.
 
@@ -49,10 +49,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import function_extent  # noqa: E402  (needs the sys.path line above)
-# THE ONE PLACE IN THIS FILE THAT DELETES.
+# the one place in this file that DELETES.
 #
-# `refresh()` rewrites the data map WHOLESALE. A row it does not reproduce is either a STRAY, which
-# stops the write, or RETIRED, which is dropped -- and "retired" was decided by asking whether the
+# `refresh()` rewrites the data map wholesale. A row it does not reproduce is either a stray, which
+# stops the write, or retired, which is dropped -- and "retired" was decided by asking whether the
 # `CONST`/`ALIAS` scan below still produced the address. That scan is name-filtered (`*RVA*`),
 # typed (`usize|u32|u64`), and knows exactly two shapes; it has no bare `rva: 0x..` table-field
 # form and no `pub use .. as ..` form. An address written in any spelling it does not know was
@@ -62,7 +62,7 @@ import function_extent  # noqa: E402  (needs the sys.path line above)
 # one that was deleted, and the code holding that address then reads a 1.16.2 value on 1.17 with no
 # refusal line and no fault. This file's own header calls that failure "quiet and then fatal".
 #
-# So the drop is now gated on `rva_symbols`, which resolves VALUES rather than spellings and
+# So the drop is now gated on `rva_symbols`, which resolves values rather than spellings and
 # reports `proven_unclaimed` as a fact separate from `found_nothing`. Only the former may delete.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
     import const_fold
@@ -126,7 +126,7 @@ class Image:
 
 
 # Bytes that can follow a rip-relative displacement before the instruction ends. The displacement
-# is rip-relative to the END of the instruction, so a trailing immediate shifts the arithmetic by
+# is rip-relative to the end of the instruction, so a trailing immediate shifts the arithmetic by
 # its own width -- and an immediate is not exotic here, it is the normal encoding for setting or
 # testing a flag:
 #
@@ -134,11 +134,11 @@ class Image:
 #     80 3D dd dd dd dd 00     cmp byte ptr [rip+dd], 0     <- trailing imm8
 #     C7 05 dd dd dd dd ....   mov dword ptr [rip+dd], imm32
 #
-# Scanning only tail 4 therefore finds every READ of a global and misses every write-an-immediate
+# Scanning only tail 4 therefore finds every read of a global and misses every write-an-immediate
 # and compare-against-an-immediate. That is not a uniform loss: it lands hardest on exactly the
-# globals that are single BYTE FLAGS, whose entire use is `mov [x],1` / `cmp [x],0`. Measured
+# globals that are single byte flags, whose entire use is `mov [x],1` / `cmp [x],0`. Measured
 # 2026-08-29 on `TITLE_GLOBAL_ACCEPT_BYTE_RVA 0x4589bdc`, the zero-input title-advance flag: tail 4
-# found NOTHING and the address was reported "no usable reference", while tail 5 finds its real
+# found nothing and the address was reported "no usable reference", while tail 5 finds its real
 # references. The mod wrote to the stale 1.16.2 address for the whole of 1.17 and the title menu
 # never opened.
 IMMEDIATE_TAILS = (4, 5, 6, 8)
@@ -152,7 +152,7 @@ def references(image: Image, target: int) -> list[int]:
     tail is scanned (see `IMMEDIATE_TAILS`), which is one vectorised pass each rather than decoding
     forty-three megabytes of instructions.
 
-    A wider scan admits candidates whose bytes happen to look right, so these are CANDIDATES only:
+    A wider scan admits candidates whose bytes happen to look right, so these are candidates only:
     `instruction_index` decodes each one and discards any whose instruction does not genuinely
     address `target`.
     """
@@ -179,7 +179,7 @@ def range_references(image: Image, lo: int, hi: int) -> list[tuple[int, int]]:
 
     `references` answers "who points at THIS address"; this answers "what does .text point at
     anywhere in this window", which is the same arithmetic run in the other direction and costs the
-    same single vectorised pass. It exists so a bracket can be built: the addresses NEXT to a
+    same single vectorised pass. It exists so a bracket can be built: the addresses next to a
     candidate, and how far each of them moved, are the only local evidence available for a global
     that has exactly one reference of its own. Candidates only -- every hit still has to be decoded.
     """
@@ -238,9 +238,9 @@ def bracket_confirms(
     radius: int = 0x400,
     min_votes: int = 2,
 ) -> tuple[bool, str]:
-    """Whether the neighbourhood AGREES with `src -> dst`, and a one-line reason either way.
+    """Whether the neighbourhood agrees with `src -> dst`, and a one-line reason either way.
 
-    THIS IS A TEST, NEVER A SOURCE OF AN ADDRESS. It answers yes or no about a candidate some other
+    This is a test, never a source of an address. It answers yes or no about a candidate some other
     mechanism produced; it never proposes the majority delta as the answer. That distinction is
     load-bearing. `WORLD_NVM_MANAGER_GLOBAL_RVA 0x3d75870` really does move +0x4078 -- measured
     here at 323 of 327 of its own references, a third independent agreement with the ledger's
@@ -249,8 +249,8 @@ def bracket_confirms(
     neighbours would be wrong. This function cannot: it is a predicate, and a row with hundreds of
     its own votes never reaches it.
 
-    An anchor counts only when its references agree unanimously AND there are at least two of them
-    -- the same bar `carry` promotes on. The test is the NEAREST such anchor on each side: the
+    An anchor counts only when its references agree unanimously and there are at least two of them
+    -- the same bar `carry` promotes on. The test is the nearest such anchor on each side: the
     candidate has to sit inside a pair of independently-carried addresses that both moved by the
     delta being claimed, which is what the word bracket means.
 
@@ -258,10 +258,10 @@ def bracket_confirms(
     form was tried first and rejected `NAV_COST_TABLE_RVA` on 0x3d61ee2, an UNALIGNED byte
     reference 0x122 above the target which moves +0x405d while its own immediate neighbours
     0x3d61ee3 and 0x3d61ee4 (18 and 7 votes) move +0x4060. That is a field shifting three bytes
-    INSIDE a structure, which says nothing about where the structure's base went, and every one of
+    inside a structure, which says nothing about where the structure's base went, and every one of
     the ~40 other anchors within +-0x400 of the target -- including 222/223, 47/47, 43/43 and 20/20
     -- moves +0x4060. The relaxation is not a loosening toward the answer wanted: run against
-    `WORLD_NVM_MANAGER`, the nearest-anchor form still FAILS (nearest above +0x4070, nearest below
+    `WORLD_NVM_MANAGER`, the nearest-anchor form still fails (nearest above +0x4070, nearest below
     +0x4062, claim +0x4078), so it continues to reject exactly the discontinuity it exists to
     catch. Disagreeing anchors elsewhere in the window are still counted and reported.
     """
@@ -298,7 +298,7 @@ def bracket_confirms(
 def call_references(image: Image, target: int) -> list[int]:
     """Offsets of the rel32 in every `call`/`jmp` in .text whose target is `target`.
 
-    A rel32 branch is relative to the END of the instruction, and both `E8 rel32` and `E9 rel32`
+    A rel32 branch is relative to the end of the instruction, and both `E8 rel32` and `E9 rel32`
     put the rel32 last, so the arithmetic is the same as a trailing displacement: the four bytes
     at `i` name `target` when `i + 4 + rel32 == target`. Candidates only -- `call_index` decodes
     them and discards anything that is not really a branch to `target`.
@@ -337,8 +337,8 @@ def call_index(md, image: Image, func: int, rel_at: int, target: int) -> int | N
 
 def call_target_of(md, image: Image, func: int, index: int) -> int | None:
     """Where instruction `index` of `func` branches to, as an RVA."""
-    # `index` was counted in the OTHER image. A 1.17 function shorter than its 1.16.2
-    # counterpart supplies that index out of its NEIGHBOUR, and this returns a branch target
+    # `index` was counted in the other image. A 1.17 function shorter than its 1.16.2
+    # counterpart supplies that index out of its neighbour, and this returns a branch target
     # that was never assembled. Bound by the extent and refuse when it runs out, rather than
     # decoding a byte budget into whatever follows. Found by check-decode-extent-bounds.py.
     end = function_extent.body_slice_end(image.data, BASE + func, 0x800)
@@ -357,16 +357,16 @@ def call_target_of(md, image: Image, func: int, index: int) -> int | None:
 
 
 def carry_code(md, old: Image, new: Image, fmap: dict[int, int], target: int):
-    """Carry a `.text` address by its CALLERS rather than by its own bytes.
+    """Carry a `.text` address by its callers rather than by its own bytes.
 
     The body-signature mappers -- this repo's function map and
     `map-rvas-1162-to-1170.py` -- both identify a function by what it looks like, so both go
-    silent on the one case that matters most: a function whose body genuinely CHANGED in 1.17.
+    silent on the one case that matters most: a function whose body genuinely changed in 1.17.
     Measured 2026-08-29, six addresses the running game refused were absent from the 128,603-row
     function map and unresolvable by masked signature, including the now-loading helper `Update`
     that the loading bar reads (1,513 refusals in a single boot).
 
-    A caller is different evidence. If the CALLER maps, the call instruction at the same index in
+    A caller is different evidence. If the caller maps, the call instruction at the same index in
     the 1.17 caller points at wherever the callee moved to -- and that holds however much the
     callee itself was rewritten. Every caller votes, exactly as the data path votes.
     """
@@ -387,7 +387,7 @@ def carry_code(md, old: Image, new: Image, fmap: dict[int, int], target: int):
         if moved is not None:
             votes[moved] = votes.get(moved, 0) + 1
     if not votes:
-        # Say WHY there is no caller: "the callers are unmapped" and "nothing branches here at
+        # Say why there is no caller: "the callers are unmapped" and "nothing branches here at
         # all" are different problems with different next steps -- improve the function map, or
         # go looking for a vtable slot / runtime-built function pointer.
         cands = len(call_references(old, target))
@@ -397,7 +397,7 @@ def carry_code(md, old: Image, new: Image, fmap: dict[int, int], target: int):
             if func is None or call_index(md, old, func, rel_at, target) is None:
                 continue
             decoded += 1
-            # Name the site. "The caller is unmapped" is only actionable if you are told WHICH
+            # Name the site. "The caller is unmapped" is only actionable if you are told which
             # caller, so the next step -- map that one function -- is one command away.
             print(f"    branch at 0x{rel_at:x} in fn 0x{func:x}  {'IN MAP' if func in fmap else 'NOT IN FUNCTION MAP'}")
         return None, (
@@ -421,17 +421,17 @@ def enclosing(starts: list[int], rva: int) -> int | None:
 def instruction_index(md, image: Image, func: int, disp_at: int, target: int) -> tuple[int, int] | None:
     """`(instruction index, byte offset from function start)` for the reference at `disp_at`.
 
-    BOTH anchors are returned because neither survives on its own, and trusting only the index
+    Both anchors are returned because neither survives on its own, and trusting only the index
     silently loses references. `displacement_of` re-reads the paired 1.17 function by walking to
-    the SAME instruction index -- so if any earlier instruction changed length, the walk arrives at
+    the same instruction index -- so if any earlier instruction changed length, the walk arrives at
     a different instruction and the reference is dropped or, worse, votes for whatever that
     instruction points at. Measured 2026-08-30 on `RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA`
-    (0x3d6c5e8) and `SAVE_SERIALIZE_BYTES_RVA` (0x3d69920): both enclosing functions ARE in the
+    (0x3d6c5e8) and `SAVE_SERIALIZE_BYTES_RVA` (0x3d69920): both enclosing functions are in the
     map, and both were reported "no usable reference" purely because index #271 and #84 land
-    elsewhere in 1.17 while the BYTE OFFSET of the reference is unchanged.
+    elsewhere in 1.17 while the byte offset of the reference is unchanged.
 
     The target check is what makes a multi-tail candidate scan safe. A candidate offset only means
-    "these four bytes would be the right displacement IF the instruction ended a certain number of
+    "these four bytes would be the right displacement if the instruction ended a certain number of
     bytes later"; decoding says where the instruction really points, and a candidate that lands on
     a real displacement pointing somewhere else is a coincidence, not a reference.
     """
@@ -449,8 +449,8 @@ def instruction_index(md, image: Image, func: int, disp_at: int, target: int) ->
 def displacement_of(md, image: Image, func: int, index: int, at_offset: int | None = None) -> int | None:
     """Where the paired instruction in `func` points, rip-relatively.
 
-    Anchored on the BYTE OFFSET from the function start when one is supplied, falling back to the
-    instruction INDEX. Byte offset is the better anchor: an instruction that changes length shifts
+    Anchored on the byte offset from the function start when one is supplied, falling back to the
+    instruction index. Byte offset is the better anchor: an instruction that changes length shifts
     every later index by one but leaves the offsets of everything before it alone, and a patch
     usually edits one instruction rather than inserting one. Neither anchor is sound alone, so a
     disagreement between them is not resolved here -- the offset simply wins, and the vote across
@@ -461,12 +461,12 @@ def displacement_of(md, image: Image, func: int, index: int, at_offset: int | No
     # the offset nor the index, and the address was reported "no usable reference" -- the same
     # sentence a genuinely unreferenced address gets. Measured 2026-08-30: with the window opened to
     # cover the offset the reference decodes, matches shape, and votes. Decoding past the function
-    # end is harmless because only an instruction that STARTS exactly at `at_offset` is consumed.
+    # end is harmless because only an instruction that starts exactly at `at_offset` is consumed.
     limit = max(0x400, (at_offset + 0x20) if at_offset is not None else 0)
     window = image.data[func : func + limit]
     # The sentence above is true of the `at_offset` arm ONLY: that arm consumes an instruction
-    # that STARTS exactly at a known offset, so a wide window cannot invent one. The `n == index`
-    # fallback below CAN match an instruction past the function end, where the decoder has
+    # that starts exactly at a known offset, so a wide window cannot invent one. The `n == index`
+    # fallback below can match an instruction past the function end, where the decoder has
     # resynchronised on padding. Bound that arm by the extent; refuse it when the extent is
     # unknown rather than falling back to the byte budget. Found by check-decode-extent-bounds.py.
     body_end = function_extent.body_slice_end(image.data, BASE + func)
@@ -508,15 +508,15 @@ def carry(md, old: Image, new: Image, fmap: dict[int, int], target: int):
 
 
 
-# --- RTTI RESCUE for vtables ----------------------------------------------------------------
+# --- RTTI rescue for vtables ----------------------------------------------------------------
 # Reference voting needs two agreeing references, and a vtable referenced from only one place is
 # withheld even when its identity is not in doubt. A vtable carries its own name: MSVC puts a
-# CompleteObjectLocator at `vtable[-1]` whose type descriptor holds the mangled class. If the SAME
+# CompleteObjectLocator at `vtable[-1]` whose type descriptor holds the mangled class. If the same
 # mangled name sits at the candidate in the new image and at the source in the old one -- and at
-# neither of the crossed positions -- that is a unique-name match, which is STRONGER evidence than
+# neither of the crossed positions -- that is a unique-name match, which is stronger evidence than
 # any number of agreeing displacements.
 #
-# Measured 2026-08-29: `FUNCTOR_VTABLE_RVA 0x2ac3ea8 -> 0x2ac6f28` was dropped as WEAK (one
+# Measured 2026-08-29: `FUNCTOR_VTABLE_RVA 0x2ac3ea8 -> 0x2ac6f28` was dropped as weak (one
 # reference), and RTTI confirms it outright -- both ends carry
 # `.?AV?$_Func_impl@V<lambda_e1e7...>@@...PEAVMenuWindow@CS@@AEAVSceneProxy@5@@std@@`, a name that
 # occurs once per image.
@@ -548,15 +548,15 @@ def rtti_class_name(image: bytes, vtable_rva: int, image_base: int = 0x140000000
     return name.decode("ascii", "replace") if name.startswith(b".?A") else None
 
 
-# MSVC tags each translation unit's ANONYMOUS NAMESPACE with a per-build hash, so the same class
+# MSVC tags each translation unit's anonymous NAMESPACE with a per-build hash, so the same class
 # is `...@?A0x7c8d539b@@...` in 1.16.2 and `...@?A0x8fca6706@@...` in 1.17. Comparing the raw
 # names therefore makes an anonymous-namespace vtable structurally unable to rescue itself here --
-# and it declines SILENTLY, as "not the same class", which is indistinguishable from a genuinely
+# and it declines silently, as "not the same class", which is indistinguishable from a genuinely
 # wrong candidate. Measured 2026-08-30 on `MenuJobLoadContextVtable` (0x2ac71e0 -> 0x2aca260,
 # renamed 2026-08-30 from `SELECTOR_STEP_VTABLE_RVA`; RTTI-confirmed a MenuJob vtable, not a
 # "SelectorStep" one -- see scripts/rva-alias-allowlist.txt 0x2ac71e0):
 # `MenuJobWithContext<LoadJobContext@?A0x...,lambda_1af212c9...>` differs between the images in the
-# namespace tag and NOTHING else -- the LAMBDA hash is stable across builds. That row happened to
+# namespace tag and nothing else -- the lambda hash is stable across builds. That row happened to
 # have two agreeing references and never needed the rescue; the next one may not.
 #
 # Only the namespace tag is masked. Class names, template arguments and lambda hashes are compared
@@ -572,7 +572,7 @@ def canonical_class(name: str | None) -> str | None:
 def rtti_confirms(old_image: bytes, new_image: bytes, src_rva: int, dst_rva: int) -> str | None:
     """The shared mangled name when `src` in the old image and `dst` in the new are the same class.
 
-    Requires the crossed positions NOT to carry that name, so a region that happens not to have
+    Requires the crossed positions not to carry that name, so a region that happens not to have
     moved cannot pass by accident.
     """
     src_name = canonical_class(rtti_class_name(old_image, src_rva))
@@ -586,31 +586,31 @@ def rtti_confirms(old_image: bytes, new_image: bytes, src_rva: int, dst_rva: int
     return src_name
 
 
-# The TYPE is not part of what makes something a game address, and requiring `usize` here made
-# every `: u32` constant INVISIBLE to this scanner -- never scanned, never voted on, never
+# The type is not part of what makes something a game address, and requiring `usize` here made
+# every `: u32` constant invisible to this scanner -- never scanned, never voted on, never
 # written to the data map, and read stale at runtime with no log line. This is the same defect
-# select-needed-1170-rows.py records and fixed for the FUNCTION map (see its RVA_TYPE note); it
+# select-needed-1170-rows.py records and fixed for the function map (see its RVA_TYPE note); it
 # survived here. Measured 2026-08-30: er-invasion-path declares NAV_COST_TABLE_RVA,
 # HK_AI_MANAGER_GLOBAL_RVA, WORLD_NVM_MANAGER_GLOBAL_RVA and GLOBAL_CSSFX_RVA as `: u32`
 # (navpath.rs:44,49,83; sfx.rs:28), so all four were absent from the data map while the nav
 # request and the SFX read went to 1.16.2 addresses on 1.17. Reading a stale global is the
 # failure this file's own header calls "quiet and then fatal".
 RVA_TYPE = r"(?:usize|u32|u64)"
-# THE WHOLE INITIALISER, NOT ITS FIRST LITERAL.
+# The whole INITIALISER, not its first literal.
 #
 # The previous form stopped at `(0x[0-9a-fA-F_]+)`, which reads the first hex literal it meets and
 # calls that the address. For `= 0x142658c60 - 0x140000000` that is the MINUEND -- an absolute VA,
 # not the RVA the constant actually holds. Measured 2026-08-30 on
 # `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA`: the scraper recorded 0x142658c60, which is 1.1 GB past the
-# end of the image, so nothing in `.text` could reference it and it was filed in this map's UNUSED
-# list as an unmappable DATA global. It is neither unmappable nor data: its real value is RVA
-# 0x2658c60, a `.text` function that the FUNCTION map already carries to 0x265b470.
+# end of the image, so nothing in `.text` could reference it and it was filed in this map's unused
+# list as an unmappable data global. It is neither unmappable nor data: its real value is RVA
+# 0x2658c60, a `.text` function that the function map already carries to 0x265b470.
 #
 # The failure mode is what makes this worth a regex change rather than a one-line exception. The
 # tool did not refuse and did not warn; it produced a confident classification of an address that
 # does not exist, in a file whose entire purpose is to be trusted about addresses. So the
 # initialiser is now captured whole and evaluated, and an initialiser this cannot evaluate is
-# REPORTED rather than half-read.
+# reported rather than half-read.
 CONST = re.compile(
     r"const\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*" + RVA_TYPE + r"\s*=\s*([^;]+);"
 )
@@ -630,9 +630,9 @@ def const_value(initialiser: str) -> int | None:
     The arithmetic now runs in `scripts/const_fold.py`, which is the same evaluator
     `select-needed-1170-rows.py` and `detect-struct-field-drift.py` use. `LITERAL_ARITHMETIC`
     stays in front of it deliberately: the shared folder resolves named constants and enum
-    variants too, and admitting those here would widen THIS map's population as a side effect of
+    variants too, and admitting those here would widen this map's population as a side effect of
     a refactor. Measured over all 732 `*_RVA` initialisers in the workspace, the delegated form
-    and the hand-rolled loop it replaced disagree on ZERO.
+    and the hand-rolled loop it replaced disagree on zero.
     """
     if not LITERAL_ARITHMETIC.match(initialiser):
         return None
@@ -650,13 +650,13 @@ ALIAS = re.compile(
 VARIANT = re.compile(r"^\s*(\w+)\s*=\s*(0x[0-9a-fA-F_]+)\s*,", re.M)
 BOUND = re.compile(r"_(MIN|MAX|BOUND|BASE|SIZE|LEN|LENGTH|COUNT|END|START|STRIDE|ALIGN)$")
 DATA_MAP = "docs/recon/rva-map-1162-to-1170.data.tsv"
-# The banner the preserved rows sit under. Matched as a PREFIX when the file is re-read, so the
+# The banner the preserved rows sit under. Matched as a prefix when the file is re-read, so the
 # rest of the wording can change without orphaning the rows it introduces.
 PRESERVED_BANNER = "# PRESERVED"
 
 
 def retirement_verdict(rva: int, claims, root: str = ""):
-    """`(retire?, why)` -- `True` ONLY on a proof that nothing in `crates/` declares `rva`.
+    """`(retire?, why)` -- `True` only on a proof that nothing in `crates/` declares `rva`.
 
     Split out of `refresh()` so the decision that DELETES a ledger row can be asserted directly.
     `claims is None` means the resolver could not run, which is not evidence of anything and must
@@ -682,7 +682,7 @@ def retirement_verdict(rva: int, claims, root: str = ""):
 
 
 def claims_for(repo: Path, rva: int):
-    """Who declares this address anywhere in `crates/`, resolved by VALUE. None if the walk broke.
+    """Who declares this address anywhere in `crates/`, resolved by value. None if the walk broke.
 
     A broken walk must never read like a clean one: the caller preserves the row on None rather
     than treating the silence as "nothing declares it".
@@ -693,14 +693,14 @@ def claims_for(repo: Path, rva: int):
         print(f"  (could not resolve crates/ symbols for 0x{rva:x}: {failure})", file=sys.stderr)
         return None
 
-# BRACKET-AND-SHAPE RESCUE: globals whose only reference lives in the dearxan'd image's trampoline
+# Bracket-and-shape RESCUE: globals whose only reference lives in the dearxan'd image's trampoline
 # rubble, where the enclosing `.pdata` entry maps to nine places or none and reference voting has
-# nothing to vote with. Each entry here is carried by THREE independent facts, all reproducible
+# nothing to vote with. Each entry here is carried by three independent facts, all reproducible
 # from this script, and is listed with the command that reproduces them:
 #
-#   1. BRACKET -- every mapped `.data` anchor on both sides of it moved by the same delta.
-#   2. SOURCE  -- in 1.16.2 exactly N sites of one masked instruction shape reach the address.
-#   3. TARGET  -- in 1.17 exactly N sites of that identical shape reach the candidate.
+#   1. Bracket -- every mapped `.data` anchor on both sides of it moved by the same delta.
+#   2. Source  -- in 1.16.2 exactly N sites of one masked instruction shape reach the address.
+#   3. Target  -- in 1.17 exactly N sites of that identical shape reach the candidate.
 #
 # Fact 3 alone is weak (the `movzx eax, byte ptr [rip]; ret` getter shape reaches 405 addresses
 # image-wide); the bracket is what selects the address and the shape is what confirms it. Kept as
@@ -726,12 +726,12 @@ SHAPE_RESCUED = {
     #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d69920 --confirm 0x3d6d990
     0x3D69920: (0x3D6D990, "SAVE_SERIALIZE_BYTES_RVA", "anchor+8+shape"),
     # `Game.Debug.IsEnableControlOnDisactiveWindow`'s backing byte, forced by er-focus-input so
-    # the game keeps reading pad/mouse input while its window is unfocused. Its one READ is the
+    # the game keeps reading pad/mouse input while its window is unfocused. Its one read is the
     # getter stub's `movzx eax, byte ptr [rip+d]` (1.16.2 0x2e6853, 1.17 0x2e8853) -- the same
     # 405-address-wide shape the note above warns about, so the shape alone is not what selects
-    # it. What selects it is the pair of CALLERS, both already carried by the FUNCTION map:
+    # it. What selects it is the pair of callers, both already carried by the function map:
     # CS::CSPadStep::STEP_Update (0xe33aa0 -> 0xe358a0) and CS::CSPadStep::CSPadStep
-    # (0xe328d0 -> 0xe346d0) reach the getter at the IDENTICAL byte offsets +0xa3c and +0x7e in
+    # (0xe328d0 -> 0xe346d0) reach the getter at the identical byte offsets +0xa3c and +0x7e in
     # both builds, and both 1.17 calls land on one stub reading 0x458cb71. Bracketed by five
     # anchors that all move +0x4080 (0x4588e98, 0x4589390, 0x45896a8, 0x4589ad8, 0x4589bdc), which
     # is exactly 0x4588af1 -> 0x458cb71.
@@ -746,25 +746,25 @@ SHAPE_RESCUED = {
 }
 
 
-# --- SINGLE-REFERENCE RESCUE ------------------------------------------------------------------
+# --- Single-reference rescue ------------------------------------------------------------------
 # Ten globals the vote refuses on its own. Every one has exactly one rip-relative reference (or, for
 # the task table, none at all), and one unopposed vote is precisely what this file declines to
 # promote -- correctly, because a lone reference inside a function that happened to be edited is how
 # a confident wrong address is produced.
 #
-# What makes them promotable is a SECOND line of evidence that does not come from the reference at
+# What makes them promotable is a second line of evidence that does not come from the reference at
 # all, re-derived here at every `--refresh` from the two images rather than trusted from this table:
 #
-#   unique   the datum is a string that occurs EXACTLY ONCE in each image, at the source in 1.16.2
+#   unique   the datum is a string that occurs exactly once in each image, at the source in 1.16.2
 #            and at the candidate in 1.17. A name that occurs once per image is stronger evidence
 #            than any number of agreeing displacements (the same argument the RTTI rescue rests on).
-#   fnptr    the datum is a table of code pointers, and the entries that the FUNCTION map can carry
+#   fnptr    the datum is a table of code pointers, and the entries that the function map can carry
 #            all land exactly where they should, with the identical test at +-0x8 and +-0x10 failing.
 #   bracket  the nearest independently-carried anchor on each side moved by the same delta being
 #            claimed. See `bracket_confirms` for why this rejects `WORLD_NVM_MANAGER`.
 #
-# The table stores the ANSWER, and the checks either confirm it or drop the row to UNUSED; a check
-# never supplies or adjusts an address. A row whose own reference votes for something OTHER than the
+# The table stores the answer, and the checks either confirm it or drop the row to unused; a check
+# never supplies or adjusts an address. A row whose own reference votes for something other than the
 # tabled address is refused outright rather than rescued -- that is a contradiction, not weak
 # evidence, and this file's failure mode is a wrong address, not a missing one.
 REFSITE_RESCUED = {
@@ -776,7 +776,7 @@ REFSITE_RESCUED = {
     0x2B26500: (0x2B29580, "TITLE_PRESS_START_NAME_RVA", "unique+bracket"),
     # ASCII "TosTitle/Text", the terms-of-service dialog's text path. One occurrence per image.
     0x2B27330: (0x2B2A3B0, "POLICY_TOS_TITLE_TEXT_PATH_RVA", "unique+bracket"),
-    # UTF-16 "m60_42_34_00". One occurrence per image, and the ONLY one of the ten with no usable
+    # UTF-16 "m60_42_34_00". One occurrence per image, and the only one of the ten with no usable
     # neighbourhood at all -- it sits in string soup where nothing else has two references -- so the
     # bracket cannot be asked for and the unique name is the whole of the corroboration.
     0x2B62C70: (0x2B65D20, "DEFAULT_MAP_STRING_RVA", "unique"),
@@ -785,51 +785,51 @@ REFSITE_RESCUED = {
     # +0x1250 -- the same delta as the referencing function itself.
     0x3B37C98: (0x3B3BCA8, "MENU_PUMP_KICK_PTR_RVA", "bracket"),
     0x3B39848: (0x3B3D858, "PROFILE_OFFSCREEN_SIZE_TABLE_RVA", "bracket"),
-    # The stored thunk sits 0xb0 past its referencing function in BOTH images. Renamed from
-    # STEAM_INTERFACE_GUARD_RVA 2026-08-31: it is an indirect-CALL slot in the SteamID64 accessor
-    # (`MOV RAX,[0x143b48ff0]; CALL RAX` at 0x140e8d52a, its ONLY reference), not a Steam interface
+    # The stored thunk sits 0xb0 past its referencing function in both images. Renamed from
+    # STEAM_INTERFACE_GUARD_RVA 2026-08-31: it is an indirect-call slot in the SteamID64 accessor
+    # (`MOV RAX,[0x143b48ff0]; CALL RAX` at 0x140e8d52a, its only reference), not a Steam interface
     # object, and not read by the save-dir builder at all.
     0x3B48FF0: (0x3B4D050, "STEAM_ID_ACCESSOR_CALL_SLOT_RVA", "bracket"),
     0x3D61DC0: (0x3D65E20, "NAV_COST_TABLE_RVA", "bracket"),
     # Slots 6 and 10 of the `TitleStep` step table, which `own_stepper_patch_once` writes our
     # handler into. Each has exactly one reference -- the store that fills it -- so the vote alone
     # refuses, and the `bracket` recorded here understates what is actually known. The initialiser
-    # 0xa4f50 fills the whole table in one straight-line run of 24 stores, and BOTH images decode
+    # 0xa4f50 fills the whole table in one straight-line run of 24 stores, and both images decode
     # to the same 24 byte offsets, so every slot is aligned by byte offset rather than by a delta.
     # On top of that each slot carries two corroborations that owe nothing to its displacement:
     # the function pointer it stores carries through the function map to the value the 1.17
     # initialiser stores (9 of 12 in the map, 0 mismatched), and the neighbouring slot holds the
-    # step's UTF-16 NAME -- "TitleStep::STEP_GameStepWait" for 6, "TitleStep::STEP_MenuJobWait"
-    # for 10 -- each occurring EXACTLY ONCE per image, at the source in 1.16.2 and at candidate+8
+    # step's UTF-16 name -- "TitleStep::STEP_GameStepWait" for 6, "TitleStep::STEP_MenuJobWait"
+    # for 10 -- each occurring exactly once per image, at the source in 1.16.2 and at candidate+8
     # in 1.17. The slot names itself; no delta is being trusted. Every neighbour at +-0x8/+-0x10 is
-    # provably the destination of a DIFFERENT store in the same run, so no competing candidate has
+    # provably the destination of a different store in the same run, so no competing candidate has
     # any support at all. Re-derive the whole table, checks included:
     #   python3 scripts/carry-step-table-slots.py
     0x3D715E0: (0x3D75650, "TITLE_STEP_IDX6_SLOT_RVA", "bracket"),
     0x3D71620: (0x3D75690, "TITLE_STEP_IDX10_SLOT_RVA", "bracket"),
-    # THE LAZY `CSEblFileManager` SLOT, and the only one of the menu tracer's five bare literals
+    # The lazy `CSEblFileManager` slot, and the only one of the menu tracer's five bare literals
     # the vote cannot carry. Its four references sit at file offsets 0x7e1d7, 0x1eed3b, 0x1efbdc
-    # and 0x1efbf3 -- the SAME four offsets in both images, each re-reading the candidate -- but
+    # and 0x1efbf3 -- the same four offsets in both images, each re-reading the candidate -- but
     # none of the enclosing functions is in the function map, so `carry` has nothing to vote with
     # and reports "no usable reference". Both corroborations here are independent of that:
-    #   BRACKET -- 0x3d5b078 and 0x3d5b0f4 both move +0x4060, and so do 105 anchors within +-0x400.
-    #   SHAPE   -- the masked referencing instruction reaches the source 10 times in 1.16.2 and
+    #   Bracket -- 0x3d5b078 and 0x3d5b0f4 both move +0x4060, and so do 105 anchors within +-0x400.
+    #   Shape   -- the masked referencing instruction reaches the source 10 times in 1.16.2 and
     #              the candidate 10 times in 1.17.
     # `None` for the name means "whatever the tree calls it today". It is written as a bare
     # literal with no constant name at all, so the harvest keys it `<file>:<line>`; freezing that
-    # key here would rot on the next edit above line 1248, and freezing an invented CONSTANT name
+    # key here would rot on the next edit above line 1248, and freezing an invented constant name
     # would put a name in a tracked ledger that nothing in crates/ declares. If the literal ever
     # leaves the tree this entry produces no row, which is the right answer rather than a stale one.
     #   python3 scripts/map-data-rvas-1162-to-1170.py 0x3d5b088 --confirm 0x3d5f0e8
     0x3D5B088: (0x3D5F0E8, None, "bracket+shape"),
-    # THE DIAGNOSTIC-ONLY VTABLE, GIVEN A ROW ON PURPOSE. `MENUJOB_IFELSE_VTABLE_DUMP_VA` is
+    # The diagnostic-only VTABLE, given a row on purpose. `MENUJOB_IFELSE_VTABLE_DUMP_VA` is
     # declared `= 0x142aa2958` in `er-quickload/src/constants/gaitem_restore.rs` and its every use
     # is a format argument: the install path logs "expect IfElseJob dump 0x..." beside the vtable
     # it actually read. Nothing resolves it, so it cannot be wrong at runtime -- and that is
     # exactly the argument that let `FIRST_SECTION_RVA` into `DETOUR_SAFE_1162_TO_1170`, where it
     # was also inert until it would not have been.
     #
-    # It is NOT a candidate for `rva_role.NOT_AN_ADDRESS`: that list is for values PROVEN to be
+    # It is not a candidate for `rva_role.NOT_AN_ADDRESS`: that list is for values proven to be
     # bounds, and this one is provably the opposite -- RTTI reads `.?AVIfElseJob@MenuJobSequence@CS@@`
     # at the source in 1.16.2 and at the candidate in 1.17. Calling a real vtable "not an address"
     # is the expensive direction, and its twin on the same log line
@@ -837,7 +837,7 @@ REFSITE_RESCUED = {
     # leaving this half out means one log line mixes a watched number with an unwatched one.
     #
     # It reaches the ledger through this table rather than through the harvest because neither of
-    # the harvest's two questions can see it: its NAME carries no `RVA`, and its VALUE is a full VA
+    # the harvest's two questions can see it: its name carries no `RVA`, and its value is a full VA
     # rather than an RVA. Widening either test to admit it would admit far more than it.
     0x2AA2958: (0x2AA59D8, "MENUJOB_IFELSE_VTABLE_DUMP_VA", "rtti"),
 }
@@ -884,7 +884,7 @@ def unique_content_confirms(old_image: bytes, new_image: bytes, src: int, dst: i
 def fnptr_table_confirms(
     old_image: bytes, new_image: bytes, fmap: dict[int, int], src: int, dst: int, entries: int = 8
 ) -> tuple[bool, str]:
-    """Code pointers stored at `src` land, in 1.17, exactly where the FUNCTION map says they went."""
+    """Code pointers stored at `src` land, in 1.17, exactly where the function map says they went."""
 
     def score(at: int) -> tuple[int, int]:
         ok = bad = 0
@@ -936,7 +936,7 @@ def rescue_confirms(md, old: Image, new: Image, fmap, src: int, dst: int, kind: 
             # all: the vtable carries its own mangled class name, the same name sits at the source
             # in 1.16.2 and at the candidate in 1.17, and at neither crossed position -- so a
             # region that happens not to have moved cannot pass by accident. Already used to
-            # rescue a weak VOTE inside `refresh`; reachable here for a vtable the harvest never
+            # rescue a weak vote inside `refresh`; reachable here for a vtable the harvest never
             # produced a target for at all.
             confirmed = rtti_confirms(old.data, new.data, src, dst)
             ok = confirmed is not None
@@ -979,8 +979,8 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             enum_variants.setdefault(variant, int(value.replace("_", ""), 16))
 
     unevaluated: dict[str, str] = {}
-    # A GAME ADDRESS DOES NOT NEED A NAME. Collected across the whole tree first and merged after
-    # the named loop, because the merge asks whether any CONSTANT already claims the value -- and
+    # A game address does not need a name. Collected across the whole tree first and merged after
+    # the named loop, because the merge asks whether any constant already claims the value -- and
     # the constant and the bare literal are routinely in different files.
     bare: dict[str, int] = {}
     for path in sorted(repo.glob("crates/**/*.rs")):
@@ -993,7 +993,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
                 # with no hex literal in it at all is an alias or a decimal: `ALIAS` already
                 # handles the enum spelling, and a path alias is carried under the constant it
                 # names, so there is nothing to warn about and 180-odd such lines would bury
-                # everything else. An initialiser that DOES contain a hex literal and still could
+                # everything else. An initialiser that does contain a hex literal and still could
                 # not be evaluated is the shape that produced the phantom address, so it prints.
                 if "0x" in initialiser:
                     unevaluated.setdefault(n, initialiser.strip().replace("\n", " ")[:60])
@@ -1008,7 +1008,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
                 continue
             if rva in done:
                 continue
-            # `.text` IS EXCLUDED, and the exclusion was tested rather than assumed.
+            # `.text` is excluded, and the exclusion was tested rather than assumed.
             #
             # It looked like it should not be. 75 of the 83 addresses the running game asked for
             # and could not be placed are in `.text` but absent from `.pdata` -- leaf functions
@@ -1016,7 +1016,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             # And a `call rel32` encodes its target exactly as a rip-relative displacement does,
             # `dword[i] + i + 4`, so the reference scan finds their call sites for free.
             #
-            # MEASURED 2026-08-29: allowing them took the table from 304 rows to 329 and killed
+            # Measured 2026-08-29: allowing them took the table from 304 rows to 329 and killed
             # the game at +145ms, during DLL init, where 304 rows had survived past twenty
             # seconds. The contract this tool advertises -- never wrong, sometimes silent -- is
             # calibrated on eleven `.data` globals. Leaf functions are a class it has never been
@@ -1025,11 +1025,11 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             if text_va <= rva < text_va + text_size:
                 continue
             targets.setdefault(name, rva)
-        # BARE LITERALS HANDED TO THE ADDRESS RESOLVER. See `rva_usage.bare_resolver_addresses`:
-        # decided from the ARGUMENT POSITION, never from the value or the spelling, so the
+        # Bare LITERALS handed to the address RESOLVER. See `rva_usage.bare_resolver_addresses`:
+        # decided from the argument position, never from the value or the spelling, so the
         # thousands of offsets/flags/sanity bounds in these same files are not admitted. Test
         # scopes are skipped for the reason the named loop skips them: a test may name an address
-        # precisely to assert the workspace does NOT use it.
+        # precisely to assert the workspace does not use it.
         tests = rva_usage.test_module_spans(source)
         line_offsets = None
         for line_no, rva in rva_usage.bare_resolver_addresses(source):
@@ -1043,8 +1043,8 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
                 continue
             bare.setdefault(f"{path.relative_to(repo).as_posix()}:{line_no}", rva)
 
-    # THE MERGE, AND THE ONE THING IT MUST NOT DO. A synthetic `<file>:<line>` key is fragile by
-    # construction -- every edit above the line renames the row -- so it is used ONLY where nothing
+    # The merge, and the one thing it must not do. A synthetic `<file>:<line>` key is fragile by
+    # construction -- every edit above the line renames the row -- so it is used only where nothing
     # else names the address. `0x3d5b0f8` is written both as `CSFILE_SINGLETON_RVA` and as a bare
     # literal three lines below its four unnamed siblings; carrying it twice would put a
     # line-number-churning duplicate beside a stable row for no gain.
@@ -1089,13 +1089,13 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         total = sum(votes.values())
         best = votes[moved]
         # A single unopposed reference, or a contested vote without a clear
-        # majority, is reported and NOT used. The failure this guards against is
+        # majority, is reported and not used. The failure this guards against is
         # not a missing address -- that only costs a feature -- but a confident
         # wrong one, which is what put 0x3d6e278 in the first 2.7.0.0 bundle.
         if best < 2 or best * 5 < total * 3:
             # A vtable can rescue itself: it carries its own mangled class name, and a name that
             # occurs once per image is stronger evidence than any number of agreeing
-            # displacements. Only for vtables, and only when the crossed positions do NOT carry
+            # displacements. Only for vtables, and only when the crossed positions do not carry
             # the name, so a region that happens not to have moved cannot pass by accident.
             confirmed = rtti_confirms(old.data, new.data, rva, moved)
             if confirmed:
@@ -1220,23 +1220,23 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
     tail = ["#", "# UNUSED -- not enough agreement to be worth trusting:"]
     tail += [f"# {name}\t0x{rva:x}\t{note}" for name, rva, note in weak]
 
-    # A ROW THIS REFRESH DID NOT PRODUCE IS A ROW SOMEBODY TYPED IN.
+    # A row this refresh did not produce is a row somebody typed in.
     #
     # This write is wholesale, and before 2026-08-30 that meant a hand-added pair vanished at exit
     # 0 with nothing naming it -- and the loss reads afterwards as an address that was never
     # mapped, not as one that was deleted. Unlike `select-needed-1170-rows.py`, this file does not
     # carry such a row forward: every line here is supposed to have been re-derived from the two
-    # images by THIS run, and silently keeping a row that no longer earns its votes would turn the
+    # images by this run, and silently keeping a row that no longer earns its votes would turn the
     # ledger into a place where a wrong address can hide behind an old derivation. So it stops
     # instead, names the addresses, and points at the two tables where hand knowledge belongs --
     # `SHAPE_RESCUED` and `REFSITE_RESCUED`, which are re-checked against the images on every
     # refresh, which is exactly the property a hand-typed TSV row does not have.
     #
-    # THAT IS THE STRAY CLASS, AND IT IS UNCHANGED. The class below it is different and was the
-    # dangerous one: a row this run does not produce AND does not want. It was dropped outright,
+    # That is the stray class, and it is unchanged. The class below it is different and was the
+    # dangerous one: a row this run does not produce and does not want. It was dropped outright,
     # and "does not want" was decided by the name-filtered scan above, so an address written in a
     # spelling that scan cannot read was deleted from a tracked ledger at exit 0. Since 2026-08-30
-    # that drop needs a PROOF from `rva_symbols` -- values, not spellings -- and everything short
+    # that drop needs a proof from `rva_symbols` -- values, not spellings -- and everything short
     # of a proof is carried forward under `PRESERVED_BANNER`, which is the `select-needed-*.py`
     # behaviour after all, for the class where it is right.
     produced = {rva: moved for _name, rva, moved, _best, _total in rows}
@@ -1269,7 +1269,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
         elif (rva, moved) in seen_rows:
             continue
         else:
-            # NOT PRODUCED BY THIS RUN, AND NOT WANTED BY IT EITHER. Before 2026-08-30 that was the
+            # Not produced by this run, and not wanted by it either. Before 2026-08-30 that was the
             # whole test and the row was deleted: "nothing declares it any more" meant "the
             # name-filtered `CONST`/`ALIAS` scan above did not produce it", which is a fact about a
             # regex, not about the tree. The scan has no bare `rva: 0x..` table-field form, no
@@ -1278,7 +1278,7 @@ def refresh(md, old: Image, new: Image, fmap: dict[int, int], repo: Path) -> int
             # `crates/` today.
             #
             # So the question is now put to `rva_symbols`, which resolves values, and only its
-            # PROVEN answer may delete. Everything else is carried forward under `PRESERVED_BANNER`
+            # proven answer may delete. Everything else is carried forward under `PRESERVED_BANNER`
             # and named on stdout, because a row that turns out to be wanted is a feature and a row
             # that turns out to be stale is a line a human deletes in a second.
             seen_rows.add((rva, moved))
@@ -1383,7 +1383,7 @@ def explain(md, old: Image, new: Image, fmap: dict[int, int], target: int) -> No
     "no usable reference" is a single word for four different situations, and they call for
     opposite responses: no candidate bytes at all means the global is not addressed
     rip-relatively from `.text` (look for a struct-relative access instead); candidates whose
-    enclosing function is absent from the map means the FUNCTION map is the thing to improve;
+    enclosing function is absent from the map means the function map is the thing to improve;
     candidates that decode to a different address mean the bytes were a coincidence and the
     scan is working as intended. Without this, all four read as "the tool cannot do it".
     """
@@ -1396,7 +1396,7 @@ def explain(md, old: Image, new: Image, fmap: dict[int, int], target: int) -> No
         if func is None:
             tally["no enclosing function"] += 1
             continue
-        # DECODE BEFORE asking the function map. A candidate that decodes elsewhere is a
+        # Decode before asking the function map. A candidate that decodes elsewhere is a
         # coincidence and says nothing about map coverage; reporting it as "function not in map"
         # would send the next reader off to improve the function map over bytes that were never a
         # reference at all.
@@ -1424,7 +1424,7 @@ def reference_shapes(md, image: Image, target: int) -> list[tuple[str, str]]:
     """`(mnemonic+operand shape, masked bytes)` for every instruction that really addresses `target`.
 
     The displacement is blanked, so what is left is what a patch does not change: the opcode and
-    the registers. Two addresses in two builds that are referenced by the SAME multiset of shapes,
+    the registers. Two addresses in two builds that are referenced by the same multiset of shapes,
     from the same number of sites, are the same datum -- or a coincidence that has to repeat itself
     once per reference.
     """
@@ -1451,16 +1451,16 @@ def reference_shapes(md, image: Image, target: int) -> list[tuple[str, str]]:
 
 
 def shape_search(md, old: Image, new: Image, target: int, lo: int, hi: int) -> int:
-    """Find `target`'s 1.17 address by looking for the SAME instruction shape in the new image.
+    """Find `target`'s 1.17 address by looking for the same instruction shape in the new image.
 
     The last resort, for a global whose only reference lives in a trampoline stub. Reference
-    VOTING needs the enclosing function to be mappable; the dearxan'd image's stub regions are
+    voting needs the enclosing function to be mappable; the dearxan'd image's stub regions are
     `jmp`/`int3` rubble that maps to nine places or none, so a getter that lives there can never
-    be voted on. But the getter's OWN bytes are still a signature: `movzx eax, byte ptr [rip+d];
+    be voted on. But the getter's own bytes are still a signature: `movzx eax, byte ptr [rip+d];
     ret` with the displacement blanked. Search the new image for that exact masked shape, read
     where each hit points, and keep the ones landing in the plausible window.
 
-    This is weaker than voting and is reported as such -- one hit in the window is a CANDIDATE,
+    This is weaker than voting and is reported as such -- one hit in the window is a candidate,
     several is a genuine ambiguity, none says the shape itself changed. It is offered because the
     alternative for such a global is a delta guess, and a guess that lands on a live neighbouring
     byte is far worse than an honest "unknown".
@@ -1504,11 +1504,11 @@ def shape_search(md, old: Image, new: Image, target: int, lo: int, hi: int) -> i
 def shape_sites(image: Image, shapes: list[tuple[str, str]]) -> dict[int, list[str]]:
     """`{address: [site, ...]}` for every masked shape occurrence anywhere in `.text`.
 
-    Deliberately BOUNDARY-FREE: it scans bytes and never decodes from a `.pdata` function start.
+    Deliberately boundary-FREE: it scans bytes and never decodes from a `.pdata` function start.
     That matters because the addresses this fallback exists for are referenced from the dearxan'd
     image's trampoline rubble, where decoding forward from the enclosing `.pdata` entry
     desynchronises long before it reaches the instruction -- so a boundary-based count reports
-    ZERO references to an address that plainly has one.
+    zero references to an address that plainly has one.
     """
     va, size = image.text
     found: dict[int, list[str]] = {}
@@ -1543,11 +1543,11 @@ def confirm(md, old: Image, new: Image, target: int, candidate: int) -> int:
     before = shape_sites(old, shapes).get(target, [])
     everywhere = shape_sites(new, shapes)
     after = everywhere.get(candidate, [])
-    # The shape's operand text comes from the 1.16.2 instruction in BOTH lines -- that is inherent
+    # The shape's operand text comes from the 1.16.2 instruction in both lines -- that is inherent
     # to matching on a masked shape, since the displacement is exactly what was blanked. Labelling
     # it plainly, because printed unqualified it reads as though the two images decoded to the
     # same displacement, which would be a much stronger claim than this test actually makes. The
-    # site ADDRESSES are per-image and are the real content of these lines.
+    # site addresses are per-image and are the real content of these lines.
     print(f"1.16.2 0x{target:x}: {len(before)} site(s) at  {', '.join(before[:4])}")
     print(f"1.17   0x{candidate:x}: {len(after)} site(s) at  {', '.join(after[:4])}")
     print("       (operand text above is the 1.16.2 shape; its displacement is masked by design)")
@@ -1562,8 +1562,8 @@ def confirm(md, old: Image, new: Image, target: int, candidate: int) -> int:
 # The shapes an `*_RVA` initialiser is written in, and what each must evaluate to. The subtraction
 # is the whole reason this exists: `ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 -
 # 0x140000000` was read as 0x142658c60 -- the MINUEND -- and that phantom address, 1.1 GB past the
-# image, was published in this map's UNUSED list as an unmappable data global for as long as the
-# list has existed. It is a `.text` function the FUNCTION map already carries. A scraper that
+# image, was published in this map's unused list as an unmappable data global for as long as the
+# list has existed. It is a `.text` function the function map already carries. A scraper that
 # mis-classifies without complaining is the same failure family as an audit that reports zero while
 # real sites exist, so the shape is pinned rather than left to a regex nobody re-reads.
 CONST_PARSER_CASES = [
@@ -1604,8 +1604,8 @@ def selftest_const_parser() -> int:
 # The positive control for the one code path that deletes
 # --------------------------------------------------------------------------------------------
 
-# THE PRE-2026-08-30 SCAN, FROZEN AS LITERALS. `refresh()` decided a row was `retired` -- and
-# deleted it -- when this scan no longer produced the address. These are its patterns, SPELLED OUT
+# The pre-2026-08-30 scan, frozen as LITERALS. `refresh()` decided a row was `retired` -- and
+# deleted it -- when this scan no longer produced the address. These are its patterns, spelled out
 # rather than composed from the live `CONST` / `ALIAS` / `VARIANT` / `BOUND` / `LITERAL_ARITHMETIC`
 # objects above.
 #
@@ -1628,7 +1628,7 @@ LEGACY_LITERAL_ARITHMETIC = re.compile(
 
 
 def legacy_declared(text: str) -> set[int]:
-    """Every address the PRE-FIX scan produced, over one blob of source."""
+    """Every address the pre-fix scan produced, over one blob of source."""
     out: set[int] = set()
     variants: dict[str, int] = {}
     for variant, value in LEGACY_VARIANT.findall(text):
@@ -1655,18 +1655,18 @@ def legacy_declared(text: str) -> set[int]:
     return out
 
 
-# FOUR ADDRESSES AND THE SPELLING EACH ONE IS WRITTEN IN. Frozen source, so the control keeps
+# Four addresses and the spelling each one is written in. Frozen source, so the control keeps
 # meaning what it means after the tree moves on:
 #
-#   0x111000  an ordinary `const *_RVA: usize = 0x..`   -- BOTH scans see it. Present only to prove
-#             the frozen legacy scan still WORKS; a control set the old scan finds nothing in makes
+#   0x111000  an ordinary `const *_RVA: usize = 0x..`   -- Both scans see it. Present only to prove
+#             the frozen legacy scan still works; a control set the old scan finds nothing in makes
 #             every "the old one missed it" assertion vacuous.
 #   0x222000  a `_MAX`-suffixed name, removed by `BOUND`. This is the real
 #             GX_CMD_QUEUE_WRAPPER_RVA_MAX spelling; the sibling ledger carries a container row for
 #             it that read "delete the line" until this fix.
-#   0xb0d400  an enum discriminant used INLINE, with no aliasing constant -- the real
+#   0xb0d400  an enum discriminant used inline, with no aliasing constant -- the real
 #             `MenuTraceRva::MenuJobWait`, three live use sites on the autoload path.
-#   0x333000  a bare `rva: 0x..` field in a HookSpec table, with no constant NAME at all. 53 of
+#   0x333000  a bare `rva: 0x..` field in a HookSpec table, with no constant name at all. 53 of
 #             these exist in crates/ (39 in er-reload-trace alone) and the scan has no rule for the
 #             shape, so every one of them looked retired.
 CONTROL_SOURCE = """
@@ -1685,7 +1685,7 @@ pub const SPECS: &[HookSpec] = &[HookSpec { rva: 0x333000, name: "trace" }];
 
 
 def selftest_retirement_gate() -> int:
-    """The `retired` drop fires ONLY on a proof, and the proof is not the old regex's silence."""
+    """The `retired` drop fires only on a proof, and the proof is not the old regex's silence."""
     import tempfile
 
     failures = []
@@ -1694,7 +1694,7 @@ def selftest_retirement_gate() -> int:
     (scratch / "lib.rs").write_text(CONTROL_SOURCE, encoding="utf-8")
     fixture = rva_symbols.Index.build(root=str(scratch.parent.parent.parent))
 
-    # NON-VACUITY FIRST, BEFORE ANY CLAIM ABOUT CONTENTS. An empty set makes every `not in` below
+    # Non-VACUITY first, before any claim about contents. An empty set makes every `not in` below
     # true and every assertion pass for the wrong reason.
     old_sees = legacy_declared(CONTROL_SOURCE)
     if old_sees != {0x111000}:
@@ -1722,18 +1722,18 @@ def selftest_retirement_gate() -> int:
             failures.append(f"0x{address:x} ({spelling}) is STILL dropped as retired: {why}")
 
     # ...and retirement must remain REACHABLE, or the fix has merely disabled the mechanism. In a
-    # tree the resolver understands completely, an address nothing declares is PROVEN unclaimed.
+    # tree the resolver understands completely, an address nothing declares is proven unclaimed.
     drop, why = retirement_verdict(0x999000, fixture.claims(0x999000))
     if not drop:
         failures.append(
             f"an address nothing declares is no longer retired in a fully-resolved tree ({why}); "
             "the gate can never delete anything, which is a different bug"
         )
-    # A BROKEN WALK IS NOT A CLEAN WALK.
+    # A broken walk is not a clean walk.
     if retirement_verdict(0x111000, None)[0]:
         failures.append("a row is dropped when the resolver could not run at all")
 
-    # THE LIVE TREE. A resolver that only ever runs against its own fixture is a fixture.
+    # The live tree. A resolver that only ever runs against its own fixture is a fixture.
     repo = Path(__file__).resolve().parent.parent
     live = claims_for(repo, 0xB0D400)
     if live is None or live.files_read < 200:
@@ -1762,7 +1762,7 @@ def main() -> int:
     repo = Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("rvas", nargs="*", help="1.16.2 data RVAs or VAs (hex)")
-    # `--refresh` REWRITES A TRACKED LEDGER. Without a way to point it at a scratch tree the only
+    # `--refresh` REWRITES a tracked ledger. Without a way to point it at a scratch tree the only
     # way to exercise that path is to run it on the real one, which is how a destructive tool gets
     # shipped untested. Everything else defaults relative to whatever `--repo` names.
     ap.add_argument("--repo", type=Path, default=repo, help="tree to read crates/ and docs/ from")
@@ -1793,7 +1793,7 @@ def main() -> int:
         "body-signature mapper can identify",
     )
     ap.add_argument("--selftest", action="store_true")
-    # THE SOURCE CONTRACTS, RUNNABLE WITH NOTHING INSTALLED. The const parser and the retirement
+    # The source contracts, RUNNABLE with nothing installed. The const parser and the retirement
     # gate read `crates/` and nothing else; making them need capstone (and therefore uv, and
     # therefore the network) is what kept them out of `scripts/check.sh`, and a selftest no gate
     # runs is a selftest that rots. `--selftest` still continues into the image calibration.
@@ -1805,11 +1805,11 @@ def main() -> int:
     args = ap.parse_args()
     repo = args.repo
     if args.selftest or args.selftest_source:
-        # BEFORE `_ensure`, FOR BOTH FLAGS. These two read `crates/` and nothing else, so running
+        # Before `_ensure`, for both flags. These two read `crates/` and nothing else, so running
         # them first means a checkout with no capstone still fails on a regressed scraper or on a
         # retirement gate that has gone back to deleting rows on a regex's silence.
         #
-        # It also keeps the tool MEASURABLE by `scripts/audit-selftest-vacuity.py`, which runs
+        # It also keeps the tool measurable by `scripts/audit-selftest-vacuity.py`, which runs
         # gates in-process with `re` neutered: `_ensure` re-execs under uv, and the re-exec threw
         # the blinding away with the process, so the sweep could only report UNMEASURED for the one
         # tool in this repo that deletes ledger rows.
@@ -1848,9 +1848,9 @@ def main() -> int:
         fmap[int(a, 16)] = int(b, 16)
 
     if args.selftest:
-        # THE CONTRACT IS "NEVER WRONG", NOT "ALWAYS ANSWERS".
+        # The contract is "NEVER WRONG", not "ALWAYS ANSWERS".
         #
-        # A missing address costs a feature: the caller refuses and says so. A WRONG
+        # A missing address costs a feature: the caller refuses and says so. A wrong
         # address costs the session -- that is what 0x3d6e278 did, and it looked
         # authoritative the whole way down. So a miss is reported and tolerated; a
         # disagreement fails the run.

@@ -5,7 +5,7 @@
 //!
 //! The payload's `rl` is not. Nothing downstream reads it, every stat the importer applies comes
 //! from the attributes themselves, and for every starting class the eight sum to `level + 79` --
-//! so the level is DERIVED here rather than trusted, and a planner that disagrees with its own
+//! so the level is derived here rather than trusted, and a planner that disagrees with its own
 //! numbers is reported, not obeyed.
 //!
 //! That derivation used to be a hard refusal, and it rejected a real build over one point: a
@@ -20,11 +20,11 @@
 //! `rl: 150` beside attributes summing to 226 stamped a character with `level == 150` and a stat
 //! block implying 147. That is not cosmetic: `er_save_loader::stats` locates a save slot's
 //! serialized `PlayerGameData` by the identity `level == sum(attrs) - 79`, so a character minted
-//! with a contradictory level was one the mod's OWN save reader could no longer find -- on the
+//! with a contradictory level was one the mod's own save reader could no longer find -- on the
 //! live default container it decoded 9 of 10 slots, and the Load Character row for the missing one
 //! rendered a name with an empty attribute line and no `WL` (user-reported 2026-09-01).
 //!
-//! Normalising here rather than in the applier keeps ONE derivation: everything downstream -- the
+//! Normalising here rather than in the applier keeps one derivation: everything downstream -- the
 //! applier, the read-back check, the report -- reads a [`BuildDoc`] whose `rl` and attributes
 //! agree, and no second copy of `- 79` can drift from this one.
 //!
@@ -45,7 +45,7 @@
 //! Raising each attribute to its class base before the sum fixes both at once, and the arithmetic
 //! is the evidence that this is the planner's own intent rather than a guess: putting the two
 //! missing points back restores the total to 229, and `229 - 79` is exactly the `rl: 150` the
-//! payload claimed. The planner computes its level WITH the floor applied while exporting the raw
+//! payload claimed. The planner computes its level with the floor applied while exporting the raw
 //! stat; the two agree again the moment the importer applies the same floor. All three archived
 //! payloads in `tests/fixtures/` corroborate it from the other side -- every attribute the author
 //! never spent sits *exactly* on its class base (the Vagabond build's `int 9, fth 9, arc 7, mnd
@@ -270,7 +270,7 @@ pub fn normalise(doc: &mut BuildDoc) -> Result<Normalised, StatError> {
         total += now;
     }
 
-    // THE ONE `- 79`. Every other level in this importer is read from `stats["rl"]`, which is the
+    // The one `- 79`. Every other level in this importer is read from `stats["rl"]`, which is the
     // line below it.
     let level = total - CLASS_INVARIANT;
     if !(1..=MAX_LEVEL).contains(&level) {
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn a_build_already_above_its_class_base_is_left_alone() {
         // The archived Vagabond fixture, unmodified: str 17, and every unspent attribute sitting
-        // exactly ON its class base. Nothing to raise, and the level it derives is the one it
+        // exactly on its class base. Nothing to raise, and the level it derives is the one it
         // claims -- which is what says the floor does not disturb a well-formed build.
         let fixture = [60, 10, 45, 17, 72, 9, 9, 7];
         let mut doc = doc_with(Some("Vagabond"), Some(150), fixture);

@@ -1,12 +1,12 @@
 // ============================================================================================
-// STAGE 2 -- the VERIFIED in-context menu-drive that actually COMPLETES a character load.
-// After PHASE_MENU_BUILD identifies the Load-Game leaf d180 (MENU_LOAD_GAME_ITEM), STAGE 2
+// stage 2 -- the verified in-context menu-drive that actually completes a character load.
+// After PHASE_MENU_BUILD identifies the Load-Game leaf d180 (MENU_LOAD_GAME_ITEM), stage 2
 // invokes its +0xa8 functor (-> ProfileLoadDialog), sets the dialog slot cursor, calls the
-// dialog's vtable-slot-20 `load_activate` (which reads the cursor [dialog+0xb0c] -- NOT an
-// arg), lets the NATIVE menu pump tick the registered selector step 0x140826d50 (which
+// dialog's vtable-slot-20 `load_activate` (which reads the cursor [dialog+0xb0c] -- Not an
+// arg), lets the native menu pump tick the registered selector step 0x140826d50 (which
 // populates iodev io18/io20 and runs the menu deserialize 0x14082c240 -> ac0=N + c30=real +
-// character applied, b80-INDEPENDENT), then `continue_confirm` 0x140b0e180 -> SetState(5).
-// All offsets VERIFIED against the on-disk decrypted exe (STAGE-2 spec 2026-06-16).
+// character applied, b80-independent), then `continue_confirm` 0x140b0e180 -> SetState(5).
+// All offsets verified against the on-disk decrypted exe (stage-2 spec 2026-06-16).
 // ============================================================================================
 pub(crate) use er_title_flow::OWN_STEPPER_PHASE_S2_ACTIVATE;
 pub(crate) use er_title_flow::ProfileLoadMenuRva;
@@ -43,7 +43,7 @@ pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
 /// It forwards event `3` to the row result's own vtable slot `+0x60`.
 /// `f(rcx = MenuWindow*)`: calls `MenuJobResult::SetResult(&r, Failed=3, 0)` then invokes the
-/// receiver's OWN vtable slot +0x60. It is a close-with-Failed, NOT an item submit or accept
+/// receiver's own vtable slot +0x60. It is a close-with-Failed, not an item submit or accept
 /// (Success is 2; the sibling emits 4). Its caller is `CS::MenuWindowJob::Run`, not `::Update`.
 /// Renamed 2026-08-01 -- the old name and doc asserted three things the dump contradicts.
 pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
@@ -63,8 +63,8 @@ pub(crate) const MENU_ITEM_RESULT_MODE_EVENT4: i32 = 2;
 pub(crate) const MENU_ITEM_RESULT_EVENT4_CODE: i32 = 4;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const MENU_ITEM_RESULT_EVENT4_PAYLOAD: i32 = -1;
-/// GameMan+0xc30 new-game DEFAULT map (m10_01_00_00). The mount writes the slot's REAL map
-/// here; for a NON-m10 char `c30 != this` corroborates the mount (for an m10 char it is
+/// GameMan+0xc30 new-game default map (m10_01_00_00). The mount writes the slot's real map
+/// here; for a non-m10 char `c30 != this` corroborates the mount (for an m10 char it is
 /// ambiguous -- ac0 is the primary mount oracle). Packed mAA_BB_CC_DD.
 #[repr(i32)]
 pub(crate) enum GameManMapId {
@@ -72,10 +72,10 @@ pub(crate) enum GameManMapId {
 }
 
 pub(crate) const GAME_MAN_NEWGAME_DEFAULT_MAP: i32 = GameManMapId::NewGameDefault as i32;
-/// STAGE 2 invocation is gated by concrete menu/action/dialog readiness, not by a fixed
+/// Stage 2 invocation is gated by concrete menu/action/dialog readiness, not by a fixed
 /// post-open settle frame count.
-/// Wall-clock fail-safe per S2 phase before failing closed (stay at the menu, NO SetState(5),
-/// NO write). Readiness is still semantic (`ProfileLoadDialog`, selector tick, mount latch, char
+/// Wall-clock fail-safe per S2 phase before failing closed (stay at the menu, no SetState(5),
+/// no write). Readiness is still semantic (`ProfileLoadDialog`, selector tick, mount latch, char
 /// fingerprint), not elapsed time.
 pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OWN_STEPPER_S2_PHASE_TIMEOUT_MS;
 /// Per-phase poll counter for S2 diagnostics/log throttling, not a readiness gate.
@@ -83,7 +83,7 @@ pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(MENU_TRAC
 pub(crate) use er_title_flow::OWN_STEPPER_DIALOG;
 /// The CS::MenuJobWithContext<LoadJobContext> selector step (vtable 0x142ac71e0) that
 /// load_activate 0x1409a4670 builds at `dialog+0x18`. A cold standalone dialog is not ticked by
-/// the MENU task-group, so STAGE 2 reads this and SELF-PUMPS the tick 0x140826d50 each frame
+/// the menu task-group, so stage 2 reads this and self-pumps the tick 0x140826d50 each frame
 /// (installer -> io18/io20 full-save read -> menu_deser 0x14082c240 -> mount).
 pub(crate) static OWN_STEPPER_SELECTOR_STEP: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -109,7 +109,7 @@ pub(crate) const OWN_STEPPER_DESER_FIRED_OK: usize = OwnStepperDeserState::Fired
 /// deserialize 0x67b290 success return code (ret==1 == real char applied + c30 written from save).
 pub(crate) const OWN_STEPPER_DESER_SUCCESS_RET: i32 = true as i32;
 pub(crate) use er_title_flow::OWN_STEPPER_TITLE_FIRED;
-/// The RESOLVED target slot the mount is expected to land on: the configured `slot=N` if
+/// The resolved target slot the mount is expected to land on: the configured `slot=N` if
 /// >=0, else (slot=-1 "most-recent") the dialog's natural highlight cursor read live at
 /// > PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.
 pub(crate) static OWN_STEPPER_EXPECTED_SLOT: std::sync::atomic::AtomicI32 =

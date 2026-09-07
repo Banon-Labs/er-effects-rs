@@ -1,5 +1,5 @@
 //! CPU-only inspector for the SPIR-V dxil-spirv emits — to diagnose the deterministic
-//! GPUVM fault when DRAWING a real ER object `.vpo` through passthrough, WITHOUT touching
+//! GPUVM fault when drawing a real ER object `.vpo` through passthrough, without touching
 //! the GPU. Translates a `.vpo` with selectable flags and dumps every descriptor-bound
 //! resource (storage class, set/binding, block type, array stride) plus the declared
 //! capabilities — so we can see exactly how `g_InstanceIndexBuffer` (t25) is represented
@@ -164,7 +164,7 @@ fn dump(label: &str, spv: &[u8]) {
     cs.sort();
     println!("capabilities: {}", cs.join(", "));
 
-    // Resource-class variables WITHOUT a (set,binding) — push constants or orphans the
+    // Resource-class variables without a (set,binding) — push constants or orphans the
     // draw harness wouldn't provide (a prime suspect for an uninitialized-index fault).
     println!("resource vars lacking set/binding (push-constant / orphan):");
     let mut any_orphan = false;

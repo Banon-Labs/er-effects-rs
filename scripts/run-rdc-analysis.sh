@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Analyze a RenderDoc .rdc via the WINDOWS qrenderdoc.exe (which bundles the `renderdoc` python module)
+# Analyze a RenderDoc .rdc via the Windows qrenderdoc.exe (which bundles the `renderdoc` python module)
 # and print the draw-call count + per-event GPU-timing summary (scripts/analyze-rdc.py).
 #
 #   scripts/run-rdc-analysis.sh <path-to.rdc> [top-N]
@@ -24,11 +24,11 @@ esac
 rm -f "$WTMP/rdc-summary.txt"
 printf '{"rdc": "%s", "log": "C:/temp/rdc-summary.txt", "top": %s}\n' "$RDC_WIN" "$TOP" > "$WTMP/rdc-analyze.json"
 echo "== analyzing $RDC_WIN via qrenderdoc.exe (replay loads all resources -- can take minutes on a multi-GB cap) =="
-# Background qrenderdoc (NOT a >30s foreground timeout -- the replay legitimately needs minutes; bounded
+# Background qrenderdoc (not a >30s foreground timeout -- the replay legitimately needs minutes; bounded
 # by the poll budget + taskkill below). --python runs the analyzer, which writes the summary + os._exit()s.
 "$QRD" --python 'C:\temp\analyze-rdc.py' >/dev/null 2>&1 &
 QPID=$!
-# Poll for the summary in bounded 3s steps (background-job + poll pattern, per AGENTS long-op guidance).
+# Poll for the summary in bounded 3s steps (background-job + poll pattern, per agents long-op guidance).
 for _ in $(seq 1 160); do
 	[[ -s "$WTMP/rdc-summary.txt" ]] && grep -q 'TOTAL_GPU_MS\|EventGPUDuration counter NOT\|ERROR' "$WTMP/rdc-summary.txt" 2>/dev/null && break
 	kill -0 "$QPID" 2>/dev/null || break

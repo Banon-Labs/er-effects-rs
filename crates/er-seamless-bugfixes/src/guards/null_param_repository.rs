@@ -4,7 +4,7 @@
 //!
 //! A tester's Elden Ring died the same way twice, a day apart (2026-08-22 18:27Z and
 //! 2026-08-23 04:35Z), on a profile carrying only this DLL and the crash logger. The fatal record
-//! is a NULL WRITE at `eldenring.exe+0x1eb9999` -- but that address is inside `DLPanic`'s body,
+//! is a NULL write at `eldenring.exe+0x1eb9999` -- but that address is inside `DLPanic`'s body,
 //! not inside the code with the bug. The access violation is the panic's death rattle.
 //!
 //! What actually happened is an assertion the game raises on itself:
@@ -65,7 +65,7 @@ pub(crate) const LOAD_BALANCER_PARAM_RVA: usize = 0xd3_d5f0;
 /// `LookupMenuOffscrRendParam` against the same slot; re-exported here so this module's own stub
 /// and its address test keep the name they use.
 ///
-/// The slot's ABSOLUTE address is resolved at install time into [`SOLO_PARAM_REPOSITORY_SLOT`],
+/// The slot's absolute address is resolved at install time into [`SOLO_PARAM_REPOSITORY_SLOT`],
 /// because a naked stub cannot compute the game's base.
 pub(crate) use er_game_base::rva::SOLO_PARAM_REPOSITORY_GLOBAL_RVA;
 
@@ -158,7 +158,7 @@ mod tests {
 
     /// Both addresses are the whole safety argument. `LOAD_BALANCER_PARAM_RVA` is where the hook
     /// goes; `SOLO_PARAM_REPOSITORY_GLOBAL_RVA` is the pointer the stub tests, and getting it
-    /// wrong would mean guarding on an unrelated qword. The prologue BYTES are pinned where they
+    /// wrong would mean guarding on an unrelated qword. The prologue bytes are pinned where they
     /// are produced, in `build.rs`, so repeating them here would only be a transcription to keep
     /// in step.
     #[test]

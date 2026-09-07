@@ -1,4 +1,4 @@
-//! Adopting the imported build's name as the CHARACTER's name.
+//! Adopting the imported build's name as the character's name.
 //!
 //! # What "inherit the name" can and cannot mean in this game
 //!
@@ -34,7 +34,7 @@ use er_game_base::rva::PLAYER_GAME_DATA_COPY_CHR_NAME_RVA;
 /// `CS::PlayerGameData::CopyChrName(PlayerGameData*, const wchar_t*)`. RCX/RDX, no return.
 type CopyChrNameFn = unsafe extern "system" fn(usize, *const u16);
 
-// The clamp lives in `er-build-import-core` because it is pure and testable; the FIELD it clamps to
+// The clamp lives in `er-build-import-core` because it is pure and testable; the field it clamps to
 // is here, bound to the upstream `PlayerGameData` layout. Pinning them to each other is what stops
 // the core's plain `16` from becoming a number nobody re-checks: if the name window ever moves or
 // resizes, this fails the build instead of silently writing a name the native refuses.
@@ -116,12 +116,12 @@ impl NameOutcome {
 /// Give the live character the build's name, as far as the game allows.
 ///
 /// Goes through the native writer rather than storing into `PGD+0x9c`, because the raw array is
-/// only ONE of the three places the name lives (see the module header) and the other two are what
+/// only one of the three places the name lives (see the module header) and the other two are what
 /// the save-slot list and the overhead nameplate read. A `memcpy` would rename the HUD and leave
 /// every other surface showing the old name.
 ///
 /// The read-back is `PGD+0x9c`, and that is sufficient for all three: the native's copy loop is the
-/// only thing that writes it, and the same function refreshes both string objects FROM it,
+/// only thing that writes it, and the same function refreshes both string objects from it,
 /// unconditionally, after the loop. So a correct `+0x9c` means the same bytes reached `+0x8e8` and
 /// `+0x8f8`. It is also the discriminating read -- the copy loop is inside the `wcslen < 0x11`
 /// branch, so a refused-for-length name is exactly the case where `+0x9c` still holds the old one.

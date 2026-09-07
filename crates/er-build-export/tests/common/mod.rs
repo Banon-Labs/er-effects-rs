@@ -10,7 +10,7 @@ use er_build_export::model::{
     Ammo, BuildExportDoc, Flasks, Items, Protectors, Slot, SlotList, SpellList,
 };
 
-// `mod common;` is compiled separately into EVERY integration-test binary, and each of them
+// `mod common;` is compiled separately into every integration-test binary, and each of them
 // uses a different subset of what is here, so every item below is unused in at least one of
 // them by construction. Per-item rather than a file-level `#![allow]` so a genuinely orphaned
 // helper still shows up.
@@ -94,7 +94,7 @@ pub fn representative_build() -> BuildExportDoc {
         legs: SlotList::new(vec![Slot::carried("Sorcerer Leggings", 0).equipped_at(1)]),
     };
 
-    // Ammunition and the assignable surfaces, so the SITE's own decoder is what proves they
+    // Ammunition and the assignable surfaces, so the site's own decoder is what proves they
     // survive rather than this repository's opinion of the format. Two arrows and two bolts with
     // distinguishable names, because the interleave (`Arrow1, Bolt1, Arrow2, Bolt2`) is the part
     // that can be wrong while the document still looks right.

@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Adjudicate the UNKNOWN-STRUCT autoload field offsets: CLEARED, MOVED, or STILL-UNKNOWN.
+"""Adjudicate the unknown-STRUCT autoload field offsets: Cleared, moved, or still-unknown.
 
-WHAT MAKES A CLEARANCE VALID HERE
+What makes a clearance valid here
 ---------------------------------
 Three things at once, and a verdict that has fewer is an annotation, not a clearance:
 
-  1. A NAMED OBJECT, identified independently in both images. That comes from MSVC RTTI
+  1. A named object, identified independently in both images. That comes from MSVC RTTI
      (`scripts/rtti-classmap-both.py`), so the class exists in 1.16.2 and in 1.17 as FromSoft's
      own embedded type descriptor rather than as a guess at a name.
-  2. A BASE REGISTER that provably holds a pointer to that object, tracked from the incoming
+  2. A base register that provably holds a pointer to that object, tracked from the incoming
      `this` (`scripts/clear-fields-by-object.py`).
   3. A WITNESS: two function bodies that are instruction-for-instruction identical apart from
-     numbers, so a displacement that did not change did not change because the CODE did not
+     numbers, so a displacement that did not change did not change because the code did not
      change.
 
-And one soundness gate on top: the class must be a LEAF. In a method of class `C`, `this` may
+And one soundness gate on top: the class must be a leaf. In a method of class `C`, `this` may
 point at anything derived from `C`, so a field read through a shared base like
 `DLUT::DLReferenceCountObject` (422 derived classes) or `CS::MenuJob` (131) could belong to any
 of them. A leaf's `this` is unambiguous. Evidence from a base class is reported as
-BASE-CLASS-EVIDENCE and never as CLEARED.
+base-class-evidence and never as cleared.
 
-OWNERSHIP
+Ownership
 ---------
 `OWNERS` below maps a repo constant to its owning class, read out of the doc comment the RE was
-recorded in. Where no owner is stated the constant stays STILL-UNKNOWN with the reason. An
-auto-suggestion is used ONLY when the prose names exactly one leaf class -- and even then the
+recorded in. Where no owner is stated the constant stays still-unknown with the reason. An
+auto-suggestion is used only when the prose names exactly one leaf class -- and even then the
 verdict prints the class it used, so a wrong owner is visible rather than silent.
 
 Output: `autoload-offset-verdicts.tsv` under the drift out-dir, plus a summary.
@@ -42,7 +42,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # Resolved by scripts/struct_drift_out.py, not spelled here: this used to be a literal
-# containing an agent SESSION UUID, which is correct for exactly one session and wrong for
+# containing an agent session UUID, which is correct for exactly one session and wrong for
 # every other one. `$ER_STRUCT_DRIFT_OUT` still overrides, and so does `--out-dir`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import struct_drift_out  # noqa: E402 -- the path is set up on the line above
@@ -52,14 +52,14 @@ DEFAULT_OUT = struct_drift_out.default_out()
 # Owning class per constant, read from the doc comment above it. `None` records a deliberate
 # "this is not a game structure" (a Windows ABI struct cannot move in a game patch) or "no class
 # owns this" so the reason survives instead of being rediscovered.
-# Owning object per repo constant, READ OUT OF THE DOC COMMENT the RE was recorded in -- never
+# Owning object per repo constant, read out of the doc comment the RE was recorded in -- never
 # inferred from the number, and never from a class name that merely appears nearby (the same file
 # mentions `CSDlcImp` beside the `DLString` offsets, and an auto-match happily proposed it).
 #
-#   "Class"            one named class. If it is a LEAF, any route's evidence counts.
+#   "Class"            one named class. If it is a leaf, any route's evidence counts.
 #   ("A", "B", ...)    the field belongs to a shared base, so several concrete classes are asked
-#                      and they must AGREE; a lone witness is not a consensus.
-#   None               deliberately NOT a game structure -- a Windows ABI struct cannot move in a
+#                      and they must agree; a lone witness is not a consensus.
+#   None               deliberately not a game structure -- a Windows ABI struct cannot move in a
 #                      game patch. Recorded so the reason survives instead of being rediscovered.
 #   FILE_CAP_SUBCLASSES  expands to every concrete `*FileCap`; `FD4FileCap` itself has no vtable
 #                      of its own, so its base fields are asked of its 71 subclasses at once.
@@ -113,15 +113,15 @@ OWNERS: dict[str, object] = {
     # ADJUDICATED 2026-08-31: 0x48, and it had been 0x40 since introduction -- not drift, an
     # offset that was never a field. The step-template constructor (1.16.2 0x140dec6d0 /
     # 1.17 0x140dee4d0, 57/57 aligned) zeroes currentState+requestedState as one qword at
-    # +0x48 in BOTH builds and never touches 0x40, which holds
+    # +0x48 in both builds and never touches 0x40, which holds
     # FD4ComponentAttachSystem_Step::allocator. Frozen in
     # scripts/check-object-field-offsets-1170.py and pinned there to 0x48.
-    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",  # 0x48 CLEARED
+    "CS_SYSTEM_STEP_CURRENT_STATE_OFFSET": "CS::CSSystemStep",  # 0x48 cleared
     # The same field under the boot-progress crate's local alias, which is a straight
     # `= er_game_base::rva::CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` and whose doc comment names
     # `CS::CSSystemStep` outright. It went unattributed the moment the shared constant moved
-    # 0x40 -> 0x48, because the ratchet keys on (name, file, VALUE) -- so a corrected offset
-    # enters as a NEW row and the gate refuses growth. Attributing the alias is the documented
+    # 0x40 -> 0x48, because the ratchet keys on (name, file, value) -- so a corrected offset
+    # enters as a new row and the gate refuses growth. Attributing the alias is the documented
     # exit from that, not a refresh.
     "BOOT_SYS_STEP_STATE_OFFSET": "CS::CSSystemStep",
     # --- menus --------------------------------------------------------------------------------
@@ -191,7 +191,7 @@ OWNERS: dict[str, object] = {
     "SL_JOB_RESULT_INFO_OFFSET": "SaveLoad2::SLSaveSession",
     "FD4_IO_WORKER_NOACCEPT_19_OFFSET": "SaveLoad2::SLSystemImpl",
     "SHOW_PROGRESS_TYPE_OFFSET": "ShowProgressJob",
-    # --- identified by RTTI FROM A VTABLE THE REPO ITSELF RECORDS ------------------------------
+    # --- identified by RTTI from a VTABLE the REPO itself records ------------------------------
     # `MOVIE_VTABLE_RVA = 0x2bfe088` sits beside `MOVIE_HWND_OFFSET` in the same doc block, and
     # `vtable[-1] -> COL -> TypeDescriptor` names that vtable `CS::CSWindowImp`. So the object is
     # not a guess: the repo recorded its vtable and RTTI reads the class name off it.
@@ -212,7 +212,7 @@ OWNERS: dict[str, object] = {
     # Owner named by Ghidra's own decompilation of the two functions that read it, which spell it
     # `(GLOBAL_GameMan->field479_0xdd0).string.length` -- 0xdf0 is the length member of the
     # `DLString<wchar_t>` inside the `FD4FilePathBase` at GameMan+0xdd0. Deliberately absent from
-    # the WITNESSES table below: `GameMan::GameMan` reaches the whole 0xdd0..0xe08 region through
+    # the witnesses table below: `GameMan::GameMan` reaches the whole 0xdd0..0xe08 region through
     # `lea rdi,[rsi+0xdd0]` and never writes 0xdf0 through `this`, so a displacement census keyed
     # on the ctor's base register finds nothing and a witness row here would fail, not confirm.
     # It carried two other names -- `OWNER_DF0_OFFSET` and `DF0_OFFSET`, both in
@@ -222,35 +222,35 @@ OWNERS: dict[str, object] = {
     # Each of these was UNATTRIBUTED until its own doc comment was read at the definition site;
     # every class below is RTTI-paired in both images, and the verdict beside it is what
     # `scripts/clear-fields-by-object.py` returned for that (class, offset) on the day it was
-    # added. A verdict of STILL-UNKNOWN is recorded AS an attribution and NOT as a clearance --
+    # added. A verdict of still-unknown is recorded as an attribution and not as a clearance --
     # naming the owner is what makes the offset measurable later; it is not evidence it held.
     #
     # CS::CSMenuProfModelRend (vtable 0x142b80128 / 0x142b831d8). portrait_camera.rs states it
     # outright: "All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base."
-    "PROFILE_RENDERER_FACEDATA_OBJ_OFFSET": "CS::CSMenuProfModelRend",  # 0x788 CLEARED
-    "PROFILE_CAM_PERSCAM_OFFSET": "CS::CSMenuProfModelRend",  # 0x9d0 CLEARED (ctor 64/64 aligned)
-    "PROFILE_CAM_ASPECT_OFFSET": "CS::CSMenuProfModelRend",  # 0xa24 CLEARED (same ctor)
-    "PROFILE_RENDERER_MARKED_DELETE_OFFSET": "CS::CSMenuProfModelRend",  # 0x756 STILL-UNKNOWN
-    "PROFILE_RENDERER_MODEL_INS_OFFSET": "CS::CSMenuProfModelRend",  # 0x778 STILL-UNKNOWN
-    "PROFILE_ANIM_HANDLE_OFFSET": "CS::CSMenuProfModelRend",  # 0x96c STILL-UNKNOWN
+    "PROFILE_RENDERER_FACEDATA_OBJ_OFFSET": "CS::CSMenuProfModelRend",  # 0x788 cleared
+    "PROFILE_CAM_PERSCAM_OFFSET": "CS::CSMenuProfModelRend",  # 0x9d0 cleared (ctor 64/64 aligned)
+    "PROFILE_CAM_ASPECT_OFFSET": "CS::CSMenuProfModelRend",  # 0xa24 cleared (same ctor)
+    "PROFILE_RENDERER_MARKED_DELETE_OFFSET": "CS::CSMenuProfModelRend",  # 0x756 still-unknown
+    "PROFILE_RENDERER_MODEL_INS_OFFSET": "CS::CSMenuProfModelRend",  # 0x778 still-unknown
+    "PROFILE_ANIM_HANDLE_OFFSET": "CS::CSMenuProfModelRend",  # 0x96c still-unknown
     "TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET": "CS::CSMenuProfModelRend",  # 0x9a8
     # FD4::FD4PadDevice / FD4::FD4PadManager (2026-08-31). The census left VK_ARRAY_88_OFFSET as
-    # the ONLY offset that was both WRITTEN THROUGH and unsettled, attributed to CS::CSInGamePad --
+    # the only offset that was both written through and unsettled, attributed to CS::CSInGamePad --
     # a class that yields 2 usable paired bodies out of 40, which is why it would not settle. It is
     # the wrong class. The array's only writer (1.16.2 0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`,
     # bound `cmp eax,0x50` on id-1000) is called from exactly four sites (0x140240e70, 0x140241130,
-    # 0x140e321b0, 0x140e32470) and EVERY one of them computes `rcx` as `*(manager + 0x18 + dev*8)`
+    # 0x140e321b0, 0x140e32470) and every one of them computes `rcx` as `*(manager + 0x18 + dev*8)`
     # = `FD4PadManager::padDevices[dev]`. `FD4PadManager::Init` fills that array with
     # `HeapAlloc(0x3c0)` + `FD4PadDevice::FD4PadDevice` + `FD4PadDevice::vftable`. The CSInGamePad
-    # is one indirection away: it HOLDS the device at its own +0x10 (Ghidra's type name
+    # is one indirection away: it holds the device at its own +0x10 (Ghidra's type name
     # `CSInGamePad0x10` records exactly that).
     #
-    # Both 1.17 values re-measured, HELD, and frozen in
+    # Both 1.17 values re-measured, held, and frozen in
     # scripts/check-object-field-offsets-1170.py.
-    "VK_ARRAY_88_OFFSET": "FD4::FD4PadDevice",  # 0x88 CLEARED (writer 7/7 aligned; ctor 168/168)
-    "PAD_MGR_DEVICES_18_OFFSET": "FD4::FD4PadManager",  # 0x18 CLEARED (builder A 195/195 aligned)
-    "PAD_DEVICES_COUNT_40_OFFSET": "FD4::FD4PadManager",  # 0x40 CLEARED (same alignment)
-    # `FD4PadDevice`'s OWN `DLFixedVector<DLUID::device*,4>` -- entries at +0x10, count at +0x38 --
+    "VK_ARRAY_88_OFFSET": "FD4::FD4PadDevice",  # 0x88 cleared (writer 7/7 aligned; ctor 168/168)
+    "PAD_MGR_DEVICES_18_OFFSET": "FD4::FD4PadManager",  # 0x18 cleared (builder A 195/195 aligned)
+    "PAD_DEVICES_COUNT_40_OFFSET": "FD4::FD4PadManager",  # 0x40 cleared (same alignment)
+    # `FD4PadDevice`'s own `DLFixedVector<DLUID::device*,4>` -- entries at +0x10, count at +0x38 --
     # filled by `FD4::FD4PadDevice::FD4PadDevice` (1.16.2 0x142663880) from the input manager's
     # device factory for types 3..6, with its own `if (4 < count + 1) DLPanic("out of memory")`.
     # Added 2026-08-31 to replace `FD4PADDEVICE_CONCRETE_OFFSET` (+0x8), which the same constructor
@@ -263,39 +263,39 @@ OWNERS: dict[str, object] = {
     "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET": "CS::PropertyNewButtonController",
     "PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET": "CS::PropertyNewButtonController",
     # CS::CSPopupMenu -> currentTopMenuJob at +0xb0. Both spellings of the same field.
-    "CSPOPUP_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 CLEARED
-    "CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 CLEARED
+    "CSPOPUP_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 cleared
+    "CS_POPUP_CURRENT_TOP_JOB_B0_OFFSET": "CS::CSPopupMenu",  # 0xb0 cleared
     # CS::MenuWindow -- the cached menu id (`field246_0x180`), 0xffff being its unmapped sentinel.
-    "MENU_WINDOW_MENU_ID_OFFSET": "CS::MenuWindow",  # 0x180 CLEARED
-    "TOP_WINDOW_MENU_ID_180_OFFSET": "CS::MenuWindow",  # 0x180 CLEARED
-    "MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET": "CS::MenuWindowJob",  # 0x130 CLEARED
-    "TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET": "CS::TitleTopDialog",  # 0xaa8 CLEARED
-    "OPTIONSETTING_COMPOSITE_OFFSET": "CS::OptionSettingTopDialog",  # 0x1768 CLEARED
-    "OPTIONSETTING_TAB_CONTROL_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 STILL-UNKNOWN
-    "OPTIONSETTING_TAB_CONTROL_1870_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 STILL-UNKNOWN
-    "IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET": "CS::InGameStep",  # 0xb8 CLEARED
-    "MSGBOX_FADE_TARGET_2300_OFFSET": "CS::SaveRetryDialog",  # 0x2300 CLEARED, like its 0x1278 pair
-    "MSGBOX_BUILDER_BUTTON_COUNT_OFFSET": "CS::MessageBoxBuilder",  # 0x10f0 CLEARED
-    "MSGBOX_BUILDER_DEFAULT_INDEX_OFFSET": "CS::MessageBoxBuilder",  # 0x28 STILL-UNKNOWN
+    "MENU_WINDOW_MENU_ID_OFFSET": "CS::MenuWindow",  # 0x180 cleared
+    "TOP_WINDOW_MENU_ID_180_OFFSET": "CS::MenuWindow",  # 0x180 cleared
+    "MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET": "CS::MenuWindowJob",  # 0x130 cleared
+    "TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET": "CS::TitleTopDialog",  # 0xaa8 cleared
+    "OPTIONSETTING_COMPOSITE_OFFSET": "CS::OptionSettingTopDialog",  # 0x1768 cleared
+    "OPTIONSETTING_TAB_CONTROL_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 still-unknown
+    "OPTIONSETTING_TAB_CONTROL_1870_OFFSET": "CS::OptionSettingTopDialog",  # 0x1870 still-unknown
+    "IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET": "CS::InGameStep",  # 0xb8 cleared
+    "MSGBOX_FADE_TARGET_2300_OFFSET": "CS::SaveRetryDialog",  # 0x2300 cleared, like its 0x1278 pair
+    "MSGBOX_BUILDER_BUTTON_COUNT_OFFSET": "CS::MessageBoxBuilder",  # 0x10f0 cleared
+    "MSGBOX_BUILDER_DEFAULT_INDEX_OFFSET": "CS::MessageBoxBuilder",  # 0x28 still-unknown
     # The world-map pin rows er-invasion-warp injects. `ROW_ID_OFFSET`'s own doc comment names
     # the class ("Row field +0x08 -- CS::WorldMapPinDataBase's per-row id"), and the surrounding
     # block states the container ("Offsets into CS::WorldMapViewModel for the pin-row list").
-    "ROW_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x8   CLEARED
-    "ROW_ENTITY_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x50  CLEARED
-    "ROW_LAYER_MASK_OFFSET": "CS::WorldMapPinDataBase",  # 0x60  CLEARED
-    "ROW_PARAM_POINTER_OFFSET": "CS::WorldMapPinDataBase",  # 0x240 STILL-UNKNOWN
-    "ROW_ICON_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x248 STILL-UNKNOWN
-    "PIN_LIST_VFTABLE_OFFSET": "CS::WorldMapViewModel",  # 0x2d8 CLEARED
-    "PIN_LIST_ALLOCATOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 STILL-UNKNOWN
-    "PIN_VECTOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 STILL-UNKNOWN
-    "PIN_LIST_BEGIN_OFFSET": "CS::WorldMapViewModel",  # 0x2e8 STILL-UNKNOWN
-    "PIN_LIST_END_OFFSET": "CS::WorldMapViewModel",  # 0x2f0 STILL-UNKNOWN
-    "PIN_LIST_CAPACITY_OFFSET": "CS::WorldMapViewModel",  # 0x2f8 STILL-UNKNOWN
-    "AREA_CONVERTERS_OFFSET": "CS::WorldMapViewModel",  # 0xf8  CLEARED
-    "AREA_CONVERTER_COUNT_OFFSET": "CS::WorldMapViewModel",  # 0x280 STILL-UNKNOWN
-    "MOVEMAPLISTSTEP_GATE_B8_OFFSET": "CS::CSMoveMapListStep",  # 0xb8  CLEARED
-    "MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET": "CS::CSMoveMapListStep",  # 0x2c0 STILL-UNKNOWN
-    # --- NOT game structures: ABI structs fixed outside FromSoft's object layout --------------
+    "ROW_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x8   cleared
+    "ROW_ENTITY_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x50  cleared
+    "ROW_LAYER_MASK_OFFSET": "CS::WorldMapPinDataBase",  # 0x60  cleared
+    "ROW_PARAM_POINTER_OFFSET": "CS::WorldMapPinDataBase",  # 0x240 still-unknown
+    "ROW_ICON_ID_OFFSET": "CS::WorldMapPinDataBase",  # 0x248 still-unknown
+    "PIN_LIST_VFTABLE_OFFSET": "CS::WorldMapViewModel",  # 0x2d8 cleared
+    "PIN_LIST_ALLOCATOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 still-unknown
+    "PIN_VECTOR_OFFSET": "CS::WorldMapViewModel",  # 0x2e0 still-unknown
+    "PIN_LIST_BEGIN_OFFSET": "CS::WorldMapViewModel",  # 0x2e8 still-unknown
+    "PIN_LIST_END_OFFSET": "CS::WorldMapViewModel",  # 0x2f0 still-unknown
+    "PIN_LIST_CAPACITY_OFFSET": "CS::WorldMapViewModel",  # 0x2f8 still-unknown
+    "AREA_CONVERTERS_OFFSET": "CS::WorldMapViewModel",  # 0xf8  cleared
+    "AREA_CONVERTER_COUNT_OFFSET": "CS::WorldMapViewModel",  # 0x280 still-unknown
+    "MOVEMAPLISTSTEP_GATE_B8_OFFSET": "CS::CSMoveMapListStep",  # 0xb8  cleared
+    "MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET": "CS::CSMoveMapListStep",  # 0x2c0 still-unknown
+    # --- Not game structures: ABI structs fixed outside FromSoft's object layout --------------
     "U16STRING_ALLOC_OFFSET": None,
     "U16STRING_DATA_OFFSET": None,
     "U16STRING_SIZE_OFFSET": None,
@@ -338,22 +338,22 @@ NON_GAME_STRUCT_REASONS = {
     "COFF_OPTIONAL_HEADER_SIZE_FIELD": "PE/COFF header, fixed by the PE/COFF spec",
 }
 
-# An MSVC polymorphic object begins with its 8-byte vfptr, and ROUTE B only accepts a witness
+# An MSVC polymorphic object begins with its 8-byte vfptr, and route B only accepts a witness
 # that stores the class's vtable at `[this + 0]` -- which places that class's own sub-object at
-# offset 0. So for a SHARED BASE, evidence from a route other than its own virtual methods is
+# offset 0. So for a shared base, evidence from a route other than its own virtual methods is
 # still sound below this bound (the first two machine words are the base's, whatever the dynamic
 # type is), and unsound above it, where the field could belong to any of the derived classes.
 BASE_SUBOBJECT_LIMIT = 0x10
 
-# Constants whose owning object has no vtable of its own, adjudicated instead against ONE named
+# Constants whose owning object has no vtable of its own, adjudicated instead against one named
 # consumer function: `constant -> (witness label prefix, base register)`. The witness evidence is
 # re-measured by `scripts/clear-fields-by-object.py --witness ... --witness-out`, never quoted
 # from notes. The object identity here rests on the repo's own RE (recorded in the doc comment
 # beside the constant) rather than on RTTI, which is weaker -- so these are reported as
-# CLEARED-BY-NAMED-WITNESS, not as CLEARED, and the witness is printed with them.
+# cleared-by-named-witness, not as cleared, and the witness is printed with them.
 NAMED_WITNESS: dict[str, tuple[str, str]] = {
     # Ghidra 1.16.2 decompiles FUN_14073bc10 as `(longlong param_1, uint param_2)` reading
-    # param_1+0xd0/0xd8/0xdc and WRITING `*(uint *)(param_1 + 0xd4) = index` -- one object, and
+    # param_1+0xd0/0xd8/0xdc and writing `*(uint *)(param_1 + 0xd4) = index` -- one object, and
     # `CS::GridControl`'s own virtual methods hold that same 0xd0/0xd8/0xdc triple, which is what
     # ties the anonymous `param_1` to the named class.
     "MENU_ITEM_LIST_CURSOR_FIELD_OFFSET": ("0x14073bc10", "rbx"),
@@ -367,7 +367,7 @@ NAMED_WITNESS: dict[str, tuple[str, str]] = {
     "SOFTWARE_KEYBOARD_VALIDATOR_FLAGS_68_OFFSET": ("0x140e70920", "rbx"),
     "SOFTWARE_KEYBOARD_VALIDATOR_MAX_6C_OFFSET": ("0x140e70920", "rbx"),
     "SOFTWARE_KEYBOARD_VALIDATOR_MAX_60_OFFSET": ("0x140e70920", "rbx"),
-    # The orbit-camera setup walks the whole camera block on ONE base register, so all seven cam
+    # The orbit-camera setup walks the whole camera block on one base register, so all seven cam
     # fields are witnessed together in a single object -- and the view-matrix builder independently
     # walks the target Vec3 (0x9b4/0x9b8/0x9bc), which is what identifies the block.
     "PROFILE_CAM_TARGET_OFFSET": ("0x140bbe0a0", "rbx"),
@@ -443,10 +443,10 @@ def main() -> int:
         return [owner], "curated from the constant's own doc comment"
 
     def bracket(cls: str, offset: int):
-        """A held field BELOW and a held field ABOVE, on ONE base register in ONE function pair.
+        """A held field below and a held field above, on one base register in one function pair.
 
         That is the only shape in which a bracket means anything: it says no bytes were inserted
-        between those two fields OF THIS OBJECT, so a field lying between them did not move. Held
+        between those two fields of this object, so a field lying between them did not move. Held
         sets pooled across functions or across registers do not support the argument, and pooling
         them is what made the anonymous version of this worthless.
         """
@@ -471,7 +471,7 @@ def main() -> int:
         derived = bases.get(cls, 0)
         key = f"{offset:#x}"
         if derived and offset >= BASE_SUBOBJECT_LIMIT:
-            # Shared base above its own first two words: only its OWN virtual methods can speak,
+            # Shared base above its own first two words: only its own virtual methods can speak,
             # because a constructor witness may be a derived class's, with a derived `this`.
             moved, held = ev["vslot_moved"].get(key), ev["vslot_held"].get(key)
             route = f"{cls}'s own virtual methods (it is a base of {derived} classes)"
@@ -592,7 +592,7 @@ def selftest(out_dir: Path) -> int:
     if not bases:
         print("SKIP: rtti-bases.tsv absent")
         return 0
-    # POSITIVE CONTROLS on the leaf/base gate, which is what makes a clearance sound.
+    # Positive controls on the leaf/base gate, which is what makes a clearance sound.
     for cls, want_leaf in (("CS::MoveMapStep", True), ("CS::GridControl", True),
                            ("Scaleform::MemoryFile", True),
                            ("DLUT::DLReferenceCountObject", False),

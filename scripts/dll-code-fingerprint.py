@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fingerprint the CODE of a built PE, ignoring build-identity noise.
+"""Fingerprint the code of a built PE, ignoring build-identity noise.
 
 Answers one question mechanically: **did this change alter the shipped DLL, or not?**
 
@@ -9,7 +9,7 @@ without a runtime proof run. Anything that moves a byte of `.text` is a differen
 change and needs one. Guessing which side a commit falls on is exactly the mistake this repo's
 rules exist to prevent, so measure it.
 
-Whole-file `sha256` does NOT work: two builds of *identical, untouched* source differ, because
+Whole-file `sha256` does not work: two builds of *identical, untouched* source differ, because
 the PE carries build identity. Measured on this repo's release DLL -- of 679,936 bytes of
 `.rdata`, exactly 10 differ across a no-op rebuild, all inside a 36-byte span holding the
 `RSDS` CodeView PDB signature (a fresh GUID per link) and a build timestamp. Every other
@@ -123,7 +123,7 @@ def selftest() -> int:
     blob = bytearray(sample.read_bytes())
     base = fingerprint(sample)
 
-    # Flipping a masked byte (the COFF timestamp) must NOT move the fingerprint.
+    # Flipping a masked byte (the COFF timestamp) must not move the fingerprint.
     pe = struct.unpack_from("<I", bytes(blob), 0x3C)[0]
     poked = bytearray(blob)
     poked[pe + 8] ^= 0xFF
@@ -132,7 +132,7 @@ def selftest() -> int:
     try:
         if fingerprint(tmp)["ALL"] != base["ALL"]:
             failures.append("masked timestamp byte changed the fingerprint")
-        # Flipping a .text byte MUST move it.
+        # Flipping a .text byte must move it.
         poked2 = bytearray(blob)
         text = next(s for s in _sections(bytes(blob)) if s[0] == ".text")
         poked2[text[2]] ^= 0xFF

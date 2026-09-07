@@ -10,15 +10,15 @@
 //! Build:  rustc -O scripts/gfx_build_proof.rs -o <out_binary>
 //! Run:    <out_binary> <path-to-original-magenta.gfx> <path-to-write-built.gfx>
 //!
-//! Byte-identity with FFDEC's output is NOT the goal (FFDEC force-encodes some tag
-//! headers in long form, an encoder quirk). The goal is a VALID, functionally
+//! Byte-identity with FFDEC's output is not the goal (FFDEC force-encodes some tag
+//! headers in long form, an encoder quirk). The goal is a valid, functionally
 //! equivalent GFX with the same tag tree the game's Scaleform parser would read.
 
 use std::env;
 use std::fs;
 
 // ----------------------------------------------------------------------------
-// Bit-level writer for RECT and SHAPE records (MSB-first, like SWF/GFX).
+// Bit-level writer for RECT and shape records (MSB-first, like SWF/GFX).
 // ----------------------------------------------------------------------------
 struct BitWriter {
     bytes: Vec<u8>,
@@ -94,7 +94,7 @@ struct Rgb {
     b: u8,
 }
 
-/// SWF 8.8 fixed-point frame rate, serialized LE as [fraction, integer].
+/// SWF 8.8 fixed-point frame rate, serialized le as [fraction, integer].
 #[derive(Clone, Copy)]
 struct Fixed8 {
     integer: u8,
@@ -322,7 +322,7 @@ impl Tag {
             }
             Tag::DefineShape { id, bounds, fills, lines, records } => {
                 b.extend_from_slice(&id.to_le_bytes());
-                // SHAPE bounds RECT (byte aligned).
+                // Shape bounds RECT (byte aligned).
                 let mut bw = BitWriter::new();
                 bounds.write(&mut bw);
                 b.extend_from_slice(&bw.into_bytes());
@@ -359,7 +359,7 @@ impl Tag {
     }
 
     /// Serialize header + body. Header is `(code<<6)|len`; if len>=0x3f, emit
-    /// the 0x3f escape followed by the real length as u32 LE.
+    /// the 0x3f escape followed by the real length as u32 le.
     fn write(&self, out: &mut Vec<u8>) {
         let body = self.body();
         write_tag_header(out, self.code(), body.len());
@@ -367,7 +367,7 @@ impl Tag {
     }
 }
 
-/// SWF style-array count: a single byte unless >=0xFF, then 0xFF + u16 LE extended count.
+/// SWF style-array count: a single byte unless >=0xFF, then 0xFF + u16 le extended count.
 fn write_style_count(out: &mut Vec<u8>, n: usize) {
     if n >= 0xFF {
         out.push(0xFF);
@@ -423,7 +423,7 @@ impl GfxFile {
             t.write(&mut body);
         }
 
-        // Header: 'G' 'F' 'X' version FileLength(u32 LE). FileLength = whole file.
+        // Header: 'G' 'F' 'X' version FileLength(u32 le). FileLength = whole file.
         let mut out = Vec::new();
         out.extend_from_slice(b"GFX");
         out.push(self.version);

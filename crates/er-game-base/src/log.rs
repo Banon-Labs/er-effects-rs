@@ -6,17 +6,17 @@
 //! `append_continue_trace`) over these primitives so log paths / prefixes stay
 //! owned by each caller.
 //!
-//! # A log describes exactly ONE process run
+//! # A log describes exactly one process run
 //!
 //! Standing rule (2026-08-04): no product DLL, shell or harness in this repo may
-//! append to a log ACROSS runs. Every log file is truncated by the first write of
+//! append to a log across runs. Every log file is truncated by the first write of
 //! the process that owns it; keeping an older run means copying the file aside
 //! yourself, not letting it accumulate.
 //!
 //! The concrete failure that set the rule: `er-invasion-warp` opened its log
 //! with a plain `append(true)` on a fixed name next to the game executable. Twelve
 //! separate launches piled into one 565 KB file, so a count taken over it ("37
-//! confirms") read as ONE run doing something 37 times when it was really twelve
+//! confirms") read as one run doing something 37 times when it was really twelve
 //! runs -- and per-run state could only be recovered by hand-splitting on the
 //! module-base banner. Worse, lines from builds that no longer exist sat
 //! indistinguishably next to lines from the build under test.
@@ -32,13 +32,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Suffix the PREVIOUS run's file is renamed to when this process freshens a log.
+/// Suffix the previous run's file is renamed to when this process freshens a log.
 ///
-/// Exactly ONE generation is kept, and it is deliberately NOT `.prev.log`: a reader
+/// Exactly one generation is kept, and it is deliberately not `.prev.log`: a reader
 /// or harness globbing `*.log` must not pick the stale generation up as if it were
 /// live. This is not a rotation system -- run N-2 is gone.
 ///
-/// The invariant is that `<name>.prev` holds the run IMMEDIATELY before the live file,
+/// The invariant is that `<name>.prev` holds the run immediately before the live file,
 /// or does not exist. Several harnesses delete the log before launching (`rm -f
 /// "$GAME_DIR"/er-quickload-*.log`), which leaves nothing to rotate; the older `.prev` is
 /// dropped in that case rather than left sitting next to a fresh log looking one run
@@ -50,7 +50,7 @@ pub const PREVIOUS_RUN_SUFFIX: &str = ".prev";
 static FRESHENED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 std::thread_local! {
-    /// True while THIS thread is inside [`begin_fresh_run`].
+    /// True while this thread is inside [`begin_fresh_run`].
     static FRESHENING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -66,10 +66,10 @@ pub fn game_directory_path() -> Option<PathBuf> {
 ///
 /// # Why a redirect knob is not optional for an artifact
 ///
-/// A game-directory artifact is SINGLE-SLOT. [`begin_fresh_run`] keeps exactly one previous
+/// A game-directory artifact is single-slot. [`begin_fresh_run`] keeps exactly one previous
 /// generation, so two launches lose the run before last, and a harness that clears the live file
 /// pre-launch takes the `.prev` with it. Several sessions launch concurrently in this repo, which
-/// makes that the normal case rather than a race. The fix is to redirect the WRITER at launch into
+/// makes that the normal case rather than a race. The fix is to redirect the writer at launch into
 /// a directory unique to the run: two runs then never share a path, and a run that is killed
 /// mid-write still leaves everything it wrote where it wrote it — unlike a copy at teardown, which
 /// a crashed run never reaches and which by then could only preserve the copier's own output.
@@ -77,12 +77,12 @@ pub fn game_directory_path() -> Option<PathBuf> {
 /// # Why the game-directory fallback stays
 ///
 /// The env has to survive `launch.sh` -> me3 -> Proton, and if it does not the DLL must still write
-/// SOMEWHERE rather than silently write nowhere: a missing artifact reads as "the feature did not
+/// somewhere rather than silently write nowhere: a missing artifact reads as "the feature did not
 /// fire", which is the exact false negative this whole path exists to prevent. An empty value is
 /// treated as unset for the same reason — `PathBuf::from("")` opens nothing, so honouring it
 /// literally would turn a mis-quoted shell variable into a run that logs into the void.
 ///
-/// The fallback is resolved against the GAME directory, never the CWD: me3 launch wrappers set the
+/// The fallback is resolved against the game directory, never the CWD: me3 launch wrappers set the
 /// process CWD to arbitrary Windows directories, so a bare relative name scatters a run's evidence
 /// away from the rest of its artifacts.
 pub fn redirected_artifact_path(env_var: &str, default_name: &str) -> PathBuf {
@@ -99,7 +99,7 @@ pub fn redirected_artifact_path(env_var: &str, default_name: &str) -> PathBuf {
 /// One-shot per (process, path): rotate the previous run's file aside and truncate,
 /// so the file that follows describes this process run and nothing else.
 ///
-/// Idempotent. The FIRST call for a path does the work; every later call in the same
+/// Idempotent. The first call for a path does the work; every later call in the same
 /// process is a short lookup, which is what makes "truncate once, append thereafter"
 /// different from "truncate on every write" (the latter would lose the run's own
 /// earlier lines).
@@ -158,7 +158,7 @@ pub fn begin_fresh_run(path: &Path) {
         .truncate(true)
         .open(path)
     {
-        // THE FIRST LINE OF EVERY LOG SAYS WHICH BINARY WROTE IT.
+        // The first line of every log says which binary wrote it.
         //
         // Placed here, in the one-shot every sanctioned opener already routes through, because
         // the alternative -- asking each DLL to log its own identity at boot -- is a rule that
@@ -175,7 +175,7 @@ pub fn begin_fresh_run(path: &Path) {
     }
 }
 
-/// THE sanctioned way to open a log for append in this repo.
+/// The sanctioned way to open a log for append in this repo.
 ///
 /// Freshens the file on this process's first call for `path`, then hands back an
 /// appending handle. Callers may keep the handle for the life of the process (hot
@@ -229,7 +229,7 @@ pub fn open_truncated_with_header(
 mod tests {
     use super::*;
 
-    /// A second write in the SAME process must not lose the first: truncation is
+    /// A second write in the same process must not lose the first: truncation is
     /// one-shot, not per-write. This is the bug the rule's shape is chosen to avoid.
     #[test]
     fn first_write_truncates_and_later_writes_append() {
@@ -247,7 +247,7 @@ mod tests {
 
         let body = fs::read_to_string(&path).expect("log written");
         // The identity line is written by the truncating open, so the run's own first line is
-        // the SECOND line of the file. Asserted as a suffix rather than by index so a future
+        // the second line of the file. Asserted as a suffix rather than by index so a future
         // header change cannot quietly turn this into a test of nothing.
         assert!(
             body.starts_with("build git="),
@@ -297,7 +297,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// The launcher's redirect must WIN, or the artifact lands back in the single-slot game
+    /// The launcher's redirect must win, or the artifact lands back in the single-slot game
     /// directory and the next launch destroys it. This is the whole point of the knob.
     #[test]
     fn a_launcher_redirect_wins_over_the_game_directory_default() {

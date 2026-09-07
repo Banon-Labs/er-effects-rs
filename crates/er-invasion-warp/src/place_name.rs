@@ -12,7 +12,7 @@
 //!
 //! `CS::MsgRepository::GetAndFormat` (`0x1407633d0`) resolves a `PlaceName` in two steps: it reads
 //! the `MsgRepositoryImp` singleton out of [`MSG_REPOSITORY_GLOBAL_RVA`], calls a getter with
-//! `(repo, id)` to obtain a raw `wchar_t*`, and only THEN wraps that pointer in a `MenuString`.
+//! `(repo, id)` to obtain a raw `wchar_t*`, and only then wraps that pointer in a `MenuString`.
 //! The wrapper `0x1407611c0` is what binds the getter to `PlaceName`:
 //!
 //! ```text
@@ -121,13 +121,13 @@ pub fn place_name_for_text_id(_text_id: i32) -> Option<String> {
     None
 }
 
-/// The area name for a BLOCK, using the names the world map recorded as it built the pins.
+/// The area name for a block, using the names the world map recorded as it built the pins.
 ///
 /// Returns `None` until the map has been opened at least once this session -- the same condition
 /// that makes `mode = "area"` fail closed, and for the same reason: nothing has a name before then.
 ///
 /// A block can carry several names (that is the "five names, five places to look" rule). The lowest
-/// id is taken so repeated rejections at one block always print the SAME name; picking arbitrarily
+/// id is taken so repeated rejections at one block always print the same name; picking arbitrarily
 /// from a set would make the banner appear to flicker between names for one place.
 #[must_use]
 pub fn place_name_for_block(block: u32) -> Option<String> {

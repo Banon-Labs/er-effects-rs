@@ -1,12 +1,12 @@
 //! Tier A: fault-safe readers for `FD4FileCap`, `DLString<wchar_t>` and the DLIO virtual-root
 //! table.
 //!
-//! These moved down here from `er-title-flow` on 2026-08-25 because a SECOND image now needs
+//! These moved down here from `er-title-flow` on 2026-08-25 because a second image now needs
 //! them: `er-diag-harness` carries the msb-parse / DLC-root / loadlist-wait traces that used to
 //! be compiled into the product DLL, and every one of those traces names a file cap or a virtual
 //! root in its log line. Copying the walkers into the harness would have put two literal
 //! declarations on one address, which `scripts/check-rva-alias-drift.py` refuses -- and rightly:
-//! divergent copies of a struct walk are divergent CLAIMS about the layout.
+//! divergent copies of a struct walk are divergent claims about the layout.
 //!
 //! They belong at this tier by construction. Every function below is a bounded `safe_read_*`
 //! walk: no writes, no native calls, no vtable dispatch, no locks, and no allocation beyond the
@@ -27,27 +27,27 @@ pub const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
 /// `MsbFileCap::msbResCap` -- the PARSED MSB resource, not the raw file buffer. `FD4FileCap` is
 /// exactly 0x90 bytes, so this is the first field of the `MsbFileCap` subclass.
 ///
-/// IT HAS EXACTLY ONE ASSIGNMENT SITE (1.16.2 static RE, bd
+/// It has exactly one assignment site (1.16.2 static RE, bd
 /// `msbrescap-single-assignment-site-and-null-content-shortcircuit-2026-07-30`): the load-complete
 /// callback `FUN_14021bbf0`, which does
 /// `content = AcquireContent(cap); if (content != 0 && header_ok) { msbResCap = MsbRepository::
 /// GetOrCreate(name, content, size); } ReleaseContent(cap);`
-/// -- and returns NORMALLY when `content` is null. `loadState` is already `4` by then, nothing
-/// errors and nothing retries, so `(loadState=4, msbResCap=0)` is a reachable SILENT TERMINAL state.
+/// -- and returns normally when `content` is null. `loadState` is already `4` by then, nothing
+/// errors and nothing retries, so `(loadState=4, msbResCap=0)` is a reachable silent terminal state.
 /// That is precisely the profile-switch reload freeze: WorldBlockRes case 2 advances to phase 3 only
 /// on `cap+0x90 != 0`, and its only other escape is also closed, so the block spins at phase 2 with
 /// no timeout.
 ///
-/// `0` and `0xDEADBEEF` mean DIFFERENT things and the distinction is the key discriminator:
+/// `0` and `0xDEADBEEF` mean different things and the distinction is the key discriminator:
 /// `MsbFileCap::MsbFileCap` (0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
-/// releases through the repository and then stores `0xDEADBEEF`. So `0` == NEVER PARSED, never
+/// releases through the repository and then stores `0xDEADBEEF`. So `0` == never PARSED, never
 /// "freed after use".
 pub const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
 
 /// `FD4ResCapHolderItem::resourceString` is an `FD4BasicHashString` at `cap+0x08`, whose
-/// `DLString<wchar_t>` starts at `cap+0x10`: union (inline `wchar[8]` OR pointer) at `+0x08`,
-/// `length` at `+0x18`, `capacity` at `+0x20`. `capacity > 7` means the union holds a POINTER.
-/// Reading it names WHICH msb the stalled cap is, which separates "wrong file requested" from
+/// `DLString<wchar_t>` starts at `cap+0x10`: union (inline `wchar[8]` or pointer) at `+0x08`,
+/// `length` at `+0x18`, `capacity` at `+0x20`. `capacity > 7` means the union holds a pointer.
+/// Reading it names which msb the stalled cap is, which separates "wrong file requested" from
 /// "right file, empty read".
 pub const FD4_FILECAP_NAME_UNION_18_OFFSET: usize = 0x18;
 
@@ -67,7 +67,7 @@ pub const FD4_FILECAP_NAME_MAX_CHARS: usize = 96;
 pub const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
 
 /// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
-/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global IS the manager pointer.
+/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global is the manager pointer.
 ///
 /// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
 /// which called the same address "the mounted-archive registry". It is not: a genuinely null
@@ -79,16 +79,16 @@ pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize =
 /// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
 /// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
 ///
-/// THIS IS THE PHASE-2 FREEZE SUSPECT. The stalled caps are named
-/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in THIS vector, not a data
+/// This is the phase-2 freeze suspect. The stalled caps are named
+/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in this vector, not a data
 /// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
-/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an EMPTY root `L""`, and
+/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an empty root `L""`, and
 /// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
 /// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
 /// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
 /// `STEP_LoadListWait` gate (`loadList == NULL || *loadList in {2,3}`) does not pass on the warm
 /// reload, the alias stays empty, the msb read resolves against nothing and returns 0 bytes, and
-/// `msbResCap` never gets written. Reading the alias AT the stall settles that without any hook.
+/// `msbResCap` never gets written. Reading the alias at the stall settles that without any hook.
 pub const DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET: usize = 0x48;
 
 pub const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET: usize = 0x08;
@@ -101,7 +101,7 @@ pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE: usize = 0x60;
 
 pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET: usize = 0x30;
 
-/// `DLString<wchar_t>` field offsets RELATIVE TO THE STRING ITSELF (`allocator +0x00`,
+/// `DLString<wchar_t>` field offsets relative to the string itself (`allocator +0x00`,
 /// union `+0x08`, `length +0x18`, `capacity +0x20`). The `FD4_FILECAP_NAME_*` constants above are
 /// the same layout pre-added to the cap's `+0x10` string base, which is why their numbers differ.
 pub const DLSTRING_UNION_08_OFFSET: usize = 0x08;
@@ -167,7 +167,7 @@ pub unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, u
 /// Read an `FD4ResCapHolderItem`'s resource name (the msb filename) off a file cap, as ASCII.
 ///
 /// `resourceString` is an `FD4BasicHashString` whose `DLString<wchar_t>` is small-string-optimized:
-/// `capacity > 7` means the union at `+0x18` holds a heap POINTER, otherwise the characters sit
+/// `capacity > 7` means the union at `+0x18` holds a heap pointer, otherwise the characters sit
 /// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
 /// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
 /// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
@@ -252,9 +252,9 @@ unsafe fn clamped_wide_ascii(chars_addr: usize, length: usize) -> String {
 /// Report the DLIO virtual-root aliases that back the stalled `mapstudio_dlc2:/m28_*.msb` reads.
 ///
 /// The phase-2 freeze's file caps resolve through `mapstudio_dlc2:`, which is an alias in
-/// `DLFileDeviceManager::virtualRoots`, NOT a data archive. That alias is registered EMPTY (`L""`)
+/// `DLFileDeviceManager::virtualRoots`, not a data archive. That alias is registered empty (`L""`)
 /// by the title start-game flow and only filled in by `CSDlcImp::AddVirtualFileRoots` behind the
-/// `STEP_LoadListWait` gate. So an alias present with an EMPTY path at the stall means the read had
+/// `STEP_LoadListWait` gate. So an alias present with an empty path at the stall means the read had
 /// nowhere to resolve to -- which is exactly a 0-byte read and a null `msbResCap`. Emitting
 /// `mapstudio` alongside it is the control: base-game populated + dlc2 empty is decisive on its own.
 ///
@@ -301,7 +301,7 @@ pub unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
         seen += 1;
         let path =
             unsafe { dlstring_wide_ascii(entry + FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET) };
-        // An EMPTY path on a present alias is the whole point of this probe -- label it loudly so a
+        // An empty path on a present alias is the whole point of this probe -- label it loudly so a
         // log scan cannot mistake it for a formatting artifact.
         let verdict = if path.is_empty() { "EMPTY" } else { "ok" };
         let _ = core::fmt::Write::write_fmt(&mut out, format_args!("{name}='{path}'({verdict}),"));

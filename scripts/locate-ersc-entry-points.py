@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Locate `er-invasion-warp`'s pinned Seamless Co-op entry points in an installed `ersc.dll`.
 
-Every ERSC address this repo holds is `module base + RVA`, measured against ONE Seamless build --
+Every ERSC address this repo holds is `module base + RVA`, measured against one Seamless build --
 the one `ERSC_SUPPORTED_VERSION` records. `ersc.dll` is third-party and the user updates it on
 their own schedule, so when a new build ships every pinned RVA moves at once and this tool is how
 they are found again.
 
     uv run --with capstone python3 scripts/locate-ersc-entry-points.py --reference <old ersc.dll>
 
-A match here is a CANDIDATE, never an identification. Two lessons from the last such move, both
+A match here is a candidate, never an identification. Two lessons from the last such move, both
 paid for the hard way:
 
-  * A masked BODY search can miss a function that did not move, because one inverted branch
+  * A masked body search can miss a function that did not move, because one inverted branch
     changes an OPCODE byte the mask keeps.
-  * A unique PROLOGUE hit is a code SHAPE, not a function -- big-frame MSVC functions in one
+  * A unique prologue hit is a code shape, not a function -- big-frame MSVC functions in one
     source file look alike from the top, and the last migration's prologue search landed
-    confidently on the WRONG function.
+    confidently on the wrong function.
 
 Resolve candidates by reading, by `.pdata` index and by function size -- never by picking the
 first hit. And note that an address and the field offsets it operates on travel TOGETHER: a
@@ -23,7 +23,7 @@ correct new address used with the previous build's offsets reads and writes the 
 live multiplayer session, which is the failure this whole module exists to avoid. Re-pinning is a
 reverse-engineering job, not a find-and-replace.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/locate-ersc-entry-points.py
     uv run --with capstone python3 scripts/locate-ersc-entry-points.py --reference <old ersc.dll>
     python3 scripts/locate-ersc-entry-points.py --selftest
@@ -97,7 +97,7 @@ class Pe:
     def code_ranges(self):
         """`(file_offset, length, rva_of_that_offset)` per section holding real compiler-emitted code.
 
-        Executable AND NOT writable. `ersc.dll` keeps most of itself in an Oreans WinLicense VM
+        Executable and not writable. `ersc.dll` keeps most of itself in an Oreans WinLicense VM
         section (named `ERSC`, `.themida` in older builds) that is 11 MB of ciphertext and
         is marked writable; scanning it manufactures coincidental hits. Selecting by section
         characteristics rather than by the name `.text` keeps the rule true if the next build
@@ -150,7 +150,7 @@ def parse_version_markers(source):
 def parse_pins(source):
     """`[(name, image, va, pin_bytes)]` for every Seamless spec in er-invasion-warp's build.rs.
 
-    `image` is the `Image::Ersc*` variant, i.e. WHICH Seamless build the spec describes. There is
+    `image` is the `Image::Ersc*` variant, i.e. Which Seamless build the spec describes. There is
     one pin set per build because this repo has to keep working across a Seamless update, so a pin
     that does not hold is only news once you know which build it was measured against.
     """
@@ -291,7 +291,7 @@ def ersc_candidates(explicit_installed, explicit_reference):
         game = os.path.join(root, "steamapps/common/ELDEN RING/Game")
         candidates.append(os.path.join(game, "SeamlessCoop", "ersc.dll"))
         candidates.append(os.path.join(game, "_SeamlessCoop", "ersc.dll"))
-    # The gitignored reference archive, added 2026-09-02. It is listed LAST on purpose: the
+    # The gitignored reference archive, added 2026-09-02. It is listed last on purpose: the
     # install directories still answer first, so nothing about which file is "installed"
     # changes. What it buys is the build the launcher has already overwritten -- the whole
     # point of the archive is that `_SeamlessCoop/` is a courtesy the next update may not
@@ -331,7 +331,7 @@ def match_marker(pe, marker):
 def report(installed_path, installed, builds, pins, markers):
     """Say, per Seamless build this repo pins, whether its pins still hold and where they went.
 
-    `builds` maps an `Image::Ersc*` variant to `(path, Pe)` for the copy of THAT build found on
+    `builds` maps an `Image::Ersc*` variant to `(path, Pe)` for the copy of that build found on
     this machine, or to `None`. On a machine that has updated Seamless at least once, both are
     usually present -- the launcher leaves the previous build behind -- so both pin sets can be
     verified in one run.
@@ -432,7 +432,7 @@ def format_hits(hits):
 
 def synth_pe(payload, decoy):
     """A minimal PE32+ with one `.text` (exec, not writable) and one packer-style `VM` section
-    (exec AND writable). `payload` goes in both, so a locator that does not exclude writable
+    (exec and writable). `payload` goes in both, so a locator that does not exclude writable
     executable sections reports two hits where it must report one."""
     text_raw, vm_raw = 0x400, 0x600
     text_rva, vm_rva = 0x1000, 0x2000
@@ -494,10 +494,10 @@ def selftest():
         pins = parse_pins(handle.read())
     with open(PROLOGUE_BUILD_RS, encoding="utf-8") as handle:
         markers = parse_version_markers(handle.read())
-    # `< 4` rather than `!= N`: a broken regex parses too FEW, and a regex that over-matches into
+    # `< 4` rather than `!= N`: a broken regex parses too few, and a regex that over-matches into
     # the game-image specs is caught by the address-range check below instead. Pinning the exact
     # count would just break the day someone legitimately adds a fifth ERSC entry point -- or a
-    # THIRD Seamless build, which is the whole shape this tool now has to survive.
+    # third Seamless build, which is the whole shape this tool now has to survive.
     if len(pins) < 4:
         failures.append(f"parsed {len(pins)} ERSC pins out of {BUILD_RS}, expected at least 4")
     images = {image for _, image, _, _ in pins}
@@ -571,7 +571,7 @@ def main():
         print(f"{installed_path}: not a readable PE image", file=sys.stderr)
         return 2
 
-    # Match each pinned build to a copy of ITSELF by the version string inside the file, never by
+    # Match each pinned build to a copy of itself by the version string inside the file, never by
     # which directory it sits in -- the launcher shuffles those and the user may downgrade.
     candidates = [(path, load_pe(path)) for path in ersc_candidates(args.installed, args.reference)]
     candidates = [(path, pe) for path, pe in candidates if pe is not None]

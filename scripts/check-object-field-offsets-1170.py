@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""Make ELDEN RING 1.16.2 -> 1.17 STRUCT-FIELD drift loud instead of silent.
+"""Make ELDEN RING 1.16.2 -> 1.17 STRUCT-field drift loud instead of silent.
 
-THE FAILURE CLASS THIS EXISTS FOR
+The failure class this exists for
 ---------------------------------
 The 1.17 migration has three ways to be wrong about an address and only two of them speak:
 
-  * a stale DETOUR target      -> `er-hook` refuses it and logs `HOOK REFUSED`;
+  * a stale detour target      -> `er-hook` refuses it and logs `HOOK REFUSED`;
   * an unmapped CALL/data RVA  -> the resolver returns 0 and the caller says so;
-  * a stale STRUCT FIELD OFFSET -> `*(this + 0xNN)` quietly returns the NEIGHBOURING field.
+  * a stale STRUCT field offset -> `*(this + 0xNN)` quietly returns the neighbouring field.
 
 The third has no refusal, no fault and no log line. It returns a plausible value of the right
 width, forever. This gate is the missing alarm for it.
 
-WHAT IT MEASURES, AND WHY THIS METHOD
+What it measures, and why this method
 -------------------------------------
 Not a displacement census. A census answers "which offsets does the image read off this object",
-which cannot say WHICH FIELD lives at an offset -- every interior byte of a big nested member is
+which cannot say which field lives at an offset -- every interior byte of a big nested member is
 witnessed too -- and it cannot see a move at all when both the old and new offsets happen to be
 read somewhere. It produces plausible-looking wrong answers and they feel like confirmation.
 
-This gate instead ALIGNS ONE FUNCTION'S TWO BODIES (scripts/pair-object-field-drift.py). When the
+This gate instead ALIGNS one function'S two bodies (scripts/pair-object-field-drift.py). When the
 instruction sequences agree except for memory displacements, the code did not change, so
-instruction k in 1.16.2 and instruction k in 1.17 are the SAME access to the SAME field -- and a
+instruction k in 1.16.2 and instruction k in 1.17 are the same access to the same field -- and a
 displacement difference is that field moving, by exactly that much. Each row below names the
 witness function pair that produced its number.
 
-WHAT WAS MEASURED (2026-08-31), AND THE CORRECTION IT CARRIES
+What was measured (2026-08-31), and the correction it carries
 --------------------------------------------------------------
-`CS::PlayerGameData` grew 8 bytes in NET SIZE (0xae8 -> 0xaf0), but its fields did NOT all move by
+`CS::PlayerGameData` grew 8 bytes in net size (0xae8 -> 0xaf0), but its fields did not all move by
 8, and the difference is exactly the kind that a mechanical "+8 above the insertion" fix gets
-wrong. 1.17 inserted ONE four-byte slot at 0x960 (a new byte field plus padding, in front of what
+wrong. 1.17 inserted one four-byte slot at 0x960 (a new byte field plus padding, in front of what
 was `damage_negation_physical`). The 0x118-byte stat sub-object that used to start at 0x960 now
-starts at 0x964 and is otherwise BYTE-IDENTICAL (its own constructor aligns with zero moved
+starts at 0x964 and is otherwise byte-identical (its own constructor aligns with zero moved
 offsets), so it ends at 0xa7c instead of 0xa78; the pointer member that follows needs 8-byte
 alignment, so it lands at 0xa80 rather than 0xa7c. Hence:
 
@@ -39,34 +39,34 @@ alignment, so it lands at 0xa80 rather than 0xa7c. Hence:
     [0x960, 0xa78)   +4          e.g. resistance_gauges 0x9c8 -> 0x9cc
     [0xa78, 0xae8)   +8          e.g. scadutree override 0xab4 -> 0xabc
 
-What the new field at 0x960 IS was established independently, from the other end: 1.17 also adds
+What the new field at 0x960 is was established independently, from the other end: 1.17 also adds
 `CS::MoveMapStep::_UpdateHorseType` (commit "The insertion was benign", bd er-effects-rs-xci9),
 which re-applies the mount after a map move and reads `PlayerGameData+0x960` to make that
 idempotent. Two derivations that share no evidence -- a constructor alignment here, a new callee
 read there -- land on the same byte.
 
-`FD4::FD4PadDevice` did not move a byte, and settling it took correcting its OWNER first. The
-census left exactly one offset that was both WRITTEN THROUGH and unsettled -- `VK_ARRAY_88_OFFSET`
+`FD4::FD4PadDevice` did not move a byte, and settling it took correcting its owner first. The
+census left exactly one offset that was both written through and unsettled -- `VK_ARRAY_88_OFFSET`
 in the input harness -- attributed to `CS::CSInGamePad`, a class that yields 2 usable paired bodies
 out of 40. It is not that class. All four call sites of the array's only writer (1.16.2
 0x1426634a0, `mov byte [rcx+rdx*2+0x88],1`) compute `rcx` as `*(FD4PadManager + 0x18 + dev*8)` =
 `padDevices[dev]`, and `FD4PadManager::Init` fills that array with `HeapAlloc(0x3c0)` +
 `FD4PadDevice::FD4PadDevice` + `FD4PadDevice::vftable`. With the owner right, the measurement is
-easy and 0x88 holds. The CSInGamePad is one indirection away: it HOLDS the device at its own +0x10.
+easy and 0x88 holds. The CSInGamePad is one indirection away: it holds the device at its own +0x10.
 
 That correction was not cosmetic. The harness had been writing `0x88 + (id-1000)*2` onto the
 CSInGamePad, which is `HeapAlloc(0x98)` = 152 bytes, so every id from 1008 up wrote past the end of
 a live game allocation.
 
-`CS::PlayerIns` did NOT grow at all: 8 bytes were inserted in (0x398, 0x3a8] and 8 bytes REMOVED
+`CS::PlayerIns` did not grow at all: 8 bytes were inserted in (0x398, 0x3a8] and 8 bytes removed
 in (0x560, 0x580], so the band between them shifts +8 while the object size is unchanged and both
 ends hold. A "+8 above the insertion" rule applied here would have corrupted
-`PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET` = 0x6b8, which is witnessed HELD twice.
+`PLAYER_INS_SESSION_MANAGER_PLAYER_ENTRY_OFFSET` = 0x6b8, which is witnessed held twice.
 
-THE OTHER HALF OF THE QUESTION: WHICH OBJECT
+The other half of the QUESTION: Which object
 --------------------------------------------
-Everything above is about where a FIELD sits, and for a READ that is the whole question. For a
-WRITE it is the smaller half. A wrong offset returns the neighbouring member; a wrong OBJECT
+Everything above is about where a field sits, and for a read that is the whole question. For a
+write it is the smaller half. A wrong offset returns the neighbouring member; a wrong object
 corrupts the heap, and until 2026-08-31 nothing in this tree checked the second thing.
 
 The bug that proved it: `stamp_vk_direct` wrote `object + 0x88 + (id - 1000) * 2` for ids up to
@@ -78,70 +78,70 @@ observed, not a reason it was safe.
 So `ALLOC_WITNESSES` pins each written-into object by the two facts that can refute a
 misattribution: the literal the game's own allocator is called with, and an identity anchor in the
 same decoded window -- the constructor that allocation is handed to, or the vtable it is stamped
-with. `WRITE_REACH` then recomputes, from the repo's OWN live literals, the highest byte this
+with. `WRITE_REACH` then recomputes, from the repo's own live literals, the highest byte this
 repo's writes can reach in that object, and fails if it is not inside. Raising a bound (a slot
 count, a virtual-key ceiling, a field offset) now fails here instead of at the far end of a
 `HeapAlloc`.
 
 Two of the measured objects have almost no slack, which is why the reach is computed rather than
 eyeballed: `CS::ProfileSummary` is `0x18 + 10 * 0x2a0 = 0x1a58` and the repo's record writes reach
-its final byte EXACTLY (slot 10 would overrun by a whole 0x2a0 record, and only a `slot <
+its final byte exactly (slot 10 would overrun by a whole 0x2a0 record, and only a `slot <
 PROFILE_SUMMARY_SLOT_COUNT` clamp stands in the way), and `CS::MoveMapStep` writes 0x4b8 of a
 0x4c0 object -- seven bytes to spare.
 
-WHAT THE GATE ASSERTS
+What the gate asserts
 ---------------------
-  1. IMAGE half -- every frozen witness row re-measures to the same pair, live, from the two
-     de-Arxan'd images. A row that cannot be measured is a FAILURE, not a pass: nine "audits" in
+  1. Image half -- every frozen witness row re-measures to the same pair, live, from the two
+     de-Arxan'd images. A row that cannot be measured is a failure, not a pass: nine "audits" in
      this repo have reported zero findings from a matcher that had gone blind.
-  2. SOURCE half -- each repo constant that names a field of these two objects still holds the
+  2. Source half -- each repo constant that names a field of these two objects still holds the
      1.16.2 literal this gate verified, at the file and line where it lives. A constant derived
      from `offset_of!`/`size_of!` carries no literal at its definition, so its `const _: () =
-     assert!(NAME == 0x..)` counts as the pin -- otherwise the whole `CS::ProfileSummary` typed
+     assert!(name == 0x..)` counts as the pin -- otherwise the whole `CS::ProfileSummary` typed
      layout would sit unwatched behind an expression.
-  3. OBJECT half -- every allocation size above re-decodes to the same literal in BOTH images and
+  3. Object half -- every allocation size above re-decodes to the same literal in both images and
      is still tied to its class by a constructor call or a vtable reference within the same
      window, and no repo write reaches past it. Unmeasurable is a failure here too: a size
      instruction that no longer decodes says nothing about whether a write fits.
-  4. THE LATENT ONE, which is the reason to have a gate rather than a report. 44 sites compute
+  4. The latent one, which is the reason to have a gate rather than a report. 44 sites compute
      `offset_of!(PlayerGameData, ...)` against the sibling `fromsoftware-rs` binding, which is a
-     1.16.2 model. Every field referenced TODAY sits below 0x960, so nothing is wrong -- but the
+     1.16.2 model. Every field referenced today sits below 0x960, so nothing is wrong -- but the
      mechanism looks maximally trustworthy (the compiler computed it) and is one added field
      reference away from silently reading a neighbour. So: any `offset_of!(PlayerGameData, X)`
      whose field is not in the verified-and-below-the-boundary set fails the build.
 
-USAGE
+Usage
     python3 scripts/check-object-field-offsets-1170.py
     python3 scripts/check-object-field-offsets-1170.py --selftest   # prove it can go red
     ER_DEOBF_1162=... ER_DEOBF_1170=... python3 scripts/check-object-field-offsets-1170.py
 
-The IMAGE half skips when the two images are absent (they are gitignored game-derived binaries);
-the SOURCE half always runs, and `--selftest` REQUIRES the images so a green selftest can never
+The image half skips when the two images are absent (they are gitignored game-derived binaries);
+the source half always runs, and `--selftest` requires the images so a green selftest can never
 mean "the image half never ran".
 
-WIRED INTO `scripts/check.sh` on 2026-08-31, beside its sibling `check-singleton-field-offsets.py`.
+Wired into `scripts/check.sh` on 2026-08-31, beside its sibling `check-singleton-field-offsets.py`.
 Until then it ran nowhere, which is why the paragraph below could happen at all: a gate that no
 suite invokes catches nothing, however good its rows are. The plain run takes a few seconds; the
 `--selftest` re-aligns every frozen row once per perturbation and takes minutes, so only the plain
 run is in the suite and the selftest is left to `scripts/audit-selftest-vacuity.py` and to
 deliberate operator runs, the same split `check.sh` uses for other slow selftests.
 
-THE OTHER HALF OF THE QUESTION, ADDED 2026-08-31: WAS IT EVER RIGHT
+The other half of the question, added 2026-08-31: Was it ever right
 --------------------------------------------------------------------
 Every row above this date asks "did 1.17 move this field". `CS::CSSystemStep` asks the question
 that comes first and had been skipped everywhere: is the declared offset a field of that object in
-EITHER build. `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 from its introduction; the object's
+either build. `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` was 0x40 from its introduction; the object's
 constructor writes 0x48 and never 0x40, and 0x40 holds a live `DLAllocator*`. So
 `oracle_system_step_label` read a pointer's low half, missed its `0..=20` range test and printed
 `"?"` with `oracle_system_step_state = -95247096` on every run, on 1.16.2 as well as 1.17 -- a
 legal i32 out of a legal read, with no fault, no log line and no drift for a drift check to see.
 
 That is a second failure mode, not a variant of the first, and the fix for it is the same
-measurement pointed at a different question: the row freezes 0x48 -> 0x48 (HELD) AND the source
+measurement pointed at a different question: the row freezes 0x48 -> 0x48 (held) and the source
 half pins the repo constant to 0x48, so a constant that was never measured now cannot be
 introduced -- pinning it requires producing a witness function whose two bodies agree on it.
 
-THE SWEEP FOR SIBLINGS OF THAT BUG (2026-08-31), AND ITS CLEAN NEGATIVE
+The sweep for siblings of that bug (2026-08-31), and its clean negative
 -----------------------------------------------------------------------
 0x40 was not a typo. It was an ARGUMENT: the sibling `fromsoftware-rs` binding declares `unk48`
 after `requested_state`, so `current_state` "must" be 0x40. That is a whole reasoning style, and
@@ -149,28 +149,28 @@ it leaves a recognisable trace in a comment -- a member name, an `unkNN`, a `#[r
 `offset_of!`, "matches the layout in ...". So the tree was swept for that trace rather than for
 wrong numbers, since a wrong number cannot be recognised by reading source.
 
-Six constructors and 15 constants later: EVERY name-derived offset in this tree measures correct.
+Six constructors and 15 constants later: Every name-derived offset in this tree measures correct.
 That is a real result and the rows below are what makes it a durable one, because "right" and
 "measured" were two different states and only the second survives an edit. The three things the
 sweep also settled, each of which had been a way to be wrong:
 
-  * ABSENCE FROM A DISPLACEMENT SET IS NOT ABSENCE OF A FIELD. `GameMan+0xbc9` never appears as a
+  * Absence from a displacement set is not absence of a field. `GameMan+0xbc9` never appears as a
     displacement in `GameMan::GameMan` -- the ctor initialises it with a DWORD store at 0xbc8 --
     yet it is a real `bool` with its own byte-width getter, `IsServerConnectionEnabled`. Only a
-    byte-COVERAGE question (does anything WIDER cover this byte) separates the two cases, which is
+    byte-coverage question (does anything wider cover this byte) separates the two cases, which is
     what `scripts/audit-name-derived-offsets.py --cover` exists for. What made 0x40's absence
-    meaningful was that NOTHING covered it, in a constructor that accounts for its whole object.
-  * A CONSTRUCTOR IS ONLY A WHOLE-OBJECT WITNESS IF IT CONSTRUCTS THE WHOLE OBJECT.
+    meaningful was that nothing covered it, in a constructor that accounts for its whole object.
+  * A CONSTRUCTOR is only a whole-object witness if it constructs the whole object.
     `CSMenuManImp::CSMenuManImp` is 552 bytes for a 0x8a0 object and never touches 0x13c, which
     Ghidra names `disableSaveMenu`. Its silence about an offset means nothing.
-  * THE BASE-REGISTER FILTER IS PART OF THE MEASUREMENT, NOT A CONVENIENCE. Reading `FieldArea`'s
+  * The base-register filter is part of the measurement, not a convenience. Reading `FieldArea`'s
     ctor with rbx and rdi admitted reported 101 offsets; those two registers hold constructor
-    ARGUMENTS, and three of the extra offsets belonged to other objects. `~GameDataMan` is worse:
+    arguments, and three of the extra offsets belonged to other objects. `~GameDataMan` is worse:
     its second instruction is `mov (%rcx),%rcx`, so rcx stops being `this` immediately.
 
 The audit that produced the sweep is reproducible: `scripts/audit-name-derived-offsets.py` buckets
-every field-offset constant in the tree by the provenance its own comment claims (MEASURED / NAME
-/ NONE). It is a report, not a gate; the findings live here.
+every field-offset constant in the tree by the provenance its own comment claims (measured / name
+/ none). It is a report, not a gate; the findings live here.
 """
 
 from __future__ import annotations
@@ -192,12 +192,12 @@ MATCHER = REPO / "scripts" / "pair-object-field-drift.py"
 EXCLUDED_DIRS = (".git", "target", "node_modules", ".worktrees", ".claude")
 
 # --------------------------------------------------------------------------------------------
-# THE MEASUREMENT. Each row: which object, which offset, what 1.17 did to it, and the WITNESS --
+# The measurement. Each row: which object, which offset, what 1.17 did to it, and the witness --
 # a function whose two bodies align instruction-for-instruction, so the displacement pair is the
 # same access to the same field in both builds. `bases` restricts the reading to memory operands
 # on registers that provably hold `this` in that function.
 #
-# HELD rows are not decoration. They are the frozen negatives: a matcher that has become
+# Held rows are not decoration. They are the frozen negatives: a matcher that has become
 # over-broad (reporting every offset as +8) fails them, and `--selftest` proves that by perturbing
 # each of them in the other direction.
 # --------------------------------------------------------------------------------------------
@@ -217,16 +217,16 @@ FD4_PAD_DEVICE_CTOR = dict(
 FD4_PAD_BUILDER_A = dict(
     va16=0x140240E70, len16=690, va17=0x140240E70, len17=690, bases=("rsi", "rcx")
 )
-# `DLUID::PadDevice<DLKR::DLMultiThreadingPolicy>::Poll` -- a DIFFERENT class from
+# `DLUID::PadDevice<DLKR::DLMultiThreadingPolicy>::Poll` -- a different class from
 # `FD4::FD4PadDevice` above, and the whole reason these two sit next to each other here. `this` is
 # rdi after `mov rdi,rcx`; rcx is admitted for the first three instructions before the move.
 #
 # This is the function `crates/er-quickload/src/experiments/can_move_probe.rs` detours, and the
 # object it writes `+0x89c`/`+0x8a0` into is this function's own `this`. The class is established
-# from the image, not from a name: the pointer to this function occurs EXACTLY ONCE in each flat
+# from the image, not from a name: the pointer to this function occurs exactly once in each flat
 # image (1.16.2 0x1430ca030, 1.17 0x1430cd170), both at `+0x128` of the vtable at 0x1430c9f08 ->
 # 0x1430cd048, whose RTTI complete-object-locator has `offset == 0` and whose type descriptor
-# spells `.?AV?$PadDevice@VDLMultiThreadingPolicy@DLKR@@@DLUID@@` in BOTH builds. `offset == 0` is
+# spells `.?AV?$PadDevice@VDLMultiThreadingPolicy@DLKR@@@DLUID@@` in both builds. `offset == 0` is
 # what makes `this` the allocation base rather than a secondary-base sub-object, and the
 # constructor agrees: `mov qword ptr [r14], rax` with rax = that vtable, r14 = rcx.
 PAD_DEVICE_POLL = dict(
@@ -243,26 +243,26 @@ PAD_DEVICE_POLL = dict(
 CS_SYSTEM_STEP_TEMPLATE_CTOR = dict(
     va16=0x140DEC6D0, len16=226, va17=0x140DEE4D0, len17=226, bases=("rsi", "rcx")
 )
-# ---- the NAME-PROVENANCE SWEEP of 2026-08-31 ------------------------------------------------
-# Six more constructors, added because the constants they settle had a NAME for provenance rather
+# ---- the name-provenance sweep of 2026-08-31 ------------------------------------------------
+# Six more constructors, added because the constants they settle had a name for provenance rather
 # than a measurement -- the shape that produced the 0x40 error below. Each 1.17 pair comes from
 # `docs/recon/rva-map-1162-to-1170.functions.tsv` and is corroborated by identical body length and
 # a full instruction alignment.
 #
 # `CS::ChrAsm::ChrAsm`. `this` is rcx, then rsi after `mov %rcx,%rsi`. It constructs the whole
-# object front to back, so its offset set IS the layout: 0x0, 0x4, 0x24, 0x7c, 0xd4, 0xdc, ending
+# object front to back, so its offset set is the layout: 0x0, 0x4, 0x24, 0x7c, 0xd4, 0xdc, ending
 # at 0xe8 = size_of::<ChrAsm>().
 CHR_ASM_CTOR = dict(va16=0x1403BE1B0, len16=161, va17=0x1403BE1C0, len17=161, bases=("rcx", "rsi"))
 # `CS::FieldArea::FieldArea`. `this` is rcx, then rsi after `mov %rcx,%rsi`. The base filter is
-# load-bearing here: rbx and rdi hold CONSTRUCTOR ARGUMENTS, and counting them manufactures
+# load-bearing here: rbx and rdi hold CONSTRUCTOR arguments, and counting them manufactures
 # "held" readings for foreign objects -- it reported 101 offsets instead of the true 98, three of
 # which were nested members' own fields.
 FIELD_AREA_CTOR = dict(
     va16=0x140618BF0, len16=1566, va17=0x140619A40, len17=1566, bases=("rsi", "rcx")
 )
 # `CS::CSMenuManImp::CSMenuManImp`. `this` is rcx, then rbx after `mov %rcx,%rbx`. NOTE it is 552
-# bytes for a 0x8a0 object, so it does NOT touch every field: `disableSaveMenu` at 0x13c is a real
-# member of Ghidra's type and has no access here at all. Absence from THIS witness's offset set is
+# bytes for a 0x8a0 object, so it does not touch every field: `disableSaveMenu` at 0x13c is a real
+# member of Ghidra's type and has no access here at all. Absence from this witness's offset set is
 # therefore not evidence that a byte is not a field -- unlike the step-template ctor above, which
 # accounts for its whole base sub-object and is why 0x40's absence there meant something.
 CS_MENU_MAN_IMP_CTOR = dict(
@@ -291,7 +291,7 @@ WITNESSES = (
     ("PlayerGameData", "face_data", 0x760, 0x760, PGD_CTOR, "constructor"),
     ("PlayerGameData", "chr_name_string_a (0x8e8)", 0x8E8, 0x8E8, PGD_CTOR, "constructor"),
     ("PlayerGameData", "is_main_player", 0x8F0, 0x8F0, PGD_CTOR, "constructor"),
-    # The autoload identity path. The character name lives in THREE PGD storages -- the raw
+    # The autoload identity path. The character name lives in three PGD storages -- the raw
     # wchar_t[17] at 0x9c and two CSWordCheckedStringInternal* at 0x8e8 / 0x8f8 -- and CopyChrName
     # is the native that writes all three, so one aligned function witnesses the whole identity
     # surface the loading screen and the save-slot list read.
@@ -370,7 +370,7 @@ WITNESSES = (
         "vtable slot 154 of CS::PlayerIns",
     ),
     # ---- FD4::FD4PadDevice ------------------------------------------------------------------
-    # The virtual-key array the input harness WRITES. A write through a moved offset does not
+    # The virtual-key array the input harness writes. A write through a moved offset does not
     # return a wrong value, it corrupts whatever now lives there -- and this is the path every
     # agent-driven menu navigation runs on, so a wrong write poisons runtime evidence rather than
     # producing one bad log line.
@@ -406,7 +406,7 @@ WITNESSES = (
         "FD4PadDevice constructor",
     ),
     # ---- FD4::FD4PadManager -----------------------------------------------------------------
-    # The BASE the write goes through. Pinning the field without pinning the pointer that reaches
+    # The base the write goes through. Pinning the field without pinning the pointer that reaches
     # it would leave half the address unmeasured.
     (
         "FD4PadManager",
@@ -434,7 +434,7 @@ WITNESSES = (
         "virtual-key builder A; the frozen negative for the padDevices rows -- 0x18 and 0x48 are "
         "adjacent members of the same object and a matcher that confused them would fail here",
     ),
-    # The two members of `FD4::FD4PadDevice` that `inject_all_pad_devices` walks to REACH the
+    # The two members of `FD4::FD4PadDevice` that `inject_all_pad_devices` walks to reach the
     # analog-stick write below. Pinning the field without pinning the pointer chain that reaches it
     # would leave half the address unmeasured -- the same argument the FD4PadManager rows above
     # make, one indirection further down.
@@ -458,21 +458,21 @@ WITNESSES = (
         "the capacity 4 comes from",
     ),
     # ---- DLUID::PadDevice<DLKR::DLMultiThreadingPolicy> --------------------------------------
-    # THE ROWS THAT SETTLE A "THIS LOOKS LIKE AN OUT-OF-BOUNDS WRITE" REPORT.
+    # The rows that settle a "THIS LOOKS LIKE AN OUT-OF-BOUNDS WRITE" report.
     #
     # `can_move_probe` writes two floats at `+0x89c`/`+0x8a0`, and read beside the FD4PadDevice
     # rows above -- `HeapAlloc(0x3c0)` = 960 bytes -- that reads as 1244 bytes past the end of a
     # live allocation, i.e. exactly the `stamp_vk_direct` defect again. It is not. They are two
-    # different classes that both end in "PadDevice", and the FD4 one HOLDS the DLUID ones:
+    # different classes that both end in "PadDevice", and the FD4 one holds the DLUID ones:
     #
     #     FD4::FD4PadDevice                 HeapAlloc(0x3c0),  vftable 0x143295998
     #       +0x08  -> DLUID::VirtualMultiDevice   HeapAlloc(0x7f8)   (factory type 7)
     #       +0x10  -> DLUID::PadDevice[0..count]  HeapAlloc(0xa68)   (factory types 3..6)
     #
-    # The four sizes come from ONE factory (`DLUserInputManagerImpl` device factory, 1.16.2
+    # The four sizes come from one factory (`DLUserInputManagerImpl` device factory, 1.16.2
     # 0x141f28a80 -> 1.17 0x141f2a880) and are frozen in ALLOC_WITNESSES below; a write ending at
     # 0x8a4 fits in only the 0xa68 one. The rows here are the other half: that `0x89c` and `0x8a0`
-    # are fields of THAT class in BOTH builds, and that the game itself stores to them.
+    # are fields of that class in both builds, and that the game itself stores to them.
     #
     # "The game itself stores to them" is the decisive form of the argument. An offset the engine's
     # own code writes on this same `this` is in-bounds by construction -- no allocation arithmetic
@@ -517,10 +517,10 @@ WITNESSES = (
         "out (0x8f0 KeyboardDevice, 0x810, 0x7f8 VirtualMultiDevice)",
     ),
     # ---- CS::CSSystemStep (its FD4StepTemplateBase base sub-object) --------------------------
-    # THE ROW THAT EXISTS BECAUSE A CONSTANT WAS NEVER MEASURED AT ALL.
+    # The row that exists because a constant was never measured at all.
     #
     # Every other row here answers "did 1.17 move this field". This one answers the question that
-    # comes first and had been skipped: is the offset a field of this object in EITHER build.
+    # comes first and had been skipped: is the offset a field of this object in either build.
     # `CS_SYSTEM_STEP_CURRENT_STATE_OFFSET` said 0x40 from its introduction until 2026-08-31. The
     # constructor never writes 0x40; it writes 0x48. 0x40 is
     # `FD4ComponentAttachSystem_Step::allocator`, a live `DLAllocator*`, so `oracle_system_step_
@@ -529,7 +529,7 @@ WITNESSES = (
     # out of a legal read is exactly the silent class this gate exists for, and it was silent on
     # 1.16.2 too -- so a drift-only check (this gate's usual question) could never have caught it.
     #
-    # The wrong value came from back-solving the layout off a field NAME. The sibling
+    # The wrong value came from back-solving the layout off a field name. The sibling
     # `fromsoftware-rs` `FD4StepTemplateBase` has a member spelled `unk48` right after
     # `requested_state`; "unk48 is at 0x48" puts `current_state` at 0x40. That member is misnamed
     # (it sits at 0x50) and the Rust struct's own computed layout was right. The measurement below
@@ -571,17 +571,17 @@ WITNESSES = (
         'step-template constructor stores L"NotExecuting" here; the highest witnessed field, so it '
         "is what bounds this object's SAFE_REGIONS entry",
     ),
-    # ---- THE NAME-PROVENANCE SWEEP (2026-08-31) ---------------------------------------------
+    # ---- The name-provenance sweep (2026-08-31) ---------------------------------------------
     # Every row below settles a constant whose stated provenance was a NAME: a sibling-crate
     # member, an `offset_of!` the compiler evaluated against that binding, or a hand walk down a
-    # `#[repr(C)]` declaration counting `unkNN` members. All of them turned out RIGHT. They are
+    # `#[repr(C)]` declaration counting `unkNN` members. All of them turned out right. They are
     # frozen anyway, because "right" and "measured" were two different states until now, and the
     # gap between them is exactly where 0x40 lived for months.
     #
     # ---- CS::ChrAsm -------------------------------------------------------------------------
     # `CHR_ASM_UNKD4_OFFSET` is computed as `equipment_param_ids + 22 * 4` because the member is
     # private upstream and cannot be reached by `offset_of!` -- a layout walk, the same argument
-    # shape that produced 0x40. The number is right; the ARGUMENT was never evidence.
+    # shape that produced 0x40. The number is right; the argument was never evidence.
     (
         "ChrAsm",
         "unk4 (0x4) -- the lower bracket for CHR_ASM_EQUIPMENT_OFFSET",
@@ -634,7 +634,7 @@ WITNESSES = (
     # `FIELD_AREA_WORLD_INFO_OWNER_OFFSET`'s comment said "both the CI-pinned and local binding
     # layouts pin this field at the same offset" -- two copies of one declaration agreeing with
     # each other, which is not a measurement. 0x10 and 0x18 are each other's frozen negative: they
-    # are adjacent `WorldInfoOwner*` members and are NOT interchangeable (the native block lookups
+    # are adjacent `WorldInfoOwner*` members and are not interchangeable (the native block lookups
     # take the second).
     (
         "FieldArea",
@@ -655,7 +655,7 @@ WITNESSES = (
         "row above -- a matcher confusing the two would fail here",
     ),
     # ---- CS::WorldBlockInfo -----------------------------------------------------------------
-    # The most literal instance of the failure shape the sweep found: the comment DERIVES 0x48 by
+    # The most literal instance of the failure shape the sweep found: the comment derives 0x48 by
     # walking the upstream `#[repr(C)]` and counting members -- `unk3c 0x3c`, `unk40 0x40`,
     # `unk41[7] 0x41` -> `msb_res_cap 0x48`. That chain is only as good as the `unkNN` names in it.
     (
@@ -730,7 +730,7 @@ WITNESSES = (
         "0xbc9(%rax),%eax ; ret`, a byte-width read at 0xbc9 off the GameMan singleton that is "
         "unique in the image; Ghidra names the field `serverConnectionEnabled` there",
     ),
-    # THE REST OF `CS::GameMan` (2026-08-31). Seventeen more GameMan offsets were spelled by hand
+    # The rest of `CS::GameMan` (2026-08-31). Seventeen more GameMan offsets were spelled by hand
     # across six crates with no provenance at all. All seventeen are accounted for by the one
     # constructor pairing below and none of them moved. Seven are not displacements of their own:
     # a wider store covers them, which is the distinction `--cover` exists to make and the reason
@@ -887,7 +887,7 @@ WITNESSES = (
     ),
     # ---- CS::CSMenuManImp -------------------------------------------------------------------
     # `CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET`'s comment says the field is "unnamed in
-    # fromsoftware-rs `unk748`" -- its provenance is that a filler array SPANS the byte, which
+    # fromsoftware-rs `unk748`" -- its provenance is that a filler array spans the byte, which
     # says nothing about where a member starts.
     (
         "CSMenuManImp",
@@ -911,11 +911,11 @@ WITNESSES = (
 )
 
 # --------------------------------------------------------------------------------------------
-# THE OBJECT, NOT JUST THE OFFSET.
+# The object, not just the offset.
 #
-# Everything above measures where a FIELD sits. That is the wrong half of the question for a
-# WRITE. A wrong offset misinforms -- `*(this + 0xNN)` returns the neighbouring member. A wrong
-# OBJECT corrupts the heap: `stamp_vk_direct` wrote `object + 0x88 + (id - 1000) * 2` for ids up to
+# Everything above measures where a field sits. That is the wrong half of the question for a
+# write. A wrong offset misinforms -- `*(this + 0xNN)` returns the neighbouring member. A wrong
+# object corrupts the heap: `stamp_vk_direct` wrote `object + 0x88 + (id - 1000) * 2` for ids up to
 # 1080, which reaches byte 0x128, into an object that turned out to be `HeapAlloc(0x98)` = 152
 # bytes. The offset 0x88 was correct and had not moved. The class was wrong, and nothing in this
 # tree checked the class.
@@ -923,10 +923,10 @@ WITNESSES = (
 # So each row below pins an object this repo writes into by the only two facts that can refute a
 # misattribution:
 #
-#   * ITS SIZE -- the literal operand of the allocation the game makes for it, re-decoded from
-#     BOTH images every run. Not Ghidra's inferred `getStructure` size, which is an analysis
+#   * its size -- the literal operand of the allocation the game makes for it, re-decoded from
+#     both images every run. Not Ghidra's inferred `getStructure` size, which is an analysis
 #     guess: the number the allocator is actually called with.
-#   * ITS IDENTITY -- an anchor within the same decoded window tying that allocation to THIS
+#   * its identity -- an anchor within the same decoded window tying that allocation to this
 #     class: the constructor the allocation is handed to, or the vtable it is stamped with. A size
 #     without an identity anchor is just a number at an address, and an address is exactly what
 #     was wrong last time.
@@ -1071,9 +1071,9 @@ ALLOC_WITNESSES = (
         0x140AF3BE0,
         "`mov $0x4c0,%ecx` then `MoveMapStep::MoveMapStep`, in `STEP_MoveMap_Init`",
     ),
-    # ---- the pad device family, which is where BOTH of this branch's heap overruns lived --------
+    # ---- the pad device family, which is where both of this branch's heap overruns lived --------
     # `DLUserInputManagerImpl`'s device factory (1.16.2 0x141f28a80 -> 1.17 0x141f2a880) hands out
-    # FOUR differently-sized classes from one call, and a write ending at 0x8a4 fits in only two of
+    # four differently-sized classes from one call, and a write ending at 0x8a4 fits in only two of
     # them. That is the entire bug: `+0x89c`/`+0x8a0` are fields of `DLUID::PadDevice`, and
     # `can_move_probe` was writing them into the object at `FD4PadDevice + 0x8`, which the
     # FD4PadDevice constructor fills from the factory with type 7 -- the 0x7f8 VirtualMultiDevice.
@@ -1153,7 +1153,7 @@ ALLOC_WITNESSES = (
     ),
 )
 
-# What this repo's writes can reach in each object above, recomputed from the repo's OWN live
+# What this repo's writes can reach in each object above, recomputed from the repo's own live
 # literals rather than from a number typed here. Each term is `addend + sum(coefficient * literal)`
 # and the result must be <= the measured allocation size.
 #
@@ -1224,12 +1224,12 @@ WRITE_REACH = (
     ),
 )
 
-# The drift model the witnesses above establish, expressed as the SAFE region per object: an
+# The drift model the witnesses above establish, expressed as the safe region per object: an
 # offset in one of these ranges is the same field in both builds. Anything outside needs a
 # version-aware constant, which this workspace does not have for either object.
 SAFE_REGIONS = {
     # Nothing at or above 0x960 held: 0x958 is the highest witnessed-held offset and 0x960 is the
-    # lowest witnessed-moved one, from the SAME function, so the boundary is exact.
+    # lowest witnessed-moved one, from the same function, so the boundary is exact.
     "PlayerGameData": ((0x0, 0x960),),
     # 8 bytes inserted in (0x398,0x3a8] and 8 removed in (0x560,0x580]; the object size is
     # unchanged and both ends hold, so the hazard is the band between them, not the whole struct.
@@ -1237,28 +1237,28 @@ SAFE_REGIONS = {
     # Nothing in either pad object moved: the FD4PadDevice constructor aligns 168/168 and its
     # destructor 99/99 with zero moved offsets, the builder aligns 195/195, the writer 7/7, the
     # object is still `HeapAlloc(0x3c0)` and the vtable pairs slot for slot. The regions stop at
-    # the highest offset actually WITNESSED, because "no witness moved" is not "no field moved" --
+    # the highest offset actually witnessed, because "no witness moved" is not "no field moved" --
     # `CS::PlayerIns` is the standing counterexample, where a compensating insert/remove pair moved
     # the interior of a bracket while both ends held.
     "FD4PadDevice": ((0x0, 0x89),),
     "FD4PadManager": ((0x0, 0xA9),),
     # Nothing in `DLUID::PadDevice` moved either: its poll aligns 616/616 with all 72 of the
-    # offsets it touches HELD, its constructor stamps the same vtable at [this+0] in both builds,
+    # offsets it touches held, its constructor stamps the same vtable at [this+0] in both builds,
     # and the factory still calls `HeapAlloc(0xa68)` for it. The region stops just past 0xa60, the
-    # highest WITNESSED offset (a byte), for the same reason as the pad rows above -- "no witness
+    # highest witnessed offset (a byte), for the same reason as the pad rows above -- "no witness
     # moved" is not "no field moved", and the eight bytes from 0xa61 to the end of the allocation
     # have no witness either way.
     "DLUID::PadDevice": ((0x0, 0xA61),),
     # Nothing in the step template moved: the constructor aligns 57/57 and all 13 field offsets it
     # touches -- 0x0, 0x10, 0x18, 0x48, 0x50, 0x58, 0x60, 0x68, 0x69, 0x70, 0xa0, 0xa8, 0xac -- are
-    # HELD. The region stops just past the highest WITNESSED offset (0xac, a dword), per the rule
+    # held. The region stops just past the highest witnessed offset (0xac, a dword), per the rule
     # the pad objects follow: "no witness moved" is not "no field moved", and `CS::PlayerIns` is
     # the standing counterexample.
     "CSSystemStep": ((0x0, 0xB0),),
 }
 
 # --------------------------------------------------------------------------------------------
-# SOURCE half. Each entry: the constant, the file that defines it, and the literal this gate
+# Source half. Each entry: the constant, the file that defines it, and the literal this gate
 # verified against the images above.
 # --------------------------------------------------------------------------------------------
 PINNED_CONSTANTS = (
@@ -1272,18 +1272,18 @@ PINNED_CONSTANTS = (
     ("PAD_DEVICES_COUNT_40_OFFSET", "crates/er-input-harness/src/pad_inject.rs", 0x40, "FD4PadManager"),
     # The loading-substep oracle's field. Two crates read it (the telemetry emitter and the
     # loading-bar sub-progression) and both now alias this one definition, so there is exactly one
-    # literal in the tree to watch -- which is the state the 0x40 bug did NOT have: it was written
+    # literal in the tree to watch -- which is the state the 0x40 bug did not have: it was written
     # twice, in two crates, and drifted from nothing because it was born wrong.
     ("CS_SYSTEM_STEP_CURRENT_STATE_OFFSET", "crates/er-game-base/src/rva.rs", 0x48, "CSSystemStep"),
-    # THE FROZEN NEGATIVE THAT IS NOT ABOUT THIS OBJECT AT ALL. These sit numerically inside the
+    # The frozen negative that is not about this object at all. These sit numerically inside the
     # band where PlayerGameData moved +4 (0x960..0xa78) and belong to `CS::CSMenuProfModelRend`,
-    # whose constructor aligns 64/64 with every one of them HELD. A "+4 everything in that range"
+    # whose constructor aligns 64/64 with every one of them held. A "+4 everything in that range"
     # sweep would have corrupted the loading-screen portrait camera; pinning them here makes that
     # sweep red instead of silent.
     ("PROFILE_CAM_YAW_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9C8, "CSMenuProfModelRend"),
     ("PROFILE_CAM_PITCH_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0x9CC, "CSMenuProfModelRend"),
     ("PROFILE_CAM_ASPECT_OFFSET", "crates/er-loading-portrait-core/src/portrait_camera.rs", 0xA24, "CSMenuProfModelRend"),
-    # ---- the WRITE-target constants, whose literals feed WRITE_REACH above -------------------
+    # ---- the write-target constants, whose literals feed WRITE_REACH above -------------------
     # Duplicated deliberately across crates that ship independently; the gate looks for the name
     # everywhere and checks every definition it finds, so a drifted copy fails even if the
     # original is right.
@@ -1295,7 +1295,7 @@ PINNED_CONSTANTS = (
     ("SCALEFORM_MEMORY_FILE_CURSOR_OFFSET", "crates/er-quickload/src/constants/stats_panel_text.rs", 0x24, "Scaleform::MemoryFile"),
     # `CS::ProfileSummary`. These four are `offset_of!`/`size_of!` expressions, so their literal
     # lives in the `const _: () = assert!(NAME == 0x..)` beside them -- which this gate reads as a
-    # pin in its own right. The record write reaches the FINAL byte of the allocation exactly, so
+    # pin in its own right. The record write reaches the final byte of the allocation exactly, so
     # every one of these is load-bearing.
     ("GAME_DATA_MAN_PROFILE_SUMMARY_OFFSET", "crates/er-game-base/src/profile_summary.rs", 0x78, "CS::GameDataMan"),
     ("PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET", "crates/er-game-base/src/profile_summary.rs", 0x08, "CS::ProfileSummary"),
@@ -1316,20 +1316,20 @@ PINNED_CONSTANTS = (
     # to nothing else in that four-class family, which is what the sweep's vtable test enforces.
     ("PAD_STICK_LY_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x8A0, "DLUID::PadDevice"),
     ("PAD_STICK_LX_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x89C, "DLUID::PadDevice"),
-    # The pointer walk that REACHES those two floats: FD4PadManager -> padDevices[i] ->
+    # The pointer walk that reaches those two floats: FD4PadManager -> padDevices[i] ->
     # FD4PadDevice -> devices[slot] -> DLUID::PadDevice. `er-input-harness` spells the manager's
     # two offsets under different names (pinned above), and this gate looks a name up tree-wide, so
     # the can_move_probe copies were unwatched until 2026-09-01 despite being the base half of a
-    # write. The capacity is here for the same reason `VK_ID_MAX` is: it is a BOUND, and the loop
+    # write. The capacity is here for the same reason `VK_ID_MAX` is: it is a bound, and the loop
     # that clamps to it is what keeps the walk inside the game's own DLFixedVector<_,4>.
     ("PAD_MGR_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x18, "FD4PadManager"),
     ("PAD_MGR_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x40, "FD4PadManager"),
     ("FD4PADDEVICE_DEVICES_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x10, "FD4PadDevice"),
     ("FD4PADDEVICE_DEVICE_COUNT_OFFSET", "crates/er-quickload/src/experiments/can_move_probe.rs", 0x38, "FD4PadDevice"),
     ("FD4PADDEVICE_DEVICES_CAPACITY", "crates/er-quickload/src/experiments/can_move_probe.rs", 4, "FD4PadDevice"),
-    # ---- THE NAME-PROVENANCE SWEEP (2026-08-31) ---------------------------------------------
-    # Constants whose only stated provenance was a NAME. The sweep measured all of them and all of
-    # them were right, so nothing here is a correction -- these rows exist so that the NEXT edit
+    # ---- The name-provenance sweep (2026-08-31) ---------------------------------------------
+    # Constants whose only stated provenance was a name. The sweep measured all of them and all of
+    # them were right, so nothing here is a correction -- these rows exist so that the next edit
     # to one of them has to produce a witness instead of a declaration. Four of the ChrAsm names
     # have no literal at their definition (`offset_of!` / a layout-walk expression), so their pin
     # is the `const _: () = assert!(NAME == 0x..)` this sweep added beside them, which this gate
@@ -1340,7 +1340,7 @@ PINNED_CONSTANTS = (
     ("CHR_ASM_UNK0_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0x00, "CS::ChrAsm"),
     ("CHR_ASM_UNKD4_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0xD4, "CS::ChrAsm"),
     ("CHR_ASM_UNKD8_OFFSET", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 0xD8, "CS::ChrAsm"),
-    # Not an offset but the multiplier INSIDE the unkd4 layout walk: 22 is what turns
+    # Not an offset but the multiplier inside the unkd4 layout walk: 22 is what turns
     # `equipment_param_ids` into 0xd4, so leaving it unpinned would leave the walk free to move.
     ("CHR_ASM_EQUIPMENT_ENTRY_COUNT", "crates/er-loading-portrait-core/src/chr_asm_layout.rs", 22, "CS::ChrAsm"),
     ("FIELD_AREA_WORLD_INFO_OWNER_OFFSET", "crates/er-invasion-warp-core/src/msb_invasion_points.rs", 0x10, "CS::FieldArea"),
@@ -1355,8 +1355,8 @@ PINNED_CONSTANTS = (
     ("GAME_MAN_SAVE_STATE_B80_OFFSET", "crates/er-save-suppress/src/save_state_device.rs", 0xB80, "CS::GameMan"),
     ("CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET", "crates/er-title-flow/src/constants_moved.rs", 0x798, "CS::CSMenuManImp"),
     ("CS_MENU_MAN_MENU_DATA_OFFSET", "crates/er-game-base/src/rva.rs", 0x08, "CS::CSMenuManImp"),
-    # ---- THE UNPROVENANCED-OFFSET SWEEP (2026-08-31) ----------------------------------------
-    # `CS::GameMan` carried more hand-spelled offsets with NO stated provenance than any other
+    # ---- The UNPROVENANCED-offset sweep (2026-08-31) ----------------------------------------
+    # `CS::GameMan` carried more hand-spelled offsets with no stated provenance than any other
     # object in the tree -- seventeen, across six crates. The witness rows above measured all of
     # them against the same constructor pairing; these pins stop the literals drifting away from
     # that measurement, wherever in the tree they are spelled.
@@ -1389,12 +1389,12 @@ PINNED_CONSTANTS = (
 )
 
 # Every `PlayerGameData` field this workspace reaches through `offset_of!`, with the offset the
-# 1.16.2 binding computes for it. A field NOT in this table fails the gate: that is the whole
+# 1.16.2 binding computes for it. A field not in this table fails the gate: that is the whole
 # point -- a new field reference must be measured against the images before it may be used, not
 # trusted because the compiler was willing to compute it.
 #
 # The 25 marked `pinned` are additionally const-asserted in crates/er-game-base/src/pgd.rs. The 8
-# marked `bracketed` are NOT const-asserted there and deliberately so: the 1.17 image never
+# marked `bracketed` are not const-asserted there and deliberately so: the 1.17 image never
 # witnesses their offset, and each is only bracketed one or two slots wide by both-witnessed
 # neighbours. A bracket is not a proof -- `CS::PlayerIns` is the counterexample, where a
 # compensating insert/remove pair moved the interior of a bracket while both ends held. They are
@@ -1482,15 +1482,15 @@ _TREE_SCAN = []
 def _scan_tree(read_text):
     """One pass over every `.rs` file: pinned-constant definitions and `offset_of!` references.
 
-    The definition is looked for EVERYWHERE rather than only at its recorded home, because these
+    The definition is looked for everywhere rather than only at its recorded home, because these
     constants are actively being consolidated into `er-game-base::rva` and a gate that goes quiet
     when a constant moves file is a gate that stops watching exactly when someone edits it.
 
-    Cached for the DEFAULT reader only. `--selftest` runs the source half ~95 times against an
+    Cached for the default reader only. `--selftest` runs the source half ~95 times against an
     unchanged tree, and re-walking it each time was 65 of the 82 seconds the selftest took -- past
     the 25s `scripts/audit-selftest-vacuity.py` allows per script, so this gate's selftest could
     not be judged for vacuity at all. That is lost coverage, not a speed preference. A caller that
-    passes its own `read_text` is deliberately feeding a tree that is NOT this one (an empty read,
+    passes its own `read_text` is deliberately feeding a tree that is not this one (an empty read,
     a perturbed literal), so those never read or write the cache.
     """
     if read_text is None and _TREE_SCAN:
@@ -1561,7 +1561,7 @@ def reach_findings(definitions, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESS
     """Assert the repo's highest write into each object stays inside the measured allocation.
 
     The reach is recomputed from the literals actually in the tree, so raising a bound (a slot
-    count, a virtual-key id ceiling, a field offset) fails HERE rather than at the far end of a
+    count, a virtual-key id ceiling, a field offset) fails here rather than at the far end of a
     `HeapAlloc`. A row whose constants cannot be read is a failure: an unreadable reach is not a
     small reach.
     """
@@ -1599,7 +1599,7 @@ def reach_findings(definitions, reach_rows=WRITE_REACH, alloc_rows=ALLOC_WITNESS
 
 
 def alloc_findings(matcher, capstone, md, rows=ALLOC_WITNESSES):
-    """Re-decode each object's allocation SIZE and its IDENTITY anchor from both images.
+    """Re-decode each object's allocation size and its identity anchor from both images.
 
     Unmeasurable is a failure, exactly as for the field rows: an allocation whose size instruction
     no longer decodes tells you nothing about whether a write fits inside it.
@@ -1706,7 +1706,7 @@ def _aligned(matcher, capstone, md, witness, label):
     900k regex calls underneath, which pushed it past that tool's 25s budget and made this gate
     UNMEASURABLE for vacuity.
 
-    The key carries the bound `compare` ITSELF, not just the witness. The selftest's final control
+    The key carries the bound `compare` itself, not just the witness. The selftest's final control
     hands in a matcher whose `compare` returns nothing and requires the result to be reported as a
     failure; a cache keyed on the witness alone would serve it the real matcher's answer and that
     control would go quietly green -- the gate's own vacuity, introduced by its speed-up.
@@ -1797,11 +1797,11 @@ def run(quiet=False, rows=WITNESSES, read_text=None, alloc_rows=ALLOC_WITNESSES,
 
 
 def _selftest_mutants(matcher):
-    """Perturbations that MUST make the gate red. A gate that survives them proves nothing."""
+    """Perturbations that must make the gate red. A gate that survives them proves nothing."""
     cases = []
     for index, row in enumerate(WITNESSES):
         obj, label, old, new, witness, how = row
-        # A MOVED row perturbed by another +4, and a HELD row perturbed to old+8. The second is
+        # A moved row perturbed by another +4, and a held row perturbed to old+8. The second is
         # the frozen negative: a matcher that reported everything as moved would still pass the
         # first, and fails this one.
         bad = new + 4 if old != new else old + 8
@@ -1813,7 +1813,7 @@ def _selftest_mutants(matcher):
 
 
 def _selftest_alloc_mutants():
-    """Perturbations of the OBJECT rows. Four kinds, because they fail four different ways.
+    """Perturbations of the object rows. Four kinds, because they fail four different ways.
 
     A size row that survives a changed size is measuring nothing. One that survives a changed
     identity is measuring an address rather than a class -- which is exactly the mistake that put
@@ -1840,7 +1840,7 @@ def _selftest_alloc_mutants():
         )
         # The 1.17 witness left at its 1.16.2 address. `scan` moves with it: a row that only
         # relocated the size instruction would still decode the 1.16.2 window and look fine.
-        # Skipped where the two builds genuinely allocate at the SAME address (CS::CSInGamePad
+        # Skipped where the two builds genuinely allocate at the same address (CS::CSInGamePad
         # does), because there the mutant is the unmutated row and a green result would be
         # correct rather than vacuous -- the identity anchor is what carries that row.
         if row["va"][0] != row["va"][1]:
@@ -1862,7 +1862,7 @@ def _selftest_alloc_mutants():
 def _selftest_reach_mutants():
     """A reach row must go red when the repo's own bound is raised past the allocation.
 
-    The last two cases are not synthetic. They are THE TWO BUGS this table was built after,
+    The last two cases are not synthetic. They are the two bugs this table was built after,
     restated as rows: point the virtual-key stamp at `CS::CSInGamePad` (which is what the code did
     from 2026-07-23), or point the analog-stick write at `DLUID::VirtualMultiDevice` (which is what
     `can_move_probe` did until 2026-08-31), and the gate must say so. If either of these ever goes

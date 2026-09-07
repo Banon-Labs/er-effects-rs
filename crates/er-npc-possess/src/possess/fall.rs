@@ -1,4 +1,4 @@
-//! THE FALL BOOKKEEPING OF A BODY THAT IS BEING CARRIED, and the one clamp that makes it safe at
+//! The fall BOOKKEEPING of a body that is being carried, and the one clamp that makes it safe at
 //! every subject size.
 //!
 //! # The arithmetic the engine actually kills on
@@ -10,14 +10,14 @@
 //! fallHeight = physics->lastGroundedPosition.y - CSChrPhysicsModule::GetPosition(physics).y
 //! ```
 //!
-//! and its caller `CSChrFallModule::Update` (`0x14044df00`) evaluates it ONLY on a frame where
+//! and its caller `CSChrFallModule::Update` (`0x14044df00`) evaluates it only on a frame where
 //! `physics->standingOnSolidGround` is set and `IsSliding` is false -- i.e. on the frame the body
-//! LANDS -- then charges `hpMax * ratio(fallHeight)` through `CSChrDataModule::ChangeHP` and
+//! lands -- then charges `hpMax * ratio(fallHeight)` through `CSChrDataModule::ChangeHP` and
 //! stamps `serverLogDataTracker->deathType = Fall`.
 //!
 //! Two facts follow, and this module exists because of the second one.
 //!
-//! **The invincibility bit DOES cover it, contrary to what this crate used to say.** The damage
+//! **The invincibility bit does cover it, contrary to what this crate used to say.** The damage
 //! block is gated on `FUN_14044e730`, whose tail is byte-read here rather than guessed
 //! (`0x14044e79a` is `XOR EAX,EAX; RET`, `0x14044e8f1` is `MOV AL,1; RET`):
 //!
@@ -31,20 +31,20 @@
 //!
 //! So a body carrying `chrFlags1c5 & 0x10` cannot be charged for a fall at all. (`0x140454be0` is
 //! `MOVZBL 0x1b(RCX),EAX; RET` and `0x140454c00` is `MOV DL -> 0x1b(RCX); RET`: the byte at
-//! `CSChrMaterialModule+0x1B` must be SET for fall damage to apply, so it enables rather than
+//! `CSChrMaterialModule+0x1B` must be set for fall damage to apply, so it enables rather than
 //! disables it, whatever the accessor is named.)
 //!
-//! **Which is exactly why the exposure is at the EDGES.** The bit is only on while the possession
+//! **Which is exactly why the exposure is at the edges.** The bit is only on while the possession
 //! is running. Release takes it off, and the frames after that are ordinary mortal frames in which
 //! `lastGroundedPosition` is still whatever the possession left behind. If the body has ended up
 //! below the point the co-location was writing -- and it can, because the body keeps its own
 //! full-size character proxy and `ChrCtrl::updatePos` runs a complete `CSChrPhysicsModule::doUpdates`
-//! immediately AFTER draining our teleport -- then the difference above is a fall the body never
+//! immediately after draining our teleport -- then the difference above is a fall the body never
 //! took, and it is charged the moment the body next touches ground.
 //!
 //! # The clamp
 //!
-//! [`grounded_pin`] writes `lastGroundedPosition` at the co-location target, but never ABOVE where
+//! [`grounded_pin`] writes `lastGroundedPosition` at the co-location target, but never above where
 //! the body actually is. That makes `lastGroundedPosition.y - position.y` non-positive by
 //! construction, at any subject size, on any frame, through any release path -- including the one
 //! where the final `request_move` fails outright and the body is left exactly where the physics
@@ -87,8 +87,8 @@ pub(crate) const ENGINE_LANDING_STEP_M: f32 = 0.3;
 /// is a fraction of a metre; anything past this is not a step height.
 const MAX_BELIEVABLE_STEP_M: f32 = 5.0;
 
-/// Where `lastGroundedPosition` must be written, given where the body is being PUT and where the
-/// body actually IS right now.
+/// Where `lastGroundedPosition` must be written, given where the body is being put and where the
+/// body actually is right now.
 ///
 /// `X` and `Z` come from the target -- they are not part of the subtraction the engine performs,
 /// and the field is meant to name the point the body is being placed on. `Y` is the smaller of the
@@ -129,7 +129,7 @@ pub(crate) fn drift_alarm_m(max_step_height: Option<f32>) -> f32 {
     }
 }
 
-/// How far BELOW the co-location target the body is, when that is worth saying, in metres.
+/// How far below the co-location target the body is, when that is worth saying, in metres.
 ///
 /// `None` when the body is at or above the target, when it is below by less than `alarm_m`, or
 /// when either number is unreadable. A positive answer is a body the world has pushed down out of
@@ -153,7 +153,7 @@ pub(crate) fn drift_below_m(target_y: f32, body_y: Option<f32>, alarm_m: f32) ->
 pub(crate) struct FallState {
     /// `CSChrPhysicsModule+0x70 position` -- where the body actually is.
     pub(crate) position: Option<[f32; 3]>,
-    /// `+0x150 lastGroundedPosition`, as it reads BEFORE this frame's pin.
+    /// `+0x150 lastGroundedPosition`, as it reads before this frame's pin.
     pub(crate) last_grounded: Option<[f32; 3]>,
     /// `+0x92 standingOnSolidGround` -- the gate on the engine evaluating a fall at all.
     pub(crate) on_ground: Option<bool>,
@@ -164,7 +164,7 @@ pub(crate) struct FallState {
     /// `+0x104 maxStepHeight`, the character's own step height in metres.
     pub(crate) max_step_height: Option<f32>,
     /// `+0x110 capsuleHalfHeight` -- half the height of the collision the body is carrying
-    /// AROUND the creature it is wearing. Render scale does not touch it (`ChrCtrl::SetScaleSize`
+    /// around the creature it is wearing. Render scale does not touch it (`ChrCtrl::SetScaleSize`
     /// writes `ChrCtrl+0x2d4/+0x2dc` and `CSChrDataModule+0x54/+0x5c` and returns), so this is the
     /// number that decides whether the body fits where the creature is standing.
     pub(crate) capsule_half_height: Option<f32>,
@@ -184,11 +184,11 @@ impl FallState {
     }
 }
 
-/// Rate limiter for the co-location line, counted in CALLS rather than seconds.
+/// Rate limiter for the co-location line, counted in calls rather than seconds.
 ///
 /// A frame counter rather than a clock because `scripts/check-no-timeouts.py` bans an `elapsed()`
 /// gate outright and is right to: the co-location runs once per frame by construction, so counting
-/// calls IS counting frames, it cannot drift against the thing being measured, and a stalled frame
+/// calls is counting frames, it cannot drift against the thing being measured, and a stalled frame
 /// loop stops the log instead of flooding it.
 ///
 /// Module state rather than a field on the possession, deliberately: there is one possession at a
@@ -200,7 +200,7 @@ const COLOCATION_LOG_EVERY: u64 = 60;
 
 /// Is this frame's co-location due a routine telemetry line?
 ///
-/// An alarm (see [`drift_below_m`]) is NOT throttled by this -- a body that has left the floor is
+/// An alarm (see [`drift_below_m`]) is not throttled by this -- a body that has left the floor is
 /// worth a line on the frame it happens, and it is rare by definition.
 pub(crate) fn colocation_line_due() -> bool {
     COLOCATION_TICKS
@@ -223,7 +223,7 @@ mod tests {
     const TINY_SUBJECT_M: f32 = 0.70;
     const HUGE_SUBJECT_M: f32 = 59.0;
 
-    /// THE INVARIANT, and it is the whole fix: whatever is pinned, the engine's subtraction can
+    /// The invariant, and it is the whole fix: whatever is pinned, the engine's subtraction can
     /// never come out positive.
     ///
     /// Stated over the full subject range rather than at the one size somebody happened to die at,
@@ -246,10 +246,10 @@ mod tests {
         }
     }
 
-    /// A body ABOVE the target is pinned at the target, not lifted with it.
+    /// A body above the target is pinned at the target, not lifted with it.
     ///
     /// This is the ordinary case on a creature walking uphill: our tick pins before the engine
-    /// drains the teleport, so the body is still one frame behind and BELOW nothing. Taking the
+    /// drains the teleport, so the body is still one frame behind and below nothing. Taking the
     /// minimum would be wrong the other way -- it would leave the field naming a point the body is
     /// about to be moved off.
     #[test]
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(fall_charge_m(4.0, 4.0), 0.0);
     }
 
-    /// X and Z always come from the TARGET. The subtraction is vertical; the horizontal pair name
+    /// X and Z always come from the target. The subtraction is vertical; the horizontal pair name
     /// the point the body is being placed on, which is the creature's, not wherever physics left
     /// the body.
     #[test]
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(pinned[1], -30.0);
     }
 
-    /// AN UNREADABLE BODY IS NOT A ZERO. The pin falls back to the target unchanged, which is what
+    /// An UNREADABLE body is not a zero. The pin falls back to the target unchanged, which is what
     /// this crate did before the clamp existed -- refusing to write at all would leave the field
     /// naming an older, higher point, which is the failure the clamp is here to prevent.
     #[test]
@@ -286,7 +286,7 @@ mod tests {
         );
     }
 
-    /// THE ALARM COMES OFF THE CHARACTER, and only falls back to the engine constant when the
+    /// The alarm comes off the character, and only falls back to the engine constant when the
     /// character's own number is missing or not believable.
     #[test]
     fn the_alarm_threshold_is_the_bodys_own_step_height() {
@@ -302,16 +302,16 @@ mod tests {
         );
     }
 
-    /// The alarm fires on a body that has gone THROUGH something, and stays quiet for a body that
+    /// The alarm fires on a body that has gone through something, and stays quiet for a body that
     /// has merely stepped down -- at both ends of the subject range, since the threshold is a
-    /// property of the BODY and the body is the same 1.5 m player either way.
+    /// property of the body and the body is the same 1.5 m player either way.
     #[test]
     fn the_alarm_separates_a_step_from_a_floor() {
         let alarm = drift_alarm_m(Some(0.4));
         assert_eq!(drift_below_m(4.81, Some(4.81), alarm), None);
         assert_eq!(drift_below_m(4.81, Some(4.51), alarm), None, "a step down");
         assert_eq!(drift_below_m(4.81, Some(9.0), alarm), None, "above it");
-        // Under the tiniest subject and under the tallest, the answer is about the BODY.
+        // Under the tiniest subject and under the tallest, the answer is about the body.
         let through_the_floor = drift_below_m(4.81, Some(4.81 - 30.0), alarm);
         assert!(through_the_floor.is_some_and(|m| (m - 30.0).abs() < 1e-3));
         let under_a_59m_subject = drift_below_m(HUGE_SUBJECT_M, Some(-1.0), alarm);
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(drift_below_m(f32::NAN, Some(0.0), alarm), None);
     }
 
-    /// THE SIZE INDEPENDENCE, stated against the one module that DOES vary with subject size.
+    /// The size independence, stated against the one module that does vary with subject size.
     ///
     /// [`crate::possess::body_size::scale_for`] stretches the player's body by
     /// `creature hitHeight / 1.5` so the lock-on reticle lands on the creature rather than at its
@@ -332,7 +332,7 @@ mod tests {
     /// no `CSChrPhysicsModule` field -- so the body's capsule, its grounding test and the
     /// subtraction the fall module makes are identical at every one of those scales. This test
     /// exists to keep that an executable claim rather than a comment, because the bug report this
-    /// module answers was filed as a SIZE-dependent one.
+    /// module answers was filed as a size-dependent one.
     #[test]
     fn the_pin_is_the_same_under_a_rat_and_under_a_fifty_nine_metre_subject() {
         use crate::camera::geometry::PLAYER_HIT_HEIGHT;

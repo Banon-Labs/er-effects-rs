@@ -3,7 +3,7 @@
 
 Companion to `scripts/find-identifier.py`. Written for the `startup_hooks/` dead-code sweep:
 it enumerates `fn` / `const` / `static` / `struct` / `enum` / `type` / `trait` definitions under a
-target directory and counts whole-word occurrences of each identifier across the repo, EXCLUDING
+target directory and counts whole-word occurrences of each identifier across the repo, excluding
 the definition line itself.
 
 Zero remaining occurrences => no caller anywhere, including through a `pub(crate) use ...::*`
@@ -17,7 +17,7 @@ The corpus used to be four globs of Rust source::
     ("crates/**/*.rs", "tools/**/*.rs", "src/**/*.rs", "build.rs")
 
 Every consumer that is not a Rust file inside the cargo build graph was therefore invisible, and
-an identifier consumed only by one of them was reported ``DEAD`` -- a wrong answer handed
+an identifier consumed only by one of them was reported ``dead`` -- a wrong answer handed
 straight to `scripts/delete-rust-items.py`, which used to delete on that advice with no proof of
 its own. Real consumer classes this repo has, all of which were being missed:
 
@@ -32,43 +32,43 @@ its own. Real consumer classes this repo has, all of which were being missed:
 
 Two corrections to folklore about the old globs, both verified rather than assumed:
 
-* ``crates/**/*.rs`` DOES already cover the seven crate-level ``crates/*/build.rs`` files --
+* ``crates/**/*.rs`` does already cover the seven crate-level ``crates/*/build.rs`` files --
   Python's ``**`` matches zero or more path segments, so ``crates/er-hook/build.rs`` matches.
-  They were never missing. What WAS missing is ``build-support/``.
+  They were never missing. What was missing is ``build-support/``.
 * the bare ``build.rs`` glob entry matched nothing at all: this repo has no repo-root ``build.rs``.
 
 # Verdicts
 
-Consumers are now classified by WHERE they live, and the three no-build-graph-consumer outcomes
+Consumers are now classified by where they live, and the three no-build-graph-consumer outcomes
 print distinctly, because "nobody anywhere names this" and "only a Python script names this" are
 different facts and must not share a line:
 
-    ALIVE            >=1 consumer inside the cargo build graph. Not printed (as before).
-    ALIVE-ELSEWHERE  0 build-graph consumers, >=1 consumer in a ledger/script/doc/manifest.
-    MIRROR-ONLY      consumers only in a mirror tree (`.worktrees/`, `target/`, ...); needs
+    Alive            >=1 consumer inside the cargo build graph. Not printed (as before).
+    Alive-elsewhere  0 build-graph consumers, >=1 consumer in a ledger/script/doc/manifest.
+    Mirror-only      consumers only in a mirror tree (`.worktrees/`, `target/`, ...); needs
                      --include-mirrors to be reachable at all. Almost always the item's own
                      duplicate definition in a stale checkout, not a consumer.
-    DEAD             zero consumers in every scanned corpus.
+    Dead             zero consumers in every scanned corpus.
 
-Only ``DEAD`` is a deletion candidate. `scripts/delete-rust-items.py` refuses anything else.
+Only ``dead`` is a deletion candidate. `scripts/delete-rust-items.py` refuses anything else.
 
-A ``DEAD`` here is still necessary but NOT sufficient to delete: a `match` arm or any other
+A ``dead`` here is still necessary but not sufficient to delete: a `match` arm or any other
 runtime-unreachable branch inside a live function still emits machine code, and removing it
 changes the shipped `.text`. Confirm the deletion with `scripts/dll-code-fingerprint.py`.
 
 # Mirror trees are opt-in, deliberately
 
 ``.worktrees/`` holds ~48,800 `.rs` files totalling ~1.06 GB -- whole copies of this repo at other
-commits -- and a "hit" there is overwhelmingly the item's OWN definition in a stale copy rather
+commits -- and a "hit" there is overwhelmingly the item's own definition in a stale copy rather
 than a consumer. Measured on `crates/` (2026-08-30):
 
-    default            corpus  1,713 files,  1.2 s,  DEAD=1941  ALIVE-ELSEWHERE=71
-    --include-mirrors  corpus 58,274 files, 48.0 s,  DEAD=  41  ALIVE-ELSEWHERE=71  MIRROR-ONLY=1900
+    default            corpus  1,713 files,  1.2 s,  dead=1941  alive-elsewhere=71
+    --include-mirrors  corpus 58,274 files, 48.0 s,  dead=  41  alive-elsewhere=71  mirror-only=1900
 
-Scanning them turns 1,900 of 1,941 findings into MIRROR-ONLY for 40x the runtime. That is not a
+Scanning them turns 1,900 of 1,941 findings into mirror-only for 40x the runtime. That is not a
 safer tool, it is a tool with no output. So it is behind ``--include-mirrors``, and when it is
-on, those findings get their own ``MIRROR-ONLY`` verdict rather than being laundered into
-``ALIVE-ELSEWHERE``. Deleting an item from the tracked tree does not break a worktree anyway --
+on, those findings get their own ``mirror-only`` verdict rather than being laundered into
+``alive-elsewhere``. Deleting an item from the tracked tree does not break a worktree anyway --
 a worktree is a separate checkout with its own copy.
 
 Usage:
@@ -98,10 +98,10 @@ DEF_RE = re.compile(
     r"(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)"
 )
 
-# DELIBERATE, and deliberately kept: this matches identifier-shaped tokens anywhere on a line,
-# including inside `//` comments and string literals. That OVER-counts consumers, which is the
-# CONSERVATIVE direction -- more things look alive, fewer get a DEAD verdict, fewer get deleted.
-# Narrowing it (stripping comments/strings) would manufacture DEAD verdicts and hand them to a
+# Deliberate, and deliberately kept: this matches identifier-shaped tokens anywhere on a line,
+# including inside `//` comments and string literals. That over-counts consumers, which is the
+# conservative direction -- more things look alive, fewer get a dead verdict, fewer get deleted.
+# Narrowing it (stripping comments/strings) would manufacture dead verdicts and hand them to a
 # tool that deletes code, so it must never be made stricter.
 #
 # It is also load-bearing rather than incidental sloppiness. Every non-Rust consumer class below
@@ -119,9 +119,9 @@ TIER_BUILD = "build"
 TIER_NON_BUILD = "non-build"
 TIER_MIRROR = "mirror"
 
-#: The pre-2026-08-30 corpus, frozen as a LITERAL on purpose. The selftest uses it as the
-#: positive control: every new consumer class must read DEAD under this tuple and not-DEAD under
-#: the live one. Do NOT rebuild it from BUILD_GLOBS or any other live value -- a control
+#: The pre-2026-08-30 corpus, frozen as a literal on purpose. The selftest uses it as the
+#: positive control: every new consumer class must read dead under this tuple and not-dead under
+#: the live one. Do not rebuild it from BUILD_GLOBS or any other live value -- a control
 #: assembled from live pieces widens when the live piece widens and silently stops proving
 #: anything, which is the exact failure this file exists to close.
 PRE_FIX_SOURCE_GLOBS = ("crates/**/*.rs", "tools/**/*.rs", "src/**/*.rs", "build.rs")
@@ -200,7 +200,7 @@ MAX_SITES_PER_IDENT = 16
 #: This tool and its executor name real repository identifiers in their docstrings and control
 #: tables (`REAL_CONTROLS` below). Counting those as consumers would let the lint keep its own
 #: controls alive: delete `docs/recon/rva-map-1162-to-1170.data.tsv` and
-#: `RESMGR_EXPECTED_VTABLE_RVA` would STILL read ALIVE-ELSEWHERE, rescued by this file. A
+#: `RESMGR_EXPECTED_VTABLE_RVA` would still read alive-elsewhere, rescued by this file. A
 #: measuring instrument must not be part of what it measures.
 SELF_EXCLUDE_RELPATHS = frozenset(
     {
@@ -263,8 +263,8 @@ def build_tiers(root: str, include_mirrors: bool = False) -> "list[tuple[str, li
     ]
     if include_mirrors:
         tiers.append((TIER_MIRROR, corpus_files(root, MIRROR_GLOBS, allow_mirror_parts=True)))
-    # A file reachable from two tiers is attributed to the FIRST (strongest) one, so a Rust
-    # source that also matches a doc glob never gets demoted to ALIVE-ELSEWHERE.
+    # A file reachable from two tiers is attributed to the first (strongest) one, so a Rust
+    # source that also matches a doc glob never gets demoted to alive-elsewhere.
     seen: set[str] = set()
     deduped = []
     for tier, paths in tiers:
@@ -328,7 +328,7 @@ def verdict_for(scan: Scan, ident: str, def_sites: dict) -> Finding:
     """Classify `ident`, discounting its own definition line(s).
 
     `def_sites` maps ``(abspath, lineno)`` -> number of `ident` tokens on that line. Only the
-    definition sites the caller is asking about are discounted; a SECOND definition of the same
+    definition sites the caller is asking about are discounted; a second definition of the same
     name elsewhere still counts as a consumer, which is what the pre-fix tool did and is the
     conservative reading.
     """
@@ -428,10 +428,10 @@ def prove_names(
     lines the caller owns and wants discounted (i.e. the ones it is about to delete).
 
     `tiers` overrides the corpus entirely. It exists so a caller's selftest can re-run the same
-    proof against `PRE_FIX_SOURCE_GLOBS` and show the answer CHANGED -- a refusal that both the
+    proof against `PRE_FIX_SOURCE_GLOBS` and show the answer changed -- a refusal that both the
     old and the new corpus would produce proves nothing about the corpus.
 
-    NOTE FOR IMPORTERS: this module uses `@dataclass`, and `dataclasses` resolves annotations
+    NOTE for IMPORTERS: this module uses `@dataclass`, and `dataclasses` resolves annotations
     through ``sys.modules[cls.__module__]``. Loading it by path therefore requires the full
     recipe -- ``spec_from_file_location`` -> ``module_from_spec`` -> ``sys.modules[name] = mod``
     -> ``exec_module``. Skipping the sys.modules line raises `AttributeError: 'NoneType' object
@@ -477,14 +477,14 @@ def analyse(
 
 
 def _classify_under(root: str, globs, ident: str, def_site) -> str:
-    """Classify one identifier against an ARBITRARY single-tier corpus (control harness)."""
+    """Classify one identifier against an arbitrary single-tier corpus (control harness)."""
     paths = corpus_files(root, globs, allow_mirror_parts=True)
     tiers = [(TIER_BUILD, paths)]
     scan = scan_corpus(root, {ident}, tiers)
     return verdict_for(scan, ident, def_site).verdict
 
 
-#: Real identifiers from THIS tree, each verified (2026-08-30) to be defined under `crates/` and
+#: Real identifiers from this tree, each verified (2026-08-30) to be defined under `crates/` and
 #: consumed from exactly one place that the pre-fix corpus could not see. Frozen as data so the
 #: control is a fact about the repo, not a fact about the tool.
 REAL_CONTROLS = (
@@ -549,7 +549,7 @@ def _build_scratch_tree(root: str) -> str:
     src = _write(root, "crates/demo/src/lib.rs", "".join(lines))
 
     _write(root, "build-support/prologue_build.rs", "// include!d: SYN_BUILD_SUPPORT\n")
-    # Not a synthetic CLASS -- it is the counter-example that pins the folklore correction below.
+    # Not a synthetic class -- it is the counter-example that pins the folklore correction below.
     _write(root, "crates/demo/build.rs", 'fn main() { let _ = "SYN_CRATE_BUILD_RS"; }\n')
     _write(root, "scripts/demo-tool.py", '"""names SYN_SCRIPT_PY"""\n')
     _write(root, "docs/recon/demo-map.tsv", "0x1\t0x2\tSYN_LEDGER_TSV\t1/1\n")
@@ -597,14 +597,14 @@ def _selftest() -> int:
 
         # Folklore correction, pinned so nobody "fixes" it back. It is widely repeated that the
         # seven `crates/*/build.rs` files were missing from the pre-fix corpus. They were not:
-        # Python's `**` matches ZERO or more path segments, so `crates/**/*.rs` already reached
-        # `crates/er-hook/build.rs`. Asserting the pre-fix corpus calls this one ALIVE is what
+        # Python's `**` matches zero or more path segments, so `crates/**/*.rs` already reached
+        # `crates/er-hook/build.rs`. Asserting the pre-fix corpus calls this one alive is what
         # stops a future agent adding a control that cannot fail.
         def site_of(name: str):
             """Definition site, or None with a recorded failure -- never a KeyError.
 
             The scratch definitions come out of DEF_RE, so a broken matcher loses them all.
-            Crashing there would hide WHICH assertion noticed, and the whole point of this
+            Crashing there would hide which assertion noticed, and the whole point of this
             selftest is that it can say.
             """
             d = defs.get(name)
@@ -620,7 +620,7 @@ def _selftest() -> int:
             "correction is stale and build.rs IS now a missing corpus class",
         )
 
-        # Negative control: a genuinely unreferenced item must stay DEAD under BOTH corpora.
+        # Negative control: a genuinely unreferenced item must stay dead under both corpora.
         site = site_of("SYN_TRULY_DEAD") or {}
         check(
             _classify_under(tmp, PRE_FIX_SOURCE_GLOBS, "SYN_TRULY_DEAD", site) == "DEAD",
@@ -634,7 +634,7 @@ def _selftest() -> int:
             f"widening the corpus resurrected a genuinely dead item ({new_dead})",
         )
 
-        # Live control: a build-graph consumer must read ALIVE, never ALIVE-ELSEWHERE.
+        # Live control: a build-graph consumer must read alive, never alive-elsewhere.
         site = site_of("SYN_BUILD_GRAPH_USER") or {}
         live = verdict_for(
             scan_corpus(tmp, {"SYN_BUILD_GRAPH_USER"}, build_tiers(tmp)),
@@ -682,7 +682,7 @@ def _selftest() -> int:
                 f"{[str(s) for s in new.consumers][:4]}",
             )
 
-        # And the classifier must still find real DEAD items, in the right order of magnitude --
+        # And the classifier must still find real dead items, in the right order of magnitude --
         # a tool that rescues everything is as useless as one that rescues nothing.
         results, _scan, _unc = analyse(["crates/er-build-export"], REPO_ROOT)
         check(len(results) > 30, f"probe target yielded only {len(results)} definitions")

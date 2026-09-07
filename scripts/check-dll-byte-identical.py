@@ -5,7 +5,7 @@ Used by `.github/workflows/refactor-byte-identical.yml`: a PR that claims to be 
 refactor / a move should not change what the game loads, so the DLLs built from
 the merge-base and from the PR head are compared byte for byte.
 
-BUILD NOISE IS NORMALIZED FIRST, AND ONLY BUILD NOISE. Two clean builds of
+Build noise is normalized first, and only build noise. Two clean builds of
 *identical* source differ in three PE fields, none of which is derived from the
 code:
 
@@ -30,7 +30,7 @@ er-game-base carries a 12-byte ASCII commit id in .rdata -- and that is EVERY
 shipped DLL. It therefore differs on every PR that has any commit at all, which
 made this gate unpassable by construction rather than by anything an author did.
 
-MEASURED, PR #392 run 33794571494: all 26 shipped cdylibs CHANGED, every one of
+Measured, PR #392 run 33794571494: all 26 shipped cdylibs changed, every one of
 them by exactly 24 bytes in 2 runs of 12, every run in .rdata, and the report
 printed the two strings for each -- 'a56af6a06c03' (the merge-base) against
 '0be70e7616f6' (the head). The PR's only Rust changes were inside `#[cfg(test)]`
@@ -38,7 +38,7 @@ modules and a test-support crate, so the release cdylibs could not have differed
 for any other reason. A gate that is red on a diff which cannot reach the
 artifact is not measuring the artifact.
 
-So the two build ids are masked, and ONLY those two: each image has its OWN
+So the two build ids are masked, and only those two: each image has its own
 recorded sha replaced by a fixed placeholder of the same length. They are passed
 in explicitly (--base-build-sha / --head-build-sha) rather than pattern-matched,
 because "any 12 hex bytes" would be an allowlist for real .rdata content, and
@@ -68,7 +68,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 #: How much of the sha crates/er-game-base/build.rs bakes into `ER_BUILD_GIT`. It spells this as
 #: `--short=12`; the two must agree or the mask silently matches nothing.
 BUILD_SHA_LENGTH = 12
-#: What a masked build id is replaced WITH. Same length, so no offset moves and the comparison
+#: What a masked build id is replaced with. Same length, so no offset moves and the comparison
 #: stays byte-for-byte; not hex, so a masked run is obvious in any dump of the normalized image.
 BUILD_SHA_PLACEHOLDER = b"@" * BUILD_SHA_LENGTH
 
@@ -174,7 +174,7 @@ def build_sha_bytes(sha: str | None) -> bytes | None:
 def mask_build_sha(data: bytes, sha: bytes | None) -> tuple[bytes, int]:
     """Replace this image's own recorded build id, reporting how many times it was found.
 
-    The count is returned rather than swallowed so a mask that matched NOTHING can be said out
+    The count is returned rather than swallowed so a mask that matched nothing can be said out
     loud. Zero is not automatically wrong -- a DLL that does not link er-game-base carries no
     build id -- but a run where every DLL reports zero means the sha being masked is not the sha
     that was built, and the gate would then be passing for the wrong reason.
@@ -338,7 +338,7 @@ def main() -> int:
             changed.append(artifact)
 
     print()
-    # SAID OUT LOUD, because a mask that matched nothing is indistinguishable from a mask that
+    # Said out loud, because a mask that matched nothing is indistinguishable from a mask that
     # was not needed -- and the difference decides whether a green run means anything.
     if (base_sha or head_sha) and not masked_total:
         print(

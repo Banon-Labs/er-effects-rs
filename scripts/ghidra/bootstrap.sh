@@ -3,13 +3,13 @@
 # get to the same capability without reconstructing every step. Idempotent: re-running skips
 # work already done.
 #
-# WHAT THIS DOES (all in-repo + local, no sudo):
+# What this does (all in-repo + local, no sudo):
 #   1. install Ghidra's MachineLearning extension (ships with Ghidra) for the RF finder
 #   2. clone + build 13bm GhidraMCP from source (Go bridge + Java extension, our local patch)
 #   3. install the built MCP extension into Ghidra
 #   4. (optional) import + analyze the deobf binary into the persistent `erdeobf` project
 #
-# WHAT YOU MUST SUPPLY (NOT in the repo -- copyrighted game data):
+# What you must supply (not in the repo -- copyrighted game data):
 #   - eldenring-deobf.bin            the dearxan-deobfuscated mapped image (repo-local, gitignored)
 #   - (optional) the runtime gzf     for the `ermaporch` semantics project (set GZF=...)
 # and the toolchain: a Ghidra 12.1 install, Go, a JDK 21, and gradle 8.14 (see checks below).

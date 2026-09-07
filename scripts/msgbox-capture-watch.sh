@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Diagnostic: burst-capture the ER window through the ProfileSelect-confirm window so we can SEE the
+# Diagnostic: burst-capture the ER window through the ProfileSelect-confirm window so we can see the
 # MessageBox(es) the System->Quit switch drive shows (~+31-33s), plus the final loaded world.
 # Validated ER-window capture only (capture-er-window.py). Tears ER down after the reload commits or
 # a hard cap. Artifacts land under the probe artifact dir (not versioned).

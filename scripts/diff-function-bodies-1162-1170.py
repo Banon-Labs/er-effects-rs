@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
-"""Print an instruction-level diff of ONE function between ELDEN RING 1.16.2 and 1.17.
+"""Print an instruction-level diff of one function between ELDEN RING 1.16.2 and 1.17.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `scripts/verify-rva-map-1170.py` answers "is the 1.17 address the same function?" and
 `scripts/detect-struct-field-drift.py` answers "did a struct field move?".  Neither answers the
-question that follows a SHAPE-DIFF verdict: *what actually changed inside the body*.  The RVA gate
-in `er-game-base` installs a detour as soon as an address maps, so a hooked function whose ADDRESS
-is fine but whose BODY changed passes every existing check silently.  This is the tool for reading
+question that follows a shape-diff verdict: *what actually changed inside the body*.  The RVA gate
+in `er-game-base` installs a detour as soon as an address maps, so a hooked function whose address
+is fine but whose body changed passes every existing check silently.  This is the tool for reading
 that difference.
 
-EXTENTS COME FROM `.pdata`, NOT FROM A GUESS
+EXTENTS come from `.pdata`, not from a guess
 --------------------------------------------
 Each image's own exception directory declares where a function begins and ends, so the two bodies
 being compared are FromSoftware's own extents.  When an address is not a `.pdata` entry (a leaf or
 a linker thunk) pass `--bytes N` to compare a fixed window instead, and the header says so.
 
-ALIGNMENT
+Alignment
 ---------
 Instructions are aligned with `difflib.SequenceMatcher` over a NORMALISED key so that an inserted
 instruction shifts the diff by one line instead of desynchronising the rest of the function:
 
   * `rip`-relative displacements  -> `[rip+*]`     (code and data moved between builds)
   * branch / call targets         -> `<target>`    (same reason)
-  * everything else, including register-base displacements and immediates, is compared LITERALLY,
+  * everything else, including register-base displacements and immediates, is compared literally,
     because those are exactly the changes worth seeing.
 
-The printed text is always the RAW disassembly; only the alignment key is normalised.  Call targets
+The printed text is always the raw disassembly; only the alignment key is normalised.  Call targets
 are resolved to a `.pdata` entry when one exists so a swapped callee is visible as an address pair.
 
-USAGE
+Usage
     python3 scripts/diff-function-bodies-1162-1170.py 0x140af7cf0 0x140af9000
     python3 scripts/diff-function-bodies-1162-1170.py --context 4 0x14067a810 0x14067b660
     python3 scripts/diff-function-bodies-1162-1170.py --bytes 0x80 0x1426634a0 0x142665cb0
@@ -73,7 +73,7 @@ def _ensure_capstone():
 
 
 class Image:
-    """A flat (virtual-layout) PE image: file offset == RVA, VA == BASE + offset."""
+    """A flat (virtual-layout) PE image: file offset == RVA, VA == base + offset."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -119,7 +119,7 @@ class Image:
         # A leaf or a linker thunk carries no unwind record, so its end is DECODED by the shared
         # `leaf_extent` watermark rule (via `function_extent.body_end`).
         #
-        # This arm used to run to the NEXT `.pdata` start, capped at 0x400 -- the retired guess
+        # This arm used to run to the next `.pdata` start, capped at 0x400 -- the retired guess
         # that `pair-leaf-functions-1162-1170.py` keeps as its `--mutate extent` control precisely
         # because it walks through inter-function padding whose bytes differ between builds, so
         # everything after the first pad compares unequal. Measured on the pair
@@ -127,7 +127,7 @@ class Image:
         # `CS::KnowledgeLoadingScreen` `_Func_impl` thunks, identical but for a moved `.rdata`
         # label and a moved callee): the old arm read 0x60 bytes on both sides, decoded 24 vs 25
         # instructions and printed `0.6122 similarity, 3 differing region(s)`. Every one of those
-        # differences was past byte 23 and belonged to the NEXT thunk.
+        # differences was past byte 23 and belonged to the next thunk.
         end = function_extent.body_end(self.data, va)
         if end is None:
             raise SystemExit(
@@ -143,7 +143,7 @@ _HEXNUM = re.compile(r"^0x[0-9a-f]+$")
 
 
 def norm(insn) -> str:
-    """Alignment key: mask what MUST move between builds, keep what must not."""
+    """Alignment key: mask what must move between builds, keep what must not."""
     op = _RIP.sub("[rip+*]", insn.op_str)
     if insn.mnemonic in _BRANCHY and _HEXNUM.match(op.strip()):
         op = "<target>"
@@ -251,7 +251,7 @@ def diff_one(a_va: int, b_va: int, nbytes: int | None, context: int, quiet: bool
 
 
 def selftest() -> int:
-    """Assert the alignment key on hand-written encodings, then on a KNOWN 1.17 field move."""
+    """Assert the alignment key on hand-written encodings, then on a known 1.17 field move."""
     _ensure_capstone()
     import capstone
 
@@ -260,7 +260,7 @@ def selftest() -> int:
     def only(blob: bytes, va: int = 0x140000000):
         return next(iter(md.disasm(blob, va)))
 
-    # rip-relative displacements are masked (code moved), register displacements are NOT.
+    # rip-relative displacements are masked (code moved), register displacements are not.
     a = only(bytes.fromhex("488B0D11111111"))  # mov rcx, [rip + 0x11111111]
     b = only(bytes.fromhex("488B0D22222222"))  # mov rcx, [rip + 0x22222222]
     assert norm(a) == norm(b), (norm(a), norm(b))

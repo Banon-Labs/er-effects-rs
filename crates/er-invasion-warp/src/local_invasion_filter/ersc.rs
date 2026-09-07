@@ -4,14 +4,14 @@
 //! # Why this is a table rather than four constants
 //!
 //! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and the last
-//! update moved every address this module pins AND the fields those addresses operate on.
+//! update moved every address this module pins and the fields those addresses operate on.
 //! A single constant set can only ever be right about one build, and the build it is right about
 //! changes without warning -- so the addresses live in an [`Abi`] record that
 //! [`super::resolve_ersc_abi`] selects by fingerprint, refusing anything it cannot identify.
 //!
 //! **[`SUPPORTED`] holds exactly one entry, and that is a product decision: this mod drives the
-//! LATEST Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
-//! next build REPLACES this entry, measured the way this one was. A build that is no longer the
+//! latest Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
+//! next build replaces this entry, measured the way this one was. A build that is no longer the
 //! latest leaves nothing behind: no second entry, no fingerprint, no pinned addresses. The
 //! refusal does not need to name which stale build it found, only that it is not the supported
 //! one.
@@ -25,17 +25,17 @@
 //! |---|---|---|
 //! | `show` | `0x241a0` | unique masked-body match; `.pdata` index 301; function size `0xa0a` |
 //! | invade action | `0x25850` | `.pdata` index 319, on a shift that holds unbroken over 78 consecutive functions; the only action of its shape writing `0xe`, at `0x25886`, out of 4903 functions |
-//! | cancel action | `0x258d0` | unique masked-body match, AND `.pdata` index 320 on that same shift, AND size `0x64` |
-//! | `BuildLobbyKey` | `0xad6e0` | `.pdata` index 1782, size `0x2d1`; loads the SHA-256 IV and a 32-byte `.rdata` salt `0x23` bytes apart; its two callers sit in ONE function that calls it twice `0xaf` apart; its opening decodes to `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
+//! | cancel action | `0x258d0` | unique masked-body match, and `.pdata` index 320 on that same shift, and size `0x64` |
+//! | `BuildLobbyKey` | `0xad6e0` | `.pdata` index 1782, size `0x2d1`; loads the SHA-256 IV and a 32-byte `.rdata` salt `0x23` bytes apart; its two callers sit in one function that calls it twice `0xaf` apart; its opening decodes to `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
 //!
-//! Two lessons from that measurement are worth keeping, because they are about METHOD and will
+//! Two lessons from that measurement are worth keeping, because they are about method and will
 //! apply again the next time Seamless ships:
 //!
 //! * **A masked body signature can miss a function that has not moved.** The compiler inverted the
 //!   invade action's idle guard -- `cmp [rdi+STATE],IDLE; je <continue>` became
 //!   `cmp [rdi+STATE],IDLE; jne <return>` -- and `je`/`jne` differ in the OPCODE byte, which a
 //!   masked search keeps. One byte at offset 21 defeated every signature length on the ladder.
-//! * **A unique prologue hit is a code SHAPE, not a function.** `BuildLobbyKey`'s 19-byte prologue
+//! * **A unique prologue hit is a code shape, not a function.** `BuildLobbyKey`'s 19-byte prologue
 //!   matched exactly one address and it was the wrong one: `0x1a6d0` merely happens to frame
 //!   `0x148` too, and sits at `.pdata` index 193 -- 1589 entries from the real function.
 //!   Big-frame MSVC functions in one source file look alike from the top; the resolution has to
@@ -48,7 +48,7 @@
 //! three consequences rather than three separate measurements, and it is the shape to re-check
 //! first when the fields move again.
 //!
-//! # The state enum renumbers wholesale, so leaving a code alone is the DANGEROUS option
+//! # The state enum renumbers wholesale, so leaving a code alone is the dangerous option
 //!
 //! Scanning every `mov dword [reg+STATE], imm32` in the real code finds seven distinct values.
 //! When Seamless last shifted them, all seven moved by a uniform `+1` and a new state was inserted
@@ -56,7 +56,7 @@
 //! carried across a build unchanged is therefore not the conservative choice: it is how a progress
 //! marker silently becomes a fast-fail state.
 //!
-// Every `*_PROLOGUE` below is assembled from NAMED `iced-x86` instructions by this crate's
+// Every `*_PROLOGUE` below is assembled from named `iced-x86` instructions by this crate's
 // `build.rs`, which additionally checks each one against a real copy of the build it claims to
 // describe -- located by the Seamless version string inside the file rather than by which
 // directory it sits in. Hand-typing them is what the generator exists to prevent: one wrong
@@ -66,7 +66,7 @@ include!(concat!(env!("OUT_DIR"), "/generated_ersc_prologues.rs"));
 
 /// Everything a Seamless build's ABI consists of, in one record.
 ///
-/// Splitting it up is what made the previous breakage silent-adjacent: a correct new ADDRESS
+/// Splitting it up is what made the previous breakage silent-adjacent: a correct new address
 /// used with the previous build's field offsets would read and write the wrong fields of a
 /// live multiplayer session, and this module's failure mode is cancelling other players'
 /// invasions. Address, layout and codes travel together or not at all.
@@ -84,12 +84,12 @@ pub struct Abi {
     ///
     /// # Why this one matters more than it looks
     ///
-    /// Seamless finds worlds with a Steam lobby-list query carrying exactly TWO match terms:
+    /// Seamless finds worlds with a Steam lobby-list query carrying exactly two match terms:
     /// `lobby_type == "yknx3_seamless_master_lobby"` and `lobby_key == <this string>`, the
     /// latter with `k_ELobbyComparisonEqual`. An exhaustive decode of the XOR-obfuscated
     /// string idiom across every plaintext function in `ersc.dll` finds only those two keys in
     /// the whole module -- no map, block, region, coordinate or radius anywhere. So two
-    /// players who derive DIFFERENT `lobby_key` values are simply invisible to each other, no
+    /// players who derive different `lobby_key` values are simply invisible to each other, no
     /// matter how well their levels, weapon levels or locations line up.
     ///
     /// The value is [`LOBBY_KEY_HEX_LEN`] lowercase hex characters -- a SHA-256 digest, from
@@ -120,37 +120,37 @@ pub struct Abi {
     pub state_searching: u32,
     /// The state "Cancel search" writes.
     ///
-    /// NOT usable as a "the user cancelled" signal, which is what it was briefly used for: the
-    /// static scan found SEVEN sites writing this value and only one is the Cancel action, so
+    /// Not usable as a "the user cancelled" signal, which is what it was briefly used for: the
+    /// static scan found seven sites writing this value and only one is the Cancel action, so
     /// every internal abort looked like a user cancel -- and it was still seven sites after the
     /// last renumber. It survives as a label for the trace.
     pub state_cancelling: u32,
     /// The first state past the fast-fail path, our own progress marker for the restart
     /// backoff. See `note_attempt_progress`, its only reader, for what it gates.
     ///
-    /// The one number in this table that is INFERRED rather than read out of an instruction: it
+    /// The one number in this table that is inferred rather than read out of an instruction: it
     /// was measured at runtime on the preceding build and carried across the proven enum-wide
     /// `+1`. Leaving it unshifted would have been worse than moving it -- under that renumber the
-    /// stale value lands on a FAST-FAIL state, so the marker would clear the backoff penalty on
+    /// stale value lands on a fast-fail state, so the marker would clear the backoff penalty on
     /// exactly the attempts that earned it.
     pub state_offer_received: u32,
 }
 
 /// Every Seamless build this module knows how to drive: the latest one.
 ///
-/// [`super::resolve_ersc_abi`] requires EXACTLY ONE of these to match the loaded module and
+/// [`super::resolve_ersc_abi`] requires exactly one of these to match the loaded module and
 /// refuses otherwise -- zero matches means a build this repo has not measured, and two would mean
 /// the discriminator does not discriminate. With a single entry the "two matched" arm cannot fire;
 /// it stays because the entry after the next Seamless update has to earn its place, and a pin too
 /// weak to tell itself from its predecessor must fail loudly rather than silently win a race.
 ///
-/// The discriminator is the INVADE action rather than `show` for two independent reasons.
+/// The discriminator is the invade action rather than `show` for two independent reasons.
 /// `show` survived the last update byte-identical at a different address, so it could not tell
-/// one build from the other at all. And this module HOOKS `show`, so once the detour is
+/// one build from the other at all. And this module hooks `show`, so once the detour is
 /// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
 /// Seamless is a stranger, which is a bug this module has already had once.
 pub const SUPPORTED: &[Abi] = &[Abi {
-    // NOT a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
+    // Not a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
     // "v2.0.0", so the log line announced the wrong Seamless build beside correctly re-pinned
     // addresses -- the exact second-copy-of-the-version-number that AGENTS.md forbids, and the
     // most misleading possible place for it, since this string is what a reader trusts to say
@@ -172,12 +172,12 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     state_offer_received: 0x13,
 }];
 
-// The addresses and field offsets are NAMED CONSTANTS rather than literals inside the table
+// The addresses and field offsets are named constants rather than literals inside the table
 // above, and that is not a style choice: `scripts/check-expression-constants.py` derives its
 // gated population from `const` declarations whose name carries `RVA`, and a value written as
 // a bare struct-literal field is invisible to it. Inlining these once already dropped six
 // names out of that population, which the coverage floor caught. They keep the version prefix so
-// that a re-pin lands as a NEW set of names beside the old ones for exactly one commit, rather
+// that a re-pin lands as a new set of names beside the old ones for exactly one commit, rather
 // than as an in-place edit of numbers nobody diffed.
 
 /// Seamless v2.0.1, the supported build. See this module's docs for what identifies each one.
@@ -201,7 +201,7 @@ pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 /// `OSM+0x58` is the session object, and it has survived every update so far: all five option
 /// actions still open `mov rdi,[rcx+0x58]`.
 ///
-/// A `.data` singleton holding OSM would have let this module hook NOTHING in Seamless. One
+/// A `.data` singleton holding OSM would have let this module hook nothing in Seamless. One
 /// was looked for and not found: the only `.data` global that is loaded and then dereferenced
 /// at `+0x58` is `ersc+0x21b228`, and it is read at 121 sites, written by a pair of adjacent
 /// CRT-shaped setters, and non-zero in the file -- a locale/allocator global that the search

@@ -17,7 +17,7 @@
 //! 1. [`PARAMS_INIT_RVA`] fills a 0x34-byte request-parameter block with defaults.
 //! 2. [`RESOLVE_POINT_RVA`] snaps a world position onto the navmesh, returning the snapped point
 //!    and the `(section, face)` pair it landed in. Called once for the start, once for the end.
-//! 3. [`REFINE_START_RVA`] adjusts the START point/face pair.
+//! 3. [`REFINE_START_RVA`] adjusts the start point/face pair.
 //! 4. [`REQUEST_RVA`] enqueues the search under the world's own mutex and returns a request id.
 //!    Zero means it refused.
 //! 5. [`IS_READY_RVA`] polls that id; [`FETCH_RVA`] then drains the finished route into a
@@ -58,7 +58,7 @@ const NAV_DATA_SECTIONS_OFFSET: usize = 0x130;
 const PARAMS_INIT_RVA: u32 = 0xbe_4840;
 /// `FUN_140bddfe0(world, pos, params, out_point, out_face)` -- snap a position onto the navmesh.
 const RESOLVE_POINT_RVA: u32 = 0xbd_dfe0;
-/// `FUN_140bdd570(world, point, face, params)` -- refine the START pair before the request.
+/// `FUN_140bdd570(world, point, face, params)` -- refine the start pair before the request.
 const REFINE_START_RVA: u32 = 0xbd_d570;
 /// `FUN_140bdec90(world, start_pt, start_face, end_pt, end_face, params) -> request_id`.
 const REQUEST_RVA: u32 = 0xbd_ec90;
@@ -98,7 +98,7 @@ const CONTAINER_BYTES: usize = 0x40;
 const AGENT_RADIUS_MULTIPLIER: f32 = 2.0;
 /// How hard the engine is allowed to look. Both values come from the config, already clamped.
 ///
-/// `params+0x20` is the range, where a NEGATIVE value is the engine's own "unlimited", and
+/// `params+0x20` is the range, where a negative value is the engine's own "unlimited", and
 /// `params+0x24` is the iteration budget.
 ///
 /// Both used to be hard-coded here as `150.0` and `800`, copied from `CS::CSAiFunc` -- and
@@ -236,7 +236,7 @@ fn hk_ai_world() -> Result<usize, RequestRefusal> {
         return Err(RequestRefusal::AiWorldAbsent);
     }
     // `FUN_140bddfe0` walks `world->navData->sections` with no null check of its own, so both
-    // links are checked HERE. Skipping this is not a wrong route, it is an access violation
+    // links are checked here. Skipping this is not a wrong route, it is an access violation
     // inside Havok on the first frame after a map load.
     // SAFETY: `world` is non-null; both offsets are within `CSHkAiWorld`.
     let nav_data = unsafe { safe_read_usize(world + HK_AI_WORLD_NAV_DATA_OFFSET) }.unwrap_or(0);
@@ -331,7 +331,7 @@ fn write_usize(block: &mut [u8; PARAMS_BYTES], offset: usize, value: usize) {
 ///
 /// So dropping a `PendingRequest` without polling it to an answer holds its slot, its Havok
 /// reference and its allocations for the rest of the process -- and because the ring is the
-/// world's, filling it stops the GAME'S OWN characters pathfinding. Giving up on the answer is
+/// world's, filling it stops the game'S own characters pathfinding. Giving up on the answer is
 /// fine; giving up on the request is not. `crate::abandon` is how the caller does the former.
 pub(crate) struct PendingRequest {
     world: usize,
@@ -390,7 +390,7 @@ pub(crate) unsafe fn request(
     let (mut start_point, mut end_point) = (Vector4::default(), Vector4::default());
     let (mut start_face, mut end_face): (FacePair, FacePair) = ([-1, -1], [-1, -1]);
 
-    // The engine resolves the DESTINATION first and the origin second; the order is preserved
+    // The engine resolves the destination first and the origin second; the order is preserved
     // because the resolver mutates world state the second call reads.
     // SAFETY: every pointer is to a live local of the exact shape the callee expects, and the
     // navmesh residency was checked above.
@@ -579,7 +579,7 @@ unsafe fn release_container_node(container: *const u8) {
 ///
 /// # The container, and how its shape was established
 ///
-/// It is a power-of-two ring of element POINTERS, not a flat array. From the push
+/// It is a power-of-two ring of element pointers, not a flat array. From the push
 /// (`FUN_1402ecad0`, `0x1402ecad0`):
 ///
 /// | offset | field |

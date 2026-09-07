@@ -29,8 +29,8 @@ DSR_TARGETS = [
 ER_PLAYER_FILTER = "chr/c0000"
 ER_DONOR_FILTER = "parts/bd_m_1010"
 # Tool/game discovery. Every default below is derived at run time from an env override, then
-# PATH, then the CURRENT user's home. Nothing names a literal home directory or a machine that no
-# longer exists: the /mnt/... entries are the retired WSL2 layout and come LAST, so on a native
+# path, then the current user's home. Nothing names a literal home directory or a machine that no
+# longer exists: the /mnt/... entries are the retired WSL2 layout and come last, so on a native
 # Linux box they cost a failed stat instead of reporting a present install as missing.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,7 +88,7 @@ def default_dsr_candidates() -> list[Path]:
 
 
 def default_fstools() -> Path:
-    """fstools_cli: env override, then PATH, then a sibling/`$HOME` fstools-rs checkout."""
+    """fstools_cli: env override, then path, then a sibling/`$HOME` fstools-rs checkout."""
     override = os.environ.get("FSTOOLS_CLI")
     if override:
         return Path(override).expanduser()
@@ -107,7 +107,7 @@ def default_fstools() -> Path:
 
 
 def default_witchy() -> Path:
-    """WitchyBND: env override, then PATH, then this user's install / a sibling checkout."""
+    """WitchyBND: env override, then path, then this user's install / a sibling checkout."""
     override = os.environ.get("WITCHY_BND")
     if override:
         return Path(override).expanduser()

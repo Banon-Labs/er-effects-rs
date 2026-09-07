@@ -1,4 +1,4 @@
-// IS THE DESTINATION THE LOADED SAVE? -- identity, path normalization and all-or-nothing writes
+// Is the destination the loaded save? -- identity, path normalization and all-or-nothing writes
 // for the save-destination commit.
 //
 // Extracted into `er-quit-menu-core` in S7. The product DLL keeps a root shim that re-exports this
@@ -7,9 +7,9 @@
 // # Why a string compare is not an answer
 //
 // The commit asks one question before it writes anything: is the destination the user browsed to
-// the SAME FILE as the loaded save? A "no" that is really a "yes" is the destructive answer. It
+// the same file as the loaded save? A "no" that is really a "yes" is the destructive answer. It
 // makes the commit seed and redirect the loaded save onto itself; the native write then lands
-// correctly, the live-file stamp moves because it IS the destination, the safety net reads that as
+// correctly, the live-file stamp moves because it is the destination, the safety net reads that as
 // "the redirect leaked", and it writes the pre-fire snapshot back over the save that just
 // succeeded -- logging that it restored the file it destroyed.
 //
@@ -23,7 +23,7 @@
 //   * either of those with `/` separators, a trailing separator, mixed case, a `.` or `..`
 //     segment, or through a symlinked directory.
 //
-// So the identity test is a HANDLE test: open both and compare the volume serial plus the file
+// So the identity test is a handle test: open both and compare the volume serial plus the file
 // index, which is what `BY_HANDLE_FILE_INFORMATION` is for and what Wine derives from the
 // underlying device and inode. Normalization below is a cheap pre-pass that can only answer
 // "same" (identical normalized text really is the same file); it is never allowed to answer
@@ -50,7 +50,7 @@ use std::os::windows::io::AsRawHandle as _;
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
-/// `FILE_FLAG_BACKUP_SEMANTICS`. Required to obtain a HANDLE to a DIRECTORY through
+/// `FILE_FLAG_BACKUP_SEMANTICS`. Required to obtain a handle to a directory through
 /// `CreateFileW`, which is how the redirect establishes that an incoming write-open's parent is
 /// the loaded save's folder under a different spelling.
 #[cfg(windows)]
@@ -72,7 +72,7 @@ pub enum SaveDestProbe {
     Id(SaveDestFileId),
     /// The path does not exist. Decisive: a file that is not there is not the loaded save.
     Absent,
-    /// The path could not be opened, or the filesystem returned no usable identity. NOT a
+    /// The path could not be opened, or the filesystem returned no usable identity. Not a
     /// synonym for absent -- a sharing violation lands here, and so would a filesystem that
     /// reports a zero volume serial and a zero file index.
     Unreadable,
@@ -121,14 +121,14 @@ fn save_dest_probe_opened(file: std::io::Result<fs::File>) -> SaveDestProbe {
     }
 }
 
-/// Identify a FILE. Read access only, and the handle is closed immediately -- nothing here may
+/// Identify a file. Read access only, and the handle is closed immediately -- nothing here may
 /// perturb a file the game may be holding.
 #[cfg(windows)]
 pub fn save_dest_probe_file(path: &Path) -> SaveDestProbe {
     save_dest_probe_opened(fs::File::open(path))
 }
 
-/// Identify a DIRECTORY. Same contract as [`save_dest_probe_file`]; the backup-semantics flag is
+/// Identify a directory. Same contract as [`save_dest_probe_file`]; the backup-semantics flag is
 /// what makes a directory openable at all.
 #[cfg(windows)]
 pub fn save_dest_probe_dir(path: &Path) -> SaveDestProbe {
@@ -174,7 +174,7 @@ pub fn save_dest_file_identity(target: &Path, live: &Path) -> SaveDestIdentity {
     save_dest_identity_from_probes(save_dest_probe_file(target), save_dest_probe_file(live))
 }
 
-/// Are `left` and `right` the same DIRECTORY? Used by the write-open redirect to recognize the
+/// Are `left` and `right` the same directory? Used by the write-open redirect to recognize the
 /// loaded save's folder reached through another spelling.
 #[cfg(windows)]
 pub fn save_dest_dir_identity(left: &Path, right: &Path) -> SaveDestIdentity {
@@ -316,7 +316,7 @@ pub fn save_dest_write_atomic(path: &Path, bytes: &[u8], tag: &str) -> Result<()
     Ok(())
 }
 
-/// Scratch directory for one test, keyed by PROCESS as well as by name.
+/// Scratch directory for one test, keyed by process as well as by name.
 ///
 /// The pid is what makes the tests independent. Every suite in this crate wipes its directory on
 /// entry, `%TEMP%` is one shared directory for every process in the wine prefix, and two test
@@ -328,7 +328,7 @@ pub fn save_dest_write_atomic(path: &Path, bytes: &[u8], tag: &str) -> Result<()
 /// the directory between the `fs::write` and the probe.
 ///
 /// It lives at module scope rather than inside either `#[cfg(test)]` module so the whole crate
-/// shares ONE implementation. A private copy per test module is exactly how the identity tests
+/// shares one implementation. A private copy per test module is exactly how the identity tests
 /// came to use a fixed name while the commit tests next door were already pid-keyed.
 #[cfg(all(test, windows))]
 pub(crate) fn save_dest_test_dir(name: &str) -> PathBuf {
@@ -371,7 +371,7 @@ mod save_dest_identity_tests {
     }
 
     /// The spelling difference this whole module exists for: two texts that are one file. They
-    /// must NOT normalize equal -- only the handle test can join them -- which is why
+    /// must not normalize equal -- only the handle test can join them -- which is why
     /// normalization is allowed to prove "same" and never "different".
     #[test]
     fn the_two_wine_spellings_of_one_save_do_not_normalize_equal() {
@@ -413,8 +413,8 @@ mod save_dest_identity_tests {
         assert_eq!(save_dest_normalize_wide(&[0]), None);
     }
 
-    /// THE DEFECT, END TO END. Two different paths that are one file must come back `SameFile`,
-    /// and the normalized text must NOT be what says so -- that is precisely the case a string
+    /// The defect, end to end. Two different paths that are one file must come back `SameFile`,
+    /// and the normalized text must not be what says so -- that is precisely the case a string
     /// compare gets wrong, and getting it wrong makes the commit redirect the loaded save onto
     /// itself and then restore a pre-save snapshot over the save that just succeeded.
     ///

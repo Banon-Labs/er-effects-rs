@@ -8,14 +8,14 @@
 //! Under Proton these resolve to Wine's `kernel32`, which is the module the game
 //! actually calls, so the detours observe the real write path.
 //!
-//! Those blind spots do NOT exist in this binary. An exhaustive parse of
+//! Those blind spots do not exist in this binary. An exhaustive parse of
 //! `eldenring-deobf.bin`'s import directory (RVA 0x4c09000, 23 DLLs) plus its delay-import
 //! directory (0x3b03bec, EOSSDK only) shows the game imports none of `NtWriteFile`,
 //! `NtCreateFile`, `ZwWriteFile`, `CreateFile2`, `WriteFileEx`, `WriteFileGather`,
 //! `ReplaceFileW/A`, `CreateFileMapping*` or `MapViewOfFile*`. `WriteFile` has exactly five
 //! xref sites image-wide and `SetEndOfFile` exactly one.
 //!
-//! What DID escape, found by measurement rather than reasoning: `CopyFileW`. A census run
+//! What did escape, found by measurement rather than reasoning: `CopyFileW`. A census run
 //! logged one `WriteFile` of 2359328 bytes while the offline BND4 witness found three changed
 //! slots totalling 5374016 bytes in `ER0000.sl2` and a mirrored `ER0000.sl2.bak` -- 3014688
 //! bytes reached disk through APIs this module did not hook. The game builds the backup with
@@ -68,7 +68,7 @@ pub(crate) const EXPECTED_HOOKS: usize = 8;
 /// telemetry publishes as `census_hooks_installed` against `census_hooks_expected`, so
 /// a run with incomplete coverage cannot be mistaken for a clean one.
 ///
-/// The count is deliberately stored in ONE place -- `lib.rs`'s `HOOKS_INSTALLED`. This
+/// The count is deliberately stored in one place -- `lib.rs`'s `HOOKS_INSTALLED`. This
 /// module used to keep a second copy plus an `installed_hooks()` accessor that nothing
 /// read; two stores of the same fact can only ever drift apart.
 pub(crate) fn install() -> usize {
@@ -212,7 +212,7 @@ unsafe extern "system" fn write_file_hook(
     bytes_written: *mut u32,
     overlapped: *mut c_void,
 ) -> i32 {
-    // Observe BEFORE the call: the census records intent, so an interception that
+    // Observe before the call: the census records intent, so an interception that
     // later fails the write still shows up as a save attempt.
     witness::note_write_file(file, u64::from(bytes_to_write));
     let orig = ORIG_WRITE_FILE.load(Ordering::SeqCst);
@@ -279,7 +279,7 @@ unsafe extern "system" fn copy_file_w_hook(
     }
     let original: CopyFileWFn = unsafe { core::mem::transmute(orig) };
 
-    // Hooked because it was a proven ESCAPE, not because it is intercepted: the `.bak`
+    // Hooked because it was a proven escape, not because it is intercepted: the `.bak`
     // is built by copy, not by write, and 3,014,688 bytes once reached disk through it
     // while the census reported clean. It is observed here and stopped upstream.
     unsafe { witness::note_copy_file(existing, new) };

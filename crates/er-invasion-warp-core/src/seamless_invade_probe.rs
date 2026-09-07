@@ -9,7 +9,7 @@
 //! either: the code that picks a target sits inside the ~3.4% of its `.text` that Themida
 //! encrypted.
 //!
-//! What IS readable is the answer, after the fact. An invader's destination is not a coordinate
+//! What is readable is the answer, after the fact. An invader's destination is not a coordinate
 //! -- it is an MSB **entry-point entity ID** plus a destination map, and both are handed to the
 //! engine through `CSGameMan` where anything can read them. One invasion therefore tells us what
 //! the encrypted code decided, which is the fact the static analysis could not produce.
@@ -27,7 +27,7 @@
 //! at `0x140af9d20` -- calls the first two, which is what puts these fields on the placement path
 //! rather than merely near it.
 //!
-//! This module only READS. It never writes `CSGameMan` and never calls into the engine, because
+//! This module only reads. It never writes `CSGameMan` and never calls into the engine, because
 //! the point is to find out what Seamless does, and a probe that perturbs the thing it measures
 //! answers a different question.
 
@@ -96,7 +96,7 @@ impl InvadeDestinationWatcher {
 
     /// Feed a reading; returns `Some` only when it is new and armed.
     ///
-    /// A disarmed reading CLEARS the memo rather than being ignored, so invading the same place
+    /// A disarmed reading clears the memo rather than being ignored, so invading the same place
     /// twice reports twice -- the slot returns to `-1` between invasions, and treating the second
     /// one as a duplicate would hide exactly the repeat case the user cares about.
     pub fn observe(&mut self, reading: InvadeDestination) -> Option<InvadeDestination> {
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn invading_the_same_place_twice_reports_twice() {
-        // THE CASE THIS PROBE EXISTS FOR. The slot returns to -1 between invasions; if a
+        // The case this probe exists for. The slot returns to -1 between invasions; if a
         // disarmed reading did not clear the memo, the second invasion to the same spot would be
         // silently deduplicated -- and "does it send me to the same place again" is the question.
         let mut watcher = InvadeDestinationWatcher::new();

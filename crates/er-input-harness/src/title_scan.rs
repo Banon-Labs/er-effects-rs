@@ -1,12 +1,12 @@
-//! TITLE-OWNER SCAN -- passive read of the TITLE screen's state machine, ported from the product's
+//! Title-owner scan -- passive read of the title screen's state machine, ported from the product's
 //! `find_title_owner_by_vtable` (experiments/title/profile_select_flow.rs). It lets the harness gate the
-//! title phases (PRESS ANY BUTTON parked vs. Continue/Load menu built) on real RAM semaphores instead of
-//! guessing, per bd TITLE-CONTINUE-is-accept-byte-not-keystate (owner+0x48 state, dialog+0xa40).
+//! title phases (press any button parked vs. Continue/Load menu built) on real RAM semaphores instead of
+//! guessing, per bd title-continue-is-accept-byte-not-keystate (owner+0x48 state, dialog+0xa40).
 //!
 //! The title owner is a heap object whose vtable is `base + TITLE_OWNER_VTABLE_RVA` and whose per-
 //! instance state-dispatch table (at `owner+0x10`) is `base + INNER_TITLE_STATE_TABLE_RVA`. To find it we
 //! walk this process's own address space with `VirtualQuery`, read each committed/readable region in
-//! 64KB chunks via `ReadProcessMemory` (a chunk freed by the booting game returns FALSE instead of
+//! 64KB chunks via `ReadProcessMemory` (a chunk freed by the booting game returns false instead of
 //! faulting), and scan for a pointer-slot equal to the vtable whose `+0x10` slot equals the state table.
 //!
 //! All reads are fault-safe (`ReadProcessMemory` on the current-process pseudo handle, same idiom as
@@ -26,7 +26,7 @@ use windows::Win32::System::Memory::{
 use crate::log::harness_log;
 use crate::win32::{read_u8, read_usize};
 
-// --- RVAs / offsets off the game image base (0x140000000), bd TITLE-CONTINUE-is-accept-byte-not-keystate ---
+// --- RVAs / offsets off the game image base (0x140000000), bd title-continue-is-accept-byte-not-keystate ---
 /// Title-owner vtable RVA -- `[owner+0x00]` equals `base + this`.
 const TITLE_OWNER_VTABLE_RVA: usize = 0x2b63bb0;
 /// Per-instance state-dispatch table RVA -- `[owner+0x10]` equals `base + this` (the discriminator that
@@ -40,8 +40,8 @@ const TITLE_OWNER_INSTANCE_TABLE_OFFSET: usize = 0x10;
 const TITLE_OWNER_DIALOG_E0_OFFSET: usize = 0xe0;
 /// TitleTopDialog vtable RVA -- `[dialog+0x00]` equals `base + this`.
 const TITLETOP_DIALOG_VTABLE_RVA: usize = er_game_base::rva::TITLE_TOP_DIALOG_VTABLE_RVA;
-/// TitleTopDialog discriminator (`dialog+0xa40`, u8): 0 = PRESS ANY BUTTON parked / 1 = Continue-Load
-/// menu built (both are outer state 10 -- this byte is THE difference).
+/// TitleTopDialog discriminator (`dialog+0xa40`, u8): 0 = press any button parked / 1 = Continue-Load
+/// menu built (both are outer state 10 -- this byte is the difference).
 const TITLETOP_DIALOG_A40_OFFSET: usize = 0xa40;
 
 // --- scan tuning ---
@@ -67,7 +67,7 @@ fn cur_proc() -> HANDLE {
 }
 
 /// Scan a single 64KB chunk (already read into `buf`) for a candidate title owner. Returns the owner
-/// address when a pointer-slot equals the vtable AND that candidate's `+0x10` slot equals the state
+/// address when a pointer-slot equals the vtable and that candidate's `+0x10` slot equals the state
 /// table. Fault-safe: `ReadProcessMemory` never faults, and the `+0x10` cross-check uses `read_usize`.
 fn scan_chunk(
     want_vtable: usize,
@@ -230,7 +230,7 @@ pub fn title_dialog(base: usize) -> Option<usize> {
     let dialog =
         (unsafe { read_usize(owner + TITLE_OWNER_DIALOG_E0_OFFSET) }).filter(|p| *p >= HEAP_LO)?;
     let vtable = unsafe { read_usize(dialog) }?;
-    // RESOLVED, and never satisfied by zero. `CS::TitleTopDialog`'s vtable moved on 1.17
+    // Resolved, and never satisfied by zero. `CS::TitleTopDialog`'s vtable moved on 1.17
     // (0x2b26468 -> 0x2b294e8), so the raw `base + RVA` matched nothing: `title_dialog` returned
     // `None` for the whole session and everything downstream of it -- `title_dialog_a40`, the
     // PAB/menu discriminator the harness gates its title navigation on -- reported `-1` with no
@@ -254,7 +254,7 @@ pub fn title_dialog_a40(base: usize) -> i32 {
     }
 }
 
-/// PRESS ANY BUTTON ready and the menu NOT yet opened: state == 10 && dialog a40 == 0.
+/// Press any button ready and the menu not yet opened: state == 10 && dialog a40 == 0.
 pub fn title_pab_parked(base: usize) -> bool {
     title_state(base) == 10 && title_dialog_a40(base) == 0
 }

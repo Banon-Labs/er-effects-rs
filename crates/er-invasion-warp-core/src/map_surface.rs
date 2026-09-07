@@ -12,7 +12,7 @@
 //! It is also the wrong surface. Auto-invasion points cluster densely inside a tile; 20 pins
 //! within a few metres of each other are not 20 destinations a person can choose between. The
 //! useful unit for exploration is "take me to this tile's invasion spawn", so the default
-//! granularity is ONE pin per block ([`PinGranularity::PerBlock`]) -- 365 pins, the same order
+//! granularity is one pin per block ([`PinGranularity::PerBlock`]) -- 365 pins, the same order
 //! as the game's own Site-of-Grace count, and each one still warps to a real authored point.
 //!
 //! [`PinGranularity::PerPoint`] keeps every target for anyone who wants it, and exists so the
@@ -27,7 +27,7 @@
 //! private band; a confirm hook recognises one by range and maps it back to the exact
 //! [`InvasionWarpTarget`] to warp to.
 //!
-//! The id lives at row `+0x50`, NOT `+0x238` -- `+0x238` is the 16-byte
+//! The id lives at row `+0x50`, not `+0x238` -- `+0x238` is the 16-byte
 //! `BonfireWarpParamLookupResult` (`{paramId, pad, BonfireWarpParam*}`), and the row constructor
 //! copies the id into `+0x50` from the param row's `+0x08` (mapping `-1` to `0`). So the id a
 //! synthetic row carries is whatever its DLL-owned `BonfireWarpParam` puts at `+0x08`; it is not
@@ -55,7 +55,7 @@ pub const INVASION_ENTITY_ID_COUNT: i32 = 0x0010_0000;
 
 /// True when `entity_id` is one of ours.
 ///
-/// Range-checked rather than "greater than base": an id past the end of the band is NOT ours,
+/// Range-checked rather than "greater than base": an id past the end of the band is not ours,
 /// and treating it as ours would index off the end of the registry.
 #[must_use]
 pub const fn is_invasion_entity_id(entity_id: i32) -> bool {
@@ -86,7 +86,7 @@ pub struct InvasionRowRegistry {
 impl InvasionRowRegistry {
     /// Select the pin set from a catalog.
     ///
-    /// `PerBlock` takes each block's FIRST target. The catalog is sorted by block then point
+    /// `PerBlock` takes each block's first target. The catalog is sorted by block then point
     /// index, so "first" is deterministic across runs rather than whichever the walk happened
     /// to reach first.
     #[must_use]
@@ -174,7 +174,7 @@ impl InvasionRowRegistry {
 ///
 /// # Why identity is `(block, point)` and never `block`
 ///
-/// A legacy dungeon the player has not entered carries a WHOLE-DUNGEON marker: one pin at the
+/// A legacy dungeon the player has not entered carries a whole-dungeon marker: one pin at the
 /// dungeon's centre, placed precisely because its interior was unknown
 /// ([`InvasionWarpTarget::provisional`]). The moment its MSB becomes resident its real points
 /// arrive -- and every one of them is in that same block. Asking "does this block already have a
@@ -205,12 +205,12 @@ pub fn points_not_yet_shown(
 /// # Why this is a named, tested function
 ///
 /// A world-map pin the player can see is not necessarily in the injected span. A legacy dungeon
-/// harvested mid-session has its markers written into rows RESERVED as dormant by the constructor
+/// harvested mid-session has its markers written into rows reserved as dormant by the constructor
 /// and claimed later. Anything that walks "our rows" must cover both, and the live re-colour did
 /// not: marking such a dungeon repainted exactly one row -- the whole-dungeon marker that had
 /// already been hidden -- while every marker actually on screen went untouched.
 ///
-/// Only the CLAIMED prefix qualifies. Unclaimed dormant rows are blank, carry a zero layer mask and
+/// Only the claimed prefix qualifies. Unclaimed dormant rows are blank, carry a zero layer mask and
 /// are not drawn, so they have no appearance to change.
 ///
 /// Returns `None` when nothing is claimed or when the span does not lie wholly inside
@@ -243,13 +243,13 @@ pub const PLACE_ORDINAL_UNIQUE: PlaceOrdinal = 0;
 ///
 /// # What "deterministic" must mean, and what it cannot
 ///
-/// Two players have to arrive at the SAME number for the same spot or the feature is worse than
+/// Two players have to arrive at the same number for the same spot or the feature is worse than
 /// useless -- it sends them to different places while they agree out loud. That rules out numbering
 /// by position in the currently-known pin set: a legacy dungeon's per-point markers only exist once
 /// that map has been resident, so the player who has been to fewer places would number the same
 /// point differently.
 ///
-/// So the ordinal is derived ONLY from properties intrinsic to the point -- `(block, point_index)`.
+/// So the ordinal is derived only from properties intrinsic to the point -- `(block, point_index)`.
 /// `point_index` is the point's index in its own map's MSB region list and `block` is that map's
 /// id; both are fixed by the game version, not by what the player has seen. Sorting a name group by
 /// that pair yields the same sequence on any machine that knows the same points.
@@ -258,7 +258,7 @@ pub const PLACE_ORDINAL_UNIQUE: PlaceOrdinal = 0;
 ///
 /// A dungeon's points arrive together -- one MSB read yields the whole map's set -- so two players
 /// inside the same dungeon always agree, which is the case that matters for arranging a meeting.
-/// A place name shared across SEPARATE blocks, where one player has visited a block the other has
+/// A place name shared across separate blocks, where one player has visited a block the other has
 /// not, can still disagree. Nothing available at runtime fixes that: the absent block's point count
 /// is unknowable until it is read.
 ///
@@ -282,7 +282,7 @@ pub fn number_shared_place_names(pins: &[(InvasionWarpTarget, i32)]) -> Vec<Plac
             continue;
         }
         let mut ordered = members.clone();
-        // Sort by the INTRINSIC key, never by input order -- the harvest order must not be able to
+        // Sort by the intrinsic key, never by input order -- the harvest order must not be able to
         // change what a player is told to meet at.
         ordered.sort_by_key(|at| {
             let target = &pins[*at].0;
@@ -311,11 +311,11 @@ mod tests {
     #[test]
     fn pins_sharing_a_name_are_numbered_from_one() {
         let pins = [pin(0x0f00_0000, 3, 700), pin(0x0f00_0000, 1, 700)];
-        // Ordered by point_index, so the SECOND input is number 1.
+        // Ordered by point_index, so the second input is number 1.
         assert_eq!(number_shared_place_names(&pins), vec![2, 1]);
     }
 
-    /// THE INVARIANT THE WHOLE FEATURE RESTS ON. If harvest order could change the numbering, two
+    /// The invariant the whole feature rests on. If harvest order could change the numbering, two
     /// players would be sent to different places while saying the same words.
     #[test]
     fn the_numbering_does_not_depend_on_input_order() {
@@ -369,7 +369,7 @@ mod tests {
         assert!(number_shared_place_names(&[]).is_empty());
     }
 
-    /// THE REGRESSION: rows a live top-up claimed must be walked, or marking the dungeon they
+    /// The REGRESSION: rows a live top-up claimed must be walked, or marking the dungeon they
     /// belong to changes nothing the player can see.
     #[test]
     fn the_claimed_prefix_is_returned_and_stops_at_the_last_claim() {
@@ -421,7 +421,7 @@ mod tests {
         );
     }
 
-    /// THE REGRESSION. A whole-dungeon marker and the dungeon's real points share a block, so a
+    /// The regression. A whole-dungeon marker and the dungeon's real points share a block, so a
     /// block-keyed test hides exactly the points the marker exists to be replaced by.
     #[test]
     fn a_whole_dungeon_marker_does_not_suppress_its_own_blocks_real_points() {
@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(fresh[0].point_index, 1);
     }
 
-    /// The same point index in a DIFFERENT block is a different place.
+    /// The same point index in a different block is a different place.
     #[test]
     fn the_same_point_index_in_another_block_is_still_fresh() {
         let a = BlockKey::from_raw(0x1c00_0000);

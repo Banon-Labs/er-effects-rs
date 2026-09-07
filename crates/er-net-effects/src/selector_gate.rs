@@ -1,4 +1,4 @@
-//! WHEN the effect selector may take the keyboard, and WHICH keys it may take.
+//! When the effect selector may take the keyboard, and which keys it may take.
 //!
 //! # The bug this exists to kill
 //!
@@ -10,8 +10,8 @@
 //! game never learns the key was pressed.
 //!
 //! What armed them was `NetEffectsState::effect_selector_visible`, which is seeded from the
-//! `overlay_visible_on_start` config key and DEFAULTS TO TRUE. That flag does not mean "the
-//! selector list is on screen". The bar is drawn by hudhook and starts COLLAPSED
+//! `overlay_visible_on_start` config key and defaults to true. That flag does not mean "the
+//! selector list is on screen". The bar is drawn by hudhook and starts collapsed
 //! (`present_overlay::START_COLLAPSED`), so a default install shows a two-word `ER NET EFFECTS [+]`
 //! header and no effect list at all -- while blanking the player's arrow keys out of every
 //! DirectInput read. Worse, the DirectInput blanking consulted no runtime gate whatsoever, so it
@@ -23,7 +23,7 @@
 //! bar, the bar is not minimized to its button, and the DLL's own runtime gate says there is a
 //! live player.
 //!
-//! TAKING and ACTING are separate questions, and conflating them is what made the first version of
+//! Taking and acting are separate questions, and conflating them is what made the first version of
 //! this gate wrong in the other direction.
 //!
 //! **Taking** is the narrow one: only the four arrows, only while open. A key taken from the game
@@ -32,39 +32,39 @@
 //!
 //! **Acting** splits by what the key does:
 //!
-//! - Keys that drive the ON-SCREEN CURSOR -- [`SelectorKey::Arrow`] and [`SelectorKey::StackEdit`]
+//! - Keys that drive the on-screen cursor -- [`SelectorKey::Arrow`] and [`SelectorKey::StackEdit`]
 //!   -- require open. A cursor nobody can see is not a thing to drive, and numpad `+` on an
 //!   invisible highlight would stack an effect the player never chose and rewrite
 //!   `er-net-effects.toml` to match.
 //! - Deliberate chords and player-chosen bindings stay live whether the bar is open or not:
 //!   [`SelectorKey::ShowHide`] (the only way back to a hidden bar),
-//!   [`SelectorKey::ExpandCollapse`] (the only way OPEN -- see below),
+//!   [`SelectorKey::ExpandCollapse`] (the only way open -- see below),
 //!   [`SelectorKey::EffectToggle`], and [`SelectorKey::Other`] -- which is where the hotkeys from
-//!   `.er-net-effects-hotkeys.json` land. Firing an effect while the bar is minimized IS this
+//!   `.er-net-effects-hotkeys.json` land. Firing an effect while the bar is minimized is this
 //!   DLL's primary use; the bar ships minimized precisely so it can be played that way. Gating
 //!   those on open would make the DLL useless for the thing it is for.
 //!
 //! None of them can be taken from the game in the first place: they need Alt, and Elden Ring binds
 //! nothing to Alt+0, Alt+9 or Alt+'.
 //!
-//! # Why expanding needs a KEY, not just the button
+//! # Why expanding needs a key, not just the button
 //!
 //! The `[+]` header is a mouse target at absolute screen coordinates, hit-tested against
 //! `imgui::Io::mouse_pos`, which hudhook fills from `WM_MOUSEMOVE` / `WM_INPUT` on the game's
-//! window. From #317 until 2026-08-31 that click was the ONLY thing that could expand the bar,
+//! window. From #317 until 2026-08-31 that click was the only thing that could expand the bar,
 //! and it never once fired.
 //!
-//! WHAT WAS MEASURED, live, run `br-20260831-063324-0a97`, `/proc/<pid>/mem` (no injection):
+//! What was measured, live, run `br-20260831-063324-0a97`, `/proc/<pid>/mem` (no injection):
 //!
 //! - `overlay_toggle_clicks` finished the ~8-hour session at **0** across 1,296,264 rendered
 //!   frames. The button was drawn on every one of them.
-//! - The wndproc path itself WORKS -- `MouseClickedPos[0]` held `(2155, 821)`, so imgui had seen
+//! - The wndproc path itself works -- `MouseClickedPos[0]` held `(2155, 821)`, so imgui had seen
 //!   real positions and a real left click at some point. This was not a dead hook.
-//! - `MousePos` was nevertheless FROZEN at `(3190, 794)` on a 3840x2160 display across 12s of
+//! - `MousePos` was nevertheless frozen at `(3190, 794)` on a 3840x2160 display across 12s of
 //!   sampling while the game rendered at ~45fps -- far from the button's corner box, which sits
 //!   within `SCREEN_MARGIN` of the top right.
 //!
-//! WHAT IS INFERRED, not proven: that the freeze is Elden Ring holding the mouse for the camera
+//! What is inferred, not proven: that the freeze is Elden Ring holding the mouse for the camera
 //! through DirectInput and leaving the Windows cursor where it lies. It fits (the game polls a
 //! DirectInput device every frame, and the cursor is hidden in play), but a still pointer is also
 //! what a player who is not touching the mouse produces, and that was not separable from a read.
@@ -72,7 +72,7 @@
 //! Either way the conclusion is the same and does not rest on the mechanism: a hit box in a screen
 //! corner is the wrong affordance on a host that may own the pointer, and a feature with exactly
 //! one affordance that scores zero in 1.3M frames needs a second one. The click stays -- it works
-//! wherever the pointer IS free -- and the key is what the player uses.
+//! wherever the pointer is free -- and the key is what the player uses.
 
 // Windows-only in practice; kept portable so `cargo test` proves the decision table on the host
 // instead of it being reasoned about in a review.
@@ -103,7 +103,7 @@ pub(crate) const VK_OEM_7: u32 = 0xde;
 pub(crate) enum SelectorKey {
     /// Alt+0, Alt+Numpad0 or Alt+Insert -- show or hide the bar. The way back in.
     ShowHide,
-    /// Left / Right / Up / Down -- move the selector cursor. ALSO the game's own menu and
+    /// Left / Right / Up / Down -- move the selector cursor. Also the game's own menu and
     /// quick-item keys, which is why taking one has a cost.
     Arrow,
     /// Numpad `+` / `-` -- stack or unstack whatever the cursor highlights.
@@ -112,7 +112,7 @@ pub(crate) enum SelectorKey {
     EffectToggle,
     /// Alt+9 -- expand the bar from its `[+]` button, or minimize it back.
     ///
-    /// The way OPEN, and on this game the only one. See the module note.
+    /// The way open, and on this game the only one. See the module note.
     ExpandCollapse,
     /// Everything else, including whatever the player bound in the effect-trigger hotkey file.
     Other,
@@ -156,7 +156,7 @@ pub(crate) struct SelectorInputState {
     /// The player has not hidden the bar -- `overlay_visible_on_start`, then Alt+0 / Alt+Numpad0 /
     /// Alt+Insert.
     pub(crate) shown: bool,
-    /// The bar is minimized to its `[+]` button, so NO effect list is drawn. Shown-and-collapsed
+    /// The bar is minimized to its `[+]` button, so no effect list is drawn. Shown-and-collapsed
     /// is the shipped default, and treating it as open is the bug this module exists for.
     pub(crate) collapsed: bool,
     /// The DLL's own runtime gate: a local player exists and is rendered. False at the title
@@ -171,18 +171,18 @@ impl SelectorInputState {
     }
 }
 
-/// May the selector ACT on this key?
+/// May the selector act on this key?
 pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
     match key {
         // Without it a hidden bar can never be brought back from the keyboard.
         SelectorKey::ShowHide => true,
-        // Gating this on `open` would be circular: open MEANS expanded, so the key that expands
+        // Gating this on `open` would be circular: open means expanded, so the key that expands
         // the bar would need the bar already expanded. That is not a hypothetical -- the bar ships
         // collapsed, and until this key existed the only thing that could expand it was a mouse
         // click the game does not let the player make.
         SelectorKey::ExpandCollapse => true,
         // Alt+' is a deliberate chord on the effect the player already chose, and the trigger
-        // hotkeys are the player's own bindings. Both are meant to be pressed WHILE PLAYING --
+        // hotkeys are the player's own bindings. Both are meant to be pressed while playing --
         // which is exactly when the bar is minimized -- so neither waits for the bar.
         SelectorKey::EffectToggle | SelectorKey::Other => true,
         // These two drive the visible cursor. Off screen there is nothing to drive, and numpad +
@@ -191,7 +191,7 @@ pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
     }
 }
 
-/// May this key be TAKEN from the game -- blanked out of the DirectInput state, or swallowed by
+/// May this key be taken from the game -- blanked out of the DirectInput state, or swallowed by
 /// the low-level keyboard hook?
 ///
 /// Only the arrows are ever taken, and only while the selector is open. Everything else is
@@ -203,7 +203,7 @@ pub(crate) fn should_consume_key(open: bool, key: SelectorKey) -> bool {
 #[cfg(test)]
 mod tests {
     /// The shipped defaults for the two chords this module's tests name directly. They are no
-    /// longer crate constants -- every key is configurable now -- but the DECISION TABLE below is
+    /// longer crate constants -- every key is configurable now -- but the decision table below is
     /// about the shipped bindings, so it needs their codes.
     const VK_INSERT: u32 = 0x2d;
     const VK_0: u32 = 0x30;
@@ -273,7 +273,7 @@ mod tests {
         assert!(should_handle_key(false, SelectorKey::ShowHide));
     }
 
-    /// THE REGRESSION THIS NAMES. The first cut of this gate made EVERY key wait for an open bar.
+    /// The regression this names. The first cut of this gate made every key wait for an open bar.
     /// The bar ships minimized, so that silently killed the effect-trigger hotkeys from
     /// `.er-net-effects-hotkeys.json` -- bindings whose entire purpose is to fire an effect while
     /// you are playing, which is precisely when the bar is minimized. It made the DLL useless for
@@ -289,7 +289,7 @@ mod tests {
             "the shipped default is closed -- that is the premise"
         );
 
-        // `numpad_multiply`, the key in the DEFAULT hotkey file, plus a plain function key.
+        // `numpad_multiply`, the key in the default hotkey file, plus a plain function key.
         for vk in [0x6a, 0x74] {
             let key = key_for_vk(vk, false);
             assert_eq!(key, SelectorKey::Other);
@@ -420,10 +420,10 @@ mod tests {
         );
     }
 
-    /// THE REGRESSION. The bar ships minimized, and from #317 until 2026-08-31 the only thing that
+    /// The regression. The bar ships minimized, and from #317 until 2026-08-31 the only thing that
     /// could expand it was a left click on a hit box in a screen corner -- which scored
     /// `overlay_toggle_clicks == 0` across a measured 1,296,264 rendered frames. So the shipped
-    /// default MUST have a key that acts while the bar is closed, or the effect list and the four
+    /// default must have a key that acts while the bar is closed, or the effect list and the four
     /// cursor keys behind it are dead.
     #[test]
     fn the_shipped_default_can_be_expanded_from_the_keyboard() {

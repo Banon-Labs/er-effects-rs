@@ -1,4 +1,4 @@
-//! Centre the notice text in the REAL announcement movie.
+//! Centre the notice text in the real announcement movie.
 //!
 //! The unit tests build a synthetic field, so they prove the edit's shape but not that the shipped
 //! movie has that shape. This reads the vanilla `01_080_emergencynotice.gfx` out of the local
@@ -78,7 +78,7 @@ fn the_vanilla_field_has_the_shape_the_edit_assumes() {
         "the field is only {width_px}px wide; centring needs spare width to be visible"
     );
     // And it must match the constant the DLL's blank-banner oracle subtracts. The engine truncates
-    // each EDGE to int before subtracting, so this is reproduced edge-wise rather than as a plain
+    // each edge to int before subtracting, so this is reproduced edge-wise rather than as a plain
     // width -- `(int)(x_max*0.05) - (int)(x_min*0.05)`, which is not the same as `(x_max-x_min)/20`
     // when either edge is negative, and this field's left edge is.
     let engine_width =
@@ -111,7 +111,7 @@ fn the_edit_centres_the_real_movie_and_it_re_parses() {
 #[test]
 fn the_edit_changes_exactly_one_byte_worth_of_meaning() {
     // The alignment is a 2-bit field inside the layout block, so a correct edit cannot change the
-    // movie's LENGTH. A length change means something else moved -- a re-encoded string, a
+    // movie's length. A length change means something else moved -- a re-encoded string, a
     // re-packed tag -- and on a menu movie that is how a crash gets introduced by accident.
     let Some(vanilla) = vanilla_or_skip() else {
         return;

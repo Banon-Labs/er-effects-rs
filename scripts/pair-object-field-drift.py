@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Align one function's body across the two de-Arxan'd ELDEN RING images and report FIELD moves.
+"""Align one function's body across the two de-Arxan'd ELDEN RING images and report field moves.
 
-WHY A WHOLE-FUNCTION ALIGNMENT RATHER THAN A DISPLACEMENT CENSUS
+Why a whole-function alignment rather than a displacement census
 ----------------------------------------------------------------
-A census ("which offsets does the image read off this object") cannot say WHICH FIELD lives at an
+A census ("which offsets does the image read off this object") cannot say which field lives at an
 offset, and it cannot see a move at all when both the old and the new offset happen to be read
 somewhere. What it can see is coincidence.
 
-Aligning ONE function's two bodies is stronger and cheaper. If the instruction sequences agree
+Aligning one function's two bodies is stronger and cheaper. If the instruction sequences agree
 except for memory displacements, the code did not change -- so instruction k in 1.16.2 and
-instruction k in 1.17 are the SAME access to the SAME field, and any displacement difference is
+instruction k in 1.17 are the same access to the same field, and any displacement difference is
 that field moving, by exactly that much. The alignment is done with difflib over
-mnemonic+operand-SHAPE (every numeric literal masked), so an inserted or deleted instruction shows
+mnemonic+operand-shape (every numeric literal masked), so an inserted or deleted instruction shows
 up as an insert/delete block instead of desynchronising every pair after it -- which is what makes
-a 4-byte field INSERTION visible as a new store rather than as noise.
+a 4-byte field insertion visible as a new store rather than as noise.
 
-USAGE
+Usage
     scripts/pair-object-field-drift.py --pair 0x14025d580:1199 0x14025d550:1230 --label PGD::ctor
     scripts/pair-object-field-drift.py --pair 0x14025f5f0:24 0x14025f5d0:24 --base rcx
     scripts/pair-object-field-drift.py --selftest

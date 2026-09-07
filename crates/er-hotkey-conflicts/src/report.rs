@@ -4,9 +4,9 @@
 //!
 //! * **The verdict is the first line.** A reader who stops there must still learn whether they
 //!   have a problem.
-//! * **A finding names the key AND every module.** "There is a conflict on F7" is a riddle;
+//! * **A finding names the key and every module.** "There is a conflict on F7" is a riddle;
 //!   "F7: er_invasion_warp.dll, er_invasion_path.dll" is an instruction.
-//! * **What was NOT checked is printed as loudly as what was.** Parts of this DLL's coverage are
+//! * **What was not checked is printed as loudly as what was.** Parts of this DLL's coverage are
 //!   structurally limited: DirectInput hands back the whole keyboard and never names the key, an
 //!   API that could not be hooked is a hole, and the game's binding singleton is NULL until the
 //!   game initialises it. Leaving any of those silent turns "I did not look" into "there is
@@ -77,7 +77,7 @@ pub fn render(input: &ReportInput<'_>) -> Vec<String> {
 
     let mut lines = vec![BANNER.to_string()];
 
-    // THE VERDICT, FIRST. Everything below is the evidence for this one line.
+    // The verdict, first. Everything below is the evidence for this one line.
     if *calls_seen == 0 {
         lines.push(
             "VERDICT: UNKNOWN -- not one input call was observed. This is NOT a clean profile; \

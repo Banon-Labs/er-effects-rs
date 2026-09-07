@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pair the LEAF functions of ELDEN RING 1.16.2 with their 1.17 counterparts.
+"""Pair the leaf functions of ELDEN RING 1.16.2 with their 1.17 counterparts.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 Every cross-build function pairing in this repo descends from `.pdata`
 (`scripts/build-1162-1170-function-map.py` walks the exception directory of both
@@ -17,14 +17,14 @@ confirmed ground-truth field move: `[rcx+0xab5] -> [rcx+0xabd]`.  It has no
 `.pdata` record on either side, so no sweep in this repo has ever looked at it.
 "N of 553 offsets cleared" was silent about the whole leaf population.
 
-WHAT A PAIRING RESTS ON, STRONGEST FIRST
+What a pairing rests on, strongest first
 ----------------------------------------
 1. `CALLER-VOTE` -- the leaf is reached by a direct `call`/`jmp` from a function
-   this repo has ALREADY paired, at a byte offset that is identical on both
+   this repo has already paired, at a byte offset that is identical on both
    sides of an identically-shaped body.  The caller pins the callee: it composes
    with the existing map instead of re-deriving it, and it is the only evidence
    here that does not look at the leaf's own bytes.  Its own correctness is
-   measurable, because most vote targets are NOT leaves -- they are ordinary
+   measurable, because most vote targets are not leaves -- they are ordinary
    `.pdata` functions whose pairing `functions.tsv` already states.  Agreement on
    those is the positive control (`--audit-votes`).
 2. `BYTE-IDENTICAL` -- the two bodies are equal byte for byte over an extent
@@ -32,9 +32,9 @@ WHAT A PAIRING RESTS ON, STRONGEST FIRST
    the leaves of both images.
 3. `MASKED-SIG` -- equal after `scripts/map-rvas-1162-to-1170.py`'s masking of
    rip-relative displacements and immediates, unique on both sides.  This is the
-   rung that pairs `GetScadutreeBlessing`, whose only difference IS the field
+   rung that pairs `GetScadutreeBlessing`, whose only difference is the field
    displacement.
-4. `BRACKET` -- a masked signature that matched but was NOT unique, disambiguated
+4. `BRACKET` -- a masked signature that matched but was not unique, disambiguated
    by lying between the same two already-paired anchors on both sides.
 
 A leaf no rung reaches is `UNPAIRED`, and stays that way.  Bracketing is only ever
@@ -42,7 +42,7 @@ a tie-break between shape-equal candidates: position alone never pairs anything
 here, because a confident wrong pairing reads downstream as a live value and
 corrupts silently, while a missing one only costs coverage.
 
-WHAT POISONS THIS AND HOW IT IS AVOIDED
+What poisons this and how it is avoided
 ---------------------------------------
 * **Padding.** MSVC pads with `int3` (0xCC) *or* `nop` (0x90) and does not make
   the same choice in two builds.  Any extent that runs into inter-function
@@ -50,10 +50,10 @@ WHAT POISONS THIS AND HOW IT IS AVOIDED
   Extents come from `scripts/verify-rva-map-1170.py::leaf_extent`, imported, not
   copied -- it stops at the terminator and never includes padding.
 * **Joining on a number instead of an object.** The drift pass below reports a
-  displacement move only PER BASE REGISTER inside one aligned pair, never "some
+  displacement move only per base register inside one aligned pair, never "some
   function somewhere reads 0x50".
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/pair-leaf-functions-1162-1170.py --selftest
     ... --scan                 # phase A: decode both images, cache (minutes)
     ... --pair                 # phase B: enumerate + pair leaves, write TSV
@@ -278,7 +278,7 @@ def gap_entries(image: Image):
     """The first non-pad byte of every hole between one `.pdata` extent and the
     next declared start, per code section.
 
-    A hole is where undeclared code lives.  This does not claim the byte IS a
+    A hole is where undeclared code lives.  This does not claim the byte is a
     function entry -- it is an enumeration floor, used to bound how much of the
     leaf population the call-target harvest could be missing.
     """
@@ -303,7 +303,7 @@ def enumerate_leaves(image: Image, calls) -> dict:
     """Every address that is branched to directly but that `.pdata` does not
     declare: the leaf population, derived from its callers.
 
-    A second wave decodes the leaves found in the first and harvests THEIR direct
+    A second wave decodes the leaves found in the first and harvests their direct
     branches, because MSVC emits `.pdata`-less tail-call thunks that chain.
     """
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
@@ -312,7 +312,7 @@ def enumerate_leaves(image: Image, calls) -> dict:
     for caller, branches in calls.items():
         end = image.extents.get(caller, caller)
         for _off, mnem, target in branches:
-            # A `jmp` INSIDE the caller's own extent is a local branch, not a function.
+            # A `jmp` inside the caller's own extent is a local branch, not a function.
             # Counting those made the first run report 211,372 "leaves" in 1.16.2 -- nearly
             # one per `.pdata` record -- which is the population of basic blocks, not of
             # functions. A `call` always names an entry; a `jmp` only does when it leaves.
@@ -354,14 +354,14 @@ def enumerate_leaves(image: Image, calls) -> dict:
 def region_kinds(image: Image, rvas):
     """Classify each address by where it sits relative to `.pdata`'s own declarations.
 
-    NOT every branch target `.pdata` fails to declare is a function. Three cases, and the
+    Not every branch target `.pdata` fails to declare is a function. Three cases, and the
     difference matters because a `MID-EXTENT` row presented as a leaf function is an
     invitation to detour the middle of somebody else's body:
 
     * `HOLE` -- inside a gap between declared extents. This is a real `.pdata`-less
       function: the linker declared its neighbours and not it, which is exactly what the
       x64 ABI does for a leaf. `GetScadutreeBlessing` is one.
-    * `MID-EXTENT` -- inside an extent `.pdata` DOES declare, but not at its start. A
+    * `MID-EXTENT` -- inside an extent `.pdata` does declare, but not at its start. A
       branch into the middle of a function (or into an overlapping Arxan chunk record).
       The address still maps, and the mapping is still useful for reading a call site,
       but it is not a function entry and must never be treated as one.
@@ -404,7 +404,7 @@ _EXTENT_CACHE: dict[tuple[int, int], int] = {}
 
 def extent_of(image: Image, rva: int):
     """End RVA of a leaf, via the shared `leaf_extent` rule. `None` if unbounded."""
-    # Keyed by the image's PATH, never by `id(image)`: CPython reuses an address after an
+    # Keyed by the image's path, never by `id(image)`: CPython reuses an address after an
     # object is freed, so a cache keyed on `id` can hand one image's extent to another.
     key = (image.path, rva)
     hit = _EXTENT_CACHE.get(key)
@@ -428,7 +428,7 @@ def extent_of(image: Image, rva: int):
 
 
 def full_masked_signature(image: Image, start: int, end: int):
-    """Masked pattern covering the WHOLE body, built by repeated application of the
+    """Masked pattern covering the whole body, built by repeated application of the
     repo's own `build_masked_pattern`.
 
     That helper stops at the first `ret`/`jmp`, which truncates a range-checked
@@ -449,7 +449,7 @@ def full_masked_signature(image: Image, start: int, end: int):
         cursor += len(piece)
     if mutated("mask"):
         # Masking off: rip-relative displacements and field offsets are compared
-        # literally, so GetScadutreeBlessing (whose ONLY difference is 0xab5 ->
+        # literally, so GetScadutreeBlessing (whose only difference is 0xab5 ->
         # 0xabd) can no longer be paired by shape.
         mask = bytearray(b"\x01" * len(pattern))
     return bytes(pattern), bytes(mask)
@@ -458,8 +458,8 @@ def full_masked_signature(image: Image, start: int, end: int):
 def signature_key(image: Image, start: int, end: int):
     """Hashable form of the masked body: wildcarded bytes zeroed, plus the mask itself.
 
-    The mask is a keep/drop FLAG per byte (0x01 / 0x00), so the obvious `pattern & mask`
-    does not select bytes -- it keeps their LOW BIT and discards the other seven. Written
+    The mask is a keep/drop flag per byte (0x01 / 0x00), so the obvious `pattern & mask`
+    does not select bytes -- it keeps their low bit and discards the other seven. Written
     that way the signature was 8x weaker than intended: `GetScadutreeBlessing`'s `0xb5` and
     its 1.17 `0xbd` both reduce to 1, so the `--mutate mask` control could not tell masking
     apart from no masking at all, and the shape-collision count was an artefact of the bug.
@@ -491,7 +491,7 @@ def load_function_map():
 def caller_votes(img162, img170, calls162, calls170, fmap):
     """Votes cast by already-paired callers whose bodies have the same shape.
 
-    A caller qualifies only when its declared extent LENGTH is equal on both
+    A caller qualifies only when its declared extent length is equal on both
     sides and its direct branches sit at identical byte offsets with identical
     mnemonics.  That is much stronger than "same number of calls": identical
     offsets means every instruction before each call had the same length, so the
@@ -552,7 +552,7 @@ def resolve_votes(votes, voters, restrict=None):
 def bracket_pick(src, dsts, key, keyof170, anchor_src, anchor_dst):
     """Tie-break among shape-equal 1.17 candidates by the anchors that surround them.
 
-    Bracketing is NOT a pairing rung on its own.  It answers "which of these
+    Bracketing is not a pairing rung on its own.  It answers "which of these
     equally-shaped candidates", never "what is this".  A candidate whose masked
     signature is not the source's is rejected even when it is the only thing in
     the bracket -- position alone must never manufacture a pairing, because a
@@ -735,14 +735,14 @@ def decode_detail(image: Image, start: int, end: int):
     return out
 
 
-# A displacement on these bases is a STACK FRAME slot, not a struct field. MSVC re-lays a
-# frame freely between builds, and a leaf's `[rsp+K]` reads the CALLER's spill area -- so
+# A displacement on these bases is a stack frame slot, not a struct field. MSVC re-lays a
+# frame freely between builds, and a leaf's `[rsp+K]` reads the caller's spill area -- so
 # counting those as field drift manufactures a move for every common small offset. The first
 # run of this pass did exactly that: `0x30` "moved" in 21 leaf instructions, 14 of them on
 # `rsp`, and it implicated ten unrelated repo constants at once.
 FRAME_BASES = {"rsp", "rbp", "esp", "ebp"}
 # A displacement this large is not a member of an object; it is an offset from a register
-# holding the image base (`[rbx + 0x3030aa0]`), i.e. a GLOBAL. Those move when a section
+# holding the image base (`[rbx + 0x3030aa0]`), i.e. a global. Those move when a section
 # grows and say nothing about any structure.
 GLOBAL_DISPLACEMENT = 0x100000
 
@@ -762,9 +762,9 @@ def classify_displacement(base, disp):
 def leaf_drift(img162, img170, src, dst, e162, e170):
     """Field displacements that moved between one leaf and its counterpart.
 
-    Reported PER BASE REGISTER inside a single aligned pair -- never "some
+    Reported per base register inside a single aligned pair -- never "some
     function reads 0x50". The two bodies must decode to the same mnemonic
-    sequence; otherwise the pair is SHAPE-DIFF and no displacement claim is made,
+    sequence; otherwise the pair is shape-diff and no displacement claim is made,
     because position N on one side is not position N on the other.
 
     Returns `(verdict, field_moves, held, other_moves)`. Stack-frame and global
@@ -883,7 +883,7 @@ def cmd_pair(args):
         for src in sorted(result):
             dst, evidence, detail = result[src]
             end = state["ext162"].get(src)
-            # A CALLER-VOTE pairing needs no extent: the caller pins the callee. Say so
+            # A caller-vote pairing needs no extent: the caller pins the callee. Say so
             # rather than crash, and rather than print a number that was never measured.
             extent = f"{end - src:#x}" if end else "-"
             handle.write(
@@ -942,8 +942,8 @@ def cmd_drift(args):
     nonfield = Counter()
     moved_pairs = []
     all_moves = Counter()
-    # The leaf-population counterpart of NOT-MOVED-ANYWHERE: how many paired leaves read
-    # this displacement at the SAME value in both builds. A number with many holds and no
+    # The leaf-population counterpart of not-moved-ANYWHERE: how many paired leaves read
+    # this displacement at the same value in both builds. A number with many holds and no
     # moves is as clear as this method can make it; one with neither is unmeasured.
     all_held = Counter()
     for src in sorted(result):
@@ -1001,14 +1001,14 @@ def cmd_recheck_inventory(args):
     """Re-ask the drift sweep's question over the half of the image it could not see.
 
     `detect-struct-field-drift.py --resolve-unknown` cleared 362 constants as
-    NOT-MOVED-ANYWHERE.  That verdict is explicitly a statement about EVERY structure
+    not-moved-anywhere.  That verdict is explicitly a statement about every structure
     the scan can see -- which is why it clears without naming a type.  The scan is
     `.pdata`-derived, so "everywhere" was never the whole image: no leaf was in it.
 
     This reads the same constants against the leaf drift and reports which of those
-    "never moved anywhere" numbers DO move in a paired leaf.
+    "never moved anywhere" numbers do move in a paired leaf.
 
-    THE RESULT IS AN ANNOTATION, NOT A VERDICT.  It joins on a NUMBER, and the same
+    The result is an ANNOTATION, not a verdict.  It joins on a number, and the same
     small offset lives in unrelated structures -- the exact fallacy that made "a hooked
     function reads that number" light up 484 of 553.  A hit here does not say the repo's
     field moved; it says the clearance was computed without looking at this witness, so
@@ -1049,7 +1049,7 @@ def cmd_recheck_inventory(args):
     for verdict in sorted(buckets):
         entries = buckets[verdict]
         hit = [e for e in entries if e[2]]
-        # Rungs 2-4 have a MEASURED error rate against the caller-vote key
+        # Rungs 2-4 have a measured error rate against the caller-vote key
         # (`--crossvalidate`), so an annotation resting only on those is weaker than one
         # a vote carries. Report the split rather than one number.
         voted = [e for e in hit if any(w[2] == "CALLER-VOTE" for w in e[2])]
@@ -1201,7 +1201,7 @@ def selftest(args):
     check("masked signatures are equal", k162 is not None and k162 == k170)
 
     print("E. rung 4 refuses position-only pairings")
-    # One candidate sits alone inside the bracket, so POSITION says take it -- and its
+    # One candidate sits alone inside the bracket, so position says take it -- and its
     # shape says it is a different function. The rung must decline.
     shape_a, shape_b = (b"\xaa", b"\x01"), (b"\xbb", b"\x01")
     pick, why = bracket_pick(
@@ -1222,7 +1222,7 @@ def selftest(args):
     print("F. vote resolution refuses split votes and double claims")
     # No `mutated(...) or ...` escape here. A check that excuses itself under the very
     # mutation it exists to detect is not a gate, and both of these read that way until
-    # `--mutate unanimity` and `--mutate injective` were observed PASSING.
+    # `--mutate unanimity` and `--mutate injective` were observed passing.
     votes = {10: Counter({20: 3, 21: 1})}
     resolved, refused = resolve_votes(votes, {10: {1, 2}})
     check("split vote refused", 10 not in resolved and 10 in refused,

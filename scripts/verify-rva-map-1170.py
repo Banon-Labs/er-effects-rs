@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Judge whether a mapped 1.17 address is really the same function as its 1.16.2 original.
 
-`map-rvas-1162-to-1170.py` finds where a signature RE-OCCURS. That is where the evidence stops:
+`map-rvas-1162-to-1170.py` finds where a signature RE-occurs. That is where the evidence stops:
 the signature is short and its operands are wildcarded, so a match proves the opening bytes have
 the same shape, not that the function still does the same job. This script asks the follow-up
 question by decoding much further into both functions and comparing them instruction by
@@ -20,7 +20,7 @@ no matter how clean the ratio looks.
 
 VERDICTS, and the one distinction the vocabulary was missing
     The verdicts split on a question that had no word for it until 2026-08-30: was the comparison
-    a PREFIX of the two bodies, or ALL of them?
+    a prefix of the two bodies, or all of them?
 
     A prefix match stops for a reason that has nothing to do with where the function ends -- the
     instruction limit, a `ret` in a body that continues past it -- so it says nothing whatsoever
@@ -28,10 +28,10 @@ VERDICTS, and the one distinction the vocabulary was missing
     `er-game-base/build.rs` exists to put a floor under that ignorance.
 
     An exhaustive match has no instruction after the last one. It is not a longer prefix; it is a
-    different kind of claim, and it also asserts the two bodies are the same LENGTH, which no
+    different kind of claim, and it also asserts the two bodies are the same length, which no
     prefix can. Both failure modes the floor produced follow from conflating the two:
 
-      * a LEAF of 3-11 instructions verifies at ratio 1.000 over its entire body and is thrown
+      * a leaf of 3-11 instructions verifies at ratio 1.000 over its entire body and is thrown
         away for being shorter than 12. Five were: 0x67a810 (the GameMan save-slot setter),
         0x67a980 (er-save-suppress's quit-phase settle), 0xd4cc50 (GET_PARAM_RESCAP), 0x26634a0
         (er-input-harness's DLUID writer) and 0x4f9940 (the SpecialEffect null-container guard,
@@ -47,39 +47,39 @@ VERDICTS, and the one distinction the vocabulary was missing
     floor. `IDENTICAL-PREFIX` is a prefix that ran out of budget and is accepted nowhere.
     `IDENTICAL-SHORT`, `NEAR`, `DIVERGES` and `UNDECODABLE` are unchanged.
 
-    AND THE OTHER DISTINCTION THE VOCABULARY WAS MISSING, added the same day: a body that GREW,
+    And the other distinction the vocabulary was missing, added the same day: a body that grew,
     somewhere a detour never reaches. `PATCH-SITE-IDENTICAL` is that answer. It is not a member of
-    the exhaustive family -- those assert the two streams are EQUAL and this one asserts they are
-    not -- and it is not a weaker `NEAR`. It is a claim about the PATCH SITE: both images declare
+    the exhaustive family -- those assert the two streams are equal and this one asserts they are
+    not -- and it is not a weaker `NEAR`. It is a claim about the patch SITE: both images declare
     a function starting at the two addresses, the comparison covered both bodies in full, MinHook
     builds a trampoline at each and consumes the same instructions doing it, nothing branches into
     the bytes its JMP overwrites, and every instruction the two bodies disagree about lies strictly
     after the last one it relocates. `STEP_MoveMap` is why: 1.17 inserts two instructions at index
-    873 of 975, its `.pdata` extent grows by 8 bytes, and the FIRST EIGHT BYTES OF ITS PROLOGUE ARE
-    IDENTICAL. Refusing that detour cost the autoload gate-hold on 1.17. See `patch_site_drift`.
+    873 of 975, its `.pdata` extent grows by 8 bytes, and the first eight bytes of its prologue are
+    identical. Refusing that detour cost the autoload gate-hold on 1.17. See `patch_site_drift`.
 
-    AND THE MIRROR IMAGE OF THAT ONE, added the same day: a body PROVED and still un-hookable.
+    And the mirror image of that one, added the same day: a body proved and still un-hookable.
     `IDENTICAL-LEAF-NOPATCH` is an `IDENTICAL-LEAF` whose 3-byte body has nowhere to put a 5-byte
     jump, with MinHook's own ported rules refusing the site in both images rather than this file's
-    arithmetic saying so. It is admitted to the CALL map and to nothing else. It exists because
+    arithmetic saying so. It is admitted to the call map and to nothing else. It exists because
     those were one decision until 2026-08-30: such a leaf reported `IDENTICAL-SHORT`, and
-    `build.rs` seeds the CALL map from `detourable_pairs`, so a refusal about HOOKING withdrew the
-    address from COMPARING too -- and `0x7add70` (`CS::MenuItem`'s constant-false accept
+    `build.rs` seeds the call map from `detourable_pairs`, so a refusal about hooking withdrew the
+    address from comparing too -- and `0x7add70` (`CS::MenuItem`'s constant-false accept
     predicate) and `0x1c92f30` (`CTRL_SUBOBJECT_RELEASE_RVA`) were lost to their features on that
     technicality. See `leaf_verdict`.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/verify-rva-map-1170.py            # whole table
     uv run --with capstone python3 scripts/verify-rva-map-1170.py 0x1407ada40
     uv run --with capstone python3 scripts/verify-rva-map-1170.py --tsv <out> --min-ratio 0.98
 
-    There is one behaviour and no flag that selects it. Leaf extents are ALWAYS derived (see the
+    There is one behaviour and no flag that selects it. Leaf extents are always derived (see the
     comment in `main`); `--leaf-extents` is accepted and ignored so an older written-down command
     still runs. It was an opt-in until 2026-08-30, which meant three correct rows of the ledger
     `er-game-base/build.rs` reads held their verdict only because somebody remembered to type it,
     and the next regeneration that forgot would have deleted them at exit 0.
 
-`--tsv` TRUNCATES ITS TARGET. It writes what THIS run verified and nothing else, so pointing it
+`--tsv` TRUNCATES its target. It writes what this run verified and nothing else, so pointing it
 at `docs/recon/rva-map-1162-to-1170.verified.tsv` -- the ledger hand-derived pairs are put in
 because nothing regenerates it -- is a rewrite, not an update: 65 of that file's 99 addresses do
 not come from the default candidate map and would not come back. `preserve_unverified` now
@@ -97,17 +97,17 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _deobf_image(env_var: str, filename: str) -> str:
-    """Where the flat de-Arxan'd image actually is, from ANY checkout of this repo.
+    """Where the flat de-Arxan'd image actually is, from any checkout of this repo.
 
     Three answers in priority order, and the middle one is the reason this exists:
 
     1. `$<env_var>`, for a copy kept somewhere else entirely.
     2. Beside this checkout -- the developer case, and the only one the plain
        `os.path.join(ROOT, ...)` this replaced could express.
-    3. Beside the MAIN checkout, when we are running from a `git worktree`. A worktree is a
+    3. Beside the main checkout, when we are running from a `git worktree`. A worktree is a
        separate directory with its own `scripts/`, so `ROOT` points at a tree where these
        gitignored multi-hundred-MB artifacts were never copied. `--git-common-dir` names the
-       original checkout's `.git`, whose parent is the tree they DO live beside.
+       original checkout's `.git`, whose parent is the tree they do live beside.
        `scripts/disas-deobf.sh` has resolved them this way for a while; the Python gates did not,
        so `check.sh` died with `FileNotFoundError` on a path that looks right the moment an agent
        ran it from a worktree.
@@ -146,20 +146,20 @@ DECODE_BYTES = 0x400
 # Below this many compared instructions the verdict is reported as thin evidence regardless of
 # how well it matched -- several ELDEN RING getters are 6 instructions long and identical.
 #
-# It is a PROXY, and only ever was one. `IDENTICAL over N instructions` is a claim about a PREFIX:
+# It is a proxy, and only ever was one. `IDENTICAL over N instructions` is a claim about a PREFIX:
 # the decode stopped for a reason unrelated to where the function ends, so nothing is known about
 # instruction N+1, and the floor stands in for "enough of the body was seen to be worth
-# something". Where the comparison is EXHAUSTIVE the proxy has nothing left to do, which is what
+# something". Where the comparison is exhaustive the proxy has nothing left to do, which is what
 # IDENTICAL_WHOLE and IDENTICAL_LEAF below are for.
 THIN_EVIDENCE = 12
 # Bytes MinHook relocates when it installs a detour. `branch_into_prologue` checks this window.
 PATCH_BYTES = 5
-# Marks the writer's own CARRIED FORWARD banner inside the file body. `preserve_unverified`
+# Marks the writer's own carried forward banner inside the file body. `preserve_unverified`
 # needs to tell that block apart from hand-written prose so a re-run does not nest a second
 # copy of it; the writer emits this exact text.
 CARRIED_BANNER_MARK = "# CARRIED FORWARD --"
 
-# THE TWO EXHAUSTIVE VERDICTS. Both mean: the comparison covered every instruction of both
+# The two exhaustive VERDICTS. Both mean: the comparison covered every instruction of both
 # functions, the two bodies are the same length, and the normalised streams are equal. That is
 # strictly stronger evidence than any prefix match of any length, because it also asserts there is
 # no instruction the comparison did not see -- a claim `IDENTICAL` cannot make at 12 instructions
@@ -175,7 +175,7 @@ IDENTICAL_LEAF = "IDENTICAL-LEAF"
 # ...neither image declares a `.pdata` entry -- the x64 ABI omits unwind data for a function that
 # allocates no stack and calls nothing -- so the end was DECODED by `leaf_extent`. Three
 # independent facts back that decode: it stopped on a real terminator past every forward branch
-# target, the two images were decoded separately and arrived at the SAME byte length, and the
+# target, the two images were decoded separately and arrived at the same byte length, and the
 # normalised streams agree over all of it. It additionally carries the relocation check in
 # `branch_into_prologue`, which is the claim `.pdata` would have made and cannot here.
 IDENTICAL_PREFIX = "IDENTICAL-PREFIX"
@@ -190,29 +190,29 @@ IDENTICAL_PREFIX = "IDENTICAL-PREFIX"
 # discarded.
 EXHAUSTIVE_VERDICTS = frozenset(("BYTE-IDENTICAL", IDENTICAL_WHOLE, IDENTICAL_LEAF))
 
-# THE ONE VERDICT THAT TAKES AN ADDRESS AWAY. `er-game-base/build.rs::refuted_sources()` keys on
-# this literal string and subtracts the row from `VERIFIED_1162_TO_1170` -- the CALL map, not just
-# the detour map. Every other unhappy verdict merely fails to ADD a row; this one REMOVES one that
+# The one verdict that takes an address away. `er-game-base/build.rs::refuted_sources()` keys on
+# this literal string and subtracts the row from `VERIFIED_1162_TO_1170` -- the call map, not just
+# the detour map. Every other unhappy verdict merely fails to add a row; this one removes one that
 # was already there, and it does so with no log line.
 #
 # That asymmetry is why it is a named constant rather than a string typed at each use. A missing
-# address costs a feature loudly (`failed to resolve`); a wrongly REFUTED one deletes a working
+# address costs a feature loudly (`failed to resolve`); a wrongly refuted one deletes a working
 # address silently. `refutation_withheld` below is the rule that follows from it.
 REFUTED = "DIVERGES"
 
-# THE VERDICT FOR A BODY THAT GREW SOMEWHERE ELSE. Not a member of EXHAUSTIVE_VERDICTS: those
-# three assert the two instruction streams are EQUAL, and this one asserts they are not.
+# The verdict for a body that grew somewhere else. Not a member of EXHAUSTIVE_VERDICTS: those
+# three assert the two instruction streams are equal, and this one asserts they are not.
 #
-# What it claims, and it claims nothing else: the two bodies were compared IN FULL, both images'
-# own `.pdata` declare a function to START at these two addresses, MinHook will build a trampoline
-# at each of them, it consumes the SAME instructions at both, and every instruction the two bodies
-# disagree about lies strictly AFTER the last instruction MinHook relocates. The detour therefore
+# What it claims, and it claims nothing else: the two bodies were compared in full, both images'
+# own `.pdata` declare a function to start at these two addresses, MinHook will build a trampoline
+# at each of them, it consumes the same instructions at both, and every instruction the two bodies
+# disagree about lies strictly after the last instruction MinHook relocates. The detour therefore
 # overwrites the same prologue it overwrote on 1.16.2 and the trampoline returns into the same
 # instruction; what changed is somewhere the hook never touches.
 #
-# WHY THIS IS NOT "RE-CHECK THE PROLOGUE AND SHIP IT". A prologue re-check is what the impostor at
+# Why this is not "RE-CHECK THE PROLOGUE AND SHIP IT". A prologue re-check is what the impostor at
 # 1.16.2 `0x140aec480` would have passed: it verified `IDENTICAL 1.000` over 56 instructions while
-# sitting `+0x360` INSIDE another function. Three of the six clauses exist for that address alone
+# sitting `+0x360` inside another function. Three of the six clauses exist for that address alone
 # -- it is not a `.pdata` start in either image, so the entry clause refuses it before any byte is
 # compared -- and the whole-body clauses are what stop a long agreeing prefix from being mistaken
 # for evidence about the rest. Volume of agreement is not confidence; coverage is.
@@ -220,7 +220,7 @@ PATCH_SITE_IDENTICAL = "PATCH-SITE-IDENTICAL"
 # How many separate places the two bodies may disagree, and how many instructions may be inserted
 # or deleted across all of them, before the difference stops being a localised edit.
 #
-# SET FROM THE IMAGE, NOT FROM THE ROW THAT NEEDED RESCUING. Surveyed on 2026-08-30 across all
+# Set from the image, not from the row that needed rescuing. Surveyed on 2026-08-30 across all
 # 128,602 pairs in `docs/recon/rva-map-1162-to-1170.functions.tsv`: 199 pairs differ at all once
 # byte-identical and stream-identical bodies are removed, and 26 of those differ by insertions and
 # deletions only. Their hunk counts are 1 (20 pairs), 2 (5) and 4 (1); their total inserted-plus-
@@ -228,48 +228,48 @@ PATCH_SITE_IDENTICAL = "PATCH-SITE-IDENTICAL"
 # at the top of that cluster, where the data has a real gap, rather than at the one row this
 # verdict was written for (`STEP_MoveMap`, 1 hunk of 2 instructions).
 #
-# These are a POLICY LINE, and deliberately a tight one: a body that gained thirty instructions is
+# These are a policy line, and deliberately a tight one: a body that gained thirty instructions is
 # not a body that grew "somewhere else", and refusing it costs a feature while admitting it wrongly
 # costs five bytes written into a live function. A row above the line is not refused forever -- it
 # is referred to a human, who can derive the pair by hand into the curated ledger.
 MAX_DRIFT_HUNKS = 2
 MAX_DRIFT_INSNS = 8
 
-# THE VERDICT FOR A BODY THAT IS PROVED AND STILL CANNOT BE HOOKED. The mirror image of
-# PATCH-SITE-IDENTICAL: that one says the streams DIFFER and licenses the detour anyway; this one
-# says the streams are EQUAL over the whole of both bodies and refuses the detour anyway. Neither
+# The verdict for a body that is proved and still cannot be hooked. The mirror image of
+# patch-site-IDENTICAL: that one says the streams differ and licenses the detour anyway; this one
+# says the streams are equal over the whole of both bodies and refuses the detour anyway. Neither
 # belongs in EXHAUSTIVE_VERDICTS, for opposite halves of the same reason -- that list is what
-# `er-game-base/build.rs` admits to the DETOUR table, and this verdict must never reach it.
+# `er-game-base/build.rs` admits to the detour table, and this verdict must never reach it.
 #
-# WHAT IT CLAIMS: everything IDENTICAL-LEAF claims, minus the hook. Both extents were DECODED
+# What it CLAIMS: everything identical-leaf claims, minus the hook. Both extents were DECODED
 # because neither image declares a `.pdata` entry, the two decodes arrived at the same byte
 # length, the normalised streams are equal over all of both bodies, and no branch inside either
 # body targets the bytes a patch would overwrite. What it adds is the refusal, in MinHook's own
 # words: the body is shorter than the five bytes `MH_CreateHook` writes, and the ported
 # `CreateTrampolineFunction` confirms it will not install there.
 #
-# WHY THE REFUSAL HAD TO BECOME A VERDICT RATHER THAN STAY A FALLBACK. Before 2026-08-30 such a
+# Why the refusal had to become a verdict rather than stay a FALLBACK. Before 2026-08-30 such a
 # leaf fell back to `IDENTICAL`/`IDENTICAL-SHORT`, and `leaf_fits_patch` described that as keeping
-# the row CALLABLE and refusing only the detour. It did not: `build.rs` seeds the CALL map from
+# the row CALLABLE and refusing only the detour. It did not: `build.rs` seeds the call map from
 # `detourable_pairs(VERIFIED_MAP)`, so the two decisions were one, and `IDENTICAL-SHORT` withdrew
-# the address from COMPARING as well as from hooking. Two rows were losing a feature that way:
+# the address from comparing as well as from hooking. Two rows were losing a feature that way:
 #
 #   * `0x7add70 -> 0x7aebf0`, `CS::MenuItem`'s constant-false accept predicate (`33 c0 c3`,
 #     `xor eax,eax; ret`). er-quickload only ever compares a row's `+0xf8` against it;
 #   * `0x1c92f30 -> 0x1c94d30`, `CTRL_SUBOBJECT_RELEASE_RVA` (`c2 00 00`, `ret 0`), which
-#     er-invasion-path CALLS while tearing an effect down -- and its `let ... else { return }`
+#     er-invasion-path calls while tearing an effect down -- and its `let ... else { return }`
 #     abandons the whole teardown when the address will not resolve.
 #
 # Both are 3-byte bodies. A 3-byte function is a perfectly good thing to call and to compare
 # against; it is nowhere to put a 5-byte jump. The two claims are now separate.
 IDENTICAL_LEAF_NOPATCH = "IDENTICAL-LEAF-NOPATCH"
-# Verdicts admitted to `VERIFIED_1162_TO_1170` (CALL and READ) and to NOTHING else. Mirrored as
+# Verdicts admitted to `VERIFIED_1162_TO_1170` (call and read) and to nothing else. Mirrored as
 # `CALLABLE_ONLY_VERDICTS` in `er-game-base/build.rs`; `build_rs_lists_agree` asserts the two
 # files' three lists are identical and that this one is disjoint from the other two, so the
 # separation is checked rather than remembered.
 CALLABLE_ONLY_VERDICTS = frozenset((IDENTICAL_LEAF_NOPATCH,))
 # Entry-evidence verdicts, written into the table's last column and required by
-# er-game-base/build.rs before a row may carry a DETOUR.
+# er-game-base/build.rs before a row may carry a detour.
 ENTRY_BOTH = "BOTH-ENTRIES"
 ENTRY_DEST_NOT = "DEST-NOT-ENTRY"
 ENTRY_SRC_NOT = "SRC-NOT-ENTRY"
@@ -279,7 +279,7 @@ ENTRY_NEITHER = "NEITHER-ENTRY"
 def runtime_functions(image):
     """Every `RUNTIME_FUNCTION` in the image's exception directory: `(begin, end, unwind)` RVAs.
 
-    x86-64 PE stores one of these per function REGION for stack unwinding. Regions, not functions
+    x86-64 PE stores one of these per function region for stack unwinding. Regions, not functions
     -- which is the distinction the rest of this file is built on and which cost two rows before
     anyone read the `unwind` field.
     """
@@ -300,7 +300,7 @@ def runtime_functions(image):
 
 
 # `UNW_FLAG_CHAININFO` in `UNWIND_INFO`. Byte 0 packs `Version` in bits 0-2 and `Flags` in bits
-# 3-7; the flag says "this region is a CONTINUATION of another function, and my unwind data is the
+# 3-7; the flag says "this region is a continuation of another function, and my unwind data is the
 # other one's". It is the image's own statement that a `.pdata` entry is not a function.
 UNWIND_CHAINED = 0x4
 
@@ -314,25 +314,25 @@ def unwind_is_chained(image, unwind_rva):
 def function_regions(image):
     """`({begin: end of the whole chunk run}, {every primary begin})`, chunk runs merged.
 
-    MSVC SPLITS A FUNCTION INTO CHUNKS and gives each chunk its own `.pdata` entry. Only the
+    MSVC splits a function into chunks and gives each chunk its own `.pdata` entry. Only the
     first is a real function start; the rest carry `UNW_FLAG_CHAININFO`, which points their
     unwind data back at the primary and marks them as continuations. Reading the table without
     that flag produces two errors at once, and this file was making both:
 
-      * the extent of a chunked function is the FIRST CHUNK ONLY, which is typically a couple of
+      * the extent of a chunked function is the first chunk only, which is typically a couple of
         dozen bytes. Measured: `0x140afbad0` (er-reload-trace's `movemap_do_save_stuff`) declares
         0x16 bytes where the real run is 0x25c, and `0x1411a8900` (`SCALEFORM_HANDLER_DTOR_RVA`,
         the System>Quit ownership guard) declares 0x20 where the run is 0xe5. Both then compared
-        6 and 7 instructions, reported `IDENTICAL` with `whole_body` TRUE, and failed
+        6 and 7 instructions, reported `IDENTICAL` with `whole_body` true, and failed
         `MIN_VERIFIED_INSNS` -- a confident verdict over 18% and 13% of the body that was also
         not enough to be accepted. Over the full run they are 33 and 54 instructions, ratio
         1.0000, and both clear the floor with nothing relaxed;
-      * a continuation chunk's begin is NOT a function start, but `function_starts` was returning
+      * a continuation chunk's begin is not a function start, but `function_starts` was returning
         it as one. That is the exact input `entry_evidence` must not be given: it would report
         `BOTH-ENTRIES` for a pair of addresses sitting in the middle of a function, which is the
         one thing that column exists to refuse.
 
-    The run is extended only while the next entry is BOTH contiguous with the current end AND
+    The run is extended only while the next entry is both contiguous with the current end and
     flagged as a continuation. Contiguity alone is not enough -- two unrelated functions packed
     flush against each other satisfy it, and merging them would over-extend the body, which is
     the mirror-image mistake.
@@ -360,9 +360,9 @@ def function_regions(image):
 def function_extents(image):
     """`{begin RVA: end RVA}` for every function the image's .pdata declares.
 
-    The end is what makes a SHORT function verifiable. Without it `compare` stops at the first
+    The end is what makes a short function verifiable. Without it `compare` stops at the first
     `ret` and reports how many instructions it managed, which reads as thin evidence -- but a
-    21-byte function compared over all 21 bytes has been compared COMPLETELY, and calling that
+    21-byte function compared over all 21 bytes has been compared completely, and calling that
     thin confuses "few instructions" with "not much of the function". The extent is how the two
     are told apart.
     """
@@ -373,16 +373,16 @@ def function_starts(image):
     """Every address the image itself declares as a function start, from its .pdata.
 
     x86-64 PE stores one RUNTIME_FUNCTION per function in the exception directory: begin RVA,
-    end RVA, unwind info. That table is the image's OWN answer to "does a function start here",
+    end RVA, unwind info. That table is the image's own answer to "does a function start here",
     written by the linker for stack unwinding, and it is not a heuristic the way counting
     forward references is. A detour needs its target to be a function entry -- MinHook relocates
     the first five bytes and they had better be a prologue -- so this is the check that
     `scripts/audit-1170-hook-targets.py` was approximating.
 
-    What it does NOT say: that the function is the SAME function. That is what `compare` is for,
+    What it does not say: that the function is the same function. That is what `compare` is for,
     and the two are required together.
 
-    A CONTINUATION CHUNK IS NOT A START. MSVC splits a function into chunks and gives each its
+    A continuation chunk is not a start. MSVC splits a function into chunks and gives each its
     own `.pdata` entry, so a table read naively answers "yes, a function starts here" about
     addresses that are the middle of one. Those entries are excluded by `function_regions`, which
     reads the `UNW_FLAG_CHAININFO` bit the linker set to say so.
@@ -393,7 +393,7 @@ def function_starts(image):
 def branch_target(insn):
     """The rel8/rel32 destination of a branch, or `None` for anything that is not one.
 
-    Only a branch whose destination is encoded as an IMMEDIATE has a destination this file can
+    Only a branch whose destination is encoded as an immediate has a destination this file can
     see. `jmp rax` and `jmp qword ptr [rax*8 + table]` -- a switch dispatch -- do not, and that
     distinction is load-bearing rather than pedantic: a switch's cases sit immediately after the
     dispatch and are reached only through a table in `.rdata`, so treating an indirect `jmp` as a
@@ -411,20 +411,20 @@ def branch_target(insn):
 
 
 def leaf_extent(image, va, starts, limit=0x100):
-    """Where a `.pdata`-LESS leaf function ends, decoded rather than declared.
+    """Where a `.pdata`-less leaf function ends, decoded rather than declared.
 
     The x64 ABI lets a function omit unwind data when it allocates no stack and calls nothing, so
     ELDEN RING's many small getters have no `.pdata` entry at all. `compare` therefore cannot
     obtain a whole-body extent for them, falls back to the normalised decode, and -- because the
     body is a handful of instructions -- reports `IDENTICAL-SHORT`. `er-game-base/build.rs` then
-    DROPS the row: it accepts `BYTE-IDENTICAL`, or `IDENTICAL` over at least `MIN_VERIFIED_INSNS`,
+    drops the row: it accepts `BYTE-IDENTICAL`, or `IDENTICAL` over at least `MIN_VERIFIED_INSNS`,
     and a leaf can reach neither however completely it was compared. The address stays unmapped and
     the feature behind it dies quietly, which is the exact outcome this migration exists to
     prevent.
 
-    THE FIRST `ret` IS NOT THE END. Stopping there -- the obvious rule, and the one tried first --
+    The first `ret` is not the end. Stopping there -- the obvious rule, and the one tried first --
     gets several of these wrong, because a getter with a range check is `cmp / ja / <compute> / ret
-    / xor eax,eax / ret`: the early `ret` is the fast path and the branch target sits BEHIND it.
+    / xor eax,eax / ret`: the early `ret` is the fast path and the branch target sits behind it.
     Measured against the 1.16.2 Ghidra dump's own function sizes, first-`ret` truncates
     `0x140261b80` to 0x17 of its 0x1a bytes and `0x140262250` to 0x10 of its 0x13. So the sweep
     carries a watermark of the furthest forward branch target seen, and only a `ret`/tail-`jmp`
@@ -433,29 +433,29 @@ def leaf_extent(image, va, starts, limit=0x100):
     The extent never includes the padding that follows, which is what keeps two builds with
     different pad runs in phase. Returns `None` when no terminator is reached inside `limit`.
 
-    A TAIL CALL OUT OF THE FUNCTION ENDS IT, WHATEVER FOLLOWS. The `jmp` clause below used to
+    A tail call out of the function ends it, whatever follows. The `jmp` clause below used to
     require that the fall-through byte be padding or a declared function start, and in the
     de-Arxan'd images that test cannot fire at all across large stretches of `.text`: the gaps
-    between functions there hold the deobfuscator's LEFTOVER BYTES rather than `cc`/`90` runs, and
+    between functions there hold the deobfuscator's leftover bytes rather than `cc`/`90` runs, and
     a `.pdata`-less region has no declared start to land on either. Measured at the three addresses
     that sent this back for repair on 2026-08-30 -- the gap before 1.16.2 `0x14090a0a0` is
     `82 cd ac aa 32 3e 47 4b`, and before 1.17 `0x14090b240` it is `05 00 00 00 00 00 00 00`.
     Neither is padding, so the sweep walked straight through the gap and kept going:
 
     * `0x14090a0a0 -> 0x14090b240` (`LOADING_SCREEN_GFX_FADEOUT_RVA`) decoded `LEAF:0x45/0x45` --
-      the 23-byte thunk, 9 bytes of gap, the WHOLE NEXT thunk, 9 more bytes of gap and into a
+      the 23-byte thunk, 9 bytes of gap, the whole next thunk, 9 more bytes of gap and into a
       third function -- and then reported `DIVERGES 0.86`, because the two images' gap bytes
       differ. Ghidra puts both functions at 23 bytes, in both builds.
     * `0x14090a0c0 -> 0x14090b260` (`KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA`) decoded `LEAF:0x25/0x25`
       and reported `DIVERGES 0.75`. Ghidra: 23 bytes, both builds.
 
-    That is the WORST available failure. `refuted_sources` in `er-game-base/build.rs` reads
-    `DIVERGES` as positive evidence the pair is WRONG and subtracts the address from the CALL map
+    That is the worst available failure. `refuted_sources` in `er-game-base/build.rs` reads
+    `DIVERGES` as positive evidence the pair is wrong and subtracts the address from the call map
     as well as the detour map, so a sweep artefact would not merely fail to rescue these rows, it
     would delete them -- and delete a correct address on the strength of comparing one image's
     dead gap bytes against another's.
 
-    So a direct `jmp` whose target lies OUTSIDE the sweep window ends the body on its own. Such a
+    So a direct `jmp` whose target lies outside the sweep window ends the body on its own. Such a
     jump leaves the function by construction; nothing inside can branch back over it (the
     watermark already refuses the stop if anything did), and the bytes after it are unreachable by
     fall-through whether they are padding, leftovers or the next function. The narrowness is
@@ -480,7 +480,7 @@ def leaf_extent(image, va, starts, limit=0x100):
         if insn.mnemonic == "ret" and after > watermark:
             return after
         if insn.mnemonic == "jmp" and after > watermark:
-            # A tail call OUT of the function: the destination is past the window this sweep can
+            # A tail call out of the function: the destination is past the window this sweep can
             # reach, so the jump cannot be intra-function control flow and the body ends here
             # regardless of what the gap after it holds. See the docstring for the three rows a
             # padding-only test lost to the de-Arxan'd images' leftover gap bytes.
@@ -493,7 +493,7 @@ def leaf_extent(image, va, starts, limit=0x100):
 
 
 def pdata_regions(image):
-    """Sorted `(begin, end)` of EVERY `.pdata` region, continuation chunks INCLUDED.
+    """Sorted `(begin, end)` of every `.pdata` region, continuation chunks included.
 
     Deliberately not `function_regions`, which merges chunk runs and drops continuations because
     it answers "does a function BEGIN here". This answers "is this address INSIDE one", and for
@@ -515,18 +515,18 @@ def inside_pdata(regions, rva):
 
 
 def add_leaf_extents(image, extents, starts, vas):
-    """Give `extents` a decoded entry for each `va` the `.pdata` table does not describe AT ALL.
+    """Give `extents` a decoded entry for each `va` the `.pdata` table does not describe at all.
 
-    Returns the set of RVAs whose extent was DERIVED here rather than declared by the image. That
+    Returns the set of RVAs whose extent was derived here rather than declared by the image. That
     set is what keeps the provenance visible downstream: `compare` needs it to say
     `IDENTICAL-LEAF` instead of `IDENTICAL-WHOLE`, and without it the two claims would be
     indistinguishable in the table the build reads.
 
-    NOT DESCRIBED IS A STRONGER TEST THAN NOT DECLARED, and this asks the stronger one. Until
+    Not described is a stronger test than not declared, and this asks the stronger one. Until
     2026-08-30 the skip was `rva in extents` -- "no `.pdata` entry BEGINS here" -- which is not
     the premise `IDENTICAL-LEAF` rests on. An address 0x10 bytes into a declared function begins
     nothing, so it passed that test, took a decoded extent, and could reach the one verdict that
-    issues its own detour licence: a hook landing in the MIDDLE of a function, with the
+    issues its own detour licence: a hook landing in the middle of a function, with the
     `NEITHER-ENTRY` clause reporting no objection because neither side is an entry. The premise
     the verdict actually needs is that the linker described no function here, so that is what is
     checked.
@@ -588,7 +588,7 @@ def decode(image, va, limit=DECODE_LIMIT, end_rva=None):
 def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
     """`(normalised instructions, stop reason, RVA reached, per-instruction start RVAs)`.
 
-    The fourth element is what turns an instruction INDEX back into a BYTE OFFSET, which is the
+    The fourth element is what turns an instruction index back into a byte offset, which is the
     only way to ask whether a difference at instruction 873 lies inside or outside the handful of
     bytes MinHook is going to relocate. `PATCH_SITE_IDENTICAL` needs exactly that question
     answered; nothing else uses it, and `decode` still returns the stream alone.
@@ -596,7 +596,7 @@ def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
     The stop reason is the half that was missing until 2026-08-30, and its absence is what let a
     truncated comparison pass itself off as a complete one. `compare` had no way to ask "did this
     decode reach the end of the function, or did it merely run out of budget", so it inferred
-    coverage from the extent's BYTE LENGTH -- which answers a different question. Measured
+    coverage from the extent's byte length -- which answers a different question. Measured
     consequence: `STEP_MoveMap` (0x140af7cf0 -> 0x140af9000) is 975 instructions and 1.17 inserts
     two of them at instruction 873; the first 120 matched, the row read `IDENTICAL 1.000`, and it
     was promoted into `DETOUR_SAFE_1162_TO_1170` on evidence covering 12% of the body.
@@ -606,19 +606,19 @@ def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
       * `STOP_TERMINATOR` -- an unbounded decode ended on a `ret` or a tail `jmp` at a boundary.
         Complete as far as this file can tell, but nothing declared where the end was.
       * `STOP_LIMIT` -- the decode ran out of `DECODE_LIMIT` or `DECODE_BYTES`. The result is a
-        PREFIX of unknown coverage, and `compare` refuses to call a prefix identical.
+        prefix of unknown coverage, and `compare` refuses to call a prefix identical.
 
-    KNOWING WHERE TO STOP IS THE WHOLE ACCURACY OF THIS TOOL. Stopping only at `ret` -- which is
+    Knowing where to stop is the whole accuracy of this tool. Stopping only at `ret` -- which is
     what this did until 2026-08-30 -- silently walks off the end of any function that ends in a
-    TAIL CALL, and a great many do. Past the end sits inter-function padding whose length differs
+    tail call, and a great many do. Past the end sits inter-function padding whose length differs
     between builds (measured: 3 bytes in 1.16.2 against 4 in 1.17 after
     `CS::MenuWindowJob::~MenuWindowJob`), so the two decodes fall out of phase and every
     instruction after that point compares unequal. The result is a confident `DIVERGES` on a
     function that is byte-identical in its own body.
 
     That false negative is not merely noise: `build.rs::refuted_sources()` treats `DIVERGES` as
-    positive evidence that an address is WRONG and subtracts the row from `VERIFIED_1162_TO_1170`
-    -- the CALL map, not just the detour map. So a decoding artifact removes a working address and
+    positive evidence that an address is wrong and subtracts the row from `VERIFIED_1162_TO_1170`
+    -- the call map, not just the detour map. So a decoding artifact removes a working address and
     the feature dies with a `failed to resolve` line. Three independent reviews on 2026-08-30
     found the same artifact behind 12 of 12 non-clean rows, with zero changed immediates and zero
     changed struct offsets among them.
@@ -630,33 +630,33 @@ def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
       3. An unconditional `jmp` immediately followed by a pad byte -- `int3` (0xCC) or `nop`
          (0x90); see `FUNCTION_PAD_BYTES`, and note the two builds do not always pad the same
          function the same way. A `jmp` in the middle of a body (a loop, a branch to a shared
-         epilogue) is followed by real code and must NOT stop the decode.
-      4. An unconditional `jmp` with a rel8/rel32 destination, past the FORWARD-BRANCH WATERMARK.
+         epilogue) is followed by real code and must not stop the decode.
+      4. An unconditional `jmp` with a rel8/rel32 destination, past the forward-branch WATERMARK.
          For the shape rules 1-3 all miss: a 5-byte `jmp` THUNK. It has no `.pdata` entry in
          either image (so rule 1 never fires), no `ret` (rule 2), and the game's thunks are packed
          flush against each other, so the byte after the `jmp` is the next thunk's first
          instruction rather than padding (rule 3). Measured on `UPDATE_TROPHY_STATS_RVA`
-         0x24a1a0, which is `e9 1b 14 00 00` at the SAME address in both images and was
+         0x24a1a0, which is `e9 1b 14 00 00` at the same address in both images and was
          nonetheless reported `DIVERGES 0.05, first diff at insn 1` -- insn 1 being the first
-         instruction of the NEXT thunk, a different one in each build.
+         instruction of the next thunk, a different one in each build.
 
-         HOW RULE 4 TELLS A TAIL CALL FROM A MID-BODY `jmp`. It carries a watermark: the furthest
+         How rule 4 tells a tail call from a mid-body `jmp`. It carries a watermark: the furthest
          forward destination of any branch decoded so far, this `jmp` included. The rule fires
          only when the byte after the `jmp` is beyond that watermark, and the three cases
          separate cleanly:
-           * a `jmp` to a SHARED EPILOGUE branches forward, so its own destination raises the
+           * a `jmp` to a shared epilogue branches forward, so its own destination raises the
              watermark past the following byte and the rule does not fire;
-           * a LOOP back-edge branches backward -- but then whatever follows it can only be
+           * a loop back-edge branches backward -- but then whatever follows it can only be
              entered by an earlier forward branch, whose destination already raised the watermark
              past the following byte, so the rule does not fire there either. Control does not
-             fall through an unconditional `jmp`, so a following instruction that NO decoded
+             fall through an unconditional `jmp`, so a following instruction that no decoded
              branch reaches is not part of this function;
-           * a TAIL CALL or thunk leaves the function, nothing decoded so far reaches the
+           * a tail call or thunk leaves the function, nothing decoded so far reaches the
              following byte, and the decode stops exactly at the end.
          Indirect `jmp`s are excluded by `branch_target` returning `None` for them, which is what
          stops a switch dispatch from truncating its own cases.
 
-    WHEN AN EXTENT IS DECLARED IT IS THE ONLY STOP THAT APPLIES, and `DECODE_LIMIT` /
+    When an extent is declared it is the only stop that applies, and `DECODE_LIMIT` /
     `DECODE_BYTES` / `ret` are all suspended for it. Both of the suspended rules were producing
     silently partial comparisons that the caller could not distinguish from complete ones:
 
@@ -666,7 +666,7 @@ def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
       * the limit truncates every long body. Measured across the two verdict tables: 150 of 383
         rows never reached their own declared end, `STEP_MoveMap` at 120 of 975.
 
-    The limits exist to bound a decode that has NO declared end -- there they are the only thing
+    The limits exist to bound a decode that has no declared end -- there they are the only thing
     standing between this tool and the rest of the image -- and they keep applying in that case.
     """
     from capstone import CS_ARCH_X86, CS_MODE_64, Cs
@@ -682,7 +682,7 @@ def decode_status(image, va, limit=DECODE_LIMIT, end_rva=None):
     starts_at = []
     reason = STOP_LIMIT
     reached = offset
-    # Furthest forward branch destination seen so far. Only destinations INSIDE the decode window
+    # Furthest forward branch destination seen so far. Only destinations inside the decode window
     # count: a branch that leaves the window is not this function's own control flow.
     watermark = va
     for insn in md.disasm(bytes(image[offset : offset + window]), va):
@@ -722,7 +722,7 @@ STOP_TERMINATOR = "terminator"
 STOP_LIMIT = "limit"
 
 
-# MSVC pads between functions with EITHER `int3` (0xCC) or `nop` (0x90), and it does not always
+# MSVC pads between functions with either `int3` (0xCC) or `nop` (0x90), and it does not always
 # make the same choice in two builds of the same function. A `jmp` followed by one of these is a
 # tail call at a function boundary; a `jmp` followed by real code is inside a body.
 #
@@ -730,9 +730,9 @@ STOP_LIMIT = "limit"
 # 9 bytes -- `add rcx,8; jmp <handler>` -- and have no `.pdata` extent, so the pad byte is the
 # only boundary signal. 1.16.2 pads 0x140961649 with `nop`; 1.17 pads 0x140962789 with `int3`.
 # Recognising only `int3` stops the 1.17 decode at 2 instructions and lets the 1.16.2 decode run
-# on, so the two lengths differ, and the verdict drops from IDENTICAL to NEAR on a pair whose
-# every compared instruction matched. NEAR is not in {BYTE-IDENTICAL, IDENTICAL}, so the row stays
-# callable but never becomes DETOUR-SAFE -- and these two thunks ARE detour targets: the Quit
+# on, so the two lengths differ, and the verdict drops from identical to near on a pair whose
+# every compared instruction matched. Near is not in {byte-identical, identical}, so the row stays
+# callable but never becomes detour-safe -- and these two thunks are detour targets: the Quit
 # tab's Save Game and Return-to-Desktop row actions, the second guarding an irreversible action.
 # A pad-byte preference is not a reason to refuse a hook.
 FUNCTION_PAD_BYTES = frozenset((0xCC, 0x90))
@@ -763,7 +763,7 @@ def compare(
 
     `old_starts`/`new_starts` are each image's `.pdata` function-start set. Without them the
     entry evidence cannot be computed here and [`PATCH_SITE_IDENTICAL`] can never be issued --
-    the one verdict that turns on a body being DIFFERENT fails closed rather than guessing. Every
+    the one verdict that turns on a body being different fails closed rather than guessing. Every
     caller in this file supplies them; `result["patch_site"]` says so out loud when one does not,
     so a silently unreachable gate reads as a refusal with a reason rather than as a clean pass.
     """
@@ -772,11 +772,11 @@ def compare(
     new_end = new_extents.get(new_rva) if new_extents is not None else None
     bounded = old_end is not None and new_end is not None
     # An extent this file DECODED rather than read out of `.pdata`. The distinction is the whole
-    # difference between IDENTICAL-WHOLE and IDENTICAL-LEAF; see `add_leaf_extents`.
+    # difference between identical-whole and identical-leaf; see `add_leaf_extents`.
     derived = old_rva in old_derived or new_rva in new_derived
     extents = extent_note(old_rva, old_end, new_rva, new_end, derived)
     delta = (new_end - new_rva) - (old_end - old_rva) if bounded else None
-    # Computed HERE, above every return, because a verdict table's entry column must be present on
+    # Computed here, above every return, because a verdict table's entry column must be present on
     # every row -- including the two the shortcuts below return early. `None` means the caller did
     # not supply the `.pdata` start sets, which is the only state in which the column is absent.
     entry = (
@@ -797,10 +797,10 @@ def compare(
     # it can only ever say "the same up to what 1.17 was expected to change" -- a weaker claim
     # than the one available for free when a function did not change at all.
     #
-    # A DERIVED extent is deliberately excluded from this shortcut. "The bytes are equal" is only
+    # A derived extent is deliberately excluded from this shortcut. "The bytes are equal" is only
     # as good as the two endpoints, and if the same decoding rule truncated both leaves at the
     # same wrong place their equal prefixes prove nothing about the rest. Those pairs go the long
-    # way round and come back IDENTICAL-LEAF, which carries that provenance in its name.
+    # way round and come back identical-leaf, which carries that provenance in its name.
     if bounded and not derived:
         left_body = whole_function_bytes(old_image, old_extents, old_va)
         right_body = whole_function_bytes(new_image, new_extents, new_va)
@@ -842,21 +842,21 @@ def compare(
     if len(left) == len(right):
         ratio = sum(1 for i in range(compared) if left[i] == right[i]) / compared
     else:
-        # THE STREAMS ARE DIFFERENT LENGTHS, so index-against-index is measuring the wrong thing.
-        # An INSERTION shifts every later instruction by one and an index-wise ratio reads the
+        # The streams are different lengths, so index-against-index is measuring the wrong thing.
+        # An insertion shifts every later instruction by one and an index-wise ratio reads the
         # entire tail as changed: `STEP_MoveMap`, whose 1.17 body gains exactly two instructions
         # at index 873 of 975, scores 0.898 that way and lands on DIVERGES -- which
-        # `build.rs::refuted_sources()` reads as proof the address is WRONG and subtracts from the
-        # CALL map. An alignment-aware ratio scores the same pair 0.999 and lands on NEAR: the row
+        # `build.rs::refuted_sources()` reads as proof the address is wrong and subtracts from the
+        # call map. An alignment-aware ratio scores the same pair 0.999 and lands on NEAR: the row
         # keeps its call mapping and is refused only the detour, which is the honest answer for a
         # function that really did gain code. Equal-length pairs keep the index-wise ratio so no
         # existing verdict moves.
         ratio = difflib.SequenceMatcher(None, left, right, autojunk=False).ratio()
 
-    # Did the comparison cover BOTH functions in full? Three things have to hold, and each of them
+    # Did the comparison cover both functions in full? Three things have to hold, and each of them
     # was independently observed being false while the old `whole_body` flag said true:
     #   * both ends are known -- otherwise there is no "in full" to speak of;
-    #   * the two extents are the SAME LENGTH. A different length is a positive statement that the
+    #   * the two extents are the same length. A different length is a positive statement that the
     #     bodies differ, and it costs no decoding at all to notice;
     #   * everything between the entry and that end is accounted for -- the instructions by the
     #     decode (150 of 383 rows used to stop short of their own declared end, `STEP_MoveMap` at
@@ -870,12 +870,12 @@ def compare(
             new_rva,
         )
     )
-    # `covered` is "the comparison saw all of both bodies"; `whole_body` is that AND "the two
+    # `covered` is "the comparison saw all of both bodies"; `whole_body` is that and "the two
     # bodies are the same length". They were one flag until 2026-08-30, which is why a length
     # delta had nowhere to be reported except the extent column nobody was reading. Splitting
     # them changes no existing verdict -- `whole_body` is the same expression it was -- and gives
     # PATCH_SITE_IDENTICAL the only footing it can honestly stand on: full coverage of a pair
-    # whose lengths differ ON PURPOSE.
+    # whose lengths differ on purpose.
     whole_body = bool(covered and delta == 0)
     truncated = not whole_body and STOP_LIMIT in (left_stop, right_stop)
 
@@ -885,7 +885,7 @@ def compare(
             # `.pdata` would have supplied and cannot here: that the first bytes a detour
             # overwrites are not a branch target, and that there are five of them to overwrite.
             # `leaf_verdict` holds both, and separates "proved and hookable" from "proved and
-            # NOT hookable" instead of collapsing the second into a refusal to answer at all.
+            # not hookable" instead of collapsing the second into a refusal to answer at all.
             if derived:
                 verdict, patch_site = leaf_verdict(
                     old_image, new_image, old_va, new_va, old_end, new_end, compared
@@ -899,7 +899,7 @@ def compare(
         else:
             verdict = "IDENTICAL-SHORT"
     else:
-        # The streams are NOT equal. Today's answer first, so that a gate which declines leaves
+        # The streams are not equal. Today's answer first, so that a gate which declines leaves
         # every existing verdict exactly where it was.
         verdict = "NEAR" if ratio >= 0.95 else REFUTED
         if bounded and not derived and covered and entry == ENTRY_BOTH:
@@ -922,7 +922,7 @@ def compare(
                     if held
                 )
             )
-    # A BOUNDARY THIS FILE DECODED MAY NOT REFUTE AN ADDRESS. See [`refutation_withheld`]: the
+    # A boundary this file DECODED may not refute an address. See [`refutation_withheld`]: the
     # verdict that removes a row has to rest on evidence stronger than this file's own guess about
     # where a function ends, and a decoded extent is exactly that guess.
     if derived and verdict == REFUTED:
@@ -973,20 +973,20 @@ def refutation_withheld(
 ):
     """Re-judge a pair whose [`REFUTED`] verdict rested on a DECODED extent, without that extent.
 
-    THE ASYMMETRY THIS ENCODES. A verdict that fails to ACCEPT a row costs a feature loudly: the
+    The ASYMMETRY this ENCODES. A verdict that fails to accept a row costs a feature loudly: the
     address stays unmapped and the DLL logs `failed to resolve`. [`REFUTED`] is the only verdict
-    that goes the other way -- `build.rs::refuted_sources()` subtracts the row from the CALL map as
+    that goes the other way -- `build.rs::refuted_sources()` subtracts the row from the call map as
     well as the detour map, so a correct address that was already working disappears, with nothing
     printed. Deleting a right answer is strictly worse than declining to add one, so the evidence
     required for it has to be correspondingly stronger.
 
     A DECODED extent is not that evidence. `.pdata` is the image's own statement about where a
-    function ends; `leaf_extent` is this file's CONCLUSION about it, reached by a sweep whose stop
-    rules have been wrong before. MEASURED, and the reason this exists: until 2026-08-30 the sweep
+    function ends; `leaf_extent` is this file's conclusion about it, reached by a sweep whose stop
+    rules have been wrong before. Measured, and the reason this exists: until 2026-08-30 the sweep
     ended a body at a `jmp` only when the following byte was `0xCC`/`0x90` padding or a declared
     `.pdata` start. In these de-Arxan'd images the inter-function gaps hold the deobfuscator's
     residue instead -- `48 8d 64 24 08 ff 64 24 f8` after 1.16.2 `0x14090a0b7` -- so the sweep ran
-    through the gap into the NEXT function and compared unrelated code. `0x14090a0a0 ->
+    through the gap into the next function and compared unrelated code. `0x14090a0a0 ->
     0x14090b240` took extents of 0x45/0x45 instead of 0x17/0x17 and came back `DIVERGES 0.86`; a
     23-byte thunk that is the same function in both builds would have been SUBTRACTED from the call
     map on the strength of comparing one image's dead gap bytes against another's.
@@ -1033,15 +1033,15 @@ def refutation_withheld(
 def residue_agrees(left, right, old_rva, new_rva):
     """Do the trailing bytes neither decode reached account for each other?
 
-    A `.pdata` extent is not always all code. MSVC parks a switch's JUMP TABLE inside the function
+    A `.pdata` extent is not always all code. MSVC parks a switch's jump table inside the function
     it belongs to, after the last instruction, and capstone stops when it runs into it -- so a
     decode bounded by the extent legitimately ends short. Two rows do exactly this:
     `SL_POLL_SAVE_STATUS` (0x140e6e430) trails 104 bytes and `0x140afa6d0` trails 36, identically
     in both builds. Demanding the decode land exactly on the declared end called both of them
     truncated and refused a pair whose every instruction matched.
 
-    The table is not comparable byte for byte, because its entries ARE addresses and 1.17 moved
-    the function. They are comparable RELATIVE TO THE FUNCTION, which is the same move `normalise`
+    The table is not comparable byte for byte, because its entries are addresses and 1.17 moved
+    the function. They are comparable relative to the function, which is the same move `normalise`
     makes for displacements: entry 0 of `SL_POLL_SAVE_STATUS` is `0xe6e5d4` in 1.16.2 and
     `0xe703d4` in 1.17, both exactly `+0x1a4` from their own function start. All 26 entries agree
     that way, and so do all 9 of the other row's.
@@ -1087,29 +1087,29 @@ def extent_note(old_rva, old_end, new_rva, new_end, derived):
 def leaf_fits_patch(rva, end_rva, window=PATCH_BYTES):
     """Is this leaf even long enough for MinHook to patch?
 
-    THE OTHER HALF OF THE CLAIM `.pdata` WOULD HAVE MADE. [`branch_into_prologue`] asks whether
+    The other half of the claim `.pdata` would have made. [`branch_into_prologue`] asks whether
     the bytes a detour overwrites are a branch target; this asks whether those bytes are inside
     the function at all. A `.pdata` extent shorter than the patch is refused by
-    `scripts/audit-1170-hook-targets.py::patch_safe` for the same reason, so a DERIVED extent has
+    `scripts/audit-1170-hook-targets.py::patch_safe` for the same reason, so a derived extent has
     to be held to it too -- otherwise the one verdict that issues its own detour licence issues a
     licence to write five bytes into a three-byte body, and past its end into whatever follows.
 
-    MEASURED 2026-08-30, on the regeneration that first admitted leaves: two 3-byte bodies reached
+    Measured 2026-08-30, on the regeneration that first admitted leaves: two 3-byte bodies reached
     `DETOUR_SAFE_1162_TO_1170` this way. `0x1407add70 -> 0x1407aebf0` (`LEAF:0x3/0x3`, body
     `33 c0 c3` = `xor eax,eax; ret`) and `0x141c92f30 -> 0x141c94d30`
     (`CTRL_SUBOBJECT_RELEASE_RVA`, body `c2 00 00` = `ret 0`). The hook audit flagged both
-    PATCH-UNSAFE with the reason spelled out -- 3 bytes long, the bytes after are not padding and
+    patch-unsafe with the reason spelled out -- 3 bytes long, the bytes after are not padding and
     the five above are not padding either, so there is nowhere to put the jump. Neither would have
-    installed; the defect is that the map CLAIMED they would.
+    installed; the defect is that the map claimed they would.
 
-    A leaf that fails this is refused the DETOUR ONLY, as [`IDENTICAL_LEAF_NOPATCH`] -- a verdict
-    `build.rs` admits to the CALL map and to nothing else. It is not a fallback to
+    A leaf that fails this is refused the detour only, as [`IDENTICAL_LEAF_NOPATCH`] -- a verdict
+    `build.rs` admits to the call map and to nothing else. It is not a fallback to
     `IDENTICAL`/`IDENTICAL-SHORT`: that is what this docstring used to claim, and it was false.
-    `build.rs` seeded the CALL map from `detourable_pairs`, so `IDENTICAL-SHORT` withdrew a
-    three-byte getter from COMPARING as well as from hooking, and both addresses above were lost
+    `build.rs` seeded the call map from `detourable_pairs`, so `IDENTICAL-SHORT` withdrew a
+    three-byte getter from comparing as well as from hooking, and both addresses above were lost
     to their features entirely. Only when MinHook's own ported rules also refuse the site, so the
     "no room" half of the claim is its answer rather than this file's arithmetic; a leaf that
-    fails for any OTHER reason still falls back to `IDENTICAL`/`IDENTICAL-SHORT` and is accepted
+    fails for any other reason still falls back to `IDENTICAL`/`IDENTICAL-SHORT` and is accepted
     nowhere.
     """
     return end_rva is not None and end_rva - rva >= window
@@ -1118,13 +1118,13 @@ def leaf_fits_patch(rva, end_rva, window=PATCH_BYTES):
 def branch_into_prologue(image, va, end_rva, window=PATCH_BYTES):
     """Does any branch inside this body target a byte strictly inside its first `window` bytes?
 
-    THE CLAIM `.pdata` MAKES AND A LEAF CANNOT. `DETOURABLE_ENTRY_EVIDENCE` in
+    The claim `.pdata` makes and a leaf cannot. `DETOURABLE_ENTRY_EVIDENCE` in
     `er-game-base/build.rs` accepts a pair only when both images' `.pdata` agree about the two
     endpoints, and the reason is not that the code matches -- `compare` answers that -- but that
     MinHook is about to relocate the first five bytes and needs them to be a relocatable entry.
     A `.pdata`-declared function start is the linker's own statement that one begins there.
 
-    A LEAF has no `.pdata` entry in either image, so it reaches that rule through the
+    A leaf has no `.pdata` entry in either image, so it reaches that rule through the
     `NEITHER-ENTRY` branch, which was written for a different situation (a deliberate fixed offset
     into a known function, symmetric in both builds) and carries no such statement. Letting leaves
     in on that clause alone would widen the detour gate by accident. So the missing claim is made
@@ -1154,7 +1154,7 @@ _MINHOOK = None
 def minhook_port():
     """`scripts/audit-1170-hook-targets.py`, imported for its port of MinHook's own rules.
 
-    IMPORTED, NOT RE-DERIVED. `trampoline_walk` there is a line-by-line port of
+    Imported, not RE-derived. `trampoline_walk` there is a line-by-line port of
     `CreateTrampolineFunction` from `vendor/minhook/src/trampoline.c` -- the copy that will be
     asked to install these detours -- and it took two wrong hand-reasoned versions to get there.
     A second approximation living here would be a third. The module also carries the branch-into-
@@ -1178,11 +1178,11 @@ def minhook_port():
 def minhook_refusal(image, va):
     """MinHook's own answer about this address, unabridged, or `None` when it would install.
 
-    IMPORTED, NOT RE-DERIVED -- see [`minhook_port`]. `patch_safe` runs the ported
+    Imported, not RE-derived -- see [`minhook_port`]. `patch_safe` runs the ported
     `CreateTrampolineFunction` and then the branch-into-the-patched-bytes scan MinHook itself does
     not do. Asking it is the difference between "this file thinks three bytes is too few" and "the
     code that will be asked to install the hook says it cannot": MinHook has a padding fallback
-    that CAN hook a sub-five-byte function when uniform padding follows it or sits above the
+    that can hook a sub-five-byte function when uniform padding follows it or sits above the
     entry, so length alone is not the answer, and a hand-reasoned version of this loop refused
     five addresses the project hooks successfully today.
     """
@@ -1195,31 +1195,31 @@ def leaf_verdict(old_image, new_image, old_va, new_va, old_end, new_end, compare
     """Which leaf verdict a pair with equal whole bodies earns. `(verdict, note)`.
 
     The caller has already established the part both answers share: both extents were DECODED by
-    `leaf_extent` (neither image declares a `.pdata` entry), the two decodes arrived at the SAME
+    `leaf_extent` (neither image declares a `.pdata` entry), the two decodes arrived at the same
     byte length, and the normalised streams are equal over all of both bodies. What is left is the
-    HOOK, and the two clauses below decide it. Each is named, each is checked independently, and
+    hook, and the two clauses below decide it. Each is named, each is checked independently, and
     each has been observed to fail on its own in `leaf_nopatch_selftest`.
 
-      1. PROLOGUE -- no branch inside either body targets the bytes a patch overwrites
+      1. Prologue -- no branch inside either body targets the bytes a patch overwrites
          (`branch_into_prologue`, both images). This is the claim a `.pdata` entry stands in for
          and a leaf cannot make; without it a leaf reaches `DETOURABLE_ENTRY_EVIDENCE` through
          `NEITHER-ENTRY`, a clause written for a different situation entirely.
-      2. ROOM -- the body is at least the five bytes MinHook writes (`leaf_fits_patch`, both
-         images; equal extents mean both sides answer alike), AND, when it is not, MinHook's own
+      2. Room -- the body is at least the five bytes MinHook writes (`leaf_fits_patch`, both
+         images; equal extents mean both sides answer alike), and, when it is not, MinHook's own
          ported rules confirm they will not install there (`minhook_refusal`, both images).
 
-    THREE OUTCOMES, and the middle one is why this function exists:
+    Three outcomes, and the middle one is why this function exists:
 
       * both clauses hold -> [`IDENTICAL_LEAF`], which carries its own detour licence;
-      * PROLOGUE holds, ROOM does not, and MinHook refuses BOTH sites for itself ->
+      * Prologue holds, room does not, and MinHook refuses both sites for itself ->
         [`IDENTICAL_LEAF_NOPATCH`]: the identity is proved and the hook is refused, and those are
-        now two answers instead of one. `build.rs` admits it to the CALL map only;
+        now two answers instead of one. `build.rs` admits it to the call map only;
       * anything else -> `IDENTICAL`/`IDENTICAL-SHORT`, accepted nowhere. A leaf whose prologue is
         a branch target gets no verdict of its own: the refusal is not about room, so naming it
         NOPATCH would misdescribe it, and a body that can be branched into is a shape nobody has
         examined rather than one that has been cleared for calling.
 
-    WHY MINHOOK IS ASKED AT ALL when clause 2's first half already answered. Because the two can
+    Why MINHOOK is asked at all when clause 2's first half already answered. Because the two can
     disagree, in the direction that matters: MinHook will hook a sub-five-byte function when
     uniform padding follows it or precedes the entry, so "shorter than five bytes" is this file's
     arithmetic and not a refusal. Requiring the real refusal keeps the verdict's name true, and
@@ -1258,8 +1258,8 @@ def relocated_prefix(image, va, starts_at):
     """How much of the function at `va` a detour disturbs: `(insns, bytes, refusal or None)`.
 
     `bytes` is MinHook's `oldPos` when its trampoline walk finishes -- the run of original bytes
-    copied into the trampoline, and so also the offset its trailing jump returns INTO. `insns` is
-    how many of THIS decode's instructions that run covers, which is the unit the diff below is
+    copied into the trampoline, and so also the offset its trailing jump returns into. `insns` is
+    how many of this decode's instructions that run covers, which is the unit the diff below is
     measured in. The two are not interchangeable: a displacement that widened from disp8 to disp32
     changes the byte count of an instruction without changing the instruction, and the instruction
     count is the claim worth making.
@@ -1268,12 +1268,12 @@ def relocated_prefix(image, va, starts_at):
     a trampoline at all, and a branch elsewhere in the body landing on the four operand bytes of
     the JMP that is about to replace the prologue.
 
-    WHY `relocated` AND NOT SIMPLY `PATCH_BYTES`, given they usually agree. MinHook's walk stops
-    at the FIRST instruction boundary at or past five bytes, so every instruction it consumed
-    starts below five and the two expressions return the same COUNT for any function at least five
+    Why `relocated` and not simply `PATCH_BYTES`, given they usually agree. MinHook's walk stops
+    at the first instruction boundary at or past five bytes, so every instruction it consumed
+    starts below five and the two expressions return the same count for any function at least five
     bytes long -- measured: zero of ~25,000 sampled 1.16.2 `.pdata` functions distinguish them, and
     a mutation swapping one for the other is therefore invisible to the selftest. They part company
-    for a function SHORTER than the patch, where MinHook falls back to a two-byte hop and
+    for a function shorter than the patch, where MinHook falls back to a two-byte hop and
     `relocated` is the honest smaller number while `PATCH_BYTES` would claim instructions past the
     end of the body.
     """
@@ -1289,20 +1289,20 @@ def relocated_prefix(image, va, starts_at):
 
 
 def patch_site_drift(old_image, new_image, old_va, new_va, left, right, left_at, right_at):
-    """Do the two bodies differ ONLY beyond the region a detour disturbs? `(admitted, note)`.
+    """Do the two bodies differ only beyond the region a detour disturbs? `(admitted, note)`.
 
-    THE CLAIM, IN THE ORDER IT IS CHECKED. Every clause is about the detour; none of them is
+    The claim, in the order it is checked. Every clause is about the detour; none of them is
     about how much of the body happens to agree.
 
-      1. MinHook will build a trampoline at BOTH addresses, and nothing in either body branches
+      1. MinHook will build a trampoline at both addresses, and nothing in either body branches
          into the bytes its JMP overwrites (`relocated_prefix` -> `patch_safe`). A pair that fails
          here has no detour to license, whatever its bodies look like.
-      2. It relocates the SAME NUMBER OF INSTRUCTIONS at both. A different number means the two
+      2. It relocates the same number of instructions at both. A different number means the two
          walks consumed different code, which is a changed patch site by definition -- and it is
          checked in instructions rather than bytes so that a widened displacement, which 1.17 is
          full of, is not mistaken for one.
-      3. The two normalised streams are aligned with `difflib`, and the FIRST place they disagree
-         is strictly after the last relocated instruction, in BOTH streams. Instruction `r` -- the
+      3. The two normalised streams are aligned with `difflib`, and the first place they disagree
+         is strictly after the last relocated instruction, in both streams. Instruction `r` -- the
          one the trampoline returns into -- therefore sits inside the equal prefix, so the bytes
          the patch overwrites and the instruction control comes back to are the same in both
          builds. This is the clause the whole verdict is named for, and it is checked before the
@@ -1314,19 +1314,19 @@ def patch_site_drift(old_image, new_image, old_va, new_va, left, right, left_at,
          insertions rather than about rewrites.
       5. The difference stays inside `MAX_DRIFT_HUNKS` places and `MAX_DRIFT_INSNS` instructions.
 
-    WHAT IT CANNOT LICENSE, and why. A MOVED patch site fails clause 1, 2 or 3: the entry region
+    What it cannot license, and why. A moved patch site fails clause 1, 2 or 3: the entry region
     is compared instruction for instruction against 1.16.2's, and any insertion, deletion or
     substitution inside it -- or before it -- puts the first hunk at or below `r` and the verdict
     is refused however small the total diff. A pair landing mid-function never reaches this
     function at all: `compare` requires `BOTH-ENTRIES` from each image's own `.pdata` before
     calling it, and a mid-function address is a start in neither image.
 
-    ON `0x140aec480`, and what this verdict does NOT claim about it. That address -- `IDENTICAL
+    On `0x140aec480`, and what this verdict does not claim about it. That address -- `identical
     1.000` over 56 instructions, `+0x360` inside `0x140aec120..0x140aec567` -- fails the
     `BOTH-ENTRIES` requirement, so it cannot reach here; but it would not have reached here
-    anyway, because its two streams are EQUAL and this verdict is only ever asked about bodies
-    that DIFFER. What actually stopped it was deleting its ledger row. Do not read
-    PATCH-SITE-IDENTICAL as the thing that catches an impostor; read it as a claim that does not
+    anyway, because its two streams are equal and this verdict is only ever asked about bodies
+    that differ. What actually stopped it was deleting its ledger row. Do not read
+    patch-site-identical as the thing that catches an impostor; read it as a claim that does not
     widen the gate for one.
 
     And a body that changed near the entry is refused even when the change is a single
@@ -1350,8 +1350,8 @@ def patch_site_drift(old_image, new_image, old_va, new_va, left, right, left_at,
     ]
     if not hunks:  # `compare` only calls this when the streams differ
         return False, "the streams are equal; this is not the verdict for that"
-    # THE CLAUSE THE VERDICT IS NAMED FOR, checked before the shape and size ones so that a
-    # reader debugging a refusal is told about the PATCH SITE first when the patch site is what
+    # The clause the verdict is named for, checked before the shape and size ones so that a
+    # reader debugging a refusal is told about the patch site first when the patch site is what
     # moved. Instruction `old_insns` is the one the trampoline returns into, so the difference has
     # to start strictly after it -- `>`, never `>=`.
     if hunks[0][1] <= old_insns or hunks[0][3] <= new_insns:
@@ -1411,7 +1411,7 @@ def load_map(path=None):
 
 
 def role_note(path):
-    """The one thing this particular ledger's header must say about WHERE hand work goes.
+    """The one thing this particular ledger's header must say about where hand work goes.
 
     Emitted by the writer rather than typed into the file, because the writer truncates: a line a
     human adds to the header is gone at the next `--tsv`, which is the same class of silent loss
@@ -1434,40 +1434,40 @@ def role_note(path):
 
 
 def preserve_unverified(path, rows):
-    """Rows already in the `--tsv` target that THIS run would not write.
+    """Rows already in the `--tsv` target that this run would not write.
 
     `--tsv` truncates. That is fine when the target is a scratch file and ruinous when it is
     `rva-map-1162-to-1170.verified.tsv`, which is where hand-derived pairs are put precisely
-    BECAUSE nothing regenerates it -- as of 2026-08-30, 65 of its 99 addresses are not in
+    because nothing regenerates it -- as of 2026-08-30, 65 of its 99 addresses are not in
     `rva-map-1162-to-1170.tsv` and would not come back. `verify-rva-map-1170.py --tsv
     docs/recon/rva-map-1162-to-1170.verified.tsv` reads like a refresh and is a deletion of
     two thirds of the file, at exit 0, with no line of output naming what went.
 
-    So: a pair the target holds and this run did not produce is CARRIED FORWARD verbatim (its
+    So: a pair the target holds and this run did not produce is carried forward verbatim (its
     verdict columns were produced by this same verifier on an earlier, narrower run, so the line
-    is still true) and listed on stderr. A pair the target maps somewhere ELSE than this run does
-    is a CONFLICT -- one of the two is a wrong address at a live-looking value -- and the caller
+    is still true) and listed on stderr. A pair the target maps somewhere else than this run does
+    is a conflict -- one of the two is a wrong address at a live-looking value -- and the caller
     refuses to write rather than pick.
 
-    COMMENT LINES ARE CARRIED TOO, and were NOT until 2026-09-01. That omission was the same
+    Comment lines are carried too, and were not until 2026-09-01. That omission was the same
     silent loss this function exists to prevent, wearing different clothing: the guard counted
-    ROWS, so `docs/recon/rva-map-1162-to-1170.verified.tsv` came through a narrow run with all
+    rows, so `docs/recon/rva-map-1162-to-1170.verified.tsv` came through a narrow run with all
     103 data rows intact and 181 of its 209 comment lines gone, at exit 0, with nothing on
     stderr naming them. Measured on the 2026-09-01 ProfileSelect run: 312 lines in, 174 out.
 
     What went is not decoration. Those interleaved blocks are where this ledger records the
-    reasoning a row cannot hold -- why 0x140aec480 was REMOVED (mid-function, +0x360 inside
+    reasoning a row cannot hold -- why 0x140aec480 was removed (mid-function, +0x360 inside
     0xaec120, and mapping it relocated the bug rather than fixing it), why 0xcf9300 is
-    deliberately ABSENT, that ersc.dll RVAs are STRUCK because 1.17 cannot move them, and the
-    four mid-function addresses whose rows were refused precisely BECAUSE they verify
-    IDENTICAL. Delete those and the next agent re-adds the row that was removed on purpose,
+    deliberately absent, that ersc.dll RVAs are struck because 1.17 cannot move them, and the
+    four mid-function addresses whose rows were refused precisely because they verify
+    identical. Delete those and the next agent re-adds the row that was removed on purpose,
     with the verifier agreeing beautifully about the wrong thing.
 
-    The LEADING comment block is the exception: everything before the first data line is the
+    The leading comment block is the exception: everything before the first data line is the
     header this writer regenerates (see `role_note`), so carrying it would duplicate it. From
     the first data row onward every line is kept in its original order -- comments, blanks and
     unreproduced rows alike -- so a block stays attached to the rows it annotates. A row this
-    run DOES reproduce moves up into the fresh section while its comment stays put; that
+    run does reproduce moves up into the fresh section while its comment stays put; that
     separates a note from its row, which is a readability cost and not a loss, and it is the
     price of never deleting one.
 
@@ -1497,7 +1497,7 @@ def preserve_unverified(path, rows):
                     new_va += BASE
                 pair = (old_va, new_va)
         if pair is None:
-            # Two comment blocks in this file are written by THIS script and must not be carried,
+            # Two comment blocks in this file are written by this script and must not be carried,
             # or each run would nest another copy of them: the leading header (see `role_note`),
             # and the `# CARRIED FORWARD` banner, which sits in the body and so is not excluded by
             # `body_started` alone. Everything else after the first row is hand-written prose and
@@ -1527,8 +1527,8 @@ def preserve_unverified(path, rows):
         if old_va in produced:
             conflicts.append((old_va, new_va, sorted(produced[old_va])[0]))
             continue
-        # Keyed on the whole LINE, not the pair. `verified.tsv` currently holds two addresses
-        # twice, each with a DIFFERENT derivation in the `how` column, and collapsing them here
+        # Keyed on the whole line, not the pair. `verified.tsv` currently holds two addresses
+        # twice, each with a different derivation in the `how` column, and collapsing them here
         # would throw one derivation away -- a smaller version of the same silent loss. Whether a
         # duplicate pair should exist is a question for whoever added the second one.
         if text in seen:
@@ -1591,24 +1591,24 @@ def main():
     if not pairs:
         sys.exit("nothing to verify")
 
-    # UNCONDITIONAL SINCE 2026-08-30, and it used to be the opt-in `--leaf-extents`.
+    # Unconditional since 2026-08-30, and it used to be the opt-in `--leaf-extents`.
     #
-    # WHY THE OPT-IN HAD TO GO. Three rows of the ledger `er-game-base/build.rs` reads --
+    # Why the OPT-in had to go. Three rows of the ledger `er-game-base/build.rs` reads --
     # LOADING_SCREEN_GFX_FADEOUT_RVA, KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA and
-    # PLAYER_GAME_DATA_NAME_GETTER_RVA -- carry IDENTICAL-LEAF, and they carry it ONLY because
+    # PLAYER_GAME_DATA_NAME_GETTER_RVA -- carry identical-leaf, and they carry it only because
     # somebody remembered to type the flag. Nothing recorded that they had, nothing enforced it,
     # and `--tsv` TRUNCATES: the next regeneration by anyone who did not know would have written
-    # those three back as IDENTICAL-SHORT, a verdict `build.rs` accepts nowhere, and the three
-    # addresses would have left the CALL map at exit 0 with nothing naming them. A correct address
+    # those three back as identical-short, a verdict `build.rs` accepts nowhere, and the three
+    # addresses would have left the call map at exit 0 with nothing naming them. A correct address
     # deleted by a forgotten command-line flag is not a failure mode worth keeping.
     #
-    # WHY MAKING IT THE DEFAULT IS SAFE RATHER THAN MERELY CONVENIENT. Measured over both candidate
-    # maps on 2026-08-30: 15 rows move, every one of them from IDENTICAL-SHORT or IDENTICAL to
-    # IDENTICAL-LEAF, and none in the other direction -- so the flag was never selecting between
+    # Why making it the default is safe rather than merely convenient. Measured over both candidate
+    # maps on 2026-08-30: 15 rows move, every one of them from identical-short or identical to
+    # identical-leaf, and none in the other direction -- so the flag was never selecting between
     # two answers, it was selecting between an answer and a shrug. The cost is 0.3s on a 305-pair
     # run, because a decode is attempted only for an address no `.pdata` region describes at all.
     #
-    # AND THERE IS NO OPT-OUT, deliberately. An opt-out is the same footgun with a longer name: the
+    # And there is no OPT-out, deliberately. An opt-out is the same footgun with a longer name: the
     # dangerous mode would still be one word away and would still leave no trace in the table it
     # wrote. Reproducing the old behaviour for an investigation needs no flag -- call `compare`
     # with `.pdata`-only extents and empty derived sets, exactly as `selftest` does.
@@ -1650,7 +1650,7 @@ def main():
         # outright. A reader should never have to take either on the verdict's own word.
         if result["verdict"] in (PATCH_SITE_IDENTICAL, IDENTICAL_LEAF_NOPATCH):
             print(f"    patch site: {result['patch_site']}")
-        # A refutation this run DECLINED to make. Printed because withholding one silently would
+        # A refutation this run declined to make. Printed because withholding one silently would
         # be the same class of failure the withholding exists to prevent -- see
         # `refutation_withheld`. It is also the loudest signal available that `leaf_extent` has
         # gone wrong on a new shape, so it is worth a human's attention rather than a suppressed
@@ -1658,9 +1658,9 @@ def main():
         if "refutation_withheld" in result:
             print(f"    refutation withheld: {result['refutation_withheld']}")
 
-    # A row that compared its WHOLE body is accepted on that basis alone; the instruction floor is
-    # a stand-in for coverage and exhaustive coverage does not need one. IDENTICAL-LEAF-NOPATCH
-    # compared its whole body too -- it is refused the DETOUR, not the comparison -- so counting it
+    # A row that compared its whole body is accepted on that basis alone; the instruction floor is
+    # a stand-in for coverage and exhaustive coverage does not need one. Identical-leaf-NOPATCH
+    # compared its whole body too -- it is refused the detour, not the comparison -- so counting it
     # as thin would report a proved row as unproved.
     def covered(result):
         return (
@@ -1676,8 +1676,8 @@ def main():
         f"\n{len(accepted)} accepted, {len(thin)} accepted-but-thin (<{THIN_EVIDENCE} insns), "
         f"{len(rejected)} rejected, of {len(rows)}"
     )
-    # Counted separately because the ratio triage above cannot describe it: a body that GREW has
-    # a ratio below 1.0 by construction, so a PATCH-SITE-IDENTICAL row lands in `rejected` there
+    # Counted separately because the ratio triage above cannot describe it: a body that grew has
+    # a ratio below 1.0 by construction, so a patch-site-identical row lands in `rejected` there
     # while being detour-safe here. Reporting only the triage would read as a refusal.
     promoted = [r for r in rows if r[3]["verdict"] == PATCH_SITE_IDENTICAL]
     if promoted:
@@ -1687,7 +1687,7 @@ def main():
         for old_va, new_va, _how, result in promoted:
             print(f"  {old_va:#x} -> {new_va:#x}  {result['patch_site']}")
     # The other verdict the triage above describes wrongly, and in the opposite direction: these
-    # ARE accepted -- for calling -- and a reader who sees only "accepted" would take that as a
+    # are accepted -- for calling -- and a reader who sees only "accepted" would take that as a
     # detour licence, which is the one thing this verdict withholds.
     callable_only = [r for r in rows if r[3]["verdict"] in CALLABLE_ONLY_VERDICTS]
     if callable_only:
@@ -1810,9 +1810,9 @@ def main():
     return 0
 
 
-# Pairs whose PATCH-SITE-IDENTICAL answer is settled by the two images, one clause each.
+# Pairs whose patch-site-identical answer is settled by the two images, one clause each.
 #
-# `clause` names the ONE thing each pair is here to exercise. A control that fails for two reasons
+# `clause` names the one thing each pair is here to exercise. A control that fails for two reasons
 # at once tests neither of them, so each refusal below was checked to fail on the clause named and
 # to pass everything checked before it. The two acceptances are the control on the controls: a
 # gate that refuses everything satisfies every refusal for free, and would be worse than no gate
@@ -1863,18 +1863,18 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
 
     Returns a list of failure strings.
 
-    THE THING THIS HAS TO RULE OUT is a gate that says yes to everything, or one whose clauses have
+    The thing this has to rule out is a gate that says yes to everything, or one whose clauses have
     quietly stopped being reachable -- six audits in this repo were caught reporting false greens
     on 2026-08-30 alone, all of them by filtering to an empty set and then finding nothing wrong
     with it. So there are three layers, and the third is the one that matters:
 
       1. `PATCH_SITE_CASES`: real pairs from the two images, two accepted and five refused, each
          refusal landing on a named clause.
-      2. the refusal REASON is asserted, not just the boolean. A pair refused for the wrong reason
+      2. the refusal reason is asserted, not just the boolean. A pair refused for the wrong reason
          is a gate that happens to agree with the answer.
-      3. MUTATION. Each clause is broken in turn -- the position test, the drift ceiling, the hunk
+      3. Mutation. Each clause is broken in turn -- the position test, the drift ceiling, the hunk
          ceiling, the entry requirement, MinHook's own walk -- and `STEP_MoveMap`, which passes
-         all of them, must FLIP to a refusal, then flip back when the mutation is undone. A clause
+         all of them, must flip to a refusal, then flip back when the mutation is undone. A clause
          that cannot be made to fail is not doing anything.
     """
     failures = []
@@ -1889,15 +1889,15 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
             frozenset(), frozenset(), old_starts, new_starts,
         )
 
-    # THE WINDOW ITSELF, pinned against MinHook's own numbers. Every clause below is stated
+    # The window itself, pinned against MinHook's own numbers. Every clause below is stated
     # relative to "the instructions MinHook relocates", so a wrong count makes every one of them
-    # measure the wrong thing while still looking decisive -- and a count faked to ZERO is the
+    # measure the wrong thing while still looking decisive -- and a count faked to zero is the
     # most permissive possible window, refusing only a difference at instruction 0. Two sizes are
     # pinned so the value cannot be a constant that happens to fit.
     for label, image, extents, va, want_insns, want_bytes in (
         ("STEP_MoveMap 1.16.2", old_image, old_extents, 0x140AF7CF0, 3, 5),
         ("STEP_MoveMap 1.17", new_image, new_extents, 0x140AF9000, 3, 5),
-        # A site where MinHook has to take a WHOLE SEVEN bytes, so a window hard-coded at
+        # A site where MinHook has to take a whole seven bytes, so a window hard-coded at
         # PATCH_BYTES would be wrong here and this case says so.
         ("0x140e6e060 1.16.2", old_image, old_extents, 0x140E6E060, 1, 7),
     ):
@@ -1908,10 +1908,10 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         check(f"{label}: MinHook relocates bytes", relocated, want_bytes)
         check(f"{label}: and does not refuse the site", why, None)
 
-    # WHY `not derived` IN `compare` CANNOT BE MUTATION-TESTED, stated as a checked fact rather
-    # than assumed. A DERIVED extent belongs to an address `add_leaf_extents` accepted, and it
+    # Why `not derived` in `compare` cannot be mutation-tested, stated as a checked fact rather
+    # than assumed. A derived extent belongs to an address `add_leaf_extents` accepted, and it
     # accepts only addresses no `.pdata` region describes -- so such an address can never be a
-    # `.pdata` START, and the ENTRY_BOTH clause already excludes it. The `not derived` clause is
+    # `.pdata` start, and the ENTRY_BOTH clause already excludes it. The `not derived` clause is
     # therefore defence in depth, and dropping it changes no verdict. That is only true while the
     # premise holds, so the premise is what gets asserted.
     for leaf in (0x14067A810, 0x14067A980, 0x140D4CC50, 0x1426634A0, 0x1404F9940):
@@ -1929,7 +1929,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         check(f"{old_va:#x} -> {new_va:#x} ({why})", got, want)
     check("the acceptances in PATCH_SITE_CASES", accepted, 2)
 
-    # The refusal REASON, one clause at a time. Asserting only the boolean would pass on a gate
+    # The refusal reason, one clause at a time. Asserting only the boolean would pass on a gate
     # that refuses everything, and pass on a gate that refuses the right rows for the wrong cause.
     for old_va, new_va, fragment in (
         (0x140533C70, 0x140534BE0, "is REPLACED"),
@@ -1940,7 +1940,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         note = verdict_of(old_va, new_va)["patch_site"]
         check(f"{old_va:#x} is refused for the right reason ({fragment})", fragment in note, True)
 
-    # ------------------------------------------------------------------ MUTATION
+    # ------------------------------------------------------------------ Mutation
     # Break one clause, watch the known-good row fall, put it back, watch it stand again. The
     # restore half is not ceremony: a mutation that is never undone leaves the rest of the suite
     # testing a broken gate, and a "the control failed" that was going to fail anyway proves
@@ -1975,14 +1975,14 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
     mutate("drift ceiling", lambda: set_insns(1), lambda: set_insns(keep_insns))
     mutate("hunk ceiling", lambda: set_hunks(0), lambda: set_hunks(keep_hunks))
 
-    # THE POSITION CLAUSE, which is the whole verdict and has no real counter-example in either
+    # The position clause, which is the whole verdict and has no real counter-example in either
     # image -- the earliest first difference among all 128,602 pairs is 7 instructions in, and
     # MinHook relocates 1 to 3. So it is mutated instead: tell the gate the relocated window
-    # swallows the entire body, and the difference is then INSIDE the patch site by construction.
+    # swallows the entire body, and the difference is then inside the patch site by construction.
     #
-    # THE SAME LIE ON BOTH SIDES, on purpose. The first draft of this mutation reported
+    # The same lie on both sides, on purpose. The first draft of this mutation reported
     # `len(starts_at)`, which is 973 for 1.16.2 and 975 for 1.17 -- so the row was refused by the
-    # count-equality clause, and the mutation passed while the position clause was DELETED.
+    # count-equality clause, and the mutation passed while the position clause was deleted.
     # A mutation only tests the clause it is the sole possible cause of.
     real_prefix = globals()["relocated_prefix"]
     LONGER_THAN_ANY_BODY = 10_000
@@ -1997,7 +1997,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         lambda: globals().__setitem__("relocated_prefix", real_prefix),
     )
 
-    # The clause that says the two walks consumed the SAME instructions. No pair in either image
+    # The clause that says the two walks consumed the same instructions. No pair in either image
     # exercises it -- MinHook relocates the same count on both sides everywhere it was measured --
     # so the skew is injected: one extra instruction claimed on the 1.17 side and nothing else
     # touched.
@@ -2025,7 +2025,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         lambda: globals().__setitem__("relocated_prefix", real_prefix),
     )
 
-    # Second, and finer: is `patch_safe` actually CONSULTED inside `relocated_prefix`? Mutating
+    # Second, and finer: is `patch_safe` actually consulted inside `relocated_prefix`? Mutating
     # the wrapper above cannot tell -- it answers for the wrapper. This mutates the ported MinHook
     # rule itself, so a `relocated_prefix` that had stopped reading its answer stays green above
     # and goes red here. That is the shape two three-byte bodies exploited on 2026-08-30, when a
@@ -2039,7 +2039,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         lambda: setattr(audit, "patch_safe", real_patch_safe),
     )
 
-    # FULL COVERAGE. `covered` is the clause that says the comparison saw all of both bodies --
+    # Full coverage. `covered` is the clause that says the comparison saw all of both bodies --
     # including the trailing bytes neither decode reached, which `residue_agrees` accounts for as
     # a relocated jump table. Without it a truncated comparison could carry this verdict, which is
     # the exact defect (`IDENTICAL` over 120 of 975 instructions) that made STEP_MoveMap
@@ -2053,7 +2053,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
         lambda: globals().__setitem__("residue_agrees", real_residue),
     )
 
-    # The entry requirement, mutated by moving the DESTINATION 8 bytes into its own body. One
+    # The entry requirement, mutated by moving the destination 8 bytes into its own body. One
     # variable, and the cleanest available demonstration that the clause decides: the same source
     # address, the same bodies, the same instructions -- and the 1.17 address is no longer
     # something the linker declared a function to start at.
@@ -2075,7 +2075,7 @@ def patch_site_selftest(old_image, new_image, old_extents, new_extents, old_star
 
 # The pairs [`IDENTICAL_LEAF_NOPATCH`] exists for: proved over their whole bodies, and refused a
 # detour by MinHook itself. Both are three bytes. Both were `IDENTICAL-SHORT` before 2026-08-30,
-# which took them out of the CALL map as well, and both have a live consumer that only ever needs
+# which took them out of the call map as well, and both have a live consumer that only ever needs
 # the address for a comparison or a call.
 NOPATCH_CASES = (
     (
@@ -2087,7 +2087,7 @@ NOPATCH_CASES = (
         "er-invasion-path CALLS while tearing an effect down",
     ),
 )
-# The five leaves that DO fit the patch. They are the control on the new verdict: a rule that
+# The five leaves that do fit the patch. They are the control on the new verdict: a rule that
 # answered NOPATCH for every leaf would satisfy both cases above for free and would quietly
 # withdraw five working detours, which is a worse failure than the one it fixes.
 FITTING_LEAVES = {
@@ -2104,14 +2104,14 @@ def build_rs_lists_agree(path=None):
 
     Returns a list of failure strings.
 
-    THE DRIFT THIS CLOSES was previously a comment asking two files to be changed together.
+    The drift this closes was previously a comment asking two files to be changed together.
     `build.rs` holds three lists -- the detour-admitting `EXHAUSTIVE_VERDICTS` and
-    `PATCH_SITE_VERDICTS`, and the CALL-only `CALLABLE_ONLY_VERDICTS` -- and this file WRITES the
+    `PATCH_SITE_VERDICTS`, and the call-only `CALLABLE_ONLY_VERDICTS` -- and this file writes the
     strings they match on. A verdict renamed here and not there is not an error anywhere: the
     rows simply stop being admitted, silently, which is how the leaves were lost the first time.
 
     It also asserts the property the whole verdict rests on, in the file that would have to be
-    edited to break it: the CALL-only list is DISJOINT from both detour lists. That is what makes
+    edited to break it: the call-only list is DISJOINT from both detour lists. That is what makes
     "cannot reach the detour table" a checked fact rather than a description of today's code.
     """
     if path is None:
@@ -2155,10 +2155,10 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
     Returns `(failures, per_clause)` -- the failure strings, and `{clause: failures}` so a run can
     report which clause was not doing anything rather than only that something was wrong.
 
-    THE SHAPE OF THE LIE THIS RULES OUT. A verdict that is issued unconditionally satisfies both
+    The shape of the lie this rules out. A verdict that is issued unconditionally satisfies both
     `NOPATCH_CASES` for free, and would take the five leaves in `FITTING_LEAVES` with it -- five
     working detours withdrawn by a change advertised as adding two callable rows. So the positive
-    cases are checked, then the five that must NOT get this verdict, then each clause is BROKEN in
+    cases are checked, then the five that must not get this verdict, then each clause is broken in
     turn and the control must lose the verdict and get it back. A clause that cannot be made to
     fail is not a clause.
     """
@@ -2182,7 +2182,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
             old_image, new_image, old_va, new_va, left, right, od, nd, old_starts, new_starts
         )
 
-    # THE PREMISES, asserted rather than assumed, so a future build that stops having this shape
+    # The premises, asserted rather than assumed, so a future build that stops having this shape
     # says so instead of passing on a different one.
     audit = minhook_port()
     for old_va, new_va, why in NOPATCH_CASES:
@@ -2208,7 +2208,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
               "nowhere to put the jump" in result["patch_site"], True)
         check(f"{old_va:#x} extents agree on length", result["extent_delta"], 0)
 
-    # ...AND THE FIVE IT MUST NOT TOUCH. Same family, same derived extents, room for the patch.
+    # ...AND the five it must not touch. Same family, same derived extents, room for the patch.
     fit_old, fit_new = dict(old_extents), dict(new_extents)
     fit_od = add_leaf_extents(old_image, fit_old, old_starts, list(FITTING_LEAVES))
     fit_nd = add_leaf_extents(new_image, fit_new, new_starts, list(FITTING_LEAVES.values()))
@@ -2216,7 +2216,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         result = verdict_of(old_va, new_va, (fit_old, fit_new), (fit_od, fit_nd))
         check(f"{old_va:#x} keeps its detourable leaf verdict", result["verdict"], IDENTICAL_LEAF)
 
-    # ------------------------------------------------------------------ MUTATION
+    # ------------------------------------------------------------------ Mutation
     control_old, control_new = NOPATCH_CASES[0][0], NOPATCH_CASES[0][1]
     per_clause["control before any mutation"] = check(
         "the control carries the verdict before anything is broken",
@@ -2227,9 +2227,9 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
     def mutate(clause, apply_it, undo_it, becomes, run=None):
         """Break one clause; the control must lose the verdict, and regain it when restored.
 
-        `becomes` is asserted, not just "not NOPATCH": a clause whose removal produced some OTHER
-        refusal has not been shown to be the clause that was deciding. Breaking the ROOM clause in
-        particular must produce IDENTICAL-LEAF -- the DETOURABLE verdict -- which is the whole
+        `becomes` is asserted, not just "not NOPATCH": a clause whose removal produced some other
+        refusal has not been shown to be the clause that was deciding. Breaking the room clause in
+        particular must produce identical-leaf -- the DETOURABLE verdict -- which is the whole
         thing it holds back, and asserting merely "not NOPATCH" would pass on a fallback too.
         """
         count = 0
@@ -2250,8 +2250,8 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
     real_residue, real_decode = globals()["residue_agrees"], globals()["decode_status"]
     real_patch_safe = audit.patch_safe
 
-    # ROOM, and what it is holding back. With the length test satisfied the pair becomes
-    # IDENTICAL-LEAF, which build.rs admits to DETOUR_SAFE_1162_TO_1170 -- five bytes into a
+    # Room, and what it is holding back. With the length test satisfied the pair becomes
+    # identical-leaf, which build.rs admits to DETOUR_SAFE_1162_TO_1170 -- five bytes into a
     # three-byte body. This mutation is the measurement of the cost of getting the clause wrong.
     mutate(
         "room: the body is shorter than the patch",
@@ -2259,7 +2259,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         lambda: globals().__setitem__("leaf_fits_patch", real_fits),
         IDENTICAL_LEAF,
     )
-    # MinHook's OWN refusal, which is a separate claim from the length: it has a padding fallback
+    # MinHook's own refusal, which is a separate claim from the length: it has a padding fallback
     # that can hook a sub-five-byte function, so a site it would accept must not be called NOPATCH.
     mutate(
         "MinHook's ported rules are consulted",
@@ -2267,7 +2267,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         lambda: setattr(audit, "patch_safe", real_patch_safe),
         "IDENTICAL-SHORT",
     )
-    # PROLOGUE. A body something branches into is not cleared for anything, so it gets no verdict
+    # Prologue. A body something branches into is not cleared for anything, so it gets no verdict
     # of its own -- the refusal is not about room and must not be named after room.
     mutate(
         "prologue: nothing branches into the patched bytes",
@@ -2275,7 +2275,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         lambda: globals().__setitem__("branch_into_prologue", real_branch),
         "IDENTICAL-SHORT",
     )
-    # FULL COVERAGE. Without it a truncated comparison could carry the verdict, which is the
+    # Full coverage. Without it a truncated comparison could carry the verdict, which is the
     # defect that made STEP_MoveMap detour-safe on 12% of its body.
     mutate(
         "coverage: the comparison saw all of both bodies",
@@ -2284,18 +2284,18 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         "IDENTICAL-SHORT",
     )
 
-    # EQUAL EXTENTS. One variable: the 1.17 end moves by a byte, so the two decodes no longer
+    # Equal EXTENTS. One variable: the 1.17 end moves by a byte, so the two decodes no longer
     # agree on the body's length and `whole_body` is false. No monkeypatch -- the extent tables
     # are this function's own inputs. The 1.17 stream gains an instruction the 1.16.2 one has not,
     # so the raw comparison lands on DIVERGES: a length disagreement is not a near miss.
     #
-    # AND THEN IT IS WITHHELD, which is the half this test now also pins. `build.rs::
-    # refuted_sources()` subtracts a DIVERGES row from BOTH maps, so under the old behaviour a
-    # leaf whose end was decoded one byte long did not merely lose its verdict, it DELETED the
+    # And then it is withheld, which is the half this test now also pins. `build.rs::
+    # refuted_sources()` subtracts a DIVERGES row from both maps, so under the old behaviour a
+    # leaf whose end was decoded one byte long did not merely lose its verdict, it deleted the
     # address -- and it deleted it on the strength of a boundary this file inferred. That is
     # exactly what happened to LOADING_SCREEN_GFX_FADEOUT_RVA when the sweep over-ran a
     # de-Arxan'd gap. `refutation_withheld` now re-judges such a pair with the decoded extent
-    # withdrawn, so a wrong decode costs a DROPPED row (IDENTICAL-SHORT, accepted nowhere,
+    # withdrawn, so a wrong decode costs a dropped row (identical-short, accepted nowhere,
     # subtracted from nowhere) instead of a deleted one. The clause is still load-bearing: the
     # verdict is still lost.
     skewed_new = dict(leaf_new)
@@ -2319,19 +2319,19 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         IDENTICAL_LEAF_NOPATCH,
     )
 
-    # LEAF PROVENANCE, and the sharpest measurement in this block. Told that the same two extents
+    # Leaf provenance, and the sharpest measurement in this block. Told that the same two extents
     # came from `.pdata` rather than from a decode, the pair takes the byte-comparison shortcut and
-    # comes back BYTE-IDENTICAL -- which `build.rs` admits to DETOUR_SAFE_1162_TO_1170 with no
-    # length check anywhere in its path. The bodies really ARE byte-equal; three bytes of them.
+    # comes back byte-identical -- which `build.rs` admits to DETOUR_SAFE_1162_TO_1170 with no
+    # length check anywhere in its path. The bodies really are byte-equal; three bytes of them.
     # So the `derived` flag is the only thing standing between this address and a five-byte jmp
-    # written into a three-byte function, and the ROOM clause is reachable ONLY through it.
+    # written into a three-byte function, and the room clause is reachable only through it.
     #
     # That is a live shape, not a hypothetical: both images declare 110 `.pdata` regions shorter
-    # than five bytes, so a real function CAN be too short and still be judged by the `.pdata`
-    # family. MEASURED 2026-08-30 across both verdict ledgers: of the 444 rows currently admitted
-    # to a detour, ZERO have a `.pdata` extent under five bytes and ZERO are refused by the ported
+    # than five bytes, so a real function can be too short and still be judged by the `.pdata`
+    # family. Measured 2026-08-30 across both verdict ledgers: of the 444 rows currently admitted
+    # to a detour, zero have a `.pdata` extent under five bytes and zero are refused by the ported
     # `patch_safe`. The hole is empty today; it is not closed, and it is not this verdict's to
-    # close -- widening the length check to the `.pdata` families would move the DETOUR count.
+    # close -- widening the length check to the `.pdata` families would move the detour count.
     per_clause["provenance: the extents were DECODED, not declared"] = check(
         "MUTATION provenance: a leaf presented as a .pdata function takes the .pdata verdict",
         verdict_of(control_old, control_new, None, (frozenset(), frozenset()))["verdict"],
@@ -2342,7 +2342,7 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
         IDENTICAL_LEAF_NOPATCH,
     )
 
-    # STREAMS EQUAL. The leaf branch is only reached when the two normalised streams match, so the
+    # Streams equal. The leaf branch is only reached when the two normalised streams match, so the
     # clause is structural and has no counter-example among three-byte bodies that are all
     # `xor eax,eax; ret` or `ret 0`. One instruction of the 1.17 decode is altered instead.
     def altered(image, va, limit=DECODE_LIMIT, end_rva=None):
@@ -2374,23 +2374,23 @@ def leaf_nopatch_selftest(old_image, new_image, old_extents, new_extents, old_st
 def selftest():
     """Pin the decode boundary, and record that one 2026-08-29 verdict was retracted.
 
-    THE RETRACTION, because a test that asserts a wrong answer is worse than no test. This
+    The RETRACTION, because a test that asserts a wrong answer is worse than no test. This
     selftest used to require `HUD_WEAPON_SLOT_UPDATE` (0x1408d2110 -> 0x1408d32b0) to come back
     `DIVERGES` at "18% of its instruction shape", and treated that as the lesson of the
-    2026-08-29 crash bisect. The 18% was an artifact of THIS FILE: the function is 86 bytes and
+    2026-08-29 crash bisect. The 18% was an artifact of this FILE: the function is 86 bytes and
     ends in a tail-call `jmp`, `decode()` stopped only at `ret`, and roughly 98 of the 120
-    instructions it compared belonged to the NEXT function. Bounded by the `.pdata` extent the two
+    instructions it compared belonged to the next function. Bounded by the `.pdata` extent the two
     bodies differ in four bytes, both of them halves of `call rel32` displacements, and the
-    verdict is IDENTICAL. Three independent reviews found the same artifact behind 12 of 12
+    verdict is identical. Three independent reviews found the same artifact behind 12 of 12
     non-clean rows, with zero changed immediates and zero changed struct offsets among them.
 
-    WHAT IS NOT RETRACTED: the crash was real. Its cause is now UNKNOWN and must be re-derived --
+    What is not RETRACTED: the crash was real. Its cause is now unknown and must be re-derived --
     an independent look at the same run found the game dying in FromSoftware's own `DL_PANIC`
     ("未初期化のシングルトンにアクセスしました", FD4Singleton.h) for an uninitialised singleton,
-    which points at a stale `.data` global rather than at a detour. Do not read the IDENTICAL
+    which points at a stale `.data` global rather than at a detour. Do not read the identical
     verdict below as "that address was fine all along"; read it as "the reason we gave was wrong".
 
-    So what is asserted here is the BOUNDARY, which is the thing that was actually broken: a
+    So what is asserted here is the boundary, which is the thing that was actually broken: a
     function ending in a tail call must compare over its own body and no further.
     """
     old_image = open(OLD_IMAGE, "rb").read()
@@ -2406,7 +2406,7 @@ def selftest():
         if got != want:
             failures.append(f"{name}: got {got!r}, want {want!r}")
 
-    # `--tsv` TRUNCATES, AND THE ROWS IT WOULD NOT REPRODUCE ARE THE HAND-DERIVED ONES.
+    # `--tsv` TRUNCATES, and the rows it would not reproduce are the hand-derived ones.
     # Asserted on a temporary file so it keeps holding once the real ledger's hand rows are all
     # reproducible. The pair used is the one a merge agent hand-derived into `verified.tsv` on
     # 2026-08-30 -- absent from the default candidate map, and so absent from any full run.
@@ -2423,7 +2423,7 @@ def selftest():
         carried, clash = preserve_unverified(path, this_run)
         check("a hand-derived row survives a narrower --tsv run", carried, [hand])
         check("an agreeing row is not carried twice", clash, [])
-        # And a row the run pairs SOMEWHERE ELSE is a conflict, not something to merge.
+        # And a row the run pairs somewhere else is a conflict, not something to merge.
         moved = [(0x1408D0900, 0x140999999, "x", {})]
         _keep, clash2 = preserve_unverified(path, moved)
         check(
@@ -2433,7 +2433,7 @@ def selftest():
         )
         check("a missing target carries nothing", preserve_unverified(path + ".nope", this_run), ([], []))
 
-    # Populated, and populated with FUNCTIONS. Roughly a quarter of the 235,823 `.pdata` entries
+    # Populated, and populated with functions. Roughly a quarter of the 235,823 `.pdata` entries
     # in 1.16.2 -- 60,624 of them -- are continuation chunks of a function that starts elsewhere,
     # so a table read without the chain flag overstates the function count by 35% and hands
     # `entry_evidence` tens of thousands of mid-function addresses to call function starts.
@@ -2476,7 +2476,7 @@ def selftest():
     # bodies agree; the old DIVERGES was this file decoding the following function.
     check("HUD_WEAPON_SLOT_UPDATE verdict", killer["verdict"], IDENTICAL_WHOLE)
     check("HUD_WEAPON_SLOT_UPDATE compares its own body only", killer["compared"] <= 40, True)
-    # THE REGRESSION GUARD THAT MATTERS. A tail-call function must not decode past its own end.
+    # The regression guard that matters. A tail-call function must not decode past its own end.
     # Without the .pdata bound this returned ~120 instructions for an 86-byte body.
     tail_call_body = decode(
         old_image,
@@ -2487,7 +2487,7 @@ def selftest():
     check("tail-call body is not empty", len(tail_call_body) > 0, True)
 
     # Short functions the extent rule rescues: 21 and 38 bytes, byte-for-byte unchanged in 1.17.
-    # Before extents were read these were IDENTICAL-SHORT over 7 instructions and excluded, which
+    # Before extents were read these were identical-short over 7 instructions and excluded, which
     # is what left er-armament-icons' PROXY_IS_BOUND detour refused on a function that did not
     # change at all.
     for old_va, new_va in ((0x140733150, 0x140733FA0), (0x140733EF0, 0x140734D40)):
@@ -2501,7 +2501,7 @@ def selftest():
     midway = entry_evidence(old_starts, new_starts, 0x1408D0905, 0x1408D1AA5)
     check("mid-function pair", midway, ENTRY_NEITHER)
 
-    # THE TRUNCATED COMPARISON THAT READ AS A CLEAN ONE. `STEP_MoveMap` is the only pair in either
+    # The truncated comparison that read as a clean one. `STEP_MoveMap` is the only pair in either
     # verdict table whose two `.pdata` extents differ in length -- 0x120b against 0x1213 -- and
     # 1.17 spends those 8 bytes on two instructions inserted at index 873 of 975. Decoding 120 and
     # calling it `IDENTICAL 1.000` promoted it into DETOUR_SAFE_1162_TO_1170 on 12% of the body.
@@ -2519,15 +2519,15 @@ def selftest():
     check("STEP_MoveMap compares its whole body", move_map["compared"] > 900, True)
     check("STEP_MoveMap extent delta is reported", move_map["extent_delta"], 8)
     check("STEP_MoveMap extent note", move_map["extents"], "PDATA:0x120b/0x1213+8")
-    # NOT identical -- a body that gained two instructions is not the same body...
+    # Not identical -- a body that gained two instructions is not the same body...
     check("STEP_MoveMap is not identical", move_map["verdict"] in EXHAUSTIVE_VERDICTS, False)
     check("STEP_MoveMap is not IDENTICAL either", move_map["verdict"] == "IDENTICAL", False)
-    # ...and NOT refuted, which matters just as much. `build.rs::refuted_sources()` keys on the
-    # literal string DIVERGES and subtracts such a row from the CALL map, and an index-against-
-    # index ratio scores an INSERTION at 0.898 and lands there. Aligned, the same pair scores
+    # ...and not refuted, which matters just as much. `build.rs::refuted_sources()` keys on the
+    # literal string DIVERGES and subtracts such a row from the call map, and an index-against-
+    # index ratio scores an insertion at 0.898 and lands there. Aligned, the same pair scores
     # 0.999.
     #
-    # NEAR is what the comparison says WITHOUT the `.pdata` start sets, and it is pinned here
+    # Near is what the comparison says without the `.pdata` start sets, and it is pinned here
     # because that is the fail-closed path: a caller who does not supply them cannot be handed a
     # detour licence by accident. The verdict with them supplied is asserted below.
     check("STEP_MoveMap without .pdata starts is NEAR", move_map["verdict"], "NEAR")
@@ -2542,11 +2542,11 @@ def selftest():
         patch_site_selftest(old_image, new_image, old_extents, new_extents, old_starts, new_starts)
     )
 
-    # THE LEAF, and the whole point of `--leaf-extents`. These five have no `.pdata` entry in
-    # EITHER image -- MSVC emits no unwind data for a function that allocates no stack and calls
-    # nothing -- so no extent can be read, no BYTE-IDENTICAL can be awarded, and their 3 to 13
+    # The leaf, and the whole point of `--leaf-extents`. These five have no `.pdata` entry in
+    # either image -- MSVC emits no unwind data for a function that allocates no stack and calls
+    # nothing -- so no extent can be read, no byte-identical can be awarded, and their 3 to 13
     # instructions cannot clear MIN_VERIFIED_INSNS. Each is byte-for-byte or shape-for-shape
-    # unchanged over its ENTIRE body and each was being discarded anyway.
+    # unchanged over its entire body and each was being discarded anyway.
     leaves = {
         0x14067A810: 0x14067B660,  # GameMan save-slot setter
         0x14067A980: 0x14067B7D0,  # er-save-suppress quit-phase settle
@@ -2558,8 +2558,8 @@ def selftest():
     for old_va, new_va in leaves.items():
         check(f"{old_va:#x} has no .pdata extent in 1.16.2", (old_va - BASE) in old_extents, False)
         check(f"{old_va:#x} has no .pdata extent in 1.17", (new_va - BASE) in new_extents, False)
-        # THE PREMISE THE VERDICT ACTUALLY RESTS ON, which "no entry begins here" is not. A leaf
-        # is a function the linker DESCRIBED NOWHERE; an address merely lacking an entry of its
+        # The premise the verdict actually rests on, which "no entry begins here" is not. A leaf
+        # is a function the linker described nowhere; an address merely lacking an entry of its
         # own can be the interior of one, and the interior is where a detour must never land.
         check(
             f"{old_va:#x} is described by no .pdata region in 1.16.2",
@@ -2596,7 +2596,7 @@ def selftest():
         # assumed.
         check(f"{old_va:#x} leaf extents agree on length", derived["extent_delta"], 0)
         check(f"{old_va:#x} leaf extent note", derived["extents"].startswith("LEAF:"), True)
-        # A leaf carries no .pdata entry, so it reaches the detour gate through NEITHER-ENTRY --
+        # A leaf carries no .pdata entry, so it reaches the detour gate through neither-entry --
         # a clause written for a different case. `branch_into_prologue` supplies the claim that
         # clause does not make: the five bytes MinHook overwrites are not a branch target.
         check(
@@ -2609,11 +2609,11 @@ def selftest():
             branch_into_prologue(new_image, new_va, leaf_new[new_va - BASE]),
             False,
         )
-    # A LEAF TOO SHORT TO PATCH IS NOT DETOURABLE, however completely it was compared, and until
+    # A leaf too short to patch is not DETOURABLE, however completely it was compared, and until
     # 2026-08-30 it was not CALLABLE either -- which is the defect `IDENTICAL-LEAF-NOPATCH` exists
     # to separate. Clause-by-clause, with each clause broken and observed to fail, next door.
     #
-    # WITHOUT the `.pdata` start sets, the fail-closed path: those are what `add_leaf_extents`
+    # Without the `.pdata` start sets, the fail-closed path: those are what `add_leaf_extents`
     # needs, so the pair is judged with no extent at all and comes back short. Pinned here so a
     # caller who omits them can never be handed a verdict by accident.
     for old_va, new_va, _why in NOPATCH_CASES:
@@ -2633,19 +2633,19 @@ def selftest():
             True,
         )
 
-    # A CONTINUATION WEARING AN ENTRY'S CLOTHES, and the reason `add_leaf_extents` asks whether a
-    # `.pdata` region CONTAINS an address rather than whether one BEGINS at it.
+    # A continuation wearing an entry'S clothes, and the reason `add_leaf_extents` asks whether a
+    # `.pdata` region contains an address rather than whether one begins at it.
     #
     # 1.16.2 `0xc57666` is a `.pdata` record carrying `UNW_FLAG_CHAININFO`: the middle of the
     # function that starts 0x86 bytes earlier at `0xc575e0`. `function_regions` correctly refuses
     # to call it a start and correctly merges its bytes into the primary's run -- which means it
-    # appears in NEITHER `starts` NOR `extents`, and the old skip (`rva in extents`) therefore let
+    # appears in neither `starts` nor `extents`, and the old skip (`rva in extents`) therefore let
     # it through. It would have taken a decoded extent of 0xc57666..0xc576ae and been eligible for
     # `IDENTICAL-LEAF`, the one verdict that issues its own detour licence, with `NEITHER-ENTRY`
     # raising no objection because neither side is an entry. A hook into the middle of a function,
     # arrived at through two correct decisions.
     #
-    # It is not hypothetical: `scripts/classify-1170-entry-kind.py` calls this address ENTRY and it
+    # It is not hypothetical: `scripts/classify-1170-entry-kind.py` calls this address entry and it
     # is already a row in functions.tsv. The preconditions are asserted first, so that if the game
     # ever stops chaining here the test says so rather than passing on a changed premise.
     chained_continuation = 0x140C57666
@@ -2672,7 +2672,7 @@ def selftest():
         set(),
     )
 
-    # A leaf whose extent had to be decoded never claims BYTE-IDENTICAL even when the bytes ARE
+    # A leaf whose extent had to be decoded never claims byte-identical even when the bytes are
     # equal (0xd4cc50, 0x26634a0 and 0x4f9940 all are). Equal bytes over two extents derived by
     # the same rule prove nothing about a body that rule truncated, so the provenance stays in the
     # name.
@@ -2681,23 +2681,23 @@ def selftest():
     )
     check("byte-equal leaf keeps its LEAF verdict", byte_equal["verdict"], IDENTICAL_LEAF)
 
-    # THE DE-ARXAN'D GAP: a `jmp` followed by DEOBFUSCATOR LEFTOVERS must end the body.
+    # The de-ARXAN'D GAP: a `jmp` followed by DEOBFUSCATOR leftovers must end the body.
     #
     # `leaf_extent` used to end a body at a `jmp` only when the byte after it was `0xCC`/`0x90`
     # padding or a declared `.pdata` start. Between functions in these images that byte is
     # routinely neither -- the de-Arxan pass leaves its own residue in the gaps -- so the sweep
-    # walked THROUGH the gap into the next function and compared unrelated code. The bodies below
+    # walked through the gap into the next function and compared unrelated code. The bodies below
     # are 23 bytes; the sweep took 0x45 and 0x25 and reported `DIVERGES` at 0.86 and 0.75.
     #
-    # WHAT IS PINNED, and why it is not simply "the verdict is right today":
-    #   * THE TERMINATOR'S GROUND TRUTH. The byte after each body is asserted to be neither a pad
-    #     byte nor a declared start, so the OLD rule provably cannot fire here and the clause under
+    # What is pinned, and why it is not simply "the verdict is right today":
+    #   * the terminator'S ground truth. The byte after each body is asserted to be neither a pad
+    #     byte nor a declared start, so the old rule provably cannot fire here and the clause under
     #     test is the only thing that can end the body. Without this the test would pass on an
     #     image where the gaps happened to be padded, which is the shape that hid the bug.
-    #   * THE LENGTH, as a FROZEN LITERAL. 0x17 is 23, which is what Ghidra independently reports
-    #     for these functions in BOTH dumps. It is written here rather than recomputed from
+    #   * the length, as a frozen literal. 0x17 is 23, which is what Ghidra independently reports
+    #     for these functions in both dumps. It is written here rather than recomputed from
     #     `leaf_extent`, because a number the code under test produced cannot check that code.
-    #   * THE OLD ANSWER, also frozen. 0x45 and 0x25 are what the previous rule returned, measured
+    #   * the old answer, also frozen. 0x45 and 0x25 are what the previous rule returned, measured
     #     before it was replaced, and they are used below to drive the fail-closed path.
     #
     # Ghidra's sizes are the outside check: 1.16.2 and 1.17 both put these two functions at 23
@@ -2720,7 +2720,7 @@ def selftest():
             check(f"{va:#x} is described by no .pdata region in {label}", inside_pdata(regions, rva), False)
             end = ends.get(rva)
             check(f"{va:#x} leaf extent in {label}", None if end is None else end - rva, extent)
-            # THE GROUND TRUTH THAT BROKE THE OLD RULE. Neither test it applied can fire here.
+            # The ground truth that broke the old rule. Neither test it applied can fire here.
             check(
                 f"{va:#x} is followed by deobfuscator leftovers, not padding, in {label}",
                 end is not None and image[end] in FUNCTION_PAD_BYTES,
@@ -2741,10 +2741,10 @@ def selftest():
         # ...and it is not quietly the fail-closed path dressed as a pass.
         check(f"{old_va:#x} gap-leaf withheld nothing", "refutation_withheld" in gap, False)
 
-    # THE CONTROL FOR THE SAME LANDMINE, and it is a control for a DIFFERENT reason.
+    # The control for the same LANDMINE, and it is a control for a different reason.
     # PLAYER_GAME_DATA_NAME_GETTER_RVA was in the same rescued set of three, but its body ends on a
-    # real `0xCC` pad byte, so the OLD rule got it right and the sweep was never the problem there.
-    # It was lost to the OPT-IN alone: no derived extent, no IDENTICAL-LEAF, IDENTICAL-SHORT, gone.
+    # real `0xCC` pad byte, so the old rule got it right and the sweep was never the problem there.
+    # It was lost to the OPT-in alone: no derived extent, no identical-leaf, identical-short, gone.
     # Pinned so the two failure modes stay told apart -- fixing the sweep would not have saved it,
     # and making derivation unconditional is what does.
     pad_old, pad_new = 0x14025F8E0, 0x14025F8F0
@@ -2761,13 +2761,13 @@ def selftest():
     check("padded leaf verdict", padded["verdict"], IDENTICAL_LEAF)
     check("padded leaf extents", padded["extents"], "LEAF:0xc/0xc")
 
-    # A DECODED BOUNDARY MAY NOT DELETE AN ADDRESS. `refutation_withheld`, driven with the exact
-    # extents the OLD sweep produced, so the failure being guarded against is reproduced rather
+    # A DECODED boundary may not delete an address. `refutation_withheld`, driven with the exact
+    # extents the old sweep produced, so the failure being guarded against is reproduced rather
     # than imagined: 0x45 bytes on both sides of the fadeout pair, which is the 23-byte thunk plus
-    # 9 bytes of gap plus the whole of the NEXT thunk plus 9 more bytes of gap.
+    # 9 bytes of gap plus the whole of the next thunk plus 9 more bytes of gap.
     #
-    # THE SECOND HALF IS THE POINT. The same over-long extents, presented as though `.pdata` had
-    # DECLARED them, must still come back REFUTED -- because then the refutation rests on the
+    # The second half is the point. The same over-long extents, presented as though `.pdata` had
+    # declared them, must still come back refuted -- because then the refutation rests on the
     # image's own statement about where the function ends, not on this file's guess. If both halves
     # answered the same way the rule would be doing nothing, and this test would be measuring the
     # image instead of the code.
@@ -2788,10 +2788,10 @@ def selftest():
     )
     check("the same extents DECLARED by .pdata still refute", declared["verdict"], REFUTED)
 
-    # THE THUNK, the boundary artifact rules 1-3 cannot reach (`decode` rule 4).
-    # `UPDATE_TROPHY_STATS_RVA` is a 5-byte `jmp` at the SAME address in both images with the SAME
+    # The THUNK, the boundary artifact rules 1-3 cannot reach (`decode` rule 4).
+    # `UPDATE_TROPHY_STATS_RVA` is a 5-byte `jmp` at the same address in both images with the same
     # bytes, and it used to come back `DIVERGES 0.05 over 22 insns, first diff at insn 1` -- insn 1
-    # being the first instruction of the NEXT thunk. The preconditions are asserted first, so that
+    # being the first instruction of the next thunk. The preconditions are asserted first, so that
     # if the game ever stops having a thunk here the test says so instead of quietly passing on a
     # different shape.
     thunk_rva = 0x24A1A0
@@ -2816,18 +2816,18 @@ def selftest():
         old_image, new_image, BASE + thunk_rva, BASE + thunk_rva, old_extents, new_extents
     )
     # The point of the whole exercise: `build.rs::refuted_sources()` keys on the literal string
-    # DIVERGES and subtracts such a row from the CALL map. A decoding artifact must never be able
+    # DIVERGES and subtracts such a row from the call map. A decoding artifact must never be able
     # to delete an address that is byte-for-byte unchanged.
     check("thunk verdict", thunk["verdict"], "IDENTICAL-SHORT")
 
-    # NEGATIVE CONTROLS for rule 4: a `jmp` in the MIDDLE of a body must not stop the decode. Both
-    # are `.pdata`-declared functions, decoded with `end_rva=None` so that ONLY rules 2-4 are in
+    # Negative controls for rule 4: a `jmp` in the middle of a body must not stop the decode. Both
+    # are `.pdata`-declared functions, decoded with `end_rva=None` so that only rules 2-4 are in
     # play; the invariant is that the unbounded decode reaches exactly as far as the image's own
     # extent takes it. Truncating either is how rule 4 would manufacture a false verdict of its
     # own, so this is the guard against over-stopping.
-    #   0x140001120 branches FORWARD to a shared epilogue -- the jmp's own destination raises the
+    #   0x140001120 branches forward to a shared epilogue -- the jmp's own destination raises the
     #     watermark past the following byte.
-    #   0x140002020 is a LOOP whose back-edge is followed by code an earlier forward branch
+    #   0x140002020 is a loop whose back-edge is followed by code an earlier forward branch
     #     reaches, which raised the watermark first.
     for control_va in (0x140001120, 0x140002020):
         end = old_extents.get(control_va - BASE)
@@ -2842,8 +2842,8 @@ def selftest():
         # ...and it stopped because it ran out of function, not because it ran out of budget.
         check(f"{control_va:#x} unbounded decode ends on a terminator", stop, STOP_TERMINATOR)
 
-    # THE CHUNKED FUNCTION. MSVC splits these and gives every chunk its own `.pdata` entry, so a
-    # table read without the `UNW_FLAG_CHAININFO` bit reports the FIRST CHUNK as the whole
+    # The CHUNKED function. MSVC splits these and gives every chunk its own `.pdata` entry, so a
+    # table read without the `UNW_FLAG_CHAININFO` bit reports the first chunk as the whole
     # function. Both of these were then compared over 6 and 7 instructions, reported `IDENTICAL`
     # with a whole-body flag that was not true, and dropped by MIN_VERIFIED_INSNS -- confident and
     # discarded at the same time. The chunk counts are pinned so that a build which stops chunking
@@ -2874,7 +2874,7 @@ def selftest():
         True,
     )
 
-    # THE JUMP TABLE INSIDE THE EXTENT. `SL_POLL_SAVE_STATUS` parks a 104-byte switch table after
+    # The jump table inside the extent. `SL_POLL_SAVE_STATUS` parks a 104-byte switch table after
     # its last instruction and inside its own `.pdata` extent, so a decode bounded by that extent
     # legitimately stops 104 bytes short. Requiring the decode to land exactly on the end called
     # this pair truncated; `residue_agrees` reads the table as 26 self-relative entries instead
@@ -2896,7 +2896,7 @@ def selftest():
         ),
         True,
     )
-    # ...but only because it IS the same table. Point one side at the other function's table and
+    # ...but only because it is the same table. Point one side at the other function's table and
     # the entries no longer line up.
     check(
         "a mismatched residue is refused",
@@ -2913,7 +2913,7 @@ def selftest():
     )
     check("switch-table function verdict", with_table["verdict"], IDENTICAL_WHOLE)
 
-    # A DECODE THAT RAN OUT OF BUDGET IS NOT AN IDENTICAL ONE. Take a `.pdata` extent away from a
+    # A decode that ran out of budget is not an identical one. Take a `.pdata` extent away from a
     # long function and the decode stops at DECODE_LIMIT with matching streams on both sides; the
     # verdict must record that its coverage is unknown, not report a clean match.
     prefix = compare(old_image, new_image, 0x1408D0900, 0x1408D1AA0, {}, {})

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Direct client for the headless Ghidra MCP daemon (ghidra.mcp.MCPServer) on localhost:8765.
 Framing: 4-byte big-endian length + JSON {"id","method","params"}. Lets a session query the daemon
-WITHOUT taking the project lock (bd prefer-ghidra-mcp-daemon-over-perquery-headless)."""
+without taking the project lock (bd prefer-ghidra-mcp-daemon-over-perquery-headless)."""
 import socket, struct, json, sys, argparse
 
 def query(method, params=None, host="localhost", port=8765, timeout=120):

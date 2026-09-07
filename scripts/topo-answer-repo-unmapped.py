@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Ask the call-graph topology map about the 1.16.2 addresses this workspace still cannot map.
 
-Collects every game ADDRESS declared under `crates/`, subtracts the ledgers that
+Collects every game address declared under `crates/`, subtracts the ledgers that
 already answer one (`rva-map-1162-to-1170.functions.tsv`, `.verified.tsv`, `.needed.tsv`,
 `.tsv`), and reports what the topology pairing says about the remainder -- with the rule and the
-tier that carried it, because a LOOSE-tier row measured 12-18% wrong and must never be used.
+tier that carried it, because a loose-tier row measured 12-18% wrong and must never be used.
 
-WHAT "EVERY ADDRESS" USED TO MEAN, and why it was fewer than it sounded (fixed 2026-08-30)
+What "EVERY ADDRESS" used to mean, and why it was fewer than it sounded (fixed 2026-08-30)
 ------------------------------------------------------------------------------------------
 The collector was one regex requiring a SCREAMING_SNAKE name containing `RVA`, one of three
-types, and a hex literal on the spot. THE LIST THIS TOOL PRODUCES IS THE LIST OF ADDRESSES THAT
-GET MAPPED, so every spelling it could not read was an address that silently never got a 1.17
+types, and a hex literal on the spot. The list this tool produces is the list of addresses that
+get mapped, so every spelling it could not read was an address that silently never got a 1.17
 row -- and then refused at runtime with nothing to say why. Four spellings it could not read:
 
     MenuJobWait = 0x00b0d400,                     an enum discriminant (er-title-flow keeps most
                                                   of its addresses this way)
     const FILE_OPEN_RVA: usize = other::FOO_RVA;  derived, so no literal is present here
     const GAME_HEAP_ALLOC_VA: usize = 0x141eb9ed0; a VA. The old collector read it as an RVA and
-                                                  then added the image base AGAIN, asking the
+                                                  then added the image base again, asking the
                                                   topology about 0x2801eb9ed0 -- an address in
                                                   no image at all
     const LONG_RVA: usize =\n    0x9af3a0;        the literal on the next line
@@ -25,20 +25,20 @@ row -- and then refused at runtime with nothing to say why. Four spellings it co
 Values now come from `scripts/rva_symbols.py`, which resolves all of them, and a VA is folded onto
 its RVA.
 
-WHAT COUNTS AS AN ADDRESS, stated because dropping the name filter needs a replacement
+What counts as an address, stated because dropping the name filter needs a replacement
 --------------------------------------------------------------------------------------
 Not every integer constant is a game address; asking the topology about `BOOT_PUMP_MAX_MS` is
 noise. A declaration is collected when its value could be an RVA at all -- at or above the end of
-the PE headers, below the image size -- AND one of three things is true of it:
+the PE headers, below the image size -- And one of three things is true of it:
 
-  * it is NAMED like an address (`*RVA*`, `*_VA`), this tree's convention;
-  * it is USED like an address: `base + X`, `game_rva(X)`, `game_data_addr(base, X, ..)`,
+  * it is named like an address (`*RVA*`, `*_VA`), this tree's convention;
+  * it is used like an address: `base + X`, `game_rva(X)`, `game_data_addr(base, X, ..)`,
     `X.checked_add(..)`. What the code does with it is stronger evidence than what it is called;
-  * its value is the 1.16.2 SOURCE of a row in one of the curated maps, which is a direct
+  * its value is the 1.16.2 source of a row in one of the curated maps, which is a direct
     statement by an earlier pass that this number is a game address.
 
 The third is required to be >= 0x100000: below that a small round number collides with a real
-address by accident rather than by being one (`0x1000` is a curated row AND a texture dimension
+address by accident rather than by being one (`0x1000` is a curated row and a texture dimension
 cap in `boot_progress.rs`).
 
   python3 scripts/topo-answer-repo-unmapped.py --pairs DIR/topo-pairs.pickle
@@ -52,7 +52,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT FOUR. `rva_symbols` resolves every declaration spelling in this tree to a value,
+# One dialect, not four. `rva_symbols` resolves every declaration spelling in this tree to a value,
 # and blanks comments and string bodies before anything is read -- so a `//` paragraph quoting an
 # address does not enter the list of things to go and map.
 try:  # noqa: E402 - repo-local; the sys.path line above is what makes it work
@@ -68,8 +68,8 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 0x140000000
 RECON = os.path.join(ROOT, "docs", "recon")
-# THE COLLECTOR THIS FILE USED TO BE, frozen as a LITERAL so `--selftest` can prove the replacement
-# is load-bearing: every control below must be INVISIBLE to this and visible to the resolver.
+# The collector this file used to be, frozen as a literal so `--selftest` can prove the replacement
+# is load-bearing: every control below must be invisible to this and visible to the resolver.
 # Spelled out rather than composed from the live pieces, so it cannot quietly widen along with them.
 LEGACY_CONST_RE = re.compile(
     r"\b([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:\s*(?:usize|u64|u32)\s*=\s*(0x[0-9a-fA-F_]+)")
@@ -80,15 +80,15 @@ PE_HEADER_LIMIT = 0x1000
 # A ~120 MiB image. Above this a value is a size, a mask or a magic, not an offset into the image.
 IMAGE_LIMIT = 0x8000000
 # Below this, "the number appears in a map" is a coincidence rather than evidence -- see the
-# docstring. It is only applied to that one disjunct; a constant NAMED `*_RVA` is still collected.
+# docstring. It is only applied to that one disjunct; a constant named `*_RVA` is still collected.
 COINCIDENCE_FLOOR = 0x100000
-# This tree's naming convention for a game address, in both spellings it uses -- matched on WHOLE
-# UNDERSCORE COMPONENTS, not as a substring. `RVA` as a substring also occurs inside `INTERVAL`,
+# This tree's naming convention for a game address, in both spellings it uses -- matched on whole
+# UNDERSCORE components, not as a substring. `RVA` as a substring also occurs inside `INTERVAL`,
 # which is how `PATCH_RETRY_LOG_INTERVAL: u32 = 100_000` (a log throttle) was first collected as a
 # game address the topology should pair.
 ADDRESS_NAME = re.compile(r"(?:^|_)(?:RVA|RVAS|VA|VAS)(?:_|$)")
-# ...and what USING one looks like, which is the stronger evidence of the two -- but only when the
-# thing being added to is a MODULE BASE.
+# ...and what using one looks like, which is the stronger evidence of the two -- but only when the
+# thing being added to is a module base.
 #
 # The first draft of this accepted any lowercase binding, on the reasoning that
 # `crates/er-loading-portrait-core/src/lookat_stage_camera.rs` binds the module base as `b`. That
@@ -96,7 +96,7 @@ ADDRESS_NAME = re.compile(r"(?:^|_)(?:RVA|RVAS|VA|VAS)(?:_|$)")
 # images, so the loose form promoted `dialog + PROFILE_LOAD_DIALOG_STORED_LIST_OFFSET` and two
 # more struct-field offsets (0x10f0, 0x1200, 0x1260) into "addresses the repo still needs mapped",
 # and the topology was asked to pair them. A one-letter base is only safe to read when the
-# CONSTANT is address-shaped, which the name test already covers.
+# constant is address-shaped, which the name test already covers.
 ADDRESS_USE = re.compile(
     r"(?<![.\w])\$?(?:base|module_base|image_base|game_base|game_module_base|exe_base)\s*"
     r"(?:\+|\.checked_add\(\s*)\s*((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)"
@@ -106,7 +106,7 @@ ADDRESS_USE = re.compile(
 
 
 def map_source_addresses(recon=None):
-    """Every 1.16.2 address a CURATED map already calls a game address.
+    """Every 1.16.2 address a curated map already calls a game address.
 
     `functions.tsv` is excluded on purpose: it is a 128k-row dump of every function in the image,
     so membership in it is nearly free and would admit any round number as "a known address".
@@ -147,8 +147,8 @@ def address_use_names(index):
 def repo_consts(root=None, recon=None):
     """`{1.16.2 RVA: {(symbol, repo-relative file)}}` for every declared game address.
 
-    TWO PASSES, because the unit is an ADDRESS and the names are only who declares it. One
-    qualifying declaration makes the address a game address, and then EVERY declaration of that
+    Two passes, because the unit is an address and the names are only who declares it. One
+    qualifying declaration makes the address a game address, and then every declaration of that
     address is listed -- otherwise `0xb0d400` would be reported as `TITLE_MENU_JOB_WAIT_RVA` alone
     and the enum discriminant that actually carries the literal, `MenuTraceRva::MenuJobWait`, would
     be missing from the one line a reader uses to go and find it.
@@ -200,7 +200,7 @@ def ledger_rvas():
 
 
 FIXTURE = {
-    # The control: 0xb0d400 is declared in the live tree ONLY as this enum discriminant, reached
+    # The control: 0xb0d400 is declared in the live tree only as this enum discriminant, reached
     # through TITLE_MENU_JOB_WAIT_RVA, with three live use sites on the autoload path.
     "crates/a/src/lib.rs": (
         "#[repr(u32)]\npub enum MenuTraceRva {\n    MenuJobWait = 0x00b0d400,\n}\n"
@@ -215,7 +215,7 @@ FIXTURE = {
         "pub const DERIVED_RVA: usize = SOME_TABLE_ENTRY as usize;\n"
         "pub const ISIZE_RVA: isize = 0x555000;\n"
         "pub const GAME_HEAP_ALLOC_VA: usize = 0x141eb9ed0;\n"
-        # RVA-NAMED AND VA-VALUED, which is not hypothetical: `gaitem_restore.rs` declares
+        # RVA-named and VA-valued, which is not hypothetical: `gaitem_restore.rs` declares
         # ADD_DEFAULT_FILE_LOAD_PROCESS_RVA = 0x142658c60. The old collector read that as an RVA
         # and `main` then added the image base again, asking the topology about 0x282658c60.
         "pub const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60;\n"
@@ -230,7 +230,7 @@ FIXTURE = {
 def selftest():
     """Prove the collector sees the spellings the frozen regex could not -- and no prose.
 
-    Every case is asserted BOTH ways. A control the old regex also caught would pass on the broken
+    Every case is asserted both ways. A control the old regex also caught would pass on the broken
     collector and prove nothing, which is how a measuring instrument ends up reporting a false
     green: the assertion runs, and it was never about the thing that broke.
     """
@@ -269,7 +269,7 @@ def selftest():
             )
         if not hidden and address not in legacy:
             failures.append(f"the fixture is wrong: 0x{address:x} should be legacy-visible")
-    # THE VA BUG, as a fact about the old collector rather than an opinion about it. It read
+    # The VA bug, as a fact about the old collector rather than an opinion about it. It read
     # 0x142658c60 as an RVA, and `main` adds the image base to every collected value -- so the
     # question actually put to the topology was about 0x282658c60, an address in no image.
     if 0x142658C60 not in legacy:
@@ -280,13 +280,13 @@ def selftest():
                 f"0x{raw:x} was collected as if it were an RVA; `main` would add the image base "
                 "again and ask about an address in no image"
             )
-    # NEGATIVE CONTROLS. Dropping the name filter must not turn every integer into an address.
+    # Negative controls. Dropping the name filter must not turn every integer into an address.
     if 0x2710 in found:
         failures.append("BOOT_PUMP_MAX_MS (a millisecond cap) was collected as a game address")
     if 0x333000 in found:
         failures.append("a `//` comment quoting a declaration was collected as a game address")
 
-    # NON-VACUITY OF THE LIVE WALK. A collector that reads nothing reports that the repo needs
+    # Non-VACUITY of the live walk. A collector that reads nothing reports that the repo needs
     # nothing mapped, which is the most comfortable wrong answer available to it.
     live = repo_consts()
     index = rva_symbols.index(os.path.join(ROOT, "crates"))
@@ -363,7 +363,7 @@ def main():
     newly = [r for r in rows if r[5] == "unmapped" and r[1] is not None]
     still = [r for r in rows if r[5] == "unmapped" and r[1] is None]
     conflict = [r for r in rows if r[5] != "unmapped"]
-    # Not "*_RVA constants" any more: the collector is keyed on the resolved ADDRESS, so an enum
+    # Not "*_RVA constants" any more: the collector is keyed on the resolved address, so an enum
     # discriminant and a `*_VA` spelling count too. Saying otherwise in the header would understate
     # the set by exactly the amount that used to be invisible.
     print(f"repo game-address constants: {len(consts)} distinct addresses")

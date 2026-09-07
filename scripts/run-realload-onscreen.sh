@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# REAL gold-load smoke, ONSCREEN: stages the gold save and runs the actual
-# zero-input autoload (NOT telemetry-only), so success == the character reaching
+# Real gold-load smoke, ONSCREEN: stages the gold save and runs the actual
+# zero-input autoload (not telemetry-only), so success == the character reaching
 # the playable world. Onscreen so it can be watched; watcher-bounded (early-exit
 # on world reach, else teardown at the canonical cap).
 set -euo pipefail

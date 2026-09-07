@@ -9,12 +9,12 @@
 //! information needed to predict it was already in the process; nobody was looking.
 //!
 //! This DLL looks. It watches the input APIs, works out which module each call came from, and once
-//! the profile has settled it prints ONE warning naming every input that more than one party
+//! the profile has settled it prints one warning naming every input that more than one party
 //! wants.
 //!
 //! # Why it observes the APIs instead of asking the mods
 //!
-//! It has to work against ANY author's DLL. A third-party mod exports nothing you can query, ships
+//! It has to work against any author's DLL. A third-party mod exports nothing you can query, ships
 //! no manifest of its bindings, and will never cooperate. Sitting on `GetAsyncKeyState` and
 //! attributing the caller works on a binary you have never seen, which is the only property that
 //! makes the tool worth having.
@@ -33,11 +33,11 @@
 //!
 //! * **A binding read through DirectInput has no key.** `GetDeviceState` returns all 256 scancodes
 //!   at once and the caller picks its own afterwards, in its own code. Those modules are reported
-//!   as whole-keyboard readers, explicitly as NOT CHECKED. The one thing that does recover a key
+//!   as whole-keyboard readers, explicitly as not checked. The one thing that does recover a key
 //!   is a mod BLANKING it -- see [`dik`].
 //! * **A mod that reads `inputmgr+0x90+eventId`** -- the game's decoded per-action keystate bitmap
 //!   -- calls no API at all. Catching it needs a data breakpoint, which is not passive.
-//! * **Action names.** The game's binding table gives an action INDEX; the names live in an FMG
+//! * **Action names.** The game's binding table gives an action index; the names live in an FMG
 //!   message table, not in the executable, so the report prints the index.
 
 // Ungated on purpose: the census, the attribution rule, the scancode table, the settle gate and
@@ -247,7 +247,7 @@ fn emit_report(reason: settle::Settled) {
         conflict_log(format_args!("{line}"));
     }
 
-    // THE EVIDENCE FOR THE REPORT, not decoration. Attribution is the one claim here that can be
+    // The evidence for the report, not decoration. Attribution is the one claim here that can be
     // confidently wrong, and the way it fails is by resolving every call to one module. Printing
     // the resolved chains means that failure is visible in the log instead of showing up as a
     // warning naming an innocent DLL.
@@ -345,7 +345,7 @@ fn tick() {
 
     if ticks.is_multiple_of(MODULE_SAMPLE_TICKS) {
         let map = ModuleMap::capture();
-        // An empty capture is an enumeration FAILURE, not a process with no modules in it.
+        // An empty capture is an enumeration failure, not a process with no modules in it.
         // Publishing it would blank every attribution and reset the settle gate's stability clock
         // on a transient, so the previous good map is kept instead.
         if !map.is_empty() {
@@ -407,7 +407,7 @@ fn spawn_game_task() {
         .name("er-hotkey-conflicts-task".to_owned())
         .spawn(move || {
             conflict_log(format_args!("game task thread waiting for CSTaskImp"));
-            // BOUNDED, and spinning in user space rather than yielding per attempt. A bare
+            // Bounded, and spinning in user space rather than yielding per attempt. A bare
             // `yield_now()` loop is one wineserver round trip per attempt, and the wineserver is
             // shared and serialising: measured 2026-08-29, two such threads starved the game to
             // 104 CPU ticks in three minutes with no window and no crash. See
@@ -415,7 +415,7 @@ fn spawn_game_task() {
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
             else {
-                // A shell that cannot find the task manager stays INERT rather than hanging the
+                // A shell that cannot find the task manager stays inert rather than hanging the
                 // game. The user32 hooks are already installed and keep observing; only the
                 // FrameBegin tick -- which is what prints the settled report -- is lost.
                 conflict_log(format_args!(
@@ -467,13 +467,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // One sink for this DLL's hook + address lines. Without it a REFUSED ADDRESS IS SILENT
+        // One sink for this DLL's hook + address lines. Without it a refused address is silent
         // here: every cdylib links its own copy of er-hook, so the default no-op sink is this
         // module's own, and `scripts/check-hook-log-sink.py` fails the build precisely because a
         // DLL that installs detours with no sink cannot tell you which address it declined.
         // `report_panics_to` rides along for the same reason -- a `rust_panic` inside a cdylib
         // loaded into the game is otherwise anonymous, leaving a 0xe06d7363 record that names the
-        // MODULE and nothing else.
+        // module and nothing else.
         er_game_base::panic_report::report_panics_to("er-hotkey-conflicts", log_sink);
         er_hook::set_hook_logger(log_sink);
         START.call_once(|| {
@@ -491,7 +491,7 @@ pub extern "C" fn er_hotkey_conflicts_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
 }
 
-// This module never HOSTS the overlay (see `overlay`), but it links the host crate, and every
+// This module never hosts the overlay (see `overlay`), but it links the host crate, and every
 // shell that links it must define the export or it becomes a host no guest can find.
 #[cfg(windows)]
 er_build_watermark_core::export_overlay_host!();

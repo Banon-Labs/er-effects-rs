@@ -1,60 +1,60 @@
 #!/usr/bin/env python3
-"""Tear down EVERY process belonging to the Elden Ring Proton prefix, not just the obvious four.
+"""Tear down every process belonging to the Elden Ring Proton prefix, not just the obvious four.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 bd `er-teardown-must-kill-wineserver-or-next-boot-hangs-2026-08-24` says to kill
 `eldenring.exe`, `me3`, `me3-launcher.exe`, `wineserver` and `winedevice.exe`. That list is
-INCOMPLETE, and the omission is what wedges the next launch.
+incomplete, and the omission is what wedges the next launch.
 
 A Wine prefix session also runs `services.exe`, `plugplay.exe`, `explorer.exe`, `svchost.exe`,
 `rpcss.exe`, and (under Proton) `tabtip.exe` and `xalia.exe`. Killing only the five above leaves
 about seven processes per launch alive, parented to the dead wineserver. They accumulate.
 
-MEASURED 2026-08-25: after four "successful" teardowns that each verified their own list was
+Measured 2026-08-25: after four "successful" teardowns that each verified their own list was
 empty, the machine held **105** orphaned prefix processes across roughly fifteen sessions, some
 days old. Every launch after the first came up as a two-thread `eldenring.exe` husk at 0% CPU --
 the process exists, so a naive liveness check calls it running, and both the game's own log and
 the mod DLLs' logs stop within ~100ms looking exactly like a DLL hang. It is not one.
 
-THE LIVENESS ORACLE, since it is the other half of the same mistake: a real Elden Ring has ~57
+The LIVENESS oracle, since it is the other half of the same mistake: a real Elden Ring has ~57
 threads and burns CPU. Two threads at 0% is a husk. `--status` reports both rather than the
 presence of a pid.
 
-THE HOLE THAT MADE THE FIRST VERSION OF THIS TOOL LIE
+The hole that made the first version of this tool lie
 -----------------------------------------------------
-A Wine process's `comm` is the WINDOWS executable name (`eldenring.exe`) while its `exe` symlink
+A Wine process's `comm` is the Windows executable name (`eldenring.exe`) while its `exe` symlink
 points at `wine64-preloader`. Matching on `comm` therefore finds the Windows-side processes and
-MISSES the entire container stack underneath them: `srt-bwrap`, `pv-adverb`, Proton's own
+misses the entire container stack underneath them: `srt-bwrap`, `pv-adverb`, Proton's own
 `python3.13`, `wine-preloader`, `wine64-preloader`. The first version of this script swept 101
 processes, reported "clean -- zero prefix processes remain", and left **93** alive -- parented to
 the Steam client itself, which is why the Steam UI sat on "Stopping" and every relaunch wedged.
 "My list is empty" is not "the game is gone" unless the list was built the right way.
 
-SCOPE
+Scope
 -----
 The primary classifier is now the process ENVIRONMENT: `SteamGameId=1245620`,
 `SteamAppId=1245620` or `STEAM_COMPAT_APP_ID=1245620`. Every process in the session inherits one,
 whatever it renamed itself to, so the container layers are caught with the Windows ones. The
 comm+prefix rule is kept as a second net for anything that lost its environment.
 
-These are exact literals naming one appid. AGENTS.md forbids broad `wine`/`rsi` COMMAND-LINE
+These are exact literals naming one appid. AGENTS.md forbids broad `wine`/`rsi` command-line
 patterns because they match unrelated words (`rsi` matches `version`); an appid equality test in
 `environ` has no such failure mode, and nothing here reads a command line.
 
-A TEARDOWN THAT LEAVES NO RECORD IS INDISTINGUISHABLE FROM A CRASH
+A TEARDOWN that leaves no record is indistinguishable from a crash
 ------------------------------------------------------------------
 `er-quickload` stamps `er-run-outcome.txt` with `outcome=running` the moment its exit hooks are
 armed, and its hooks rewrite that line on the way out: `clean-exit`, `exit-unclassified`, or
 `fatal-exception`. The file's own contract says that finding `running` after the process is gone
-means NO exit path ran -- "killed from outside (an agent teardown, `wineserver`, the OOM killer)".
+means no exit path ran -- "killed from outside (an agent teardown, `wineserver`, the OOM killer)".
 
 Which was true and useless, because this script was one of those outside killers and said nothing.
 Measured 2026-09-06: a run ended, the file read `outcome=running`, and there was no way to tell a
 deliberate teardown-to-rebuild from a death nobody understood. Every agent teardown was a
 permanent false positive in the one instrument built to answer "did it crash".
 
-So this script now owns that line while it kills. It stamps BEFORE signalling -- after SIGKILL
+So this script now owns that line while it kills. It stamps before signalling -- after SIGKILL
 there is no process left to write anything -- and again after the sweep, because the DLL's own
 exit hooks may fire in between and overwrite the record with a code that on this target says
 nothing (a normal quit exits `0xc0000005` under Proton). The `was=` field carries whatever the
@@ -122,7 +122,7 @@ HUSK_THREAD_CEILING = 4
 # has to know which writer it is looking at, which is the guesswork the file exists to end.
 RUN_OUTCOME_FILE_NAME = "er-run-outcome.txt"
 RUN_OUTCOME_TORN_DOWN = "torn-down"
-# What `--reason` defaults to. Deliberately not "unknown": the reason field exists to say WHY a
+# What `--reason` defaults to. Deliberately not "unknown": the reason field exists to say why a
 # process was killed, and a teardown run without one was still a deliberate act by an agent.
 DEFAULT_TEARDOWN_REASON = "agent-teardown"
 
@@ -134,7 +134,7 @@ DEFAULT_TEARDOWN_REASON = "agent-teardown"
 TERM_GRACE_MS = 12_000
 KILL_GRACE_MS = 3_000
 # Window over which CPU burn is sampled in `--status`. Also spent in `poll()`, so a process that
-# dies mid-sample is REPORTED as having died rather than silently scoring zero ticks.
+# dies mid-sample is reported as having died rather than silently scoring zero ticks.
 CPU_SAMPLE_MS = 3_000
 
 
@@ -195,7 +195,7 @@ def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
                 poller.unregister(fd)
                 os.close(fd)
                 fds.pop(fd, None)
-            # `poll` returns as soon as ANY pid exits, so the loop re-enters for the rest. The
+            # `poll` returns as soon as any pid exits, so the loop re-enters for the rest. The
             # budget is deliberately not decremented by observed elapsed time: shrinking it here
             # would need a clock, and the caller's contract is an upper bound on the wait, which
             # a re-entered poll with the same bound still satisfies for a set that is strictly
@@ -211,11 +211,11 @@ def wait_for_exit(pids: list[int], timeout_ms: int) -> bool:
 
 
 def _steam_client_pids() -> set[int]:
-    """The user's Steam client and its helpers -- NEVER targets.
+    """The user's Steam client and its helpers -- Never targets.
 
     The Proton prefix contains a Windows `steam.exe` shim, and the client's own children can
     inherit the game's environment. Killing the client would log the user out of Steam to clean
-    up after a game, which is not a trade this tool gets to make. Identified by the NATIVE
+    up after a game, which is not a trade this tool gets to make. Identified by the native
     executable name, which the Windows shim does not share.
     """
     client: set[int] = set()
@@ -244,7 +244,7 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
         exe = _link(f"{entry}/exe")
         in_prefix = prefix in exe or prefix in _link(f"{entry}/cwd")
         by_appid = _has_appid(entry)
-        # THE GAME ITSELF NEEDS NO CORROBORATION, and twice it has been missed for want of some.
+        # The game itself needs no CORROBORATION, and twice it has been missed for want of some.
         # Launched through the Steam Linux Runtime the game's /proc/<pid>/exe and cwd are inside
         # the bwrap container, not the prefix, and the appid env is not always readable -- so both
         # of the other rules can be false for a process whose comm is literally `eldenring.exe`.
@@ -285,7 +285,7 @@ def survey(prefix: str = DEFAULT_PREFIX) -> list[dict[str, object]]:
 def is_zombie(pid: int) -> bool:
     """Has this pid exited but not been reaped?
 
-    A ZOMBIE LEADER IS DEAD NO MATTER WHAT ELSE IS TRUE, and nothing here used to ask. Measured
+    A zombie leader is dead no matter what else is true, and nothing here used to ask. Measured
     2026-09-04: `eldenring.exe` pid 3885401 sat in state `Z` with `Threads: 127` still listed and
     27 CPU ticks in the sample window, so the thread/CPU husk rule below passed it as `running`
     while `/proc/<pid>/stat` said it had already exited. A driver that trusted that verdict kept
@@ -294,7 +294,7 @@ def is_zombie(pid: int) -> bool:
     stat = _read(f"/proc/{pid}/stat")
     if stat is None:
         return False
-    # "pid (comm) state ..." -- comm can contain spaces and parens, so split on the LAST ')'.
+    # "pid (comm) state ..." -- comm can contain spaces and parens, so split on the last ')'.
     try:
         return stat[stat.rindex(")") + 1 :].split()[0] == "Z"
     except (ValueError, IndexError):
@@ -325,7 +325,7 @@ def game_status(
 ) -> list[dict[str, object]]:
     """Every `eldenring.exe` in the prefix, with the two facts that separate a game from a husk.
 
-    Machine-readable half of [`game_health`]. It exists because a tool that SCORES a launch --
+    Machine-readable half of [`game_health`]. It exists because a tool that scores a launch --
     an A/B, a bisect -- has to branch on the verdict, and re-deriving it from a formatted string
     would put a second copy of the husk rule outside this module.
     """
@@ -363,7 +363,7 @@ def game_status(
 
 
 def game_health(prefix: str = DEFAULT_PREFIX, sample_ms: int = CPU_SAMPLE_MS) -> str:
-    """Is there a REAL game running -- threads and CPU, not merely a pid?"""
+    """Is there a real game running -- threads and CPU, not merely a pid?"""
     rows = game_status(prefix, sample_ms)
     if not rows:
         return "no eldenring.exe"
@@ -405,7 +405,7 @@ def game_directory(explicit: str | None = None) -> str:
 def read_run_outcome(game_dir: str | None = None) -> str | None:
     """The current `er-run-outcome.txt` line, or `None` when the file is not there.
 
-    ABSENT is not the same as `running` and must not be reported as it: the DLL writes the file
+    Absent is not the same as `running` and must not be reported as it: the DLL writes the file
     at install, so no file at all means the logger never started and the record says nothing
     about the game.
     """
@@ -426,7 +426,7 @@ def format_run_outcome(reason: str, previous: str | None) -> str:
 
 
 def stamp_run_outcome(reason: str, game_dir: str | None = None) -> str | None:
-    """Record that THIS script is the reason the process is about to stop existing.
+    """Record that this script is the reason the process is about to stop existing.
 
     Returns the line written, or `None` when there was nowhere to write it. A failure here is
     reported by the caller and never raises: refusing to tear down because a log could not be
@@ -456,7 +456,7 @@ def teardown(
     if verbose:
         print(f"[er-teardown] {len(targets)} prefix process(es) to remove")
 
-    # BEFORE the first signal, because SIGKILL leaves nobody to write anything afterwards, and
+    # Before the first signal, because SIGKILL leaves nobody to write anything afterwards, and
     # because a teardown that dies half way through should still have said why it started.
     if targets:
         stamped = stamp_run_outcome(reason, game_dir)
@@ -491,7 +491,7 @@ def teardown(
     wait_for_exit([int(row["pid"]) for row in survivors], KILL_GRACE_MS)
     remaining = survey(prefix)
 
-    # AGAIN, now that everything is gone. SIGTERM can reach the DLL's own exit hooks, which
+    # Again, now that everything is gone. SIGTERM can reach the DLL's own exit hooks, which
     # rewrite this file with an exit code that on this target diagnoses nothing -- a normal quit
     # exits 0xc0000005 under Proton. Whatever they wrote is carried into `was=` rather than
     # dropped, and the final word is the one fact neither hook could know: an agent did this.
@@ -534,12 +534,12 @@ def selftest() -> int:
     )
     # AGENTS.md forbids matching on command lines -- `rsi` matches `version`, `wine` matches
     # anything. Checked BEHAVIOURALLY: two earlier versions of this test scanned this file for a
-    # literal and both matched their own text, reporting FAIL against a file that was correct.
+    # literal and both matched their own text, reporting fail against a file that was correct.
     # What matters is not the source text but that every row survey() returns was classified by
     # comm plus prefix, so that is what is asserted.
     rows = survey()
-    # THE RUN-OUTCOME CONTRACT. These are the cases that make `running` mean something: a
-    # teardown must be distinguishable from a death nobody explains, and an ABSENT file must not
+    # The run-outcome contract. These are the cases that make `running` mean something: a
+    # teardown must be distinguishable from a death nobody explains, and an absent file must not
     # be reported as either.
     import tempfile
 
@@ -623,8 +623,8 @@ def selftest() -> int:
         "waiting on a LIVE pid times out rather than reporting it gone",
         wait_for_exit([os.getpid()], 50) is False,
     )
-    # STRUCTURAL, not textual. Three earlier checks in this file scanned the source for a literal
-    # and each matched the check's own text, reporting FAIL against a file that was correct. The
+    # Structural, not textual. Three earlier checks in this file scanned the source for a literal
+    # and each matched the check's own text, reporting fail against a file that was correct. The
     # module simply does not import `time`; if a sleep is ever reintroduced it must import it, and
     # this fails.
     check("the module has no time facility to sleep on", "time" not in globals())
@@ -661,7 +661,7 @@ def main() -> int:
         for comm, count in sorted(by_comm.items()):
             print(f"    {count:3d}  {comm}")
         print(f"[er-teardown] game health: {game_health(args.prefix)}")
-        # The outcome file is reported HERE because not reading it is the whole defect this
+        # The outcome file is reported here because not reading it is the whole defect this
         # change exists to close: on 2026-09-06 "did it crash?" was answered by inference from
         # process absence while the file that answers it sat unread beside the game.
         outcome = read_run_outcome(args.game_dir)

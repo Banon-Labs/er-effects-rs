@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Store a `bd remember` memory whose body lives in a FILE rather than on the command line.
+"""Store a `bd remember` memory whose body lives in a file rather than on the command line.
 
 `bd remember` takes the insight as a positional argument, which means a multi-paragraph memory has
 to arrive through a shell substitution -- and a long `$(cat ...)` is exactly the shape of command

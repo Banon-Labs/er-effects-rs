@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Launch Elden Ring live via me3 with the freshly-built repo DLL, for manual inspection.
 
-HOST LAYOUT IS DETECTED, NEVER ASSUMED (2026-08-11):
+Host layout is detected, never assumed (2026-08-11):
     This script used to hard-code a WSL2 host: a Windows `me3.exe` under one specific user's
     `/mnt/c/Users/<name>/AppData/...`, `wslpath -w` to translate the DLL path, and
     `tasklist.exe` for the Steam check. On a native Linux box every one of those is absent and
     the script died with `FileNotFoundError: 'wslpath'` before launching anything. Both layouts
     are now resolved at runtime:
 
-    native Linux (Steam + Proton)   me3 is a NATIVE LINUX binary (PATH, or `ME3_BIN`). It runs
+    native Linux (Steam + Proton)   me3 is a native Linux binary (path, or `ME3_BIN`). It runs
                                     the game through the Steam compat tool, so it wants
                                     `--steam-dir` and an explicit `-e <game exe>`. The DLL path
-                                    is passed AS IS -- there is nothing to translate.
-    WSL2 + Windows Steam            me3.exe is a NATIVE WINDOWS process started from WSL. It
-                                    loads this repo's build output IN PLACE from the Windows
+                                    is passed as is -- there is nothing to translate.
+    WSL2 + Windows Steam            me3.exe is a native Windows process started from WSL. It
+                                    loads this repo's build output in place from the Windows
                                     spelling of the WSL path (`wslpath -w`, e.g.
                                     `\\\\wsl.localhost\\<distro>\\home\\...\\er_quickload.dll`).
                                     Windows LoadLibraryW over the WSL filesystem was verified
                                     reliable (5/5), so the old "must copy to a C:\\ tree first"
-                                    belief does not hold. (The real UNC hazard is log WRITES from
+                                    belief does not hold. (The real UNC hazard is log writes from
                                     the game, not the DLL load; the DLL's debug log already lands
                                     in the game dir, a Windows path.) One build, referenced where
                                     cargo puts it.
@@ -27,17 +27,17 @@ Every machine-specific value is env-overridable with a discovered default: `ME3_
 `ME3_STEAM_DIR`, `GAME_EXE`, `ME3_TMPDIR`, `ME3_PROFILE`. `~/Elden/launch.sh` (the user's
 canonical launcher) uses the same names, so an override that works there works here.
 
-CWD IS LOAD-BEARING, not cosmetic: me3 resolves `me3-launcher.exe`/`me3_mod_host.dll` from a
+CWD is load-bearing, not cosmetic: me3 resolves `me3-launcher.exe`/`me3_mod_host.dll` from a
 CWD-relative `target/x86_64-pc-windows-msvc/release` directory when one exists, so launching
 from a Rust checkout makes Proton exec a nonexistent/stale launcher and the run dies silently
 inside the compat tool (bd me3-launch-cwd-must-lack-rust-target-dir). We cd to the game dir,
 and refuse outright if the effective CWD carries that trap.
 
-No-teardown stdin trick (INTENTIONAL, do not "fix"):
-    me3 tears the game down when its own stdin hits EOF. We pass `stdin=PIPE` and NEVER
+No-teardown stdin trick (intentional, do not "fix"):
+    me3 tears the game down when its own stdin hits EOF. We pass `stdin=PIPE` and never
     close it, so me3's stdin never EOFs and me3 stays alive as the monitor with the game
     running. There is no taskkill and no runtime cap here: `p.wait()` returns only when
-    the USER closes the game. This is a manual-inspection helper, not an autoresearch probe.
+    the user closes the game. This is a manual-inspection helper, not an autoresearch probe.
 
 Note: the real DLL debug log is `er-quickload-autoload-debug.log` in the game directory,
 not anything this script writes. We let me3's stdout/stderr inherit to the console so
@@ -56,7 +56,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# --- Repo build output (derived from THIS script's location) -----------------------------
+# --- Repo build output (derived from this script's location) -----------------------------
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILT_DLL = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "er_quickload.dll"
 STEAM_HELPER = REPO_ROOT / "scripts" / "steam-running.sh"
@@ -76,7 +76,7 @@ STEAM_ROOT_CANDIDATES = (
 ER_APPMANIFEST_RELPATH = Path("steamapps") / "appmanifest_1245620.acf"
 ER_GAME_EXE_RELPATH = Path("steamapps") / "common" / "ELDEN RING" / "Game" / "eldenring.exe"
 
-# me3 install locations to fall back to when it is not on PATH. Current-user aware; the WSL
+# me3 install locations to fall back to when it is not on path. Current-user aware; the WSL
 # entry globs the Windows user directories instead of naming one user's home.
 NATIVE_ME3_FALLBACKS = ("~/.local/bin/me3",)
 WSL_ME3_GLOB_ROOT = Path("/mnt/c/Users")
@@ -101,7 +101,7 @@ _BUILD_TIMEOUT_SECONDS = 30.0
 
 
 def md5_prefix(path: Path) -> str:
-    """Return the first 8 hex chars of the file's md5 (identifies WHICH dll is loaded)."""
+    """Return the first 8 hex chars of the file's md5 (identifies which dll is loaded)."""
     h = hashlib.md5()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -114,7 +114,7 @@ def is_wsl() -> bool:
 
     Two independent signals, because either alone can be wrong: `wslpath` is the tool we would
     actually call (its presence is the operative fact), and `/proc/version` carries the
-    "microsoft" kernel tag even in an environment where interop tools are missing from PATH.
+    "microsoft" kernel tag even in an environment where interop tools are missing from path.
     """
     if shutil.which("wslpath") is not None:
         return True
@@ -125,7 +125,7 @@ def is_wsl() -> bool:
 
 
 def resolve_me3_binary(wsl: bool) -> str:
-    """Locate the me3 executable for THIS host: env override, then PATH, then known installs."""
+    """Locate the me3 executable for this host: env override, then path, then known installs."""
     override = os.environ.get("ME3_BIN")
     if override:
         found = shutil.which(override)
@@ -197,9 +197,9 @@ def loader_dll_path(dll: Path, wsl: bool, me3_bin: str) -> str:
     """Spell the DLL path for whichever me3 we are driving.
 
     Native Linux me3 takes the path as is. A Windows me3.exe driven from WSL needs the Windows
-    spelling of the WSL path (`wslpath -w`), which is the ONLY reason path translation exists
+    spelling of the WSL path (`wslpath -w`), which is the only reason path translation exists
     here -- so it is keyed on actually driving a Windows binary, not on the host tag alone. A
-    WSL kernel with no `wslpath` on PATH is the exact shape that used to crash this script with
+    WSL kernel with no `wslpath` on path is the exact shape that used to crash this script with
     FileNotFoundError; say what is missing instead.
     """
     if not (wsl and me3_bin.lower().endswith(".exe")):
@@ -229,7 +229,7 @@ def steam_running() -> tuple[bool, str]:
          table via tasklist.exe, and Hyprland, then reports running/signed-in/game-installed
          per reachable Steam install. Built expressly to replace the single-boundary pgrep.
       2. scripts/steam-running.sh -- the sanctioned shell helper (AGENTS.md), which checks the
-         Linux process AND the Windows one.
+         Linux process and the Windows one.
     """
     if DETECT_PROC.is_file():
         try:
@@ -341,7 +341,7 @@ def main() -> None:
     if args.build:
         run_build()
 
-    # 1. Resolve the host layout and every machine-specific path BEFORE any gate, so a failing
+    # 1. Resolve the host layout and every machine-specific path before any gate, so a failing
     #    gate still reports against the real, fully-resolved configuration.
     wsl = is_wsl()
     me3_bin = resolve_me3_binary(wsl)
@@ -393,7 +393,7 @@ def main() -> None:
         print(f"warning: {message}", flush=True)
         dll_arg = str(BUILT_DLL)
     else:
-        # 4. Spell the repo's build output for THIS me3 (loaded IN PLACE, no copy).
+        # 4. Spell the repo's build output for this me3 (loaded in place, no copy).
         dll_arg = loader_dll_path(BUILT_DLL, wsl, me3_bin)
         print(f"loading repo DLL in place: {BUILT_DLL}", flush=True)
         if dll_arg != str(BUILT_DLL):
@@ -415,9 +415,9 @@ def main() -> None:
     env = dict(os.environ)
     env.update(env_overrides)
 
-    # 5. Launch. stdin=PIPE is held open forever (never closed): me3 tears the game down on stdin
+    # 5. Launch. stdin=pipe is held open forever (never closed): me3 tears the game down on stdin
     #    EOF, so keeping stdin open keeps the game alive for manual inspection. stdout/stderr
-    #    inherit to the console so launch errors are visible. p.wait() returns only when the USER
+    #    inherit to the console so launch errors are visible. p.wait() returns only when the user
     #    closes the game.
     print(f"launching: {quoted(cmd, cwd, env_overrides)}", flush=True)
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE, cwd=str(cwd), env=env)

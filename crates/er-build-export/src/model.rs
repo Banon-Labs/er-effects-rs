@@ -46,15 +46,15 @@ pub const DEFAULT_SET_NAME: &str = "Default";
 ///
 /// The planner's own `QUICKBAR`, read out of the live bundle
 /// (`e[e.QUICKBAR = 10] = "QUICKBAR", e[e.POUCH = 16] = "POUCH"`). It is a fact about the
-/// DOCUMENT, which is why it is declared here rather than borrowed from the importer: the game
+/// document, which is why it is declared here rather than borrowed from the importer: the game
 /// side has its own count -- the length of `ChrAsmEquipEntries::quickItem1..10` -- and the two
 /// being equal is a claim worth testing rather than an identity worth assuming. See
 /// `tests/round_trip.rs`, which asserts they agree.
 pub const QUICKBAR_POSITIONS: usize = 10;
 
-/// Tool `equipIndex` values from [`QUICKBAR_POSITIONS`] up to this are POUCH positions.
+/// Tool `equipIndex` values from [`QUICKBAR_POSITIONS`] up to this are pouch positions.
 ///
-/// The planner's `POUCH`, and it is a TOTAL rather than a count: its equip view builds
+/// The planner's `POUCH`, and it is a total rather than a count: its equip view builds
 /// `times(POUCH)` entries and slices at `QUICKBAR`, so the pouch itself holds
 /// `POUCH_POSITIONS_TOTAL - QUICKBAR_POSITIONS` = 6.
 pub const POUCH_POSITIONS_TOTAL: usize = 16;
@@ -102,7 +102,7 @@ pub struct BuildExportDoc {
     /// which is why it is skipped rather than written when unset.
     #[serde(rename = "greatRune", skip_serializing_if = "Option::is_none")]
     pub great_rune: Option<String>,
-    /// The character's APPEARANCE, as an uppercase hex AOB of the game's own `FaceDataBuffer`.
+    /// The character's appearance, as an uppercase hex AOB of the game's own `FaceDataBuffer`.
     ///
     /// **Ours, not the planner's.** No key of `makeDefault()` carries an appearance and nothing in
     /// the planner reads one: a build there is stats and gear. It is written at the top level
@@ -349,7 +349,7 @@ impl Slot {
         self
     }
 
-    /// Mark this slot equipped at `index` and claim NO named set -- the shape a TOOL has.
+    /// Mark this slot equipped at `index` and claim no named set -- the shape a tool has.
     ///
     /// Not a laxer [`Slot::equipped_at`]: it is the planner's own distinction. `setSlotEquipIndex`
     /// assigns `equipIndex` unconditionally and only touches `equipSet` `if (category)`, and the
@@ -406,17 +406,17 @@ pub struct Protectors {
 /// Consumables, ammunition, physick tears and flask allocation.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Items {
-    /// Arrows and bolts, keyed by EQUIP POSITION. See [`Ammo`].
+    /// Arrows and bolts, keyed by equip position. See [`Ammo`].
     pub ammo: Ammo,
     /// Consumable and crafting items -- **and the quickbar and the pouch**, neither of which has
     /// a key of its own anywhere in the document.
     ///
-    /// The planner keeps ONE list here and addresses both assignable surfaces out of it through
+    /// The planner keeps one list here and addresses both assignable surfaces out of it through
     /// `equipIndex`: `0..10` is a quickbar position, `10..16` a pouch one. Its `ToolEquipSlots`
     /// view is literally `times(POUCH).map(() => null)` folded over `items.tools.slots` by
     /// `equipIndex`, then `slice(0, QUICKBAR)` for the quickbar and `slice(QUICKBAR, POUCH)` for
     /// the pouch, with `QUICKBAR = 10` and `POUCH = 16`. So a document that leaves this list
-    /// empty ships a character whose quickbar and pouch are BOTH empty -- one omission, two
+    /// empty ships a character whose quickbar and pouch are both empty -- one omission, two
     /// missing categories, which is exactly what "only the physick came through" was.
     ///
     /// A row here carries `equipIndex` and no `equipSet`: the planner's `setSlotEquipIndex`
@@ -442,9 +442,9 @@ impl Default for Items {
     }
 }
 
-/// The four ammunition positions, each holding an item NAME.
+/// The four ammunition positions, each holding an item name.
 ///
-/// # The one category that is not a slot list, and the one whose key IS the position
+/// # The one category that is not a slot list, and the one whose key is the position
 ///
 /// Every other category is `{slots: [...]}` of [`Slot`] objects. Ammo is a flat object keyed by
 /// equip position whose value is the bare name string --
@@ -455,7 +455,7 @@ impl Default for Items {
 /// `delete items.ammo[slot]` followed by deleting the whole object once nothing is left.
 ///
 /// That last detail is why every field is skipped rather than written as `null`: an unequipped
-/// position on the planner's own documents is an ABSENT KEY, and `{}` -- what this serialises to
+/// position on the planner's own documents is an absent key, and `{}` -- what this serialises to
 /// when the character carries no ammunition -- is exactly `makeDefault`'s value.
 ///
 /// # There was an older shape and it is not a variant to support
@@ -612,9 +612,9 @@ pub struct Author {
     pub name: String,
 }
 
-/// What a finished document actually CARRIES, per category.
+/// What a finished document actually carries, per category.
 ///
-/// # Counted off the DOCUMENT, never off whatever produced it
+/// # Counted off the document, never off whatever produced it
 ///
 /// This is the whole point of the type, and it lives beside the document rather than beside the
 /// game-side reader for exactly that reason. The thing that was read and the thing that gets
@@ -877,7 +877,7 @@ mod tests {
         let mut ammo = Ammo::default();
         assert!(ammo.set("arrow1", "Bone Arrow"));
         assert!(ammo.set("bolt2", "Ballista Bolt"));
-        // A key the planner does not know is REFUSED rather than written: it would survive the
+        // A key the planner does not know is refused rather than written: it would survive the
         // whole pipeline and simply never be read.
         assert!(!ammo.set("arrow3", "Great Arrow"));
         assert!(!ammo.set("slots", "Great Arrow"));
@@ -889,7 +889,7 @@ mod tests {
             },
             ..BuildExportDoc::default()
         };
-        // Bare strings, and ONLY the filled positions -- an empty one is an absent key.
+        // Bare strings, and only the filled positions -- an empty one is an absent key.
         assert_eq!(
             as_object(&doc)["items"]["ammo"],
             serde_json::json!({"arrow1": "Bone Arrow", "bolt2": "Ballista Bolt"})
@@ -971,7 +971,7 @@ mod tests {
 
     #[test]
     fn the_counts_come_from_the_document_and_not_from_its_construction() {
-        // A document whose tool list was never assigned reports ZERO, which is the line the defect
+        // A document whose tool list was never assigned reports zero, which is the line the defect
         // would have shown had anything been counting.
         let doc = BuildExportDoc {
             items: Items {

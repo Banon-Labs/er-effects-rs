@@ -2,9 +2,9 @@
 //! diagnosable evidence trail (default runtime research mode is telemetry/non-fatal per AGENTS.md)
 //! without a `bd` memory or a screenshot -- those are separate oracles.
 //!
-//! Both files describe exactly ONE process run: `er_game_base::log` truncates each on this
+//! Both files describe exactly one process run: `er_game_base::log` truncates each on this
 //! process's first write to it (rotating the previous run's aside as `.prev`), which is what makes
-//! a count over `er-input-harness-phases.jsonl` a count for THIS run.
+//! a count over `er-input-harness-phases.jsonl` a count for this run.
 
 use std::{
     fmt,
@@ -32,12 +32,12 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Both files used to resolve as bare CWD-relative names no launcher could move, so each launch
 /// rotated the run before it to `.prev` and the launch after that destroyed it. The redirect and
 /// its game-directory fallback live in `er_game_base::log`, shared with every other per-run
-/// artifact so a run's evidence has ONE convention for where it goes.
+/// artifact so a run's evidence has one convention for where it goes.
 fn log_path() -> std::path::PathBuf {
     er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH", LOG_PATH)
 }
 
-/// Same for the per-phase JSONL, which gets its OWN knob rather than following the log's: the
+/// Same for the per-phase JSONL, which gets its own knob rather than following the log's: the
 /// oracle reads the two files separately, and one knob for both would silently drop whichever the
 /// launcher did not name.
 fn phases_path() -> std::path::PathBuf {

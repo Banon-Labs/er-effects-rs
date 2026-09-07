@@ -1,8 +1,8 @@
-// STEP_LoadListWait GATE TRACE -- which of the three conditions blocks the DLC virtual-root refill.
+// STEP_LoadListWait gate trace -- which of the three conditions blocks the DLC virtual-root refill.
 //
-// MOVED VERBATIM out of the product DLL's
+// Moved verbatim out of the product DLL's
 // `crates/er-quickload/src/experiments/startup_hooks/diagnostics/loadlist_wait_trace.rs` on
-// 2026-08-25. There it was installed UNCONDITIONALLY at process attach, on a step that runs every
+// 2026-08-25. There it was installed unconditionally at process attach, on a step that runs every
 // frame, for a log nothing in the product read back. The verdict logic, the short-circuit order and
 // every log string are unchanged; only the sink moved and the counters are now this crate's own.
 //
@@ -11,26 +11,26 @@
 // against nothing and returns 0 bytes (bd
 // `PROVEN-reload-softlock-is-blanked-dlc-virtual-root-mapstudio-dlc2-empty-2026-07-30`).
 //
-// Those roots are refilled from exactly ONE live place -- inside `CS::MoveMapListStep::STEP_LoadListWait`:
+// Those roots are refilled from exactly one live place -- inside `CS::MoveMapListStep::STEP_LoadListWait`:
 //
 //     if ((loadList == NULL || *(int*)loadList - 2u < 2) && *(this+0xb8) == 0)      // gates A and B
 //         if (FUN_140e6e6c0(FUN_140e6e060()) != 1) {                                // gate C
 //             ...; FUN_140e05fb0(GLOBAL_CSDlc, true); ...                           // <- the refill
 //         }
 //
-// FOUR outcomes have to be told apart, and only three of them are "a gate":
-//   0 calls on the reload  -> the STEP NEVER RAN; no internal gate is responsible
+// Four outcomes have to be told apart, and only three of them are "a gate":
+//   0 calls on the reload  -> the step never ran; no internal gate is responsible
 //   gate A fails           -> loadList is non-null and not in state 2/3
 //   gate B fails           -> this+0xb8 is non-zero
-//   A and B both pass, roots STILL empty -> gate C (the storage-status check) is the blocker
+//   A and B both pass, roots still empty -> gate C (the storage-status check) is the blocker
 //
-// Gate C is deliberately NOT evaluated here. `FUN_140e6e6c0` allocates (DLAllocator/GetBackAllocator)
+// Gate C is deliberately not evaluated here. `FUN_140e6e6c0` allocates (DLAllocator/GetBackAllocator)
 // and is not a pure predicate, so calling it from a trace would perturb the very run being measured.
 // It is inferred instead: the counter says the step reached it, and the existing root probe says
 // whether the refill happened. That inference is sound and costs nothing.
 //
 // This is a TRACE: it forwards unconditionally and writes only our own counters. `STEP_LoadListWait`
-// runs every frame, so logging is on VERDICT CHANGE (plus the first few entries for a load-1
+// runs every frame, so logging is on verdict change (plus the first few entries for a load-1
 // baseline) -- the same discipline that kept the msb-parse trace readable.
 
 use std::{
@@ -56,17 +56,17 @@ use crate::{
 static LOADLIST_WAIT_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline for the `STEP_LoadListWait` gate trace. 0 = not hooked.
 static LOADLIST_WAIT_TRACE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-/// Total `STEP_LoadListWait` entries observed. THE ZERO CASE IS THE POINT: the DLC virtual roots are
+/// Total `STEP_LoadListWait` entries observed. The zero case is the POINT: the DLC virtual roots are
 /// refilled only from inside this step, so if this stays flat across a profile-switch reload the
-/// blocker is "the step never ran", which is NOT any of its three internal gates.
+/// blocker is "the step never ran", which is not any of its three internal gates.
 static LOADLIST_WAIT_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Last gate verdict seen, so the trace can log on CHANGE instead of every frame. Encoding matches
+/// Last gate verdict seen, so the trace can log on change instead of every frame. Encoding matches
 /// `loadlist_wait_verdict`: 0 = both readable gates pass, 1 = loadList state gate, 2 = the `+0xb8`
 /// gate. `usize::MAX` = nothing observed yet.
 static LOADLIST_WAIT_TRACE_LAST_VERDICT: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Entries where BOTH readable gates passed, i.e. the step reached the storage-status check. If this
+/// Entries where both readable gates passed, i.e. the step reached the storage-status check. If this
 /// is non-zero on a reload whose roots stayed empty, the blocker is that third check -- the one the
-/// trace deliberately does NOT evaluate itself, because it allocates and would perturb the run.
+/// trace deliberately does not evaluate itself, because it allocates and would perturb the run.
 static LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE: AtomicUsize = AtomicUsize::new(0);
 
 /// Name the first failing gate. Returns `(verdict, loadList, loadListState, gate_b8)` where verdict
@@ -78,7 +78,7 @@ static LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE: AtomicUsize = AtomicUsize::new(0
 unsafe fn loadlist_wait_verdict(this: usize) -> (usize, usize, i64, usize) {
     let load_list =
         unsafe { safe_read_usize(this + MOVEMAPLISTSTEP_LOADLIST_2C0_OFFSET) }.unwrap_or(0);
-    // Native reads the state only when loadList is non-null; a NULL list PASSES gate A.
+    // Native reads the state only when loadList is non-null; a NULL list passes gate A.
     let state = if load_list > PTR_SANITY_MIN {
         unsafe { safe_read_i32(load_list) }
             .map(i64::from)
@@ -151,7 +151,7 @@ pub(crate) unsafe extern "system" fn loadlist_wait_trace_hook(this: usize, param
         LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE.fetch_add(1, Ordering::SeqCst);
     }
 
-    // Log on CHANGE (plus an opening window for the load-1 baseline): this runs every frame, and a
+    // Log on change (plus an opening window for the load-1 baseline): this runs every frame, and a
     // per-frame line would drown the reload in thousands of identical entries.
     let previous = LOADLIST_WAIT_TRACE_LAST_VERDICT.swap(verdict, Ordering::SeqCst);
     if previous != verdict || n <= LOADLIST_WAIT_TRACE_VERBOSE_CALLS {

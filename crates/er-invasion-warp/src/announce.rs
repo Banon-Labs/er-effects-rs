@@ -16,7 +16,7 @@
 //!
 //! # How the message gets in without the queue
 //!
-//! `FeSystemAnnounceView::Update` drains the view-model's queue ONLY when its own embedded message
+//! `FeSystemAnnounceView::Update` drains the view-model's queue only when its own embedded message
 //! is inactive, disassembled at `0x1408c481a`:
 //!
 //! ```text
@@ -32,7 +32,7 @@
 //! and Update walks straight to the display step. The queue is bypassed rather than fought — which
 //! matters, because the queue's push function is not symbolised and was never found.
 //!
-//! # Where the text comes from, and why NOT the embedded `DLString`
+//! # Where the text comes from, and why not the embedded `DLString`
 //!
 //! The display step's `Load` case picks the string like this (`0x1408c48c0`):
 //!
@@ -45,19 +45,19 @@
 //!   FUN_14074a000(&view->textWidget, text);
 //! ```
 //!
-//! [`MSG_TEXT_POINTER_OFFSET`] is checked FIRST and used verbatim when non-null, so pointing it at
+//! [`MSG_TEXT_POINTER_OFFSET`] is checked first and used verbatim when non-null, so pointing it at
 //! a buffer we own is the engine's own primary path — no allocator, no string type, no growth.
 //!
 //! The obvious-looking alternative, calling the game's `DLString::assign` on `msg->text`, is what
-//! shipped first and it produced A BANNER WITH NO TEXT ON IT (live, 2026-08-12). The cause is
-//! visible in a read of the live message: the view's EMBEDDED message is never populated by the
+//! shipped first and it produced a banner with no text on it (live, 2026-08-12). The cause is
+//! visible in a read of the live message: the view's embedded message is never populated by the
 //! game unless the game itself announces something, so its `DLString` is all zeroes — including
 //! `allocator`. `assign` memcpys in place only while `capacity >= length`; for anything longer it
 //! delegates to a grow that needs that null allocator. Nothing crashed and nothing was copied, so
 //! `capacity` stayed `0`, the null-check above fell through to the SSO branch, and the inline
 //! buffer it read was the zeroed one — an empty string, drawn as an empty banner, while our own
-//! `SHOWN` counter said the notice had been placed. A counter that proves the WRITE happened is
-//! not evidence the PIXELS changed.
+//! `SHOWN` counter said the notice had been placed. A counter that proves the write happened is
+//! not evidence the pixels changed.
 //!
 //! # Buffer lifetime
 //!
@@ -65,7 +65,7 @@
 //! (`0x1408c4710`) propagates `field8_0x8` by value, and the `Dequeue` state only clears
 //! `is_active`. Nothing frees it, so the buffer must outlive the scroll and fade — and it is
 //! therefore leaked, the same choice and the same reason as the synthetic param rows. The leak is
-//! bounded in practice by the notice policy, which announces only a CHANGE of destination: a long
+//! bounded in practice by the notice policy, which announces only a change of destination: a long
 //! session is tens of messages of under 200 bytes each. Leaking is also what makes this race-free
 //! without a lock — a buffer that is never freed cannot dangle under a view still reading it.
 
@@ -75,13 +75,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// `CS::FeSystemAnnounceView::Update`. Hooked to learn the live view, which is otherwise reachable
 /// only by walking `CSMenuMan`'s window list.
 ///
-/// # 1.17: `0x8c5960`, and the PROLOGUE does not need regenerating
+/// # 1.17: `0x8c5960`, and the prologue does not need regenerating
 ///
 /// It is easy to assume this needs a fresh `UPDATE_PROLOGUE` generated from the 1.17 image, since
 /// the existing one is assembled and pin-checked against `eldenring-deobf.bin` (1.16.2). It does
 /// not. The function's opening is byte-identical in both builds --
 /// `40 53 48 83 ec 30 0f 29 74 24 20` (`push rbx; sub rsp,0x30; movaps [rsp+0x20],xmm6`) -- and
-/// the pin the generator asserts is the first eight of those. What is missing is the ADDRESS, and
+/// the pin the generator asserts is the first eight of those. What is missing is the address, and
 /// only the address.
 ///
 /// The 1.17 counterpart is `0x8c5960` (`+0x11a0`), derived four ways and each one independent:
@@ -92,14 +92,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// * the `.pdata` run around it has the same five consecutive record sizes in both images
 ///   (`0x6a, 0x34, 0x6, 0x5b, 0x3e`), and the whole-image map already pairs the four neighbours:
 ///   `0x8c4710 -> 0x8c58b0`, `0x8c4780 -> 0x8c5920`, `0x8c47c6 -> 0x8c5966`,
-///   `0x8c4821 -> 0x8c59c1`. This one record sits BETWEEN two mapped ones and ends exactly where
+///   `0x8c4821 -> 0x8c59c1`. This one record sits between two mapped ones and ends exactly where
 ///   the next begins, in both images, so its own pair is fixed arithmetically;
 /// * the call at `+0x11` targets `0x7459d0` in 1.16.2 and `0x746820` in 1.17, which the map
 ///   already carries as a pair;
 /// * the `CSMenuMan` global it reads moves `0x3d6b7b0 -> 0x3d6f820`, the documented `+0x4070`
 ///   `.data` shift.
 ///
-/// The mapper missed it because the record is SIX BYTES -- an MSVC chained-unwind prologue record,
+/// The mapper missed it because the record is six bytes -- an MSVC chained-unwind prologue record,
 /// which has no body to build a masked signature from. That is a property of this function's
 /// unwind encoding, not a gap in the evidence.
 ///
@@ -117,7 +117,7 @@ include!(concat!(env!("OUT_DIR"), "/generated_announce_prologues.rs"));
 pub const MSG_OFFSET: usize = 0x0b10;
 /// `AnnounceMessage +0x08` — a raw `wchar_t*` the display step prefers over the embedded string.
 ///
-/// This is THE text field for our purposes. The dump types it as a bare `ulonglong`, but the
+/// This is the text field for our purposes. The dump types it as a bare `ulonglong`, but the
 /// `Load` case dereferences it as the string and only falls back to `+0x10` when it is null.
 pub const MSG_TEXT_POINTER_OFFSET: usize = 0x08;
 /// `AnnounceMessage::text`, a `DLString<wchar_t>` inside that message.
@@ -126,7 +126,7 @@ pub const MSG_TEXT_POINTER_OFFSET: usize = 0x08;
 /// writes it: on the view's embedded message it is a zeroed string with a null allocator, which is
 /// exactly why writing it produced an empty banner.
 pub const MSG_TEXT_OFFSET: usize = 0x10;
-/// `announcePlayState`, written as a BYTE by the game (`movb $0x1`), not as the enum's full width.
+/// `announcePlayState`, written as a byte by the game (`movb $0x1`), not as the enum's full width.
 pub const PLAY_STATE_OFFSET: usize = 0x0b50;
 
 /// `FeSystemAnnounceView +0xb64` — how far the loaded text OVERFLOWS its field, in pixels.
@@ -135,15 +135,15 @@ pub const PLAY_STATE_OFFSET: usize = 0x0b50;
 ///
 /// The `Load` case stores `FUN_14074a140`'s result here and the `Scrolling` case advances a scroll
 /// offset toward it, which is what makes it a real measurement rather than a status code. It was
-/// first taken for the text's WIDTH. It is not: `FUN_140d82660` returns
-/// `textWidth - (fieldRight - fieldLeft)`, i.e. the OVERFLOW, and a live read proved it —
+/// first taken for the text's width. It is not: `FUN_140d82660` returns
+/// `textWidth - (fieldRight - fieldLeft)`, i.e. the overflow, and a live read proved it —
 /// "Rejected Castle Front (elsewhere)" measured **-1418** on a 1728 px field, so the text itself is
 /// 310 px wide and the value is negative whenever the line comfortably fits.
 ///
-/// That correction matters, because the first version of this oracle tested `!= 0` and would NOT
-/// have caught the bug it was written for: an EMPTY string does not measure zero, it measures
+/// That correction matters, because the first version of this oracle tested `!= 0` and would not
+/// have caught the bug it was written for: an empty string does not measure zero, it measures
 /// `-fieldWidth`. Zero is returned only when the GFx object is not a live text field at all. So the
-/// text's own width has to be reconstructed by adding the field width back, and THAT is what must
+/// text's own width has to be reconstructed by adding the field width back, and that is what must
 /// be positive.
 pub const TEXT_OVERFLOW_OFFSET: usize = 0x0b64;
 
@@ -153,8 +153,8 @@ pub const NOTICE_FIELD_WIDTH_PX: i32 = er_gfx::announce_notice::NOTICE_FIELD_WID
 /// the width: a wide string that does not scroll is a different bug from one that measures zero.
 pub const TEXT_NEEDS_SCROLL_OFFSET: usize = 0x0b5c;
 
-/// Frames to wait before measuring. The `Load` case runs on the NEXT `Update` after the play state
-/// is armed, so a same-frame read would measure the PREVIOUS notice and call a broken one healthy.
+/// Frames to wait before measuring. The `Load` case runs on the next `Update` after the play state
+/// is armed, so a same-frame read would measure the previous notice and call a broken one healthy.
 /// Three is slack for that one frame, and the value persists until the next `Load`, so reading late
 /// costs nothing while reading early would lie.
 pub const MEASURE_DELAY_FRAMES: usize = 3;
@@ -178,7 +178,7 @@ static REFUSALS: AtomicUsize = AtomicUsize::new(0);
 /// Frames left before the pending notice is measured; 0 means nothing is waiting.
 #[cfg(windows)]
 static MEASURE_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
-/// Notices whose text measured a width of ZERO -- i.e. drew an empty banner.
+/// Notices whose text measured a width of zero -- i.e. drew an empty banner.
 #[cfg(windows)]
 static MEASURED_EMPTY: AtomicUsize = AtomicUsize::new(0);
 /// Notices whose text measured a non-zero width.
@@ -279,21 +279,21 @@ pub fn tally() -> (usize, usize) {
     (0, 0)
 }
 
-/// Resolve a game function FOR THE RUNNING BUILD and confirm its opening bytes before handing
+/// Resolve a game function for the running build and confirm its opening bytes before handing
 /// back a pointer.
 ///
 /// # The order matters, and it used to be wrong
 ///
-/// This computed `base + rva` and byte-checked THERE. On 1.17 that address is not the function --
+/// This computed `base + rva` and byte-checked there. On 1.17 that address is not the function --
 /// `0x1408c47c0` holds `and $0x38,%al`, the tail of an unrelated instruction -- so the check
 /// failed and `install` returned `false` having logged nothing at all. The refusal was correct
 /// and completely invisible: the byte check is what kept it from being a corruption, but nothing
 /// downstream ever ran, so `er-hook`'s own `HOOK REFUSED` line never got the chance to appear.
-/// Worse, checking before resolving meant that even a CORRECT map row could not rescue it -- the
+/// Worse, checking before resolving meant that even a correct map row could not rescue it -- the
 /// stale bytes decide first.
 ///
 /// Resolving first and checking at the resolved address makes the two claims independent: the
-/// resolver says WHERE the function is on this build, and the prologue says the code there really
+/// resolver says where the function is on this build, and the prologue says the code there really
 /// is that function. The byte check is not redundant with the resolver -- it is the belt to its
 /// braces, and the pattern `apply_splash_skip` established (a signature check turns a stale
 /// address into a refusal rather than a corruption).
@@ -301,7 +301,7 @@ pub fn tally() -> (usize, usize) {
 /// `resolve_detour_address`, not the call resolver: the address is about to carry a MinHook
 /// detour. `er_hook::register_union_hook` resolves again internally, which is harmless -- the
 /// resolver's `already_translated` shortcut hands a 1.17 destination straight back.
-/// How many times a refusal here may be logged. `install` runs EVERY tick and clears its own
+/// How many times a refusal here may be logged. `install` runs every tick and clears its own
 /// latch on failure, so an unbounded line would be one per frame forever -- the 339,764-refusal
 /// failure `scripts/check-no-rva-zero.py` exists to stop. Twice is enough to be found.
 #[cfg(windows)]
@@ -334,19 +334,19 @@ fn verified_fn(rva: usize, prologue: &[u8], what: &str) -> Option<usize> {
             return None;
         }
     }
-    // THE UNRESOLVED ADDRESS, deliberately. The prologue was checked at `address`, but
-    // `register_union_hook` resolves what it is given, and it must be the ONE resolve that places
+    // The unresolved address, deliberately. The prologue was checked at `address`, but
+    // `register_union_hook` resolves what it is given, and it must be the one resolve that places
     // the detour. Handing it `address` would resolve a second time -- normally a no-op, but on an
     // address that is both a 1.17 destination and some other row's 1.16.2 source it silently
     // returns a third, unrelated function (measured on three live detours, 2026-08-30). Resolving
-    // the same 1.16.2 input twice is fine; resolving the OUTPUT is the bug.
+    // the same 1.16.2 input twice is fine; resolving the output is the bug.
     // `scripts/check-double-resolved-hook-targets.py` gates the shape.
     Some(base + rva)
 }
 
 /// Learn the live view and get out of the way.
 ///
-/// Deliberately does NOT inject from here. Update runs every frame; doing work inside it would put
+/// Deliberately does not inject from here. Update runs every frame; doing work inside it would put
 /// our cost on the frame budget and, worse, would mean writing the message from inside the very
 /// function that reads it. Capturing the pointer and writing later from the rejection path keeps
 /// the two apart, and both run on the game thread so there is no race to synchronise.
@@ -417,7 +417,7 @@ pub unsafe fn show(text: &str) -> bool {
         return false;
     }
     // NUL-terminated: the display step is handed a bare pointer with no length beside it, so the
-    // terminator is the ONLY thing that ends the string. Without it the widget reads whatever
+    // terminator is the only thing that ends the string. Without it the widget reads whatever
     // follows in the heap.
     units.push(0);
     // Leaked deliberately -- see the module docs. The game stores this pointer and reads it for the
@@ -427,7 +427,7 @@ pub unsafe fn show(text: &str) -> bool {
 
     let message = view + MSG_OFFSET;
     unsafe {
-        // The pointer FIRST, then is_active. Update tests is_active to decide whether to pop a
+        // The pointer first, then is_active. Update tests is_active to decide whether to pop a
         // queued message over the top of ours, and the display step reads the pointer only once
         // is_active is set -- so publishing the text before arming it is what keeps a frame
         // boundary from finding an armed message with no string.
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(MSG_TEXT_POINTER_OFFSET, 0x08, "the raw wchar_t* text field");
         assert_eq!(MSG_TEXT_OFFSET, 0x10, "DLString inside AnnounceMessage");
         assert_eq!(PLAY_STATE_OFFSET, 0x0b50, "announcePlayState");
-        // The two text fields must not overlap, and the pointer must come first -- that ORDER is
+        // The two text fields must not overlap, and the pointer must come first -- that order is
         // the whole reason the pointer works: the display step reads `+0x08` and only consults the
         // DLString at `+0x10` when it is null.
         const {
@@ -489,7 +489,7 @@ mod tests {
         // is_active sits at the message's own offset 0, which is why the write target is the
         // message base rather than the message plus something.
         //
-        // EXACTLY adjacent, not merely non-overlapping: AnnounceMessage is 64 bytes, so the play
+        // Exactly adjacent, not merely non-overlapping: AnnounceMessage is 64 bytes, so the play
         // state begins the instant the message ends. Asserting the exact relationship catches a
         // drifted offset that a `>` would wave through -- and a wrong play-state offset writes a 1
         // into whatever field actually lives there.
@@ -500,7 +500,7 @@ mod tests {
         );
     }
 
-    /// The measurement offsets, and the ORDER that makes them a state rather than two constants.
+    /// The measurement offsets, and the order that makes them a state rather than two constants.
     ///
     /// Both are written by the same `Load` case, immediately after the text is handed to the
     /// widget, and both live past `announcePlayState` in the view -- so a drifted `PLAY_STATE`
@@ -521,7 +521,7 @@ mod tests {
                 "the scroll flag must not overlap the width"
             )
         };
-        // Measuring on the same frame reads the PREVIOUS notice's width, which would report a
+        // Measuring on the same frame reads the previous notice's width, which would report a
         // broken banner as healthy -- the exact false-negative this oracle exists to prevent.
         const {
             assert!(
@@ -538,10 +538,10 @@ mod tests {
         assert!(UPDATE_PROLOGUE.len() >= 8);
     }
 
-    /// THE BUG THIS MODULE SHIPPED ONCE: a banner with no text on it.
+    /// The bug this module shipped ONCE: a banner with no text on it.
     ///
-    /// `DLString::assign` cannot populate the view's EMBEDDED message, because that message is only
-    /// ever initialised when the GAME announces something -- until then its allocator is null and
+    /// `DLString::assign` cannot populate the view's embedded message, because that message is only
+    /// ever initialised when the game announces something -- until then its allocator is null and
     /// its capacity is zero, so `assign` copies nothing, the display step's null-check falls
     /// through to the zeroed inline buffer, and the surface draws an empty line while every counter
     /// reports success. Writing the raw pointer needs none of that machinery.
@@ -569,16 +569,16 @@ mod tests {
         );
     }
 
-    /// THE POINT OF THE REWRITE. Nothing here may reach for the modal path: `showPopupMenu` is a
-    /// popup MENU, it blocks on an OK button, and shipping it once already cost the user a dialog
+    /// The point of the rewrite. Nothing here may reach for the modal path: `showPopupMenu` is a
+    /// popup menu, it blocks on an OK button, and shipping it once already cost the user a dialog
     /// per rejection plus a stalled Seamless session.
     #[test]
     fn this_module_never_touches_the_modal_path() {
-        // ONLY THE PRODUCT CODE, and only its non-comment lines. Both exclusions are load-bearing
+        // Only the product code, and only its non-comment lines. Both exclusions are load-bearing
         // and both were learned the hard way. The doc comments name `showPopupMenu` to explain what
         // this module replaces, and the banned list below is itself source text containing every
         // banned token -- so a naive scan of the whole file matches its own checker and fails
-        // eternally. The mirror of that mistake (prose SATISFYING a required-token check) shipped a
+        // eternally. The mirror of that mistake (prose satisfying a required-token check) shipped a
         // gate that could not fail earlier the same day.
         let source = include_str!("announce.rs");
         let product = source
@@ -598,7 +598,7 @@ mod tests {
         }
     }
 
-    /// The cap is a DISPLAY bound, not a buffer one -- `assign` grows the string itself. It exists
+    /// The cap is a display bound, not a buffer one -- `assign` grows the string itself. It exists
     /// so a long message cannot scroll for the rest of the session.
     #[test]
     fn the_length_cap_is_sane_for_a_scrolling_line() {

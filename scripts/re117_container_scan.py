@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Scan a flat ER image for the ChrIns->moduleContainer->module idiom.
 
-Finds `mov r64, [rX + 0x190]` and, when the very next instruction dereferences the SAME
+Finds `mov r64, [rX + 0x190]` and, when the very next instruction dereferences the same
 destination register with a displacement, records that displacement. The histogram of
-displacements IS the observed ChrInsModuleContainer layout for that build.
+displacements is the observed ChrInsModuleContainer layout for that build.
 """
 import sys, os, collections
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64, x86_const

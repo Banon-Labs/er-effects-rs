@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Lightweight, bounded recovery monitor. Polls /proc/loadavg and swap free until the system has
 # clearly recovered from the swap-thrash hang (so we never relaunch the game on a starved machine
-# and contaminate the run). Exits READY when healthy, TIMEOUT if it never settles. No game, no Ghidra.
+# and contaminate the run). Exits ready when healthy, timeout if it never settles. No game, no Ghidra.
 set -euo pipefail
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-900}"
 LOAD_THRESHOLD="${LOAD_THRESHOLD:-5.0}"        # 1-min load average must drop below this

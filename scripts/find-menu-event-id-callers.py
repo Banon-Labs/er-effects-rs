@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Find which menu-event ids a build actually feeds to the CSMenuManImp keystate lookup.
 
-WHY THIS EXISTS. `getShownMenuFlags` is the function this repo cites as proof that
+Why this exists. `getShownMenuFlags` is the function this repo cites as proof that
 `inputmgr+0x90[event_id] & 1` is the menu-input surface, and it is -- but it reads only the ids it
 needs for the "shown menu flags" word. Measured 2026-09-05, that set contains Confirm 0x3d and the
-tab pair 0x30/0x31 and does NOT contain MoveUp 0x45 or MoveDown 0x00, so the two ids the harness's
+tab pair 0x30/0x31 and does not contain MoveUp 0x45 or MoveDown 0x00, so the two ids the harness's
 menu navigation depends on had no evidence behind them on either build. Directional nav is consumed
 somewhere else, and "somewhere else" is what this finds.
 
-HOW. Every id reaches the keystate lookup through a tiny identity helper -- 1.16.2 `FUN_140767df0`,
+How. Every id reaches the keystate lookup through a tiny identity helper -- 1.16.2 `FUN_140767df0`,
 1.17 `FUN_140768c70`, both literally `*param_1 = param_2; return param_1;` -- called as
 `helper(&local, <id>)`. So each id appears as an immediate in the register that carries the second
 argument, in the instructions immediately before the call. Scanning for direct `e8` calls to that

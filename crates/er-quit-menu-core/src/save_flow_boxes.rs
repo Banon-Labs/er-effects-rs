@@ -6,7 +6,7 @@ use er_telemetry_core::counters::SAVE_FLOW_BOX_COUNT;
 
 /// No confirm box (also the `SAVE_FLOW_BOX_EXPECTED` "not expecting a build" sentinel).
 pub const SAVE_FLOW_BOX_NONE: usize = 0;
-/// "Are you sure you want to overwrite this file?" -- the flow's ONLY confirm, asked about a
+/// "Are you sure you want to overwrite this file?" -- the flow's only confirm, asked about a
 /// destination that already exists.
 pub const SAVE_FLOW_BOX_OVERWRITE_FILE: usize = 1;
 
@@ -31,7 +31,7 @@ pub enum SaveFlowDecision {
 pub const SAVE_FLOW_PROMPT_CAPACITY: usize = 64;
 
 /// Widen an ASCII prompt into a NUL-terminated fixed-capacity UTF-16 buffer at compile time.
-/// `CS::MenuString` stores the RAW pointer, so every prompt must be a process-lifetime static.
+/// `CS::MenuString` stores the raw pointer, so every prompt must be a process-lifetime static.
 pub const fn save_flow_prompt(text: &[u8]) -> [u16; SAVE_FLOW_PROMPT_CAPACITY] {
     let mut out = [0_u16; SAVE_FLOW_PROMPT_CAPACITY];
     let mut idx = 0;
@@ -46,7 +46,7 @@ pub static SAVE_FLOW_OVERWRITE_PROMPT_W: [u16; SAVE_FLOW_PROMPT_CAPACITY] =
     save_flow_prompt(b"Are you sure you want to overwrite this file?");
 
 /// The Yes descriptor's internal label `L"\u{6c7a}\u{5b9a}"` ("kettei"/decide). This is an
-/// INTERNAL key the adder `_wcsicmp`s against the builder's default-label slot, not display
+/// internal key the adder `_wcsicmp`s against the builder's default-label slot, not display
 /// text (the visible label comes from the localized Yes adder), and it is byte-identical to
 /// the literal every native Yes/No confirm passes.
 pub static SAVE_FLOW_YES_DESC_LABEL_W: [u16; 3] = [0x6c7a, 0x5b9a, 0];
@@ -99,7 +99,7 @@ pub fn save_flow_box_prompt(box_id: usize) -> Option<&'static [u16; SAVE_FLOW_PR
     }
 }
 
-/// Add order per box. `default_last` makes the LAST entry the default choice.
+/// Add order per box. `default_last` makes the last entry the default choice.
 pub fn save_flow_box_add_order(box_id: usize) -> Option<&'static [SaveFlowButton]> {
     // Default No: refuse unless the user actively chooses to write over an existing file.
     const DEFAULT_NO: &[SaveFlowButton] = &[SaveFlowButton::Yes, SaveFlowButton::No];

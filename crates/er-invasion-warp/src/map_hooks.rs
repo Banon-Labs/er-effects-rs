@@ -3,36 +3,36 @@
 //! # Where the rest of it lives
 //!
 //! Two child modules came out of this file on 2026-08-30, when it stood 29 lines under the
-//! 3200-line FAIL threshold in `scripts/check-rust-file-sizes.py` with more than one writer still
+//! 3200-line fail threshold in `scripts/check-rust-file-sizes.py` with more than one writer still
 //! appending to it. Both are children rather than siblings so that nothing had to be made more
 //! public than it was:
 //!
-//! * [`install`] -- where the three detours go and whether they may go there. Installed ONCE,
-//!   from the game task thread, and the three installs are INDEPENDENT of each other.
+//! * [`install`] -- where the three detours go and whether they may go there. Installed once,
+//!   from the game task thread, and the three installs are independent of each other.
 //! * [`msb_catalog`] -- the two session-lifetime caches (MSB invasion points, block -> place
 //!   names). No detour of any kind; the injection and the local-invasion filter both read them.
 //!
-//! What stays here is what runs INSIDE a detour: the ctor handler, the row-filter handler, the
+//! What stays here is what runs inside a detour: the ctor handler, the row-filter handler, the
 //! injection they drive, and the row/list layout those three agree on.
 //!
 //! # The injection, and why it is gated the way it is
 //!
 //! The seam is the `CS::WorldMapViewModel` constructor: the pin-row list at `+0x2d8` is populated
 //! there and nowhere else. Appending anywhere else is unsafe -- `CS::WorldMapWarpData+0x08` holds
-//! RAW pointers into this buffer, and the reserve relocates it, so a later append dangles every
+//! raw pointers into this buffer, and the reserve relocates it, so a later append dangles every
 //! live dialog row pointer. At the ctor epilogue no dialog exists yet.
 //!
-//! **The ViewModel is NOT built once per session.** The RE said it was, and a first run appeared
+//! **The ViewModel is not built once per session.** The RE said it was, and a first run appeared
 //! to confirm it (`ctor #1`). A later run measured `ctor #1 this=0x2d41be80` followed by
 //! `ctor #2 this=0x8400a580` -- a second, different instance, with its own freshly-built
 //! 420-row list, and that second one got nothing. That single log is both reported symptoms at
 //! once: the markers vanish when the map is reopened, and views other than the first are bare.
 //!
-//! So injection runs on EVERY constructor call and remembers nothing between them. The ctor
+//! So injection runs on every constructor call and remembers nothing between them. The ctor
 //! builds a fresh list each time, which makes re-injection the correct behaviour rather than a
 //! hazard, and makes bookkeeping the only thing that can be wrong -- as it twice was, first as a
 //! process-wide flag and then as a `this`-pointer table that a recycled menu-heap address
-//! defeats. What IS shared is the catalog-derived registry and the synthetic param rows, built
+//! defeats. What is shared is the catalog-derived registry and the synthetic param rows, built
 //! once: a pin does not own its param row, and rebuilding them per open would both leak and drag
 //! a 7073-point catalog walk into the frame where the player opens the map.
 //!
@@ -57,11 +57,11 @@
 //!
 //! # Hooking rules this module obeys
 //!
-//! * Every detour goes through the `er_hook` UNION, never a bare `MhHook`. Two MinHook instances
+//! * Every detour goes through the `er_hook` union, never a bare `MhHook`. Two MinHook instances
 //!   patching one prologue corrupt each other's trampolines, and `er_quickload.dll` may be
 //!   loaded alongside this DLL.
 //! * Nothing is patched until [`crate::map_seams::verify_seam`] has re-read the live prologue.
-//! * A handler that finds no trampoline does NOT invent a return value -- see
+//! * A handler that finds no trampoline does not invent a return value -- see
 //!   [`worldmap_viewmodel_ctor_hook`].
 //!
 //! # Open hazard
@@ -72,7 +72,7 @@
 //! back coherent, the world loaded) -- most likely because the ctor takes <= 4 register args and
 //! builds its own frame with `sub rsp, 0x170`, leaving a shifted-but-self-consistent anchor. One
 //! success is not proof. If a fifth stack argument or a caller-frame-relative read is ever found
-//! in this ctor, the CALL form breaks and this must become a JMP-entry trampoline.
+//! in this ctor, the call form breaks and this must become a JMP-entry trampoline.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -81,7 +81,7 @@ use er_game_base::fnv1a::{fnv1a64, fnv1a64_mix};
 
 use crate::map_seams::WORLDMAP_VIEWMODEL_CTOR;
 // `verify_seam` reads live process memory, so it only exists on the game target. The import has
-// to be gated with it: an ungated `use` of a `cfg(windows)` item fails the HOST build outright,
+// to be gated with it: an ungated `use` of a `cfg(windows)` item fails the host build outright,
 // which took this crate's unit tests -- the pin-list geometry and span-table checks that need no
 // game at all -- out of reach on Linux.
 #[cfg(windows)]
@@ -90,7 +90,7 @@ use crate::map_seams::verify_seam;
 mod install;
 mod msb_catalog;
 
-// The two extracted modules are CHILDREN, not siblings, so nothing here had to change visibility
+// The two extracted modules are children, not siblings, so nothing here had to change visibility
 // to be reachable from them -- a child sees its parent's private items. Only the reverse needs
 // spelling out, which is what these re-exports are. Every path a caller outside this module used
 // before the split still resolves: `crate::map_hooks::msb_coverage`, `::install_map_observers`,
@@ -114,7 +114,7 @@ pub const PIN_LIST_ALLOCATOR_OFFSET: usize = 0x2e0;
 pub const PIN_LIST_BEGIN_OFFSET: usize = 0x2e8;
 /// `+0x2f0` -- one past the last row.
 pub const PIN_LIST_END_OFFSET: usize = 0x2f0;
-/// `+0x2f8` -- one past the last ALLOCATED row.
+/// `+0x2f8` -- one past the last allocated row.
 pub const PIN_LIST_CAPACITY_OFFSET: usize = 0x2f8;
 /// `CS::WorldMapWarpPinData` stride. `(end - begin)` must divide by this or the layout is wrong.
 pub const PIN_ROW_STRIDE: usize = 0x350;
@@ -124,18 +124,18 @@ static ORIG_WORLDMAP_VIEWMODEL_CTOR: AtomicUsize = AtomicUsize::new(0);
 
 /// How many times the ctor hook has fired. Measured >1 in practice, which refuted the original
 /// "once per session" assumption -- but the replacement "once per map view" was wrong too. The
-/// static call graph pins it: one ViewModel per WORLD ENTRY, destroyed with `MoveMapStep`. So a
-/// value above 1 counts MAP MOVES, not layer toggles or map opens.
+/// static call graph pins it: one ViewModel per world entry, destroyed with `MoveMapStep`. So a
+/// value above 1 counts map moves, not layer toggles or map opens.
 static VIEWMODEL_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 /// The ViewModel the last injection wrote into. Exactly one is ever alive.
 ///
-/// Kept only to recognise the object the recorded span belongs to. It is NEVER the authority --
+/// Kept only to recognise the object the recorded span belongs to. It is never the authority --
 /// see [`authoritative_view_model`], which reads the engine's own slot.
 pub(crate) static LIVE_VIEW_MODEL: AtomicUsize = AtomicUsize::new(0);
 
 /// `CSPopupMenu+0x250` -- `CS::WorldMapViewModel*`, the engine's single authoritative slot.
 ///
-/// Allocated by `FUN_1407ed840` only when this field is NULL, and freed AND NULLED by
+/// Allocated by `FUN_1407ed840` only when this field is NULL, and freed and NULLED by
 /// `FUN_1407ed790` from `~MoveMapStep`. So reading it live cannot return a destroyed ViewModel,
 /// which a stored pointer very much can: MenuHeap recycles a freed 0x450 block at the same size
 /// class, and its pages stay mapped, so no amount of fault-tolerant reading detects the swap.
@@ -146,7 +146,7 @@ pub const POPUP_MENU_WORLD_MAP_VIEW_MODEL_OFFSET: usize = 0x250;
 ///
 /// `FUN_140886750(viewModel, dialog)` is a compare-and-clear on this field and is called from the
 /// dialog's destructor, so the slot is the engine's own "is the map open" answer. Reading it needs
-/// no hook of ours, which matters: the obvious place to hook (`FUN_1409cef10`) takes SEVEN
+/// no hook of ours, which matters: the obvious place to hook (`FUN_1409cef10`) takes seven
 /// arguments, and the union dispatcher forwards four.
 pub const VIEW_MODEL_ATTACHED_DIALOG_OFFSET: usize = 0x08;
 
@@ -185,11 +185,11 @@ pub(crate) fn authoritative_view_model() -> Option<usize> {
 /// exactly while no world-map dialog object is alive -- opening the map, not entering the world, is
 /// what closes this gate.
 ///
-/// # It fails CLOSED, and the first version did not
+/// # It fails closed, and the first version did not
 ///
 /// An unreadable slot returns `true`. Reading it with `is_some_and` instead reported an unreadable
 /// slot as "no dialog attached" and let the caller write rows -- inverted, because a read that
-/// fails is the case where it is LEAST known whether a dialog is holding raw row pointers into the
+/// fails is the case where it is least known whether a dialog is holding raw row pointers into the
 /// buffer about to be retargeted. The `cfg(not(windows))` stub below has always returned `true`;
 /// this is the Windows path agreeing with it.
 #[cfg(windows)]
@@ -209,7 +209,7 @@ pub(crate) static LIVE_RESTYLE_SIGNATURE: AtomicUsize = AtomicUsize::new(usize::
 static OBSERVED_ROW_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Set when `(end - begin)` did not divide by [`PIN_ROW_STRIDE`] -- i.e. the list is not the
-/// shape the RE describes and NOTHING should be appended to it.
+/// shape the RE describes and nothing should be appended to it.
 static ROW_STRIDE_MISMATCH: AtomicUsize = AtomicUsize::new(0);
 
 /// A read-back of the pin-row list, as observed on the game thread.
@@ -283,7 +283,7 @@ pub unsafe fn read_pin_list(view_model: usize) -> Option<PinListGeometry> {
     })
 }
 
-/// `viewModel + 0x2E0` -- the `Vector*` every list helper takes. NOT `+0x2d8`.
+/// `viewModel + 0x2E0` -- the `Vector*` every list helper takes. Not `+0x2d8`.
 pub const PIN_VECTOR_OFFSET: usize = 0x2e0;
 /// Within the vector: `begin` at `+0x08`, `end` at `+0x10`, `capacity` at `+0x18`.
 pub const VECTOR_END_OFFSET: usize = 0x10;
@@ -300,16 +300,16 @@ pub const ROW_ENTITY_ID_OFFSET: usize = 0x50;
 /// Row field `+0x248` -- the icon id (a GFx frame number), copied from param `+0x1C` when the row
 /// is built.
 ///
-/// Writing it on a LIVE row is the only way to change a pin that already exists. Rebuilding is not
-/// available: measured 2026-08-05, closing and reopening the world map does NOT re-run the
+/// Writing it on a live row is the only way to change a pin that already exists. Rebuilding is not
+/// available: measured 2026-08-05, closing and reopening the world map does not re-run the
 /// ViewModel constructor (`opens=2` with no `ctor #3`), so the pin list outlives every open. The
-/// ctor fires on a WORLD ENTRY (travel / area transition) -- not on open, and not on a layer switch.
+/// ctor fires on a world entry (travel / area transition) -- not on open, and not on a layer switch.
 ///
-/// THIS IS ONE OF FOUR, AND WRITING ONLY IT IS WHY THE MAP DID NOT CHANGE. See
+/// This is one of four, and writing only it is why the map did not change. See
 /// [`ROW_ICON_DESCRIPTOR_OFFSETS`].
 pub const ROW_ICON_ID_OFFSET: usize = 0x248;
 
-/// Every icon descriptor a pin row carries. The drawn frame is the first DWORD of ONE of them, and
+/// Every icon descriptor a pin row carries. The drawn frame is the first DWORD of one of them, and
 /// the engine — not us — decides which.
 ///
 /// `CS::WorldMapWarpPinData` (vftable `0x142ad8228`, `sizeof == 0x350`, which is the row stride)
@@ -324,7 +324,7 @@ pub const ROW_ICON_ID_OFFSET: usize = 0x248;
 /// | `0x308` | `altForbiddenIconId`    |
 ///
 /// `CS::WorldMapPinData::SetTo` (`0x14087ae20`) does not read any of them directly. It calls vtable
-/// slot `0xc` — `0x14088bb60` for this class — which returns an INTERIOR POINTER to whichever
+/// slot `0xc` — `0x14088bb60` for this class — which returns an interior pointer to whichever
 /// descriptor applies, and the drawn frame is that descriptor's first dword. The selection is:
 ///
 /// ```text
@@ -335,7 +335,7 @@ pub const ROW_ICON_ID_OFFSET: usize = 0x248;
 ///
 /// `FUN_140d25b30` walks slots 0..7 of the row's `BonfireWarpParam*` (`+0x240`), checking an event
 /// flag id at `param+0x30/0x3c/0x48/0x54/0x60/0x6c/0x78/0x84` and returning 1 when the matching
-/// byte at `param+0x90+i` is 1. Our synthetic param rows do not model those fields, so WHICH
+/// byte at `param+0x90+i` is 1. Our synthetic param rows do not model those fields, so which
 /// descriptor the engine reads from is not something this DLL controls.
 ///
 /// So every icon write goes to all four. A row we injected should show our marker whatever the
@@ -365,7 +365,7 @@ pub(crate) unsafe fn write_row_icon(row: usize, icon: u16) {
     }
 }
 
-/// The icon the engine would draw from the NORMAL descriptor, as a full dword.
+/// The icon the engine would draw from the normal descriptor, as a full dword.
 ///
 /// Read back as `u32` to match the write. A `u16` read cannot tell a correctly-written row from one
 /// whose upper half is stale, which would make the "did this stick?" comparison lie.
@@ -380,13 +380,13 @@ pub(crate) unsafe fn read_row_icon(row: usize) -> Option<u32> {
     unsafe { er_game_base::mem::safe_read_i32(row + ROW_ICON_ID_OFFSET) }
         .map(|value| value.cast_unsigned())
 }
-/// Row field `+0x60` -- the MAP-LAYER visibility bitmask (bit 0 Lands Between, 1 underground,
+/// Row field `+0x60` -- the map-layer visibility bitmask (bit 0 Lands Between, 1 underground,
 /// 2 Shadow Lands). `UpdateVisible` clears the draw flag unless the active layer's bit is set, so
 /// zero here is an invisible row on every layer.
 pub const ROW_LAYER_MASK_OFFSET: usize = 0x60;
 /// Row field `+0x08` -- `CS::WorldMapPinDataBase`'s per-row id.
 ///
-/// Assigned from a global counter by the base constructor, but COPIED by the copy-ctor, which
+/// Assigned from a global counter by the base constructor, but copied by the copy-ctor, which
 /// is how every injected row ends up sharing one value unless it is stamped. The marker draw
 /// treats it as a change-detection token, not as an identity: see the stamp in [`inject_pins`].
 pub const ROW_ID_OFFSET: usize = 0x08;
@@ -394,7 +394,7 @@ pub const ROW_ID_OFFSET: usize = 0x08;
 ///
 /// Chosen far above the engine's own counter, which starts at 0 and increments per constructed
 /// pin (a map holds a few hundred), so an injected row's id can never alias a shipped one. It is
-/// deliberately NOT `-1`: the engine treats `-1` as its counter's wrap sentinel.
+/// deliberately not `-1`: the engine treats `-1` as its counter's wrap sentinel.
 pub const INJECTED_ROW_ID_BASE: i32 = 0x4000_0000;
 
 /// `WorldMapCoordinates` -- the 8 bytes a pin renders at (`row+0x10`).
@@ -418,11 +418,11 @@ pub struct BonfireLookupResult {
 #[repr(C, align(8))]
 struct TempPinRow([u8; PIN_ROW_STRIDE]);
 
-/// Fields sampled off a REAL row so synthetic pins behave like shipped ones.
+/// Fields sampled off a real row so synthetic pins behave like shipped ones.
 ///
 /// Sampling beats guessing: the subcategory id decides which tab a row lands in, the category
 /// bits decide whether it survives the caller's mask, and the label text id is re-resolved from
-/// the live param row by vtable `+0x38` -- so a fabricated text id blanks the name LATER even
+/// the live param row by vtable `+0x38` -- so a fabricated text id blanks the name later even
 /// when construction looked right.
 #[derive(Clone, Copy, Debug)]
 struct DonorParamFields {
@@ -442,9 +442,9 @@ const MAX_DONOR_SCAN_ROWS: usize = 128;
 ///
 /// A filter callback is "ours" when the row falls inside any recorded span -- an address test,
 /// which stays correct even though the reserve relocated the buffer, because a span is recorded
-/// AFTER the reserve.
+/// after the reserve.
 ///
-/// A TABLE rather than one pair, because more than one ViewModel is alive at a time and each has
+/// A table rather than one pair, because more than one ViewModel is alive at a time and each has
 /// its own row buffer. With a single pair, the newest injection overwrote the span of every older
 /// live view, so the filter observer stopped recognising that view's rows and under-counted
 /// `ours` -- turning the visibility oracle into a source of false negatives exactly when there is
@@ -494,12 +494,12 @@ fn row_is_ours(row: usize) -> bool {
 
 /// The ViewModel whose rows the last injection appended to, and the exact span it appended.
 ///
-/// ONE SLOT, NOT A TABLE, AND IT CRASHED THE GAME TO LEARN WHY. There is exactly ONE ViewModel
+/// One slot, not a table, and it crashed the game to learn why. There is exactly one ViewModel
 /// alive at a time (`CSPopupMenu+0x250`, built in `STEP_MoveMap_Init`, freed in `~MoveMapStep` --
-/// see [`crate::map_seams::WORLDMAP_VIEWMODEL_CTOR`]). A version of this module walked EVERY
+/// see [`crate::map_seams::WORLDMAP_VIEWMODEL_CTOR`]). A version of this module walked every
 /// recorded span on the belief that several views were live at once; three of the four spans then
 /// pointed into freed MenuHeap, and a live run repainted 456 rows inside memory that had been handed
-/// to something else. Freed heap pages stay MAPPED, so a fault-tolerant read succeeds and returns
+/// to something else. Freed heap pages stay mapped, so a fault-tolerant read succeeds and returns
 /// whatever now lives there -- the read cannot be the safety net.
 pub(crate) static LIVE_LIST_BEGIN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LIVE_SPAN_BEGIN: AtomicUsize = AtomicUsize::new(0);
@@ -508,11 +508,11 @@ pub(crate) static LIVE_SPAN_END: AtomicUsize = AtomicUsize::new(0);
 /// Bounds of the leaked synthetic param-row slab, used as the row-ownership test.
 ///
 /// A row of ours points at a param row inside a single contiguous allocation this module leaked and
-/// never frees. Requiring `row+0x240` to land inside it is a FULL 64-BIT POINTER match against an
+/// never frees. Requiring `row+0x240` to land inside it is a full 64-bit pointer match against an
 /// address only we hand out.
 ///
 /// The previous test -- "is `row+0x08` in `[0x4000_0000, 0x5000_0000)`" -- sounded specific and was
-/// worth about FOUR BITS: it accepts any word whose high byte is `0x40..0x4F`, i.e. roughly one
+/// worth about four BITS: it accepts any word whose high byte is `0x40..0x4F`, i.e. roughly one
 /// garbage word in sixteen. Against ~1500 stale rows that is ~90 false positives per pass, and the
 /// live run produced far more than that. Calling it self-validating did not make it so.
 pub(crate) fn param_slab_bounds() -> Option<(usize, usize)> {
@@ -527,7 +527,7 @@ pub(crate) fn param_slab_bounds() -> Option<(usize, usize)> {
     ))
 }
 
-/// Whether `row` is genuinely one of ours: it points into our param slab AND carries our stamp.
+/// Whether `row` is genuinely one of ours: it points into our param slab and carries our stamp.
 ///
 /// Both, not either. The slab test is what makes it safe; the stamp test is what keeps the index
 /// recoverable.
@@ -549,7 +549,7 @@ pub(crate) fn row_is_verifiably_ours(row: usize, slab: (usize, usize)) -> Option
 /// Whether a `+0x08` id is one this module stamped. Split out so the range rule is testable
 /// without a live row to read.
 ///
-/// NOT an ownership test on its own -- see [`param_slab_bounds`].
+/// Not an ownership test on its own -- see [`param_slab_bounds`].
 pub(crate) const fn id_is_our_stamp(id: i32) -> bool {
     let delta = id.wrapping_sub(INJECTED_ROW_ID_BASE);
     delta >= 0 && delta < STAMP_SPACE
@@ -557,16 +557,16 @@ pub(crate) const fn id_is_our_stamp(id: i32) -> bool {
 
 /// The id to stamp into row `index` for restyle generation `generation`.
 ///
-/// THE GENERATION IS WHAT MAKES A RESTYLE VISIBLE. The marker draw treats `row+0x08` as a
+/// The generation is what makes a RESTYLE visible. The marker draw treats `row+0x08` as a
 /// change-detection token: it rebinds a clip to a row -- and only then re-reads the icon and issues
 /// `GotoAndStop(frame)` -- when its cached id for that sprite slot differs from the row's. So
 /// rewriting `row+0x248` on its own changes a field nothing will look at again, and the clip keeps
 /// drawing the frame it was bound with. That is why marking a location and reopening the map
-/// changed nothing on screen: the icon byte WAS being rewritten, correctly, into a row the renderer
+/// changed nothing on screen: the icon byte was being rewritten, correctly, into a row the renderer
 /// had already finished with.
 ///
 /// Bumping the generation alongside the icon forces the mismatch, so the next draw rebinds and
-/// picks the new frame up. Each row keeps a DISTINCT id within a generation, which the same draw
+/// picks the new frame up. Each row keeps a distinct id within a generation, which the same draw
 /// path requires for a different reason: duplicate ids make it skip the rebind and leave one pin's
 /// icon on another pin's coordinates.
 pub(crate) const fn stamped_row_id(generation: u32, index: usize) -> i32 {
@@ -579,14 +579,14 @@ pub(crate) const fn stamped_row_id(generation: u32, index: usize) -> i32 {
 /// Size of the id space reserved for our stamps: 8 generation bits over 20 index bits.
 const STAMP_SPACE: i32 = 1 << 28;
 
-/// The dormant row span in the CURRENT ViewModel, and the next unclaimed slot within it.
+/// The dormant row span in the current ViewModel, and the next unclaimed slot within it.
 pub(crate) static DORMANT_SPAN_BEGIN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DORMANT_SPAN_END: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DORMANT_NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 
 /// Rows appended beyond the real pin set, held invisible until a later harvest claims one.
 ///
-/// THIS IS THE WHOLE ANSWER TO "WITHOUT A WORLD ENTRY". The pin row vector can only be grown by
+/// This is the whole answer to "WITHOUT A WORLD ENTRY". The pin row vector can only be grown by
 /// `FUN_140888aa0`, which has exactly two call sites, both inside the ViewModel constructor -- and
 /// growing frees the old buffer, dangling every raw row pointer a `CS::WorldMapWarpData` holds.
 /// So there is no safe moment to APPEND later, and 20 independent adversarial reviews of a
@@ -596,8 +596,8 @@ pub(crate) static DORMANT_NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// Instead every row that could ever be needed exists from the constructor, and a later change is a
 /// plain in-place field write to a row that is already there. Nothing moves, so nothing dangles.
 ///
-/// Sized from what a top-up must absorb: only what becomes resident BETWEEN two world entries.
-/// Warping into a dungeon IS a world entry, so the case that needs headroom is the reported one --
+/// Sized from what a top-up must absorb: only what becomes resident between two world entries.
+/// Warping into a dungeon is a world entry, so the case that needs headroom is the reported one --
 /// the constructor runs during the loading screen, before the destination's `MsbResCap`s exist, and
 /// that map's points arrive seconds later. The largest single map is 168 raw points; 512 rows
 /// covers it several times over at 0x350 bytes each, i.e. ~424 KiB of MenuHeap against the
@@ -607,7 +607,7 @@ pub(crate) const DORMANT_ROW_COUNT: usize = 512;
 /// Restyle generation, bumped every time the pin tiers actually change.
 pub(crate) static RESTYLE_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
-/// Filter verdicts for OUR rows: how many were asked about, and how many were accepted.
+/// Filter verdicts for our rows: how many were asked about, and how many were accepted.
 static FILTER_QUERIES_OURS: AtomicUsize = AtomicUsize::new(0);
 static FILTER_PASSES_OURS: AtomicUsize = AtomicUsize::new(0);
 /// Same for the shipped rows, as a control: if the shipped rows also fail, the mask being used
@@ -620,7 +620,7 @@ static FILTER_TRACE_BUDGET: AtomicUsize = AtomicUsize::new(6);
 /// Trampoline to the original row filter.
 static ORIG_ROW_FILTER: AtomicUsize = AtomicUsize::new(0);
 
-/// Pins appended by the MOST RECENT injection.
+/// Pins appended by the most recent injection.
 static PINS_INJECTED: AtomicUsize = AtomicUsize::new(0);
 /// Injections that actually appended at least one pin, for the whole session. Paired with
 /// [`VIEWMODEL_CTOR_HITS`] this is the oracle for "every map open got pins": the two must stay
@@ -634,7 +634,7 @@ static INJECTIONS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
 ///
 /// A pin does not own its param row, so one immutable set serves every view. Building them per
 /// injection would leak a fresh copy of both on every single map open -- and now that injection
-/// runs on EVERY ctor rather than once, that is a per-open leak of ~365 param rows plus a
+/// runs on every ctor rather than once, that is a per-open leak of ~365 param rows plus a
 /// 365-entry registry, which is a slow but real memory bleed for a player who opens the map a
 /// hundred times.
 static SHARED_PARAM_ROWS_PTR: AtomicUsize = AtomicUsize::new(0);
@@ -648,7 +648,7 @@ static CATALOG_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 
 /// A cheap fingerprint of a pin set, used to notice that the loaded spawn table changed.
 ///
-/// It folds every target's block AND its position, because a mod can move a spawn without
+/// It folds every target's block and its position, because a mod can move a spawn without
 /// changing how many there are -- counting alone would call an ersc-rewritten table identical to
 /// the vanilla one and keep serving stale pins. This is not a cryptographic digest and does not
 /// need to be; it needs to change when the data changes.
@@ -668,9 +668,9 @@ fn catalog_signature(registry: &er_invasion_warp_core::map_surface::InvasionRowR
     hash as usize
 }
 
-// There is deliberately NO "already injected" bookkeeping.
+// There is deliberately no "already injected" bookkeeping.
 //
-// (Section rationale for the injection strategy below -- NOT documentation for `sample_donor`.
+// (Section rationale for the injection strategy below -- Not documentation for `sample_donor`.
 // Written as `///` it was silently attached to that function as its doc comment.)
 //
 // Two earlier shapes both failed, and they failed for the same underlying reason:
@@ -683,11 +683,11 @@ fn catalog_signature(registry: &er_invasion_warp_core::map_surface::InvasionRowR
 //   behaviour of a size-bucketed allocator. Under that dedupe, the reopen is silently skipped
 //   and the map is bare, which is precisely the reported symptom.
 //
-// Injection is idempotent-by-construction instead: the ctor builds a FRESH row list every time
+// Injection is idempotent-by-construction instead: the ctor builds a fresh row list every time
 // it runs (measured -- `rows=420` on both observed instances, never 785), so "has this list
 // already got our pins" is answerable from the list itself and the answer is always "no" at the
 // ctor epilogue. Nothing needs to be remembered between calls, so nothing can be remembered
-// WRONG.
+// wrong.
 
 /// Read the donor fields off the first existing row.
 ///
@@ -699,7 +699,7 @@ unsafe fn sample_donor(begin: usize, row_count: usize) -> Option<DonorParamField
         CATEGORY_BITS_MASK, PARAM_CATEGORY_BITS_OFFSET, PARAM_ICON_ID_OFFSET,
         PARAM_LABEL_TEXT_ID_BASE, PARAM_SUBCATEGORY_ID_OFFSET,
     };
-    // SCAN -- do NOT just take row 0. Measured live, the first shipped row has
+    // Scan -- do not just take row 0. Measured live, the first shipped row has
     // `category_bits == 0x0` and `subcategory == 0`, and cloning it produces pins the row
     // filter discards: FUN_14088be50 requires `(row+0x60 & category_mask) != 0`. A donor is
     // only useful if it would itself survive that test.
@@ -790,9 +790,9 @@ pub(crate) unsafe fn project_to_map(
                 &raw const msb_pos,
             )
         } {
-            // `refBlock` sits at converter+0x08; its AREA is byte 3 of the packed BlockId.
+            // `refBlock` sits at converter+0x08; its area is byte 3 of the packed BlockId.
             // Reporting it distinguishes "an area-61 point matched a DLC converter" from "an
-            // area-61 point was accepted by a BASE converter and is now drawn at a meaningless
+            // area-61 point was accepted by a base converter and is now drawn at a meaningless
             // place on the base map" -- the leading hypothesis for the missing DLC pins.
             let converter_area = unsafe { er_game_base::mem::safe_read_u8(converter + 0x0b) };
             return Some((out, index, converter_area.unwrap_or(0)));
@@ -908,7 +908,7 @@ pub(crate) fn layer_bit_for_converter(
         return None;
     }
     let mut layer_id = table[converter_index];
-    // The underground has NO converter of its own. Siofra, Ainsel, Deeproot and Mohgwyn are area
+    // The underground has no converter of its own. Siofra, Ainsel, Deeproot and Mohgwyn are area
     // 12, and they reach map space by having the legacy converter rewrite them into an overworld
     // block, which slot 0 then accepts -- so they arrive here looking like layer 0. The engine
     // corrects that with exactly this test (`FUN_140887870`: `if (mapId == 0 && areaId == 0x0C)
@@ -933,31 +933,31 @@ pub const PARAM_AREA_NO_OFFSET: usize = 0x20;
 
 /// The `PlaceName` text id of the shipped warp row nearest `coords`, or `-1` when there is none.
 ///
-/// Every injected pin previously carried the DONOR row's label, so all 365 read "Godrick the
+/// Every injected pin previously carried the donor row's label, so all 365 read "Godrick the
 /// Grafted" -- the donor is a Site of Grace and its name was copied wholesale. The game has no
 /// block-to-place-name function to ask instead, but it does not need one: 225 of the shipped warp
 /// rows in areas 60/61 carry a valid `PlaceName` text id, and they are already sitting in the
 /// list being appended to, already projected into map space by the engine. Naming a pin after the
 /// nearest one costs a walk over resident memory and no engine calls at all.
 ///
-/// `-1` IS NOT A HARMLESS "NO NAME". A pin whose eight label text ids are ALL negative is not
+/// `-1` is not a harmless "NO NAME". A pin whose eight label text ids are all negative is not
 /// drawn at all: `CS::WorldMapPinData::UpdateVisible` (0x14087afa0) computes the clip's visible
 /// flag at `row+0x0c` as `A && B && C && D`, and for a warp pin `D` reduces to
 /// `FUN_14088bcd0` -- a loop over the 8 labels that returns false unless some
 /// `param+0x30+12i >= 0`. `SetTo` then passes `row+0x0c` straight to the clip. So a nameless pin is
-/// an INVISIBLE pin, and the comment that used to sit here ("only -1 produces an empty label") was
+/// an invisible pin, and the comment that used to sit here ("only -1 produces an empty label") was
 /// describing a label that never gets the chance to be empty.
 ///
 /// This is why legacy dungeons were the family that lost icons. The search below is area-locked,
 /// and a legacy block's area byte is its own (10/11/12/13/15/28/30..39/...), so its candidate pool
 /// is only that area's warpable graces. An area with no grace row carrying label kind 0 and a
-/// positive text id yields `-1` for EVERY pin in EVERY dungeon of that area -- all of them
+/// positive text id yields `-1` for every pin in every dungeon of that area -- all of them
 /// invisible, all of them counted as placed.
 ///
-/// So the area lock is now a PREFERENCE, not a requirement. Its original reason -- keeping a base
+/// So the area lock is now a preference, not a requirement. Its original reason -- keeping a base
 /// pin from borrowing a DLC name whose coordinates live in another frame -- does not apply to a
 /// legacy pin at all: by the time it is projected, `ConvertLegacyDungeonPositionToOverworldPositionForMap`
-/// has already rebased it into the 60/61 overworld frame, so the nearest row in THAT frame is the
+/// has already rebased it into the 60/61 overworld frame, so the nearest row in that frame is the
 /// right neighbour to take a name from. Same area first, then anywhere, then `-1`.
 ///
 /// A fallback id is still never invented: an id that resolves in no FMG renders the literal
@@ -1040,7 +1040,7 @@ pub const fn block_area(block_id: u32) -> u8 {
 
 /// Append the invasion pins to a freshly-constructed ViewModel's row list.
 ///
-/// Runs at the ctor EPILOGUE and nowhere else: `CS::WorldMapWarpData+0x08` holds raw pointers
+/// Runs at the ctor epilogue and nowhere else: `CS::WorldMapWarpData+0x08` holds raw pointers
 /// into this buffer, and the reserve below relocates it. At ctor time no dialog exists, so
 /// nothing can be holding a stale pointer.
 ///
@@ -1139,7 +1139,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     };
 
-    // The catalog is RE-READ on every injection, and the derived registry is rebuilt only when
+    // The catalog is RE-read on every injection, and the derived registry is rebuilt only when
     // the data actually changed.
     //
     // The spawn table is not a constant. Seamless Co-op's `ersc.dll` rewrites the invasion spawn
@@ -1150,7 +1150,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // shows the wrong spawns for the rest of the session, with nothing to indicate it.
     //
     // The leak is avoided by comparing a cheap signature instead of by refusing to look. Only a
-    // genuine change re-leaks, and injection runs per WORLD LOAD (the ViewModel is built in
+    // genuine change re-leaks, and injection runs per world load (the ViewModel is built in
     // `MoveMapStep`), not per frame and not per map open -- so the walk sits inside a load the
     // player is already waiting through.
     let catalog =
@@ -1168,7 +1168,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // Is this the shipped table, or has a mod rewritten it in memory?
     //
     // The count oracle cannot tell: Seamless Co-op modifies invasion locations at runtime, and a
-    // mod that MOVES points without adding or removing any leaves 365 blocks / 7073 points
+    // mod that moves points without adding or removing any leaves 365 blocks / 7073 points
     // looking untouched. This folds every position and yaw into the same canonical form the
     // on-disk containers hash to, so a moved point is visible. It is also the measurement that
     // decides whether on-disk data could ever describe what a player will actually encounter --
@@ -1205,20 +1205,20 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         .targets()
         .to_vec();
     let aip_pins = targets.len();
-    // The two sources OVERLAP. `.aip` is areas 60/61 only, but the MSB harvest reads whatever is
+    // The two sources overlap. `.aip` is areas 60/61 only, but the MSB harvest reads whatever is
     // resident -- which includes the overworld blocks the player is standing in. Both sides emit one
     // representative per block, so an m60 block present in both would stack two markers on the same
     // spot, and the second would be indistinguishable from the first in the UI while carrying a
     // different synthetic entity id. Let the `.aip` table win where it has an entry: it is the
     // table the engine's own auto-invasion path uses for those areas.
     //
-    // THE SUPPRESSION SET IS RESTRICTED TO NON-LEGACY AREAS. It is keyed on BLOCK, but the MSB side
-    // it filters is keyed per POINT for a legacy dungeon -- so one `.aip` entry for a legacy block
+    // The suppression set is restricted to non-legacy areas. It is keyed on block, but the MSB side
+    // it filters is keyed per point for a legacy dungeon -- so one `.aip` entry for a legacy block
     // would delete that entire dungeon's per-point set and leave a single representative behind.
     // That is precisely the "warped into the Haligtree and found one marker where there should have
     // been dozens" defect the granularity fix was written to end, reachable again through the other
     // source. The shipped table is areas 60/61 only, but `collect_invasion_warp_catalog` reads
-    // whatever is LOADED and Seamless Co-op rewrites that table at runtime -- which is why the
+    // whatever is loaded and Seamless Co-op rewrites that table at runtime -- which is why the
     // digest check above exists. Deduping overworld blocks is all this was ever for.
     let aip_blocks: std::collections::BTreeSet<u32> = targets
         .iter()
@@ -1233,7 +1233,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             .filter(|t| !aip_blocks.contains(&t.block.raw())),
     );
     let msb_pins = targets.len() - aip_pins;
-    // A legacy dungeon the player has NEVER ENTERED contributes nothing above: its invasion
+    // A legacy dungeon the player has never entered contributes nothing above: its invasion
     // points are in its MSB, and an MSB is only readable while its map is resident. That used to
     // be the end of it -- no marker for Leyndell, Farum Azula, the Haligtree or any catacomb
     // until the player had physically walked there.
@@ -1242,7 +1242,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // `WorldMapLegacyConverter` tree carries one entry per legacy block with the map-space origin
     // the converter adds to. And a warp to such a block needs no coordinate, because
     // `MoveMapStep` resolves the destination's own spawn after the load. So a block we know
-    // NOTHING about the inside of is still both drawable and reachable.
+    // nothing about the inside of is still both drawable and reachable.
     //
     // These are placed at the block origin, which the engine's own converter turns into the
     // dungeon's centre on the map. They are superseded the moment the real points arrive: the
@@ -1295,14 +1295,14 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
          all, so this is the ONLY source that can mark them)"
     ));
     let fresh = InvasionRowRegistry::from_targets(targets);
-    // The param rows carry a per-location ICON, so the cache that serves them has to notice the
+    // The param rows carry a per-location icon, so the cache that serves them has to notice the
     // user's marks changing -- not just the spawn table.
     //
     // This is the bug that made the map look frozen. `catalog_signature` hashes blocks, point
     // indices and positions; marking a location changes none of those, so the signature matched,
-    // the leaked rows were reused verbatim, and every reopen served icon ids computed at the FIRST
+    // the leaked rows were reused verbatim, and every reopen served icon ids computed at the first
     // injection. Measured live: three marker frames provably installed, four re-injections, zero
-    // visible change. The pin COUNT did change across those runs (467 -> 500 -> 587) precisely
+    // visible change. The pin count did change across those runs (467 -> 500 -> 587) precisely
     // because those were catalog changes, which is what made the cache look like it was working.
     let signature =
         catalog_signature(&fresh) ^ crate::local_invasion_filter::pin_choice_signature();
@@ -1338,9 +1338,9 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     }
 
-    // RESOLVE EVERY NATIVE CALL BEFORE ANY WORK, and refuse as one unit. Five game functions are
+    // Resolve every native call before any work, and refuse as one unit. Five game functions are
     // called below and each was a hand-built `base + rva` transmuted into a function pointer --
-    // i.e. a call into whatever 1.17 put at a 1.16.2 address. Resolved TOGETHER and HERE because
+    // i.e. a call into whatever 1.17 put at a 1.16.2 address. Resolved together and here because
     // partial success is worse than none: the grow helper runs first and RELOCATES the list's
     // buffer, so a per-use resolve could enlarge the ViewModel and then find the row ctor
     // unmapped. Here a refusal is also free -- before the leaked param-row slab and before the
@@ -1368,7 +1368,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     };
 
-    // PROJECT FIRST. The layer bit a pin must carry is decided by WHICH converter accepted it,
+    // Project first. The layer bit a pin must carry is decided by which converter accepted it,
     // not by anything readable off the block on its own, so the projection has to run before the
     // param rows are authored rather than after them.
     let projections: Vec<Option<(MapCoordinates, usize, u8)>> = registry
@@ -1387,7 +1387,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // One param row per pin, leaked on purpose: the pin does not own it, its dtor never touches
     // it, but IsOpen / the row filter / the label refresh all dereference it on demand for the
     // rest of the session.
-    // Build the param rows ONCE and share them across every map view. A pin does not own its
+    // Build the param rows once and share them across every map view. A pin does not own its
     // param row, so one immutable set serves all views; rebuilding per view would leak a fresh
     // copy every time the player switched between the overworld, underground and Shadow Lands.
     let cached = SHARED_PARAM_ROWS_PTR.load(Ordering::SeqCst);
@@ -1396,7 +1396,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         // SAFETY: leaked on the first injection and never freed or mutated.
         unsafe { core::slice::from_raw_parts(cached as *const [u8; SYNTHETIC_PARAM_ROW_LEN], len) }
     } else {
-        // PRE-SIZED WITH DORMANT HEADROOM, and never grown again.
+        // Pre-sized with dormant HEADROOM, and never grown again.
         //
         // Every live row's `+0x240` points into this slab, and `row_is_verifiably_ours` -- the
         // ownership test that exists because the last crash happened without one -- is a 64-bit
@@ -1411,7 +1411,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             let Some(entity_id) = registry.entity_id_at(index) else {
                 break;
             };
-            // The layer bit follows the CONVERTER THAT ACCEPTED THIS PIN, because a row carries
+            // The layer bit follows the converter that accepted this pin, because a row carries
             // exactly one coordinate and that coordinate only means anything on the map whose
             // converter produced it. A pin nothing accepted gets no bit at all -- it is dropped
             // below rather than given a default that would draw it somewhere arbitrary.
@@ -1437,7 +1437,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 record_place_name(target.block.raw(), place_name_text_id);
             }
             // Whether the user chose, excluded or ignored this location -- a property of the
-            // LOCATION, not of where they are standing. Asked at injection time because that is
+            // location, not of where they are standing. Asked at injection time because that is
             // when the row is built; the map re-injects on every open, so marking a place and
             // reopening the map shows the new tier.
             let appearance = crate::local_invasion_filter::pin_appearance_for(
@@ -1455,15 +1455,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 SyntheticParamSpec {
                     entity_id,
                     subcategory_id: donor.subcategory_id,
-                    // Deliberately NOT the donor's icon: the donor is a grace, and the id is a
+                    // Deliberately not the donor's icon: the donor is a grace, and the id is a
                     // GFx frame number, so copying it draws a Site of Grace.
                     icon_id: er_invasion_warp_core::param_row::invasion_pin_icon_id_for(
                         appearance,
                         crate::map_gfx::red_pin_frame_installed(),
                         er_invasion_warp_core::warp::invasion_attempt_in_flight(),
                     ),
-                    // NOT the donor's bits, and NOT all three. These are per-map-layer
-                    // visibility bits over a row that holds ONE coordinate, so all-three drew
+                    // Not the donor's bits, and not all three. These are per-map-layer
+                    // visibility bits over a row that holds one coordinate, so all-three drew
                     // every Shadow Lands pin on the Lands Between map too -- at Shadow Lands
                     // coordinates, i.e. out in the sea, while still warping correctly because
                     // the warp reads the block id and never the map position.
@@ -1485,12 +1485,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     ) > 0
                 })
                 .count();
-            // UNNAMED IS UNDRAWN, not "drawn without a caption": `UpdateVisible`'s label term is a
+            // Unnamed is UNDRAWN, not "drawn without a caption": `UpdateVisible`'s label term is a
             // hard gate on the clip's visible flag.
             //
-            // But this count is NOT the oracle, and publishing it as one read 12 on every injection
+            // But this count is not the oracle, and publishing it as one read 12 on every injection
             // for a reason that had nothing to do with drawing. A param row is built for every
-            // TARGET, including targets that no converter will place; an unprojected target has no
+            // target, including targets that no converter will place; an unprojected target has no
             // coordinates to name itself from, so it gets -1 -- and is then dropped before the
             // append. Counting unnamed rows here therefore counts pins that never existed. The
             // oracle is published after the append instead, over the rows that actually landed.
@@ -1505,10 +1505,10 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         }
         // The dormant entries. Built here so the slab's length is final before it is leaked --
         // `into_boxed_slice` shrinks capacity to length, so a slab built with `wanted` entries has
-        // EXACTLY ZERO spare no matter what capacity was reserved, and a top-up that needed one
+        // exactly zero spare no matter what capacity was reserved, and a top-up that needed one
         // would refuse forever without ever saying why.
         //
-        // Their param carries no layer bit and no label, which is belt AND braces: `UpdateVisible`
+        // Their param carries no layer bit and no label, which is belt and braces: `UpdateVisible`
         // clears the draw flag when the row's layer mask misses the active map layer, and again
         // when no label has a non-negative text id. A dormant row is invisible on both counts until
         // it is claimed.
@@ -1541,16 +1541,16 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // Re-stamp the icon frame every injection rather than trusting the one baked in at the first.
     //
     // The frame depends on whether the edited world-map movie has been served, which is an
-    // OBSERVED fact that starts out false. Both live runs parsed the movie during boot, before
+    // observed fact that starts out false. Both live runs parsed the movie during boot, before
     // any world load, so the first injection already saw `true` -- but that ordering is the
     // loader's business, not ours. If a world ever loads first, the cached rows would be frozen
     // on the fallback icon for the whole session and no later swap could rescue them.
     //
     // Writing the param bytes is safe at any time: a pin copies the icon out of its param at
     // construction (`param+0x1C` -> `pin+0x248`), so a re-stamp cannot disturb a pin that already
-    // exists -- it only decides what the NEXT ViewModel's pins are built with, which is exactly
+    // exists -- it only decides what the next ViewModel's pins are built with, which is exactly
     // the scope wanted.
-    // The re-stamp is PER ROW, and that is the whole point of it now.
+    // The re-stamp is per row, and that is the whole point of it now.
     //
     // It used to write one icon id over every row, which silently defeated the tiers: they were
     // computed correctly at build time -- a live run logged `chosen=3` and then `chosen=96` as
@@ -1559,7 +1559,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // per-location icon; it has to recompute the same decision the build did.
     {
         let installed = crate::map_gfx::red_pin_frame_installed();
-        // Re-stamp when EITHER input changes: whether the marker frames are in front of Scaleform
+        // Re-stamp when either input changes: whether the marker frames are in front of Scaleform
         // (the late-swap rescue this block was written for), or the user's lists (the tiers).
         let stamp_signature = crate::local_invasion_filter::pin_choice_signature()
             ^ usize::from(installed).wrapping_mul(0x9e37_79b9);
@@ -1592,8 +1592,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                     installed,
                     er_invasion_warp_core::warp::invasion_attempt_in_flight(),
                 );
-                // ALL FOUR icon slots, via the one stamper. Writing only `+0x1c` here -- which is
-                // what this line used to do -- left the other three holding the icon from the FIRST
+                // All four icon slots, via the one stamper. Writing only `+0x1c` here -- which is
+                // what this line used to do -- left the other three holding the icon from the first
                 // build, and the engine reads whichever descriptor its own event-flag predicate
                 // selects. That is why marking a location changed every count in the log and
                 // nothing on the map.
@@ -1615,14 +1615,14 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     }
     let wanted = wanted.min(param_rows.len());
 
-    // Reserve ONCE with the final count. Each reserve copy-constructs every existing element
+    // Reserve once with the final count. Each reserve copy-constructs every existing element
     // into a new block and destructs the originals, so per-row reserves are O(N*size) and
     // transiently double the peak menu-heap footprint.
     type ReserveFn = unsafe extern "system" fn(usize, usize);
     // SAFETY: resolved for the running build at the top of this function.
     let reserve: ReserveFn = unsafe { core::mem::transmute(grow_address) };
     let vector = view_model + PIN_VECTOR_OFFSET;
-    // Reserve for the dormant rows in the SAME call. This is the only relocation that will ever
+    // Reserve for the dormant rows in the same call. This is the only relocation that will ever
     // happen to this buffer, and it happens at the one moment it is provably safe: no map dialog
     // exists yet, so no `CS::WorldMapWarpData+0x08` raw row pointer can be left dangling.
     unsafe { reserve(vector, wanted + DORMANT_ROW_COUNT) };
@@ -1659,12 +1659,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     let mut injected = 0_usize;
     let mut unplaceable = 0_usize;
     // Per-area and per-converter tallies. The "0 CROSS-AREA" line was reassuring and nearly
-    // meaningless: area 60 covers BOTH the surface and the underground, so an area match cannot
+    // meaningless: area 60 covers both the surface and the underground, so an area match cannot
     // tell a Siofra block from a Limgrave one. Counting which converter actually accepted each
     // pin is the measurement that can, because the converters are what differ per map.
     let mut per_area: [usize; 2] = [0, 0]; // [area 60, area 61]
     let mut per_converter: [usize; 8] = [0; 8];
-    // How many pins were accepted by a converter belonging to a DIFFERENT area than the
+    // How many pins were accepted by a converter belonging to a different area than the
     // target's own -- those land in the wrong map's coordinate space.
     let mut cross_area_projections = 0_usize;
     let mut cross_area_trace = 4_usize;
@@ -1678,8 +1678,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // specifically a claim about `WorldMapAreaConverter::legacyConverter` being null.
     let mut legacy_seen = 0_usize;
     let mut legacy_placed = 0_usize;
-    // WHICH BLOCKS WERE REFUSED, not the first six refusals. A per-refusal line budget was written
-    // when a legacy target meant one whole dungeon; now that legacy targets are PER POINT, a single
+    // Which blocks were refused, not the first six refusals. A per-refusal line budget was written
+    // when a legacy target meant one whole dungeon; now that legacy targets are per point, a single
     // unplaceable dungeon spends the entire budget on its own first six points and every other
     // refused dungeon goes unnamed -- while "which dungeons are missing" is the exact question the
     // symptom asks. A set of block ids answers it in one line and is bounded by the ~245-entry
@@ -1688,15 +1688,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     let mut refused_points = 0_usize;
     // Rows abandoned by the append itself rather than refused by a converter. Counted so the
     // summary can assert `injected + unplaceable + aborted == wanted`; without it a mid-append read
-    // failure silently drops an arbitrary SUFFIX of the set -- and the targets are ordered .aip
+    // failure silently drops an arbitrary suffix of the set -- and the targets are ordered .aip
     // first, then legacy points, then provisional markers, so the suffix lost is precisely the
     // legacy pins.
     let mut aborted = 0_usize;
-    // Appended rows that cannot draw for want of a label. MUST be zero.
+    // Appended rows that cannot draw for want of a label. Must be zero.
     let mut undrawable = 0_usize;
     for (index, target) in registry.targets().iter().enumerate() {
         // Reuse the projection computed above rather than re-running it: the layer bit and the
-        // coordinate must come from the SAME converter decision, and projecting twice invites
+        // coordinate must come from the same converter decision, and projecting twice invites
         // them to disagree as well as doubling 365 native calls inside a world load.
         let is_legacy = !matches!(
             block_area(target.block.raw()),
@@ -1715,15 +1715,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             }
             continue;
         };
-        // A LEGACY PIN ACCEPTED BY A 60/61 CONVERTER IS CORRECT, NOT CROSS-AREA (user-observed
+        // A legacy pin accepted by a 60/61 converter is correct, not cross-area (user-observed
         // 2026-08-04, and it reverses a "fix" made earlier the same day). `ConvertMsbCoordsToMapCoords`
-        // calls `ConvertLegacyDungeonPositionToOverworldPositionForMap` FIRST and area-matches the
+        // calls `ConvertLegacyDungeonPositionToOverworldPositionForMap` first and area-matches the
         // REMAPPED block, so a dungeon necessarily arrives through the ordinary overworld converter
         // and its converter area necessarily differs from the block's own. Requiring them to be equal
         // made the counter unsatisfiable for exactly the maps it exists to measure: the Haligtree pin
         // logged `m15_00_00_00 (area 15) accepted by converter #0 (area 60)` and reported 0/2 placed,
         // while the user watched it render on the Haligtree warp point.
-        // NOTE: `legacy_placed` is NOT incremented here. Being accepted by a converter is not being
+        // NOTE: `legacy_placed` is not incremented here. Being accepted by a converter is not being
         // placed -- the layer-bit test below and the append itself can both still drop this pin, and
         // counting it as placed at this point made the oracle structurally unable to report the very
         // failure it exists to catch (it read N/N placed while N rows were dropped). It is counted
@@ -1750,7 +1750,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         if let Some(slot) = per_converter.get_mut(converter_index) {
             *slot += 1;
         }
-        // Cross-area is only meaningful for a pin that was NOT remapped: an area-60/61 target
+        // Cross-area is only meaningful for a pin that was not remapped: an area-60/61 target
         // accepted by a converter of the other area really is drawn in the wrong space. A legacy
         // block reaching a 60/61 converter went through the legacy remap and is where it belongs.
         let legacy_remap_expected = is_legacy
@@ -1759,7 +1759,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
                 60 | er_invasion_warp_core::param_row::AREA_SHADOW_LANDS
             );
         if converter_area != target_area && !legacy_remap_expected {
-            // The converter that accepted this point belongs to a DIFFERENT area, so the map
+            // The converter that accepted this point belongs to a different area, so the map
             // coordinates are in that area's space and the pin renders somewhere meaningless.
             // This is the leading explanation for "markers on the base map, none on the DLC map,
             // and not where I'd expect".
@@ -1813,19 +1813,19 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         };
         if end != 0 {
             unsafe { copy_ctor(end as *mut u8, temp.0.as_ptr()) };
-            // Stamp a DISTINCT row id. The base ctor draws `+0x8` from the engine's counter
+            // Stamp a distinct row id. The base ctor draws `+0x8` from the engine's counter
             // (`CS::WorldMapPinDataBase::WorldMapPinDataBase`), but the copy-ctor copies it
             // verbatim and never re-runs that ctor -- so every row cloned from one temp would
-            // otherwise carry the SAME id.
+            // otherwise carry the same id.
             //
             // That is not cosmetic. The marker draw uses `+0x8` purely as a change-detection
             // token: a clip slot is re-bound (`SetTo`, which is what sets the icon and the
             // visibility) only when `idCache[slot] != row+0x8`. With duplicate ids the engine
             // concludes the slot already shows this row, skips the re-bind, and then moves the
-            // clip to the new row's coordinates -- leaving the PREVIOUS pin's icon sitting at
+            // clip to the new row's coordinates -- leaving the previous pin's icon sitting at
             // this pin's position. Distinct ids are what make each pin render as itself.
             //
-            // Stamped at the CURRENT restyle generation so a later restyle can bump it and force
+            // Stamped at the current restyle generation so a later restyle can bump it and force
             // the same re-bind deliberately -- see `stamped_row_id`.
             unsafe {
                 *((end + ROW_ID_OFFSET) as *mut i32) =
@@ -1833,7 +1833,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
             }
             unsafe { *((vector + VECTOR_END_OFFSET) as *mut usize) = end + PIN_ROW_STRIDE };
             injected += 1;
-            // PLACED MEANS APPENDED. Counting it earlier is what let the oracle report 100%
+            // Placed means APPENDED. Counting it earlier is what let the oracle report 100%
             // placement for a set that had rows dropped after acceptance.
             if is_legacy {
                 legacy_placed += 1;
@@ -1855,11 +1855,11 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         } else {
             aborted += 1;
         }
-        // MUST use the engine dtor: the temp owns its MenuString and up to 8 label DLStrings.
+        // Must use the engine dtor: the temp owns its MenuString and up to 8 label DLStrings.
         unsafe { dtor(temp.0.as_mut_ptr()) };
     }
 
-    // APPEND THE DORMANT ROWS. Same engine ctor/copy-ctor path as a real pin, into capacity the
+    // APPEND the dormant rows. Same engine ctor/copy-ctor path as a real pin, into capacity the
     // single reserve above already claimed, so `end` only advances and the buffer never moves.
     // Their param carries no layer bit and no label, so `UpdateVisible` leaves the draw flag clear
     // and none of them is visible until a top-up claims it.
@@ -1926,15 +1926,15 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     } else {
         INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
     }
-    // Record the span AFTER the appends: the reserve already relocated the buffer, so these are
+    // Record the span after the appends: the reserve already relocated the buffer, so these are
     // the final addresses the filter will be asked about.
     if injected > 0
         && let Some(final_geometry) = unsafe { read_pin_list(view_model) }
     {
         let first = final_geometry.begin + existing_rows * PIN_ROW_STRIDE;
         record_injected_span(first, first + injected * PIN_ROW_STRIDE);
-        // The CURRENT span, kept separately from the wrap-around table. The table exists for the
-        // filter observer's counters, where a stale entry costs a wrong tally; the restyle WRITES,
+        // The current span, kept separately from the wrap-around table. The table exists for the
+        // filter observer's counters, where a stale entry costs a wrong tally; the restyle writes,
         // where a stale entry costs the player their game.
         LIVE_LIST_BEGIN.store(final_geometry.begin, Ordering::SeqCst);
         LIVE_SPAN_BEGIN.store(first, Ordering::SeqCst);
@@ -1947,7 +1947,7 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
          because its single coordinate is only valid in that converter's space",
         per_area[0], per_area[1]
     ));
-    // The legacy line is emitted unconditionally, INCLUDING when the count is zero. A silent
+    // The legacy line is emitted unconditionally, including when the count is zero. A silent
     // absence would read as "legacy dungeons are handled" when the truth is "no dungeon map has
     // been resident yet, so none were even offered".
     er_invasion_warp_core::oracles::publish_legacy_pin_oracles(legacy_seen, legacy_placed);
@@ -1966,8 +1966,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
          seen=0 means no such map has been resident this session yet (coverage accumulates as \
          maps load); seen>0 with placed=0 means the converters refused them."
     ));
-    // NAME EVERY REFUSED DUNGEON, once. `refused_points` and the size of this set answer different
-    // questions -- 168 refused points can be one dungeon or eight -- and only the set can say WHICH
+    // Name every refused dungeon, once. `refused_points` and the size of this set answer different
+    // questions -- 168 refused points can be one dungeon or eight -- and only the set can say which
     // dungeon has no icon, which is the question the symptom actually asks.
     if !refused_blocks.is_empty() {
         let names: Vec<String> = refused_blocks
@@ -2013,18 +2013,18 @@ pub(crate) static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);
 /// distinct harvest outcome instead of once per frame.
 static MERGE_REPORTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(u64::MAX);
 
-/// Warp destinations for pins a LIVE top-up claimed, which the registry cannot describe.
+/// Warp destinations for pins a live top-up claimed, which the registry cannot describe.
 ///
 /// # Why a second table exists at all
 ///
 /// [`InvasionRowRegistry::target_for_entity_id`] is a dense index: entity id `BASE + i` means
-/// "element `i`". A top-up claims a dormant row AFTER the registry was leaked, so the only ids left
-/// to hand it are past the end -- and the lookup then MISSES. The confirm hook, correctly, refuses
+/// "element `i`". A top-up claims a dormant row after the registry was leaked, so the only ids left
+/// to hand it are past the end -- and the lookup then misses. The confirm hook, correctly, refuses
 /// to pass an unresolvable synthetic id to the native assembler (that is a loading-screen hang), so
 /// without this table a topped-up marker would draw on the map and then do nothing when selected: a
 /// pin that is visible but dead, which is worse than an absent one because it looks like a feature.
 ///
-/// The id is stored EXPLICITLY rather than derived from a position, so it stays correct no matter
+/// The id is stored explicitly rather than derived from a position, so it stays correct no matter
 /// what the registry's length does afterwards. Cleared wherever the dormant span is re-established,
 /// because that is the moment every claim it describes stops existing.
 pub(crate) static TOP_UP_TARGETS: Mutex<
@@ -2064,7 +2064,7 @@ pub(crate) fn top_up_target_for_entity_id(
         .map(|(_, target)| *target)
 }
 
-/// Points a top-up examined and could not place, for THIS ViewModel.
+/// Points a top-up examined and could not place, for this ViewModel.
 ///
 /// All three refusal reasons -- no converter accepted the position, no map layer bit, no nearby
 /// named place -- are decided by the converter set and shipped rows of the ViewModel currently on
@@ -2128,7 +2128,7 @@ pub(crate) fn clear_top_up_targets() {
 ///
 /// Observation only -- it forwards the original verdict untouched.
 ///
-/// It was installed believing it was the MAP-MARKER visibility gate. It is not: its callers all
+/// It was installed believing it was the map-marker visibility gate. It is not: its callers all
 /// build the fast-travel list and the bookmark dialog, so `ours 0/0` here means "our rows were
 /// never offered to the warp list", which is a different question from "are the pins drawn".
 /// The counters are kept because that first question is still worth answering, but nothing may
@@ -2194,7 +2194,7 @@ pub fn filter_verdicts() -> (usize, usize, usize, usize) {
 
 /// Union handler for `CS::WorldMapViewModel::WorldMapViewModel`.
 ///
-/// Calls the original FIRST -- the list does not exist until the ctor has run -- then reads the
+/// Calls the original first -- the list does not exist until the ctor has run -- then reads the
 /// list back. Observation only: nothing is written into the engine here.
 ///
 /// # Safety
@@ -2277,7 +2277,7 @@ pub fn pins_injected() -> usize {
 
 /// `(ctor_hits, injections_performed, injections_skipped)`.
 ///
-/// THE ORACLE for "the pins come back every time the map is opened". Every ViewModel
+/// The oracle for "the pins come back every time the map is opened". Every ViewModel
 /// construction must be followed by an injection that appended rows, so a healthy session has
 /// `injections_performed == ctor_hits` and `injections_skipped == 0`. Any gap means some map view
 /// or some map open was left bare, and it is readable from memory without deciding anything from
@@ -2306,7 +2306,7 @@ pub fn viewmodel_ctor_hits() -> usize {
     VIEWMODEL_CTOR_HITS.load(Ordering::SeqCst)
 }
 
-/// Times the row span did not divide by the stride. Non-zero means DO NOT append.
+/// Times the row span did not divide by the stride. Non-zero means do not append.
 #[must_use]
 pub fn row_stride_mismatches() -> usize {
     ROW_STRIDE_MISMATCH.load(Ordering::SeqCst)
@@ -2356,7 +2356,7 @@ mod tests {
     }
 
     /// The claims describe rows in one ViewModel's dormant span. Once that span is re-established
-    /// those rows are gone, and a stale answer would warp a NEW pin to an OLD destination.
+    /// those rows are gone, and a stale answer would warp a new pin to an old destination.
     #[test]
     fn clearing_forgets_every_claim_so_a_rebuilt_span_cannot_inherit_a_stale_destination() {
         clear_top_up_targets();
@@ -2481,10 +2481,10 @@ mod tests {
 
     #[test]
     fn the_id_stamp_is_far_too_weak_to_be_an_ownership_test_on_its_own() {
-        // THIS TEST EXISTS BECAUSE THE STAMP WAS USED AS ONE AND IT CRASHED THE GAME.
+        // This test exists because the stamp was used as one and it crashed the game.
         //
         // `id_is_our_stamp` accepts every value whose high byte lands in 0x40..0x4F -- one word in
-        // sixteen. A freed MenuHeap page stays MAPPED, so a fault-tolerant read of it succeeds and
+        // sixteen. A freed MenuHeap page stays mapped, so a fault-tolerant read of it succeeds and
         // returns whatever now lives there; roughly 6% of that garbage passes. Applied to ~1500
         // stale rows a live run repainted 456 of them inside memory belonging to other objects.
         //
@@ -2505,7 +2505,7 @@ mod tests {
     fn a_restyle_generation_changes_every_rows_id_while_keeping_rows_distinct() {
         // Both halves matter. The generation must change the id -- that is the whole mechanism that
         // forces the renderer to re-bind and pick up the new icon. And rows must stay distinct
-        // WITHIN a generation, because duplicate ids make the draw skip the re-bind and leave one
+        // within a generation, because duplicate ids make the draw skip the re-bind and leave one
         // pin's icon sitting on another pin's coordinates.
         let before: Vec<i32> = (0..1000).map(|index| stamped_row_id(3, index)).collect();
         let after: Vec<i32> = (0..1000).map(|index| stamped_row_id(4, index)).collect();

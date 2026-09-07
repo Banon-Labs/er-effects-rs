@@ -1,58 +1,58 @@
-// WHICH WRITE BRANCH RAN.
+// Which write branch ran.
 //
 // `include!`d into `lib.rs` (same module, same imports) like `save_job_completion.rs`.
 //
-// `SaveLoad2::SLSaveSession`'s job body `FUN_14240fd70` has TWO mutually exclusive write
+// `SaveLoad2::SLSaveSession`'s job body `FUN_14240fd70` has two mutually exclusive write
 // paths, and until these two counters existed nothing in the process could say which one a
 // save took. Every claim about the steady state -- that a save over an existing container
 // patches blocks in place and never rebuilds -- was read out of the decompile, not measured.
 // These observers measure it.
 //
-// The choice is made INSIDE `FUN_14240fd70` (the `if`/`else` is its own), on the result code
-// of a THIRD, separate call, `FUN_142413230` @line 114 of the decompile:
+// The choice is made inside `FUN_14240fd70` (the `if`/`else` is its own), on the result code
+// of a third, separate call, `FUN_142413230` @line 114 of the decompile:
 //
 //   uVar4 = FUN_142413230(job+0x280, session, path);  // probe: is in-place viable?
 //   FUN_14240dbf0(job, uVar4);                        // publish into job+0x9c
 //   iVar5 = FUN_14240d8d0(job);                       // read it back out
-//   if (iVar5 == 0) { FUN_142413860(job+0x281, ..) }  // -> FULL REBUILD
-//   else            { FUN_1424142b0(job+0x282, ..);   // -> per-block IN-PLACE,
+//   if (iVar5 == 0) { FUN_142413860(job+0x281, ..) }  // -> full rebuild
+//   else            { FUN_1424142b0(job+0x282, ..);   // -> per-block in-place,
 //                     FUN_1424142e0(job+0x283, ..) }  //    once per supplied block
 //
-// `FUN_142413230` mounts the container ALREADY ON DISK at the save path and walks every
+// `FUN_142413230` mounts the container already on disk at the save path and walks every
 // block the request supplies, testing `entry.size + entry.padding >= needed`. It returns `6`
-// when the mount succeeded AND every block still fits, and `0` when the mount failed or any
-// block outgrew its entry. Note that polarity is the INVERSE of the writers' own convention
+// when the mount succeeded and every block still fits, and `0` when the mount failed or any
+// block outgrew its entry. Note that polarity is the inverse of the writers' own convention
 // (both writers return 0 = success, 6 = failure), which is exactly why the branch reads like
 // it selects the rebuild on success. It does not: 0 from the probe means "in-place is not
 // viable", and the rebuild is the fallback.
 //
-// The probe mounts the ORIGINAL save path, so this decision does not depend on where the
+// The probe mounts the original save path, so this decision does not depend on where the
 // bytes eventually land -- a write-open redirect diverts the writers, not the probe. That
-// part is CODE-DERIVED, not measured; these counters are the first instrument that can begin
+// part is code-derived, not measured; these counters are the first instrument that can begin
 // to test it.
 //
 // Both are pure observers: forward, count, return the callee's value unchanged.
 
-/// `FUN_142413860` -- the FULL CONTAINER REBUILD branch, the `iVar5 == 0` arm. One
+/// `FUN_142413860` -- the full container rebuild branch, the `iVar5 == 0` arm. One
 /// whole-buffer write from offset 0 after reading back every block the request did not
-/// supply. Expected to be RARE (a block outgrew its entry, or no usable container).
+/// supply. Expected to be rare (a block outgrew its entry, or no usable container).
 ///
-/// Takes exactly FOUR register arguments and nothing on the stack. Its only call site
+/// Takes exactly four register arguments and nothing on the stack. Its only call site
 /// `0x142410158` is `lea rcx,[rbx+0x281]; mov rdx,[rbx+0xe0]; lea r8,[rbp-1]; xor r9d,r9d;
 /// call` -- there is no write to `[rsp+0x20]`, so the union's 4-argument shape describes it
 /// exactly and it goes through the shared union like the dispatch observers.
 #[cfg(windows)]
 const SAVE_WRITE_FULL_REBUILD_RVA: usize = 0x2413860;
 
-/// `FUN_1424142e0` -- the PER-BLOCK IN-PLACE PATCHER, the `else` arm. Called once per
+/// `FUN_1424142e0` -- the per-block in-place PATCHER, the `else` arm. Called once per
 /// supplied block: `OpenFile` -> `Seek(entry.dataOffset)` -> `WriteBytes(block)` -> maybe
 /// rewrite the 0x20-byte entry header -> `Seek(0,END)` -> close. Expected to be the steady
 /// state, so this counter normally climbs by more than one per save.
 ///
-/// Takes FIVE arguments, the fifth ON THE STACK, and the union's 4-argument shape must NOT be
+/// Takes five arguments, the fifth on the stack, and the union's 4-argument shape must not be
 /// used for it. Its call site `0x1424102d6` writes the fifth explicitly --
 /// `mov [rsp+0x20], r12` between the `lea rcx` and the `call` -- and the callee both keeps it
-/// (`local_1a8 = param_5`) and, when it is non-null, DEREFERENCES AND WRITES THROUGH it with
+/// (`local_1a8 = param_5`) and, when it is non-null, DEREFERENCES and writes through it with
 /// two qwords at the end of a successful write. A 4-argument detour would hand the callee
 /// whatever the Rust frame happened to leave at `[rsp+0x28]` and it would be written to as an
 /// out-parameter, so the union shape is not merely lossy here, it corrupts memory. This one
@@ -64,7 +64,7 @@ const SAVE_WRITE_IN_PLACE_RVA: usize = 0x24142e0;
 /// The result code both writers return for "the write did NOT happen" -- `uVar13 = 6` on
 /// every failure path of `FUN_1424142e0`, and 6 = open/write/short-write failure in
 /// `FUN_142413860`. It is what a missing-trampoline observer must return, because the other
-/// value in that space, `0`, means SUCCESS to `FUN_14240dbf0`/`FUN_14240d8d0` and would tell
+/// value in that space, `0`, means success to `FUN_14240dbf0`/`FUN_14240d8d0` and would tell
 /// the game a save was written when nothing was.
 ///
 /// Ungated like the prologue signatures so the host-side unit tests can assert it.
@@ -74,7 +74,7 @@ const SAVE_WRITE_FAILED_RESULT: usize = 6;
 // push r15` -- seven whole one- and two-byte instructions before MinHook's 5-byte window
 // closes, and no relative branch. They diverge only at byte 12, where the frame pointer is
 // set up: the rebuild takes `lea rbp,[rsp-0x60]` and the patcher `lea rbp,[rsp-0xd0]`.
-// Both signatures are ASSEMBLED from those named instructions by this crate's `build.rs`.
+// Both signatures are assembled from those named instructions by this crate's `build.rs`.
 include!(concat!(
     env!("OUT_DIR"),
     "/generated_save_write_branch_prologues.rs"
@@ -82,7 +82,7 @@ include!(concat!(
 
 /// `FUN_1424142e0`'s real shape. The fifth argument lives at `[rsp+0x28]` on entry and at
 /// `[rsp+0x20]` of the frame we build to forward it, so an `extern "system"` five-argument
-/// call hands the callee the SAME qword it would have received undetoured -- which matters,
+/// call hands the callee the same qword it would have received undetoured -- which matters,
 /// because it is an out-parameter the callee writes two qwords through.
 #[cfg(windows)]
 type SaveWriteInPlaceFn = unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize;
@@ -94,11 +94,11 @@ static ORIG_SAVE_WRITE_IN_PLACE: AtomicUsize = AtomicUsize::new(0);
 
 /// Entries into `FUN_142413860`, the full container rebuild.
 static WRITE_FULL_REBUILD_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Entries into `FUN_1424142e0`, the per-block in-place patcher. Climbs ONCE PER SUPPLIED
-/// BLOCK, not once per save.
+/// Entries into `FUN_1424142e0`, the per-block in-place patcher. Climbs once per supplied
+/// block, not once per save.
 static WRITE_IN_PLACE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Observers bound (0..=2). Zero makes both counters above meaningless -- they can only read
-/// 0, which must NOT be read as "no save was written".
+/// 0, which must not be read as "no save was written".
 static WRITE_BRANCH_OBSERVERS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Write-branch observer entries that found no trampoline and therefore reported failure to
 /// the game. Structurally unreachable (the trampoline is stored before the hook is enabled);
@@ -113,7 +113,7 @@ pub fn write_branch_observers_installed() -> usize {
     WRITE_BRANCH_OBSERVERS_INSTALLED.load(Ordering::SeqCst)
 }
 
-/// Completed entries into `FUN_142413860`, the FULL CONTAINER REBUILD write branch -- one
+/// Completed entries into `FUN_142413860`, the full container rebuild write branch -- one
 /// whole-buffer write from offset 0, taken when a block outgrew its entry or no usable
 /// container was on disk. One per save that took it.
 ///
@@ -123,25 +123,25 @@ pub fn write_full_rebuild_calls() -> u64 {
     WRITE_FULL_REBUILD_CALLS.load(Ordering::SeqCst)
 }
 
-/// Completed entries into `FUN_1424142e0`, the PER-BLOCK IN-PLACE write branch.
+/// Completed entries into `FUN_1424142e0`, the per-block in-place write branch.
 ///
-/// Climbs ONCE PER SUPPLIED BLOCK, not once per save, so this is not a save count and the two
+/// Climbs once per supplied block, not once per save, so this is not a save count and the two
 /// branch counters are not comparable as magnitudes -- only as zero/non-zero.
 pub fn write_in_place_calls() -> u64 {
     WRITE_IN_PLACE_CALLS.load(Ordering::SeqCst)
 }
 
 /// Write-branch observer entries that found no trampoline and reported failure (6) to the
-/// game rather than falsely reporting success (0). Non-zero means a save was refused BY THIS
-/// INSTRUMENT -- nothing was written and nothing was corrupted, but the save did not happen.
+/// game rather than falsely reporting success (0). Non-zero means a save was refused by this
+/// instrument -- nothing was written and nothing was corrupted, but the save did not happen.
 pub fn write_branch_no_trampoline() -> u64 {
     WRITE_BRANCH_NO_TRAMPOLINE.load(Ordering::SeqCst)
 }
 
-/// Observer on `FUN_142413860`, the FULL CONTAINER REBUILD write branch.
+/// Observer on `FUN_142413860`, the full container rebuild write branch.
 ///
 /// Four register arguments, no stack argument (call site `0x142410158`), so the union's shape
-/// is exact and all four are forwarded verbatim. Counts AFTER the call so the counter means
+/// is exact and all four are forwarded verbatim. Counts after the call so the counter means
 /// "a rebuild ran to completion", and returns the callee's result untouched.
 #[cfg(windows)]
 unsafe extern "system" fn save_write_full_rebuild_hook(
@@ -152,7 +152,7 @@ unsafe extern "system" fn save_write_full_rebuild_hook(
 ) -> usize {
     let orig = ORIG_SAVE_WRITE_FULL_REBUILD.load(Ordering::SeqCst);
     if orig == 0 {
-        // Unreachable once bound. Unlike the character serializer, 0 here means SUCCESS to
+        // Unreachable once bound. Unlike the character serializer, 0 here means success to
         // the job body, so returning 0 would tell the game a container was rebuilt when
         // nothing was written at all. Report the writers' own failure code instead: the file
         // is untouched, which is strictly safer than the real failure this code stands for,
@@ -170,9 +170,9 @@ unsafe extern "system" fn save_write_full_rebuild_hook(
     ret
 }
 
-/// Observer on `FUN_1424142e0`, the PER-BLOCK IN-PLACE write branch.
+/// Observer on `FUN_1424142e0`, the per-block in-place write branch.
 ///
-/// FIVE arguments -- see [`SAVE_WRITE_IN_PLACE_RVA`] for why the four-argument union shape
+/// Five arguments -- see [`SAVE_WRITE_IN_PLACE_RVA`] for why the four-argument union shape
 /// would corrupt the fifth, which is an out-parameter the callee writes through. All five are
 /// forwarded verbatim and the result is returned untouched.
 #[cfg(windows)]
@@ -205,7 +205,7 @@ unsafe extern "system" fn save_write_in_place_hook(
 /// costs this run the answer to "which write path ran" and nothing else, so every failure is
 /// logged, counted out through [`write_branch_observers_installed`], and stepped over.
 ///
-/// The two go through DIFFERENT mechanisms on purpose. `FUN_142413860` takes four register
+/// The two go through different mechanisms on purpose. `FUN_142413860` takes four register
 /// arguments and nothing on the stack, so it rides the shared union like the dispatch
 /// observers and a future second registrant on that address stays safe. `FUN_1424142e0` takes
 /// five, and the union's four-argument shape would drop an out-parameter the callee writes

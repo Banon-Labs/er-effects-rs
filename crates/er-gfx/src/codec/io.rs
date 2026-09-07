@@ -145,15 +145,15 @@ impl GfxWriter {
 // Tier-2 bit-packed primitive layer (MSB-first bit order -- the SWF convention)
 // ===========================================================================
 //
-// SWF/GFX bit-packed structures (RECT, MATRIX, CXFORM[WITHALPHA]) read bits
+// SWF/GFX bit-packed structures (RECT, matrix, CXFORM[WITHALPHA]) read bits
 // most-significant-first and byte-align at the end of each structure. The fields
-// `Nbits` (RECT), `NScaleBits`/`NRotateBits`/`NTranslateBits` (MATRIX), and
-// `Nbits` (CXFORM) are NOT guaranteed minimal: the Scaleform exporter is
-// confirmed non-minimal (2,413 MATRIX instances in the 114-file corpus use more
+// `Nbits` (RECT), `NScaleBits`/`NRotateBits`/`NTranslateBits` (matrix), and
+// `Nbits` (CXFORM) are not guaranteed minimal: the Scaleform exporter is
+// confirmed non-minimal (2,413 matrix instances in the 114-file corpus use more
 // translate bits than the minimal width; 21 scale, 14 rotate). Byte-identity
-// therefore REQUIRES storing each source nbits verbatim and re-encoding with it,
+// therefore requires storing each source nbits verbatim and re-encoding with it,
 // never recomputing a minimal width. Byte-alignment padding is always zero
-// across the corpus (0 non-zero pads over 171,728 MATRIX, 20,157 CXFORM, 124
+// across the corpus (0 non-zero pads over 171,728 matrix, 20,157 CXFORM, 124
 // RECT); the reader rejects a non-zero pad ([`GfxError::NonZeroBitPadding`])
 // rather than silently dropping bits, and the writer zero-fills.
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Display the input-harness per-phase telemetry (er-input-harness-phases.jsonl).
 
-VIEWER ONLY. The DECISION/comparison logic (vanilla-vs-product per-phase deltas,
-"does this situation apply / is it useful for comparison") is the ORACLE dll's job
-(bd ORACLE-dll-decides-reports-harness-drives-telemetry-gathers-...-2026-07-22). This
+Viewer only. The DECISION/comparison logic (vanilla-vs-product per-phase deltas,
+"does this situation apply / is it useful for comparison") is the oracle dll's job
+(bd oracle-dll-decides-reports-harness-drives-telemetry-gathers-...-2026-07-22). This
 script just renders what the harness (driving) + telemetry (gathering) captured for a
-SINGLE run, so a human/agent can read the per-phase timing + boundary semaphores that
+single run, so a human/agent can read the per-phase timing + boundary semaphores that
 the harness emitted for: startup, press_any_button, continue, wait_load_in, menu_flow,
-quit_to_menu (and the reload continue). bd HARNESS-per-phase-telemetry-full-native-flow-2026-07-22.
+quit_to_menu (and the reload continue). bd harness-per-phase-telemetry-full-native-flow-2026-07-22.
 
 Usage: python3 scripts/report-harness-phases.py <artifact-dir-or-jsonl>
 """

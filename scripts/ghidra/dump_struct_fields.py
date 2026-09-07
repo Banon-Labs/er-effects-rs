@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print only the NAMED fields of a Ghidra structure via the MCP daemon.
+"""Print only the named fields of a Ghidra structure via the MCP daemon.
 
 Usage: python3 scripts/ghidra/dump_struct_fields.py [--port 8765] <StructName>...
 The full getStructure payload is thousands of lines of `undefined` padding; this

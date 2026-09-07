@@ -1,20 +1,20 @@
-//! Read-side, PASSIVE RAM oracle modules for the standalone `er-telemetry`.
+//! Read-side, passive RAM oracle modules for the standalone `er-telemetry`.
 //!
 //! Each oracle is a self-contained, independently marker-gated module that does
-//! ONLY fault-safe `ReadProcessMemory` reads (via `er_game_base::mem::safe_read_*`)
+//! only fault-safe `ReadProcessMemory` reads (via `er_game_base::mem::safe_read_*`)
 //! plus, for the title-owner resolver, a bounded `VirtualQuery` address-space
-//! walk. NO hooks, NO MinHook trampolines, NO D3D12 device/queue/command-list
-//! touch, NO game-code / vtable-fn calls -- so they are safe to run while
+//! walk. No hooks, no MinHook trampolines, no D3D12 device/queue/command-list
+//! touch, no game-code / vtable-fn calls -- so they are safe to run while
 //! RenderDoc is capturing (RPM/VirtualQuery never touch the GPU device or call
-//! game code). See the ORACLES/SEMAPHORES specs + PHASE-A build plan (bd
+//! game code). See the ORACLES/SEMAPHORES specs + phase-A build plan (bd
 //! decoupled-diagnostics-architecture-buildplan-2026-07-24).
 //!
 //! DECOUPLING CONTRACT: this module depends only on `er-game-base`
 //! (`game_module_base`, `safe_read_*`, `vtable_in_game_image`) + `eldenring`
 //! typed singletons + `fromsoftware-shared` (the `FromStatic` singleton trait),
 //! never on the product (`er-quickload`) crate or any product static. Each
-//! oracle is gated by its OWN game-dir marker file, checked once and cached,
-//! DEFAULT OFF -- when its marker is absent the oracle costs a single atomic load
+//! oracle is gated by its own game-dir marker file, checked once and cached,
+//! default off -- when its marker is absent the oracle costs a single atomic load
 //! and performs zero file I/O, so a plain product run carries no diagnostic cost
 //! and one A/B run can enable exactly the signals it needs.
 
@@ -28,7 +28,7 @@ mod stream_overlap;
 mod title_binding;
 
 /// True if a game-dir (or CWD-relative) marker file `name` exists. Stateless fs
-/// check; callers cache the first result (DEFAULT OFF). Env vars do NOT propagate
+/// check; callers cache the first result (default off). Env vars do not propagate
 /// through me3/Proton to the game process, so a `.exists()` marker in the game
 /// directory is the reliable per-category enable (same rationale as
 /// `renderdoc_slow_ms`'s `er-quickload-rdoc-slow-ms.txt`).
@@ -88,7 +88,7 @@ fn json_u8_opt(o: Option<u8>) -> String {
 }
 
 /// Drive both read-side oracles for this write-tick. Called from `standalone_tick`
-/// AFTER the base / play_time / frame-time reads. The load epoch is advanced ONCE
+/// after the base / play_time / frame-time reads. The load epoch is advanced once
 /// here (so the flat-play_time boundary is measured consistently regardless of how
 /// many oracles are enabled) and passed to both. Each oracle is independently
 /// gated by its own cached marker; an absent marker means that oracle no-ops.

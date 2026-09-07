@@ -41,7 +41,7 @@ def audit(texts: dict[str, str]) -> list[str]:
     failures: list[str] = []
     try:
         resolver = rust_fn_body(texts["drive"], "own_load_read_sl2_bytes")
-        # The anchor is the FIRST source-resolution step in the resolver. It was
+        # The anchor is the first source-resolution step in the resolver. It was
         # `switch_save_file_override()` until 2026-09-05, when the menu-free control-file switch
         # driver that fed it was deleted; the first step is now the committed-foreign path. Naming a
         # call that no longer exists does not fail loudly here -- `before()` would just compare

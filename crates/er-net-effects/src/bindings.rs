@@ -1,4 +1,4 @@
-//! WHICH keys drive the effect selector, read from `er-net-effects.toml` and re-read while the
+//! Which keys drive the effect selector, read from `er-net-effects.toml` and re-read while the
 //! game runs.
 //!
 //! # Why these stopped being constants
@@ -21,9 +21,9 @@
 //! **A malformed value must keep the key that was working.** `er_hotkey_config::Binding` owns that
 //! rule; this module supplies the parse and the log line.
 //!
-//! # Alt is a REQUIREMENT, never a filter
+//! # Alt is a requirement, never a filter
 //!
-//! A chord with Alt fires only while Alt is held. A chord WITHOUT Alt fires whether or not it is
+//! A chord with Alt fires only while Alt is held. A chord without Alt fires whether or not it is
 //! -- which is what the hard-coded table did, and it matters: holding Alt while arrowing through
 //! the list must keep moving the cursor. Getting this backwards would make the arrows deaf
 //! whenever the player happened to rest a thumb on Alt.
@@ -69,10 +69,10 @@ pub(crate) mod slot {
     pub(crate) const STACK_ADD: usize = 4;
     pub(crate) const STACK_REMOVE: usize = 5;
     pub(crate) const EFFECT_TOGGLE: usize = 6;
-    /// Show/hide accepts several chords, so it owns a RANGE.
+    /// Show/hide accepts several chords, so it owns a range.
     pub(crate) const SHOW_HIDE_FIRST: usize = 7;
     pub(crate) const SHOW_HIDE_MAX: usize = 3;
-    /// Expand/collapse, placed AFTER the show/hide range so adding it renumbered no existing
+    /// Expand/collapse, placed after the show/hide range so adding it renumbered no existing
     /// slot. The indices feed a positional bitmask, so a renumber is a real hazard even though
     /// nothing persists them.
     pub(crate) const EXPAND_COLLAPSE: usize = SHOW_HIDE_FIRST + SHOW_HIDE_MAX;
@@ -81,7 +81,7 @@ pub(crate) mod slot {
     pub(crate) const COUNT: usize = EXPAND_COLLAPSE + 1;
 }
 
-/// The mask of the four cursor slots -- the only keys this DLL TAKES from the game.
+/// The mask of the four cursor slots -- the only keys this DLL takes from the game.
 pub(crate) const CURSOR_SLOT_MASK: usize = (1 << slot::CURSOR_UP)
     | (1 << slot::CURSOR_DOWN)
     | (1 << slot::CURSOR_LEFT)
@@ -149,7 +149,7 @@ pub(crate) const SHOW_HIDE_DEFAULT: &str = "alt+0, alt+kp_0, alt+insert";
 /// The key section of the shipped `er-net-effects.toml`, appended to the default file by
 /// `crate::config`.
 ///
-/// It lives HERE, next to the table it documents, so a host test can prove that every line it
+/// It lives here, next to the table it documents, so a host test can prove that every line it
 /// declares is a binding this module recognises and every value it suggests actually parses. A
 /// config file that documents a key the parser rejects is a lie the player reads and then reports
 /// as the feature being broken -- and `crate::config` is windows-gated, so a test living there
@@ -206,7 +206,7 @@ selector_show_hide_key = "alt+0, alt+kp_0, alt+insert"
 /// Is this config key one of the binding keys?
 ///
 /// Used by the config parser so a binding line is not reported as an unknown key, and so the list
-/// of names lives HERE rather than being repeated in the parser -- a name that drifts between the
+/// of names lives here rather than being repeated in the parser -- a name that drifts between the
 /// two would read as a typo in the player's file.
 pub(crate) fn is_binding_key(name: &str) -> bool {
     name == SHOW_HIDE_CONFIG_KEY
@@ -231,7 +231,7 @@ impl BoundKey {
 
     /// Does a virtual key plus the current Alt state press this binding?
     ///
-    /// See the module note: Alt in the chord is a REQUIREMENT; Alt absent from the chord is not a
+    /// See the module note: Alt in the chord is a requirement; Alt absent from the chord is not a
     /// prohibition.
     pub(crate) const fn matches(self, vk: u32, alt_down: bool) -> bool {
         self.chord.vk == vk && (!self.chord.needs_alt() || alt_down)
@@ -273,10 +273,10 @@ impl Default for SelectorBindings {
 
 /// Parse one binding value.
 ///
-/// `cursor` tightens the rule for the four keys this DLL TAKES from the game: taking a key means
+/// `cursor` tightens the rule for the four keys this DLL takes from the game: taking a key means
 /// blanking its byte out of the DirectInput buffer before the game reads it, and a key with no
 /// DirectInput scancode has no byte to blank. Binding one would produce a cursor key that moves
-/// the selector AND still reaches the game -- an arrow that scrolls the list and swaps your
+/// the selector and still reaches the game -- an arrow that scrolls the list and swaps your
 /// quick-item at the same time. Refusing at parse time turns that into a log line and keeps the
 /// key that was working.
 ///
@@ -315,7 +315,7 @@ pub(crate) fn parse_chord_list(value: &str) -> Result<Vec<Chord>, KeyParseError>
 impl SelectorBindings {
     /// Every bound key.
     ///
-    /// The ORDER is not the slot order and never was -- `apply_show_hide` rebinds by
+    /// The order is not the slot order and never was -- `apply_show_hide` rebinds by
     /// retain-and-append, so a rebound show/hide chord moves to the end. Read `BoundKey::slot`;
     /// nothing here may depend on position in this slice.
     pub(crate) fn keys(&self) -> &[BoundKey] {
@@ -330,7 +330,7 @@ impl SelectorBindings {
             .map(|key| key.action)
     }
 
-    /// The scancodes of the four cursor keys -- the ONLY bytes this DLL blanks out of the game's
+    /// The scancodes of the four cursor keys -- the only bytes this DLL blanks out of the game's
     /// keyboard buffer.
     ///
     /// A cursor key bound to something DirectInput cannot report has no scancode and is simply
@@ -415,7 +415,7 @@ impl SelectorBindings {
                     describe(&chords)
                 ));
             }
-            // The bar can be HIDDEN, and these chords are the only way back to it. Refusing a bad
+            // The bar can be hidden, and these chords are the only way back to it. Refusing a bad
             // value here is not a nicety -- accepting an empty list would leave a player with a
             // bar they cannot recover and a config file that looks correct.
             Err(error) => update.messages.push(format!(
@@ -428,14 +428,14 @@ impl SelectorBindings {
 
 /// What applying a config file's values did.
 ///
-/// `moved` and `messages` are DIFFERENT questions, and conflating them is a bug with a symptom:
-/// a rejected value produces a message but must NOT count as a change, because a change clears
+/// `moved` and `messages` are different questions, and conflating them is a bug with a symptom:
+/// a rejected value produces a message but must not count as a change, because a change clears
 /// the DirectInput edge mask and a clear while a key is held reads as a press the player never
 /// made. So a config file with a permanent typo in it would otherwise manufacture one phantom
 /// press per reload, forever.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BindingsUpdate {
-    /// True when at least one binding actually MOVED. The caller's edge-reset signal.
+    /// True when at least one binding actually moved. The caller's edge-reset signal.
     pub(crate) moved: bool,
     /// Lines to log: one per binding that moved, one per value refused.
     pub(crate) messages: Vec<String>,
@@ -469,7 +469,7 @@ pub(crate) fn live() -> std::sync::Arc<SelectorBindings> {
 /// Apply a config file's values to the live bindings.
 ///
 /// The returned [`BindingsUpdate::moved`] is the caller's edge-reset signal; a rejected value
-/// produces a message WITHOUT setting it, which is the whole reason the two are separate.
+/// produces a message without setting it, which is the whole reason the two are separate.
 pub(crate) fn refresh_live(setting: impl Fn(&str) -> Option<String>) -> BindingsUpdate {
     let cell = live_cell();
     let mut guard = match cell.write() {
@@ -542,7 +542,7 @@ mod tests {
         }
     }
 
-    /// Alt in a chord is a requirement; Alt absent is NOT a prohibition. Holding Alt while arrowing
+    /// Alt in a chord is a requirement; Alt absent is not a prohibition. Holding Alt while arrowing
     /// through the list must keep moving the cursor.
     #[test]
     fn a_chord_without_alt_fires_whether_or_not_alt_is_held() {
@@ -704,7 +704,7 @@ mod tests {
             .collect()
     }
 
-    /// STRUCTURAL. Every binding must appear in the shipped file, and every line the shipped file
+    /// Structural. Every binding must appear in the shipped file, and every line the shipped file
     /// declares must be a binding. A key missing from the file is one a player cannot discover; a
     /// line the parser does not know is reported to them as an unknown key in a file we wrote.
     #[test]
@@ -731,7 +731,7 @@ mod tests {
 
     /// The values the shipped file suggests must parse to exactly the built-in defaults. A file
     /// whose own values do not read is a typo the player is blamed for; one whose values read as
-    /// DIFFERENT keys silently changes the DLL for anyone who accepts the generated file.
+    /// different keys silently changes the DLL for anyone who accepts the generated file.
     #[test]
     fn the_shipped_values_parse_to_the_built_in_defaults() {
         let shipped = shipped_lines();
@@ -766,7 +766,7 @@ mod tests {
 
     /// Every shipped default must be a key DirectInput can report.
     ///
-    /// The DirectInput read is the STRONG path: `input_suppression::queue_dinput_selector_edges`
+    /// The DirectInput read is the strong path: `input_suppression::queue_dinput_selector_edges`
     /// inspects the very 256-byte buffer the game itself polls, so a key with a scancode is seen
     /// exactly when the game sees it, whatever the window is doing with messages. A key with none
     /// can only reach the selector through the `WH_KEYBOARD_LL` hook -- a separate mechanism with
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(scancodes, vec![0xc8, 0xcb, 0xcd, 0xd0], "the four arrows");
     }
 
-    /// A CURSOR key must be one DirectInput can report, because taking a key from the game means
+    /// A cursor key must be one DirectInput can report, because taking a key from the game means
     /// blanking its byte out of the buffer and a key with no scancode has no byte. Binding one
     /// would give the player an arrow that both scrolls the list and still reaches the game.
     #[test]
@@ -827,7 +827,7 @@ mod tests {
         );
     }
 
-    /// A NON-cursor key is never taken from the game, so it may be one DirectInput cannot report:
+    /// A non-cursor key is never taken from the game, so it may be one DirectInput cannot report:
     /// it still arrives through the low-level keyboard hook.
     #[test]
     fn a_non_cursor_key_may_be_one_directinput_cannot_report() {

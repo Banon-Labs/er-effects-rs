@@ -11,23 +11,23 @@ Aborts if any requested name is not found (so a typo never silently no-ops).
 
 This script is the EXECUTOR for `scripts/find-dead-items.py`. Until today it acted on that
 advice with no proof of its own: the only refusal path was "I could not find that name in this
-file". Whether anything still CALLED the item was never checked here, and the advisor it trusted
+file". Whether anything still called the item was never checked here, and the advisor it trusted
 searched a corpus of four Rust globs -- so an identifier whose only consumer was an RVA ledger,
 a `scripts/*.py`, a `Cargo.toml` comment or a design note was reported dead and deleted.
 
 That refusal path is now closed. Before writing anything, every requested name is re-proved dead
-against the FULL corpus by importing `find_dead_items.prove_names` -- the same test the advisor
+against the full corpus by importing `find_dead_items.prove_names` -- the same test the advisor
 runs, re-run at delete time so a consumer added since the advisory still stops the delete. The
 proof discounts exactly the definition lines this script is about to remove and nothing else.
 
 Outcomes:
 
-    DEAD             deleted.
-    ALIVE            refused; a Rust build-graph consumer survives.
-    ALIVE-ELSEWHERE  refused; a ledger/script/doc/manifest consumer survives.
-    MIRROR-ONLY      refused; only stale-checkout hits, but still not proof of death.
+    Dead             deleted.
+    Alive            refused; a Rust build-graph consumer survives.
+    Alive-elsewhere  refused; a ledger/script/doc/manifest consumer survives.
+    Mirror-only      refused; only stale-checkout hits, but still not proof of death.
 
-Refusal is all-or-nothing: if ANY name fails, NOTHING is deleted, so a batch can never be half
+Refusal is all-or-nothing: if any name fails, nothing is deleted, so a batch can never be half
 applied. Exit status is 3.
 
 `--force-not-proven-dead` overrides the refusal for a human who has decided otherwise. It is
@@ -37,7 +37,7 @@ ignore, and must never be reached for to make a batch "work".
 Flags:
     --force-not-proven-dead   delete anyway, loudly (default is refusal)
     --include-mirrors         also count `.worktrees/` / `target/` hits (see find-dead-items.py)
-    --repo-root PATH          corpus root (default: $REPO_ROOT or this repo)
+    --repo-root path          corpus root (default: $REPO_ROOT or this repo)
     --dry-run                 run the proof and report, write nothing
     --selftest                self-check on a scratch tree
 """
@@ -158,7 +158,7 @@ def doc_attr_start(lines, sig):
 def locate_items(lines, wanted):
     """Walk the file once, returning (spans, def_sites, found).
 
-    `spans` are (start, end) inclusive line indices INCLUDING the doc/attribute block.
+    `spans` are (start, end) inclusive line indices including the doc/attribute block.
     `def_sites` are 1-based signature line numbers per name -- the only lines the death test is
     allowed to discount, matching what `find-dead-items.py` discounts for its own findings.
     """
@@ -279,7 +279,7 @@ def _selftest() -> int:
     fdi = load_find_dead_items()
 
     # ---------------------------------------------------------------- non-vacuity, frozen control
-    # The pre-fix corpus is spelled out as a literal INSIDE find-dead-items.py and read here.
+    # The pre-fix corpus is spelled out as a literal inside find-dead-items.py and read here.
     # If the old and the new corpus agreed about these names, every assertion below would be
     # about the parser rather than about the corpus, and would prove nothing.
     with tempfile.TemporaryDirectory(prefix="delete-rust-items-control-") as tmp:
@@ -301,7 +301,7 @@ def _selftest() -> int:
         old = prove_dead(fdi, src, def_sites, root=tmp, tiers=old_tiers)
         new = prove_dead(fdi, src, def_sites, root=tmp)
         # `.get`, not `[...]`: the names reach these dicts through ITEM_RE, so a broken matcher
-        # empties them. A KeyError here would hide WHICH assertion noticed, which is the one
+        # empties them. A KeyError here would hide which assertion noticed, which is the one
         # thing this selftest exists to be able to say.
         for name in ("LEDGER_ONLY", "SCRIPT_ONLY", "DEAD_ONE"):
             if name not in old or name not in new:
@@ -321,7 +321,7 @@ def _selftest() -> int:
             "negative control DEAD_ONE must be dead under BOTH corpora",
         )
 
-    # ------------------------------------------------------------------- (a) dead item IS deleted
+    # ------------------------------------------------------------------- (a) dead item is deleted
     with tempfile.TemporaryDirectory(prefix="delete-rust-items-a-") as tmp:
         src = _make_scratch(tmp)
         before = src.read_text(encoding="utf-8")
@@ -332,7 +332,7 @@ def _selftest() -> int:
         check("LEDGER_ONLY" in after, "(a) delete removed an item it was not asked about")
         check(len(after) < len(before), "(a) file did not shrink")
 
-    # --------------------------------------------- (b) ledger/script-only consumer is REFUSED
+    # --------------------------------------------- (b) ledger/script-only consumer is refused
     for name, consumer in (("LEDGER_ONLY", "demo-map.tsv"), ("SCRIPT_ONLY", "demo-tool.py")):
         with tempfile.TemporaryDirectory(prefix="delete-rust-items-b-") as tmp:
             src = _make_scratch(tmp)
@@ -349,7 +349,7 @@ def _selftest() -> int:
                 f"(b) refusal did not name the surviving consumer {consumer}: {err.strip()[:200]}",
             )
 
-    # ------------------------------------------------------- (c) mixed request deletes NOTHING
+    # ------------------------------------------------------- (c) mixed request deletes nothing
     with tempfile.TemporaryDirectory(prefix="delete-rust-items-c-") as tmp:
         src = _make_scratch(tmp)
         before = src.read_text(encoding="utf-8")

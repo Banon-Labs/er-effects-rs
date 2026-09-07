@@ -1,61 +1,61 @@
 #!/usr/bin/env python3
 """Forbid marker-text-file feature gates in the DLL source; permit only justified diagnostics.
 
-POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
+Policy (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
 =========================================================================
 User directive: "we don't want any env/marker gated features." A "marker-file gate" is
 any `.join("er-quickload-<name>.txt")` in `crates/er-quickload/src/**/*.rs` whose result
-is consumed by `.exists()` -- the boolean on/off toggle shape, SEMANTICALLY IDENTICAL to
+is consumed by `.exists()` -- the boolean on/off toggle shape, SEMANTICALLY identical to
 an env-var gate. (Data control files read with `read_to_string`, e.g. a slot number, are
-NOT toggles and are out of scope.)
+not toggles and are out of scope.)
 
 The former grandfathering allowlist `sanctioned_marker_gate_names` and the
 `migrate_to_default` ratchet are DEPRECATED: they are kept in the baseline JSON only so
-their emptiness is explicit, and this checker FAILS if either is non-empty. With the
-behavioral allowlist empty, EVERY marker gate hard-fails UNLESS its marker NAME appears
+their emptiness is explicit, and this checker fails if either is non-empty. With the
+behavioral allowlist empty, every marker gate hard-fails unless its marker name appears
 in `diagnostic_gates` (in `.auto/marker_file_gate_baseline.json`) with a non-empty
-rationale AND the enclosing fn does NOT classify as behavioral.
+rationale and the enclosing fn does not classify as behavioral.
 
-`diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely
-diagnostic toggles that change NO game behavior (passive logging/telemetry/trace,
-read-only sampling). A behavioral fix must be DEFAULT behavior (gated only on a real
+`diagnostic_gates` is the only permitted exception and is reserved for genuinely
+diagnostic toggles that change no game behavior (passive logging/telemetry/trace,
+read-only sampling). A behavioral fix must be default behavior (gated only on a real
 runtime condition) or removed; it may never be re-added as a marker gate. Adding a
 `diagnostic_gates` entry is a deliberate reviewed act that shows in the diff and must
 carry a justification.
 
-BEHAVIORAL vs DIAGNOSTIC classification
+Behavioral vs diagnostic classification
 =======================================
 For every detected gate the checker mechanically classifies the enclosing `fn` body
 (brace-matched) as `behavioral`, `diagnostic`, or `unknown` by scanning for tokens
 (raw-pointer writes, memory patchers, detour installs, native side-effect calls =
-behavioral; logging/telemetry = diagnostic). A `diagnostic_gates` exception is REJECTED
+behavioral; logging/telemetry = diagnostic). A `diagnostic_gates` exception is rejected
 if its fn classifies as behavioral, so a behavioral fix can never sneak in as a
 "diagnostic" gate.
 
 The declarative policy lives at `.auto/marker_file_gate_policy.rego`; this checker
 asserts that file exists and contains its required snippets so it cannot silently drift.
 
-READS ONLY REAL CODE (2026-08-30)
+Reads only real code (2026-08-30)
 =================================
 Every fact below is derived from source text with comments and string bodies blanked by
-the shared `code_only` reader, never from raw text. Raw text broke this gate in BOTH
+the shared `code_only` reader, never from raw text. Raw text broke this gate in both
 directions, and only one of them was ever going to be noticed:
 
-  - LOUD. `classify()` read prose. Measured over the live tree at the time of this fix,
+  - loud. `classify()` read prose. Measured over the live tree at the time of this fix,
     15 functions classified `behavioral` purely because a comment said `transmute`,
     `SetState`, `install_detour` or `write_volatile` while explaining that the code no
     longer does any such thing. Any of those functions acquiring a sanctioned marker
     toggle would have produced a `marker-gate-diagnostic-is-behavioral` finding against
     a sentence.
-  - SILENT. The `.exists()` window in `statement_is_exists_gate` stops at the first
-    `;`, `{` or `}` in RAW text, so a trailing `// toggle; see note {here}` comment ends
+  - silent. The `.exists()` window in `statement_is_exists_gate` stops at the first
+    `;`, `{` or `}` in raw text, so a trailing `// toggle; see note {here}` comment ends
     the window before `.exists()` is reached and a real gate is never detected at all.
     Nothing surfaces that. The frozen `comment_truncated_gate` control in `selftest`
     pins it. Brace-matching in `fn_body_text` had the same exposure.
 
-The required-`.rego`-snippet facts were the silent shape again -- a REQUIRE satisfied by
-a comment -- so they are now split into STRUCTURAL snippets that must be real Rego logic
-and DOCUMENTARY snippets that are prose by design.
+The required-`.rego`-snippet facts were the silent shape again -- a require satisfied by
+a comment -- so they are now split into structural snippets that must be real Rego logic
+and documentary snippets that are prose by design.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ BASELINE_PATH = AUTO_DIR / "marker_file_gate_baseline.json"
 POLICY_PATH = AUTO_DIR / "marker_file_gate_policy.rego"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT ANOTHER AD-HOC STRIPPER. `code_only` lives in `scripts/rva_symbols.py` and is
+# One dialect, not another ad-HOC stripper. `code_only` lives in `scripts/rva_symbols.py` and is
 # shared with `check-reload-trace-policy.py`, `check-stale-rva-calls.py` and `gate-stale-rva-calls.py`.
 # A private blanker is exactly what went wrong in `audit-1170-gate-bypass.py`, whose own stripper did
 # not know a Rust char literal from a lifetime and erased live code in 42 files. Do not grow a fourth.
@@ -89,7 +89,7 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
         "rather than restoring a local copy."
     ) from missing
 
-# Deprecated behavioral-allowlist keys that MUST stay empty.
+# Deprecated behavioral-allowlist keys that must stay empty.
 DEPRECATED_ALLOWLIST_KEYS = (
     "sanctioned_marker_gate_names",
     "migrate_to_default",
@@ -136,7 +136,7 @@ DIAGNOSTIC_TOKENS = (
 # STRUCTURAL: must be real Rego logic. Checked against the policy text with `#` comments and
 # string bodies blanked, because a requirement a comment can satisfy is not a requirement. This
 # is the `has_minhook` shape from `check-reload-trace-policy.py`, where a required fact was true
-# only because a comment TITLED "NO RAW MinHook FFI HERE" named the very API it forbade.
+# only because a comment titled "NO RAW MinHook FFI HERE" named the very API it forbade.
 POLICY_REQUIRED_STRUCTURAL_SNIPPETS = (
     "package auto.marker_file_gate",
     "default allow := false",
@@ -146,7 +146,7 @@ POLICY_REQUIRED_STRUCTURAL_SNIPPETS = (
     "deny contains message if",
 )
 # DOCUMENTARY: prose is the point. Rego cannot read `diagnostic_gates` (the baseline JSON is
-# consumed by THIS checker, and the policy only sees the derived booleans) and `.exists()` is a
+# consumed by this checker, and the policy only sees the derived booleans) and `.exists()` is a
 # Rust source shape, not a Rego expression -- both can only ever appear in a comment or a deny
 # message. Requiring them in logic would be requiring a lie. Kept as a named separate class so
 # nobody later mistakes their presence for structural proof.
@@ -188,9 +188,9 @@ def relative(path: Path) -> Path:
 
 
 def match_is_code(source_text: str, code_text: str, match: re.Match) -> bool:
-    """True when the match's call PREFIX survived blanking -- i.e. it is code, not prose.
+    """True when the match's call prefix survived blanking -- i.e. it is code, not prose.
 
-    `code_only` blanks string BODIES as well as comments, and this gate's payload lives INSIDE a
+    `code_only` blanks string bodies as well as comments, and this gate's payload lives inside a
     string literal (`.join("er-quickload-x.txt")`), so the regex cannot simply be run over the
     blanked text -- it would match nothing at all, anywhere, and the gate would go permanently and
     silently green. Offsets are preserved by `code_only` and the quote characters themselves are
@@ -208,11 +208,11 @@ def match_is_code(source_text: str, code_text: str, match: re.Match) -> bool:
 
 
 def rego_code_only(text: str) -> str:
-    """`text` as Rego CODE ONLY: string bodies and `#` comments blanked, offsets preserved.
+    """`text` as Rego code ONLY: string bodies and `#` comments blanked, offsets preserved.
 
-    NOT a second stripper -- the hard half (which quotes open a string, which do not) is delegated
+    Not a second stripper -- the hard half (which quotes open a string, which do not) is delegated
     to the shared `code_only`, and this adds exactly one Rego-dialect rule on top: `#` runs to end
-    of line. Order matters and is the whole safety argument: `code_only` runs FIRST, so a `#` that
+    of line. Order matters and is the whole safety argument: `code_only` runs first, so a `#` that
     lives inside a string body has already become a space and cannot amputate the rest of a real
     rule line. Applied per line because a Rego string literal cannot span a newline; a backtick raw
     string can, and is the one shape this does not model (neither policy file uses one).
@@ -228,8 +228,8 @@ def rego_code_only(text: str) -> str:
 def statement_is_exists_gate(code_text: str, join_end: int) -> bool:
     """Is this `.join(...)` consumed by `.exists()` before the statement ends?
 
-    `code_text` MUST already be blanked. On raw text the terminator search stops at the first
-    `;`/`{`/`}` ANYWHERE in the window, including inside a trailing comment, which silently drops
+    `code_text` must already be blanked. On raw text the terminator search stops at the first
+    `;`/`{`/`}` anywhere in the window, including inside a trailing comment, which silently drops
     a real toggle written across several lines with a `// note; like {this}` on the join line.
     """
     tail = code_text[join_end : join_end + 400]
@@ -242,7 +242,7 @@ def statement_is_exists_gate(code_text: str, join_end: int) -> bool:
 
 
 def enclosing_fn(code_lines: list[str], read_index: int) -> tuple[str, int]:
-    """Nearest preceding `fn` def. `code_lines` MUST already be blanked -- a `fn` line inside a
+    """Nearest preceding `fn` def. `code_lines` must already be blanked -- a `fn` line inside a
     block comment matches `FN_DEF_RE` just as happily as a real one."""
     for i in range(read_index, -1, -1):
         if i < len(code_lines):
@@ -253,7 +253,7 @@ def enclosing_fn(code_lines: list[str], read_index: int) -> tuple[str, int]:
 
 
 def fn_body_text(code_lines: list[str], fn_index: int) -> str:
-    """Brace-matched fn body. `code_lines` MUST already be blanked -- a `}` inside a comment or a
+    """Brace-matched fn body. `code_lines` must already be blanked -- a `}` inside a comment or a
     string literal closes the body early and hides whatever behavioral token follows it."""
     depth = 0
     started = False
@@ -281,11 +281,11 @@ def classify(body: str) -> str:
 
 
 def facts_from_text(source_text: str, blank=code_only) -> dict[str, object]:
-    """Every marker-toggle fact derivable from ONE file's text, independent of where it came from.
+    """Every marker-toggle fact derivable from one file's text, independent of where it came from.
 
     `blank` defaults to the real `code_only` and exists as a parameter only so `selftest` can pass
     a deliberately-broken stand-in and prove the frozen controls are capable of failing (see the
-    NON-VACUITY block there). Product code must never call this with anything but the default.
+    non-VACUITY block there). Product code must never call this with anything but the default.
     """
     code_text = blank(source_text)
     code_lines = code_text.splitlines()
@@ -352,7 +352,7 @@ def load_baseline_data() -> dict:
 
 
 def load_diagnostic_gates(data: dict) -> dict[str, str]:
-    """Map of marker NAME -> rationale for sanctioned diagnostic-only toggles."""
+    """Map of marker name -> rationale for sanctioned diagnostic-only toggles."""
     raw = data.get("diagnostic_gates", {})
     if not isinstance(raw, dict):
         return {}
@@ -462,17 +462,17 @@ def scan_findings(gates: list[MarkerGate], diagnostic_gates: dict[str, str]) -> 
 
 
 def _blank_nothing(text: str) -> str:
-    """The gate's behaviour BEFORE this fix -- comments and strings are not stripped at all.
+    """The gate's behaviour before this fix -- comments and strings are not stripped at all.
 
     Frozen and named for what it is, not composed from `code_only`: `selftest`'s stand-in for
-    "the blanker never ran", used to show that a prose control WOULD have been misread as code by
+    "the blanker never ran", used to show that a prose control would have been misread as code by
     the old gate. Never used outside `selftest`.
     """
     return text
 
 
 def _blank_everything(text: str) -> str:
-    """A `blank` that sees NOTHING -- every character replaced with a space, offsets preserved.
+    """A `blank` that sees nothing -- every character replaced with a space, offsets preserved.
 
     `selftest`'s stand-in for a blanker broken in the other direction: over-blanking, the failure
     `scripts/audit-1170-gate-bypass.py` shipped with (its private char-literal-blind stripper
@@ -482,7 +482,7 @@ def _blank_everything(text: str) -> str:
 
 
 def selftest() -> int:
-    """The gate must read only real code, in BOTH directions: never classifying a function from a
+    """The gate must read only real code, in both directions: never classifying a function from a
     sentence (loud), and never dropping a real toggle because a comment truncated the statement
     window (silent, and nothing else would ever surface it).
     """
@@ -492,8 +492,8 @@ def selftest() -> int:
         if not condition:
             failures.append(name)
 
-    # ------------------------------------------------------------ WORLD 1: THE PROSE FALSE POSITIVE
-    # A FROZEN literal covering all three prose shapes `code_only` distinguishes: a `//` line, a
+    # ------------------------------------------------------------ World 1: The prose false positive
+    # a frozen literal covering all three prose shapes `code_only` distinguishes: a `//` line, a
     # `/* */` block, and a raw string.
     prose_control = (
         "// Removed 2026-07-19: this used to be\n"
@@ -514,14 +514,14 @@ def selftest() -> int:
         broken["marker_toggle_count"] == 3,
     )
 
-    # ------------------------------------------------------------ WORLD 2: A GENUINE VIOLATION
-    # A FROZEN LITERAL, not composed from MARKER_JOIN_RE or BEHAVIORAL_TOKENS: widening either list
+    # ------------------------------------------------------------ World 2: A genuine violation
+    # a frozen literal, not composed from MARKER_JOIN_RE or BEHAVIORAL_TOKENS: widening either list
     # must not silently widen this control too, or "the gate still catches the real thing" stops
     # being provable. `fn f<'a>` is here on purpose -- `'a` is a lifetime, not a char literal, and a
     # naive blanker that does not know the difference (the exact bug `audit-1170-gate-bypass.py`
     # shipped with, erasing live code in 42 files) treats the opening `'` as an unterminated char
     # literal and blanks everything after it, including both the toggle and the write below. One
-    # fixture, both halves: a real behavioral violation AND proof of no over-blanking.
+    # fixture, both halves: a real behavioral violation and proof of no over-blanking.
     real_violation = (
         "fn f<'a>(dir: &'a Path, target: *mut u8) -> bool {\n"
         '    if dir.join("er-quickload-real-toggle.txt").exists() {\n'
@@ -544,7 +544,7 @@ def selftest() -> int:
         and caught["marker_toggles"][0]["classification"] == "behavioral",
     )
 
-    # NON-VACUITY: regress the blanker, confirm the control FAILS, then restore. A control that
+    # Non-VACUITY: regress the blanker, confirm the control fails, then restore. A control that
     # passes no matter what `blank` does is not exercising the blanking at all and proves nothing.
     regressed = facts_from_text(real_violation, blank=_blank_everything)
     check(
@@ -568,9 +568,9 @@ def selftest() -> int:
         )
     )
 
-    # ------------------------------------------------------------ THE SILENT DIRECTION
-    # A REAL toggle the OLD gate could not see: the `.exists()` window stopped at the `;` inside
-    # the trailing comment. FROZEN. This is the false NEGATIVE -- the shape nothing surfaces.
+    # ------------------------------------------------------------ The silent direction
+    # a real toggle the old gate could not see: the `.exists()` window stopped at the `;` inside
+    # the trailing comment. Frozen. This is the false negative -- the shape nothing surfaces.
     comment_truncated_gate = (
         "fn gate(dir: &Path) -> bool {\n"
         "    dir\n"
@@ -595,8 +595,8 @@ def selftest() -> int:
         % (seen["marker_toggle_count"], missed["marker_toggle_count"])
     )
 
-    # ------------------------------------------------------------ CLASSIFICATION FROM CODE ONLY
-    # 15 live functions classified `behavioral` off prose alone when this was measured. FROZEN
+    # ------------------------------------------------------------ Classification from code only
+    # 15 live functions classified `behavioral` off prose alone when this was measured. Frozen
     # reproduction: every behavioral token here sits in a comment saying the code no longer does it.
     prose_classified_behavioral = (
         "fn diagnostic_only(dir: &Path) -> bool {\n"
@@ -643,9 +643,9 @@ def selftest() -> int:
         and braced["marker_toggles"][0]["classification"] == "behavioral",
     )
 
-    # ------------------------------------------------------------ REQUIRED POLICY SNIPPETS
-    # The silent direction again: a REQUIRE satisfied by prose never surfaces. FROZEN policy text
-    # whose comment and deny-message NAME structural requirements the file does not declare.
+    # ------------------------------------------------------------ Required policy snippets
+    # The silent direction again: a require satisfied by prose never surfaces. Frozen policy text
+    # whose comment and deny-message name structural requirements the file does not declare.
     prose_only_policy = (
         "package auto.marker_file_gate\n"
         "\n"
@@ -678,7 +678,7 @@ def selftest() -> int:
         % (len(strict["missing_structural"]), len(lax["missing_structural"]))
     )
 
-    # `rego_code_only` must not amputate a rule line at a `#` that lives inside a STRING. FROZEN.
+    # `rego_code_only` must not amputate a rule line at a `#` that lives inside a string. Frozen.
     hash_inside_string_policy = (
         "package auto.marker_file_gate\n"
         "default allow := false\n"
@@ -697,7 +697,7 @@ def selftest() -> int:
         survives["missing_structural"] == [],
     )
 
-    # ------------------------------------------------------------ AGAINST THE ACTUAL TREE
+    # ------------------------------------------------------------ Against the actual tree
     live_gates = scan_marker_gates()
     check(
         f"scan_marker_gates() found nothing under {relative(SRC_DIR)}; the walk is broken",

@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """Watch Seamless's session state machine and its option menu, live.
 
-WHAT THIS ANSWERS
+What this answers
 -----------------
 The option table, the menu builder and the confirm hook are plaintext and fully read (2026-08-04).
 Two things looked unreachable inside the Themida-virtualized `seamless_session_manager`:
 
-  * what puts the session into state 0x15 -- the ONLY state in which "Seek opponent" appears; and
+  * what puts the session into state 0x15 -- the only state in which "Seek opponent" appears; and
   * what consumes the opponent handle that "Seek opponent" latches.
 
-THE FIRST ONE TURNED OUT NOT TO BE IN THE VM AT ALL (2026-08-05). An earlier pass concluded "nothing
+The first one turned out not to be in the VM at all (2026-08-05). An earlier pass concluded "nothing
 plaintext sets 0x15" from an accessor search; that was a search artifact, not a fact. 0x15 is never
-a literal ANYWHERE in the image -- it is COMPUTED, by five plain instructions at ersc+0x716e7, from
+a literal anywhere in the image -- it is computed, by five plain instructions at ersc+0x716e7, from
 one bit. See S+0x00 below. The lesson generalises: "no immediate store of the value" is not the same
 as "no plaintext writer", and a constant that is arithmetic on a flag will never appear as a literal.
 
 The second is still unread, and is genuinely observable rather than readable: the latch is a plain
 qword, so sampling it across a real session reconstructs that half from the outside.
 
-WHAT IT WATCHES, and why each field
+What it watches, and why each field
 -----------------------------------
 Everything hangs off ERSC's option-menu object, `OSM`, and its session object `S = OSM+0x58`:
 
@@ -29,9 +29,9 @@ Everything hangs off ERSC's option-menu object, `OSM`, and its session object `S
            "Invade world as a wanderer" sets it to 0x0D; "Cancel search" sets 0x22 -- both as
            immediate stores. 0x15 is not stored, it is computed; see S+0x00.
   S+0x1D4  cleared to 0 by the "Seek opponent" action. One writer, zero plaintext readers.
-  S+0x1F0  the CHOSEN OPPONENT'S HANDLE, latched by "Seek opponent". Zero plaintext consumers.
+  S+0x1F0  the chosen opponent'S handle, latched by "Seek opponent". Zero plaintext consumers.
            This is the closest thing in the mod to "invade this specific person".
-  S+0x00   THE FLAGS WORD THAT DECIDES 0x15. Found statically 2026-08-05, and it is NOT in the
+  S+0x00   the flags word that decides 0x15. Found statically 2026-08-05, and it is not in the
            virtualized dispatcher after all -- the state is plain arithmetic on one bit, at
            ersc+0x716e7:
                mov rax,[rsp+0x30]      ; = *(u32*)S, loaded at ersc+0x71584
@@ -39,15 +39,15 @@ Everything hangs off ERSC's option-menu object, `OSM`, and its session object `S
                and eax,1               ; bit 19  (0x0008_0000)
                lea eax,[rax+rax*8]     ; x9
                add eax,0xc             ; +12
-               mov [rdi+0x110],eax     ; 12 (0x0C) when clear, 21 (0x15) when SET
+               mov [rdi+0x110],eax     ; 12 (0x0C) when clear, 21 (0x15) when set
            So "Seek opponent" is offered exactly when bit 19 of S+0x00 is set. Watching that bit
-           predicts the option's availability BEFORE the state byte changes, and distinguishes
+           predicts the option's availability before the state byte changes, and distinguishes
            "the state machine never moved" from "the bit was never set".
-  S+0x10C  update sentinel. `cmp dword [rdi+0x10c],0x7fffffff; je` at ersc+0x716db SKIPS the state
+  S+0x10C  update sentinel. `cmp dword [rdi+0x10c],0x7fffffff; je` at ersc+0x716db skips the state
            write entirely. If state looks frozen while the flags bit flips, this is why -- so it
            is sampled rather than inferred.
 
-WHAT IS PROVEN vs INFERRED: the derivation above is proven from the bytes. What bit 19 MEANS is
+What is proven vs INFERRED: the derivation above is proven from the bytes. What bit 19 means is
 inferred from context (it sits right after a decrypt+validate of a 0x1C-byte buffer --
 `xorps xmm0,[rbx]` then `call ersc+0x171f00`), which points at server-pushed state, consistent with
 the destination arriving via CS::SosSignMan::SetMultiplayJoinData. Whether the bit can be
@@ -65,14 +65,14 @@ address is resolved against Process.findModuleByName('ersc.dll').base at runtime
     0x24D10  action: "Mark world for other invaders"
     0x24460  action: "Cancel search"                (sets S+0x110 = 0x22)
 
-READ-ONLY. Nothing is written and nothing in ERSC is called. The prologue of show() is verified
+Read-only. Nothing is written and nothing in ERSC is called. The prologue of show() is verified
 before hooking, so a version drift fails loudly instead of hooking the middle of some other
 function.
 
-REACHING THE PROCESS
+Reaching the process
 --------------------
 Wine/Proton: frida.attach() sees nothing. frida-gadget.dll is loaded into the game as an me3
-[[natives]] entry and listens on 127.0.0.1:27042; connect to it as a REMOTE DEVICE. Use a
+[[natives]] entry and listens on 127.0.0.1:27042; connect to it as a remote device. Use a
 gadget-bearing profile, e.g. /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-ersc-session-trace.py
@@ -88,14 +88,14 @@ import threading
 
 #: The Seamless Co-op build every RVA, offset and state constant below was measured against.
 #:
-#: This is a GATE, checked in `main()` before the process is touched -- not a note. Seamless is
+#: This is a gate, checked in `main()` before the process is touched -- not a note. Seamless is
 #: third-party and the user updates it independently; v2.0.0 (2026-09-02) moved `show`
 #: 0x22d30->0x241a0, `cancel` 0x24460->0x258d0, the session state field +0x110->+0x150, its guard
 #: +0x10c->+0x14c, and changed the cancel constant 0x22->0x23. Only `show()` verifies a prologue
 #: before hooking, so on a moved build the other five hooks attach to whatever now occupies the
 #: offset and report plausible nonsense.
 #:
-#: Bumping this is a claim that every constant below has been RE-MEASURED against the new build,
+#: Bumping this is a claim that every constant below has been RE-measured against the new build,
 #: not merely that the new build boots. `scripts/locate-ersc-entry-points.py` is the measurement.
 MEASURED_ERSC_VERSION = "1.9.9"
 
@@ -643,9 +643,9 @@ def main() -> int:
         print(f"REFUSING: {args.out} is inside the repo.", file=sys.stderr)
         return 2
 
-    # Every RVA, session-field offset and state constant in this file was measured against ONE
+    # Every RVA, session-field offset and state constant in this file was measured against one
     # Seamless Co-op build. Refuse before touching the process rather than after, because the
-    # failure mode here is not a crash. `--auto-cancel` CALLS `ersc+0x24460`; on a build where
+    # failure mode here is not a crash. `--auto-cancel` calls `ersc+0x24460`; on a build where
     # that offset holds something else, this makes an indirect call to an arbitrary address
     # inside a live co-op session, with arguments shaped for a different function. Everything
     # else silently mis-reads: `S+0x110` on a build that moved the field to `+0x150` returns a
@@ -766,7 +766,7 @@ def main() -> int:
             f = p["fields"]
             state = f["state"]
             name = STATE_NAMES.get(state, "UNKNOWN -- this is the interesting case")
-            # Flags first: bit 19 is the CAUSE, the state byte is the effect.
+            # Flags first: bit 19 is the cause, the state byte is the effect.
             if f.get("seekBit"):
                 seen["seek_bit"] = True
             if state == 0x15:

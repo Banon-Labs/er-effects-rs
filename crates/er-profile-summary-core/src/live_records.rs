@@ -1,4 +1,4 @@
-//! Read the LIVE `CS::ProfileSummary` -- the pointer, and what one record says about its slot.
+//! Read the live `CS::ProfileSummary` -- the pointer, and what one record says about its slot.
 //!
 //! `system_quit_profile_summary_ptr` moved from
 //! `experiments/startup_hooks/loading_cover/loading_cover_save_slot.rs` and
@@ -6,7 +6,7 @@
 //! `experiments/continue_load/slot_resolution.rs`. All three walked `GameDataMan` to the same
 //! pointer and then read the same record table, from three different files.
 //!
-//! The pointer walk is THE one route to the summary: `er-quit-menu-core`'s
+//! The pointer walk is the one route to the summary: `er-quit-menu-core`'s
 //! `system_quit_profile_summary_ptr` host field is installed with this function, so the quit menu
 //! and the autoload chain cannot disagree about where the records are.
 
@@ -43,7 +43,7 @@ const PROFILE_SLOT_INDEX_ZERO: i32 = 0;
 /// # Safety
 ///
 /// No precondition: the read goes through `ReadProcessMemory` and fails closed. The returned value
-/// is a SAMPLE -- the game may free the allocation on another thread -- so callers must not hold it
+/// is a sample -- the game may free the allocation on another thread -- so callers must not hold it
 /// across a frame boundary.
 pub unsafe fn system_quit_profile_summary_ptr() -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -55,7 +55,7 @@ pub unsafe fn system_quit_profile_summary_ptr() -> usize {
 }
 
 /// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
-/// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
+/// human-driven in-world Load-Profile pick so activating an empty slot never arms a switch (which
 /// would tear the world down to a clean title and then fail the fresh deserialize, stranding the game
 /// at a blank title). Reads the same save-record table the identity semaphore uses -- fault-guarded,
 /// returns false on any unreadable pointer so an empty/unknown slot is treated as "no character".
@@ -126,10 +126,10 @@ pub unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
     )
 }
 
-/// The NAME + LEVEL identity of one live record, for the drift watch.
+/// The name + level identity of one live record, for the drift watch.
 ///
 /// Separate from [`profile_slot_fingerprint`] because that answers "is this a character" and hands
-/// back a name LENGTH -- two different names of the same length read as identical to it, which is
+/// back a name length -- two different names of the same length read as identical to it, which is
 /// exactly the comparison this must not get wrong. The name is hashed rather than returned so the
 /// caller can hold it in an atomic and compare it every tick without allocating.
 ///

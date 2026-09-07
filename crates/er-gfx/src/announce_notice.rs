@@ -4,7 +4,7 @@
 //!
 //! `CS::FeSystemAnnounceView` drives `menu:/01_080_EmergencyNotice.gfx`. The name alone is
 //! suggestive and not proof, so the identification rests on a match the name cannot fake: the
-//! view's display step (`0x1408c48c0`) drives its fade by NAME, calling
+//! view's display step (`0x1408c48c0`) drives its fade by name, calling
 //! `FUN_140749b20(view+0xa50, "FadeIn")` in one state and `"FadeOut"` in another — and this movie
 //! declares frame labels `FadeIn`, `Loop` and `fadeOut`, and is the only movie in the menu corpus
 //! that mentions "Announce" at all (it also carries `MENU_Announce.tga`).
@@ -12,7 +12,7 @@
 //! # Why the text sat on the left
 //!
 //! Its single [`Tag::DefineEditText`] — character [`NOTICE_TEXT_CHARACTER_ID`] — declares
-//! `align: 0`, i.e. LEFT, inside bounds 34,520 twips wide (~1,726 px). A short line like
+//! `align: 0`, i.e. Left, inside bounds 34,520 twips wide (~1,726 px). A short line like
 //! "Rejected Limgrave (elsewhere)" therefore starts at the far left of a box spanning most of the
 //! screen, which reads as "stuck to the edge" rather than as a banner.
 //!
@@ -42,10 +42,10 @@ pub const ALIGN_LEFT: u8 = 0;
 /// Centre — what the banner is changed to.
 pub const ALIGN_CENTER: u8 = 2;
 
-/// The notice field's width in PIXELS, as the engine computes it.
+/// The notice field's width in pixels, as the engine computes it.
 ///
 /// Bounds are `x_min = -40`, `x_max = 34_520` twips. The engine's own measurement
-/// (`FUN_140d82660`) scales each edge by `0.05` (twips to pixels) and truncates to `int` BEFORE
+/// (`FUN_140d82660`) scales each edge by `0.05` (twips to pixels) and truncates to `int` before
 /// subtracting: `(int)(34520 * 0.05) - (int)(-40 * 0.05)` = `1726 - -2` = `1728`.
 ///
 /// Reproduced here rather than approximated because it is the baseline the DLL's blank-banner
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn nothing_but_the_alignment_changes() {
         // The banner's position, size, colour, font and text all belong to the game. This edit
-        // moves glyphs INSIDE a box it does not touch; changing anything else here would move a
+        // moves glyphs inside a box it does not touch; changing anything else here would move a
         // surface the game positions itself.
         let before = movie_with(vec![
             field(NOTICE_TEXT_CHARACTER_ID, 0xa1, Some(ALIGN_LEFT)),

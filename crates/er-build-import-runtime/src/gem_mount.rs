@@ -1,4 +1,4 @@
-//! Whether a gem may be mounted on an armament -- the GAME's rule, transcribed.
+//! Whether a gem may be mounted on an armament -- the game's rule, transcribed.
 //!
 //! # Why this has to exist on both sides
 //!

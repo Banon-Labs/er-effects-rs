@@ -6,13 +6,13 @@
 //!   1. whole-file one-shot decode wall time (the "cost per map file" number),
 //!   2. the game's own incremental 256 KB-raw-step loop
 //!      (`OodleLZ_GetCompressedStepForRawStep` + `OodleLZ_Decompress`), and
-//!   3. whether a PREFIX of N raw blocks can be produced without decoding the rest,
+//!   3. whether a prefix of N raw blocks can be produced without decoding the rest,
 //!      byte-identical to the same range of the full decode.
 //!
 //! Build (from repo root):
 //!   cargo xwin build --release --target x86_64-pc-windows-msvc \
 //!     --manifest-path scripts/oodle-dcx-probe/Cargo.toml
-//! Run (oo2core_6_win64.dll must be next to the exe or on PATH):
+//! Run (oo2core_6_win64.dll must be next to the exe or on path):
 //!   wine target/.../oodle-dcx-probe.exe <in.msb.dcx> <out.msb> [prefix_blocks]
 
 use std::ffi::CString;
@@ -94,7 +94,7 @@ unsafe fn call_decompress(
     }
 }
 
-/// `--sweep <dir> <prefix_blocks|0=full>`: decode every `*.msb.dcx` in `dir` in ONE
+/// `--sweep <dir> <prefix_blocks|0=full>`: decode every `*.msb.dcx` in `dir` in one
 /// process and report total wall time -- the "full sweep" cost, measured not extrapolated.
 fn sweep(dir: &str, prefix_blocks: usize, dec: PfnDecompress, step: PfnStep) {
     let mut files: Vec<_> = std::fs::read_dir(dir)

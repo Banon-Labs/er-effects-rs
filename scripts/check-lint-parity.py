@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Fail if this workspace is less strict than the parent project `../fromsoftware-rs`.
 
-The user's standing requirement (2026-08-21) is that this code be AT LEAST as strict as the
+The user's standing requirement (2026-08-21) is that this code be at least as strict as the
 parent project. That is not a thing Cargo can do for us: `[lints] workspace = true` resolves
-only against the CURRENT workspace root, and lint levels never propagate from a path
+only against the current workspace root, and lint levels never propagate from a path
 dependency to its dependents. So parity has to be asserted, and this gate asserts it.
 
-WHAT UPSTREAM'S STRICTNESS ACTUALLY IS
+What upstream'S STRICTNESS actually is
 --------------------------------------
-Verified by exhaustive sweep 2026-08-21: `fromsoftware-rs` has NO `clippy.toml`, NO `[lints]`
+Verified by exhaustive sweep 2026-08-21: `fromsoftware-rs` has no `clippy.toml`, no `[lints]`
 table in any of its 18 member manifests, and exactly one `#![allow]` in its entire tree. Every
 occurrence of the string "clippy" in that repo is two lines of CI, one line of
 `rust-toolchain.toml`, and 5,534 per-site `#[allow(...)]` escape hatches. Its whole
@@ -19,23 +19,23 @@ configuration is therefore:
 expressed as `RUSTFLAGS=-Dwarnings` + `RUSTDOCFLAGS=-Dwarnings` around
 `cargo clippy --all-targets --no-deps` in `.github/workflows/rust.yml`.
 
-Our `[workspace.lints]` table is the declarative equivalent, and it is BETTER than the env
+Our `[workspace.lints]` table is the declarative equivalent, and it is better than the env
 vars it mirrors: it is per-package metadata rather than flags, so it survives the cargo-xwin
 trap described below, and it applies only to our crates and never to the `../fromsoftware-rs`
 path dependencies.
 
 Because upstream's configuration is "whatever the toolchain warns about by default", parity is
-not a fixed list we can hard-code -- it moves when upstream adds a knob. So this gate READS
+not a fixed list we can hard-code -- it moves when upstream adds a knob. So this gate reads
 upstream and fails if it grows a `clippy.toml` or a `[lints]` table we have not adopted.
 Discovering that upstream got stricter by having this gate go red is the entire point; finding
 out months later by reading their CI by hand is the failure mode it replaces.
 
-THE TRAP THIS GATE EXISTS TO PREVENT
+The trap this gate exists to prevent
 ------------------------------------
 `.cargo/config.toml` used to carry a blanket `rustflags = ["-Awarnings"]`. Measured across
 four configurations with forced rebuilds (2026-08-21):
 
-  * `[lints.rust] warnings = "deny"` + config `-Awarnings`  -> SILENCED. Same lint group, and
+  * `[lints.rust] warnings = "deny"` + config `-Awarnings`  -> silenced. Same lint group, and
     the config's flag is applied later, so the deny is discarded with no diagnostic saying so.
   * `[lints.clippy] all = "deny"`   + config `-Awarnings`  -> still fires. A named group beats
     the blanket allow.
@@ -43,16 +43,16 @@ four configurations with forced rebuilds (2026-08-21):
 So a single line in `.cargo/config.toml` can switch every rustc lint in the workspace off while
 leaving a `[workspace.lints]` table sitting in the root manifest looking authoritative. This
 gate fails if that line comes back. Related: `scripts/check-save-disable-warnings.py` documents
-the same trap from the other direction -- an env `RUSTFLAGS=...` does NOT reach the compiler
+the same trap from the other direction -- an env `RUSTFLAGS=...` does not reach the compiler
 through cargo-xwin, which re-propagates the config's target rustflags, so a lint audit run that
-way reports a FALSE ZERO on a crate that has hundreds of violations.
+way reports a false zero on a crate that has hundreds of violations.
 
-WHAT "AT LEAST AS STRICT" MEANS FOR A CRATE THAT IS NOT CLEAN YET
+What "AT LEAST AS STRICT" means for a crate that is not clean yet
 -----------------------------------------------------------------
 A crate opts in with `[lints] workspace = true`. A crate still carrying debt keeps the same
 deny groups at `priority = -1` and allows specific lints at default priority, which wins for
 exactly those lints and nothing else. Every such allow must carry a `# DEBT:` comment, so the
-shortfall is enumerated in the manifest rather than hidden. A crate with NO lints declaration
+shortfall is enumerated in the manifest rather than hidden. A crate with no lints declaration
 at all is the real hazard -- it inherits nothing and no one notices -- so that is an error.
 """
 
@@ -86,12 +86,12 @@ BLANKET_ALLOW_PATTERN = re.compile(r"-A\s*warnings|--allow[= ]warnings|-Awarning
 DEBT_MARKER = "# DEBT:"
 
 # A crate-root/module-level `#![allow(...)]` is invisible to a manifest-based parity check and
-# is a BLANKET hole: it switches a lint off for an entire file regardless of what the
-# `[lints]` table says. Upstream's 5,534 escape hatches are per-SITE `#[allow]` attributes on
-# the specific item -- it carries exactly ONE module-level blanket in its whole tree
+# is a blanket hole: it switches a lint off for an entire file regardless of what the
+# `[lints]` table says. Upstream's 5,534 escape hatches are per-site `#[allow]` attributes on
+# the specific item -- it carries exactly one module-level blanket in its whole tree
 # (`crates/eldenring/src/cs/lua_event_man.rs`). So "at least as strict" means a blanket is
 # allowed only when it says why, in the same shape `check-no-lossy-utf8.py` already requires
-# for `String::from_utf8_lossy`. A `#![cfg_attr(not(windows), allow(...))]` is NOT a blanket:
+# for `String::from_utf8_lossy`. A `#![cfg_attr(not(windows), allow(...))]` is not a blanket:
 # it describes a cfg in which the consumers genuinely do not compile, and the shipping target
 # keeps the full deny.
 BLANKET_ALLOW_MARKER = "// PARITY:"
@@ -241,7 +241,7 @@ def check_member(manifest: Path, repo: Path) -> list[str]:
 
 
 def check_blanket_allows(repo: Path) -> list[str]:
-    """Unconditional module-level `#![allow(...)]` must carry a PARITY justification."""
+    """Unconditional module-level `#![allow(...)]` must carry a parity justification."""
     problems: list[str] = []
     for source in sorted((repo / "crates").rglob("*.rs")) + sorted((repo / "tools").rglob("*.rs")):
         if "target" in source.parts:
@@ -254,7 +254,7 @@ def check_blanket_allows(repo: Path) -> list[str]:
             stripped = line.strip()
             if not stripped.startswith("#![allow("):
                 continue
-            # Walk UP through the contiguous comment block above the attribute, not just one
+            # Walk up through the contiguous comment block above the attribute, not just one
             # line: a justification worth writing is usually a sentence or three, and a gate
             # that only reads the adjacent line silently rejects every multi-line rationale.
             justified = BLANKET_ALLOW_MARKER in stripped

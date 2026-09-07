@@ -1,7 +1,7 @@
 //! Isolation probe: does a passthrough draw bind a uniform buffer at all on lavapipe?
 //!
-//! A clean-room fullscreen-triangle VS (no resources) + a PS that outputs a cbuffer
-//! colour. We write GREEN into the UBO and draw on the software adapter. If the readback
+//! A clean-room fullscreen-triangle vs (no resources) + a PS that outputs a cbuffer
+//! colour. We write green into the UBO and draw on the software adapter. If the readback
 //! is green, passthrough + UBO binding works on lavapipe and the ER object shader's
 //! failure is something specific (sparse/high bindings, the storage buffer, ...). If it
 //! reads back black — or segfaults on a null descriptor — lavapipe+wgpu+passthrough
@@ -23,7 +23,7 @@ fn main() {
     er_shaderkit::neutralize_draw_parameters(&mut p_spv);
     let z = er_shaderkit::force_readonly_ssbo_loads_zero(&mut v_spv);
     eprintln!("ssbo loads zeroed in vs: {z}");
-    // THE FIX: lavapipe nulls descriptors at sparse bindings; remap to contiguous 0..N.
+    // The FIX: lavapipe nulls descriptors at sparse bindings; remap to contiguous 0..N.
     let map = er_shaderkit::compact_descriptor_bindings(&mut v_spv);
     eprintln!("compacted bindings: {map:?}");
     // Build the draw bindings from the compacted (new) numbers; all are UBOs here.
@@ -31,7 +31,7 @@ fn main() {
         .iter()
         .map(|(_, (s, b))| (*s, *b, ObjBind::Uniform))
         .collect();
-    // GREEN goes into whatever b4 compacted to.
+    // Green goes into whatever b4 compacted to.
     let b4_new = map
         .iter()
         .find(|((_, ob), _)| *ob == 4)
@@ -56,7 +56,7 @@ fn main() {
         return;
     }
 
-    // GREEN written into the PS cbuffer at b0 (set 0, binding 0 via identity mapping).
+    // Green written into the PS cbuffer at b0 (set 0, binding 0 via identity mapping).
     let green: Vec<u8> = [0f32, 1.0, 0.0, 1.0]
         .iter()
         .flat_map(|f| f.to_le_bytes())

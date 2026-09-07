@@ -23,7 +23,7 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 /// The MSVC `/GS` cookie slot every one of these frames seeds with `-2` before anything else.
 const GS_COOKIE_SEED: i32 = -2;
 /// `GLOBAL_CSGameMan` at its 1.17 address, the singleton the quit-phase settle loads RIP-relative.
-/// Naming the ABSOLUTE address lets iced compute the displacement for the VA being assembled at,
+/// Naming the absolute address lets iced compute the displacement for the VA being assembled at,
 /// instead of a transcribed `+0x36f21b1` that means nothing on its own.
 ///
 /// 1.16.2 had it at `0x143d69918`; 1.17 moved it `+0x4070` with the rest of `.data`
@@ -40,7 +40,7 @@ const QUIT_PHASE_WAITING: i32 = 2;
 const SL_ENQUEUE_SAVE_JOB_VA: u64 = 0x140e6fb50;
 /// `SaveLoad2::SLSystemImpl::PollSaveStatus`.
 const SL_POLL_SAVE_STATUS_VA: u64 = 0x140e6e430;
-/// The ONLY code that moves `GameMan+0xbc4` from 2 to 3, at its 1.17 address. 1.16.2
+/// The only code that moves `GameMan+0xbc4` from 2 to 3, at its 1.17 address. 1.16.2
 /// `FUN_14067a980`; 1.17 `0x14067b7d0`, `+0xe50`, the whole-region delta for this part of `.text`.
 const QUIT_PHASE_SETTLE_VA: u64 = 0x14067b7d0;
 /// Where it jumps when the phase is not 2 -- the branch is inside the checked window, so its
@@ -63,7 +63,7 @@ const SAVE_WRITE_IN_PLACE_VA: u64 = 0x1424142e0;
 /// `FUN_14240fd70`, `SaveLoad2::SLSaveSession`'s job body.
 const SL_SAVE_JOB_BODY_VA: u64 = 0x14240fd70;
 
-/// How much of each write branch is compared. Both open with the SAME seven-instruction
+/// How much of each write branch is compared. Both open with the same seven-instruction
 /// multi-push prologue and diverge only at the frame-pointer `lea`, so the window has to reach
 /// past byte 12 or one signature would match both functions.
 const SAVE_WRITE_CHECKED_BYTES: usize = 24;

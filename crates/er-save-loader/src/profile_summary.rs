@@ -17,18 +17,18 @@
 //!
 //! # When the file's own table is wrong
 //!
-//! A save ASSEMBLED OUTSIDE the game (a manager copying `USER_DATA00N` bodies between files) keeps
+//! A save assembled outside the game (a manager copying `USER_DATA00N` bodies between files) keeps
 //! the donor's `USER_DATA010`, so a slot's record can describe whoever used to hold it.
 //! `save-files/100-Lilbro` carries `45-Slots`' table: seven of its ten records name a different
 //! character than the body beside them, which is how the Load Game rows came to print another
 //! character's place (user-reported 2026-08-07). [`record_describes_slot_body`] detects it by the one
 //! field both sides carry -- the map -- and [`place_name_by_block`] answers it from the records the
-//! game DID write in the same file.
+//! game did write in the same file.
 //!
 //! # Layout, and the two bytes that hid it
 //!
 //! Relative to a record base, the on-disk layout is the same as the in-memory `CS::ProfileSummary`
-//! record, EXCEPT that the name sits at `+0x02` rather than `+0x00`. Anchoring on the name (the
+//! record, except that the name sits at `+0x02` rather than `+0x00`. Anchoring on the name (the
 //! obvious thing to do, since it is the only human-readable field) puts every subsequent offset two
 //! bytes early, which reads `level` and `play_time` correctly by luck -- both survive a two-byte
 //! shift as plausible numbers -- while turning the place-name id into `0xffff0000`. That near-miss
@@ -58,7 +58,7 @@ use crate::bnd4::{Bnd4Error, SAVE_SLOT_COUNT, active_slots, entry_body};
 const USER_DATA010_NAME: &str = "USER_DATA010";
 /// Body offset of slot 0's record. Fixed across every save in the corpus test below.
 pub const SUMMARY_TABLE_OFFSET: usize = 0x195c;
-/// Distance between consecutive slot records. Note this is NOT the in-memory `0x2a0`: the on-disk
+/// Distance between consecutive slot records. Note this is not the in-memory `0x2a0`: the on-disk
 /// record carries an embedded `FACE` block and packs to `0x24c`.
 pub const SUMMARY_RECORD_STRIDE: usize = 0x24c;
 
@@ -147,7 +147,7 @@ pub fn slot_summaries(save: &[u8]) -> Result<[Option<SlotSummary>; SAVE_SLOT_COU
 /// Does slot `slot`'s stored summary record describe the character body in that same slot?
 ///
 /// The game writes the two together, so in a save the game produced they always agree. A save
-/// ASSEMBLED OUTSIDE the game does not: a manager that copies `USER_DATA00N` bodies between files
+/// assembled outside the game does not: a manager that copies `USER_DATA00N` bodies between files
 /// leaves `USER_DATA010` behind, and every field of that slot's record -- name, level, play time and
 /// the `PlaceName` -- then describes whoever used to occupy the slot. `save-files/100-Lilbro`
 /// (2026-08-07) is exactly this: its summary table is `45-Slots`', and seven of its ten records name a
@@ -172,10 +172,10 @@ pub fn record_describes_slot_body(save: &[u8], slot: usize) -> bool {
 }
 
 /// What the save itself knows about which `PlaceName` belongs to which map: `block_id ->
-/// place_name_id`, learned ONLY from records that describe the body beside them.
+/// place_name_id`, learned only from records that describe the body beside them.
 ///
 /// The game writes a record's map and place name together, out of one character's state, so a
-/// self-consistent record is a pair the GAME asserted -- not an inference of ours. Ten slots
+/// self-consistent record is a pair the game asserted -- not an inference of ours. Ten slots
 /// therefore carry up to ten worked examples, and a slot whose record was copied in from another
 /// save can usually be answered by a sibling that was not: in `save-files/100-Lilbro` the consistent
 /// records supply `0x1c000000 -> 28000` and `0x0e000000 -> 14000`, and all seven stale slots have
@@ -274,7 +274,7 @@ mod tests {
         out
     }
 
-    /// Corpus gate for the table geometry AND for the field this whole module exists to supply.
+    /// Corpus gate for the table geometry and for the field this whole module exists to supply.
     ///
     /// Pins `SUMMARY_TABLE_OFFSET`/`SUMMARY_RECORD_STRIDE` against every save present, so a wrong
     /// base cannot come back: the failure mode it guards is not a crash but a two-byte drift that
@@ -352,7 +352,7 @@ mod tests {
         // Slot 0's record was rewritten by the game and agrees with its body.
         assert!(record_describes_slot_body(&data, 0));
         assert_eq!(slot_place_name_id(&data, 0), Some(28_000));
-        // Slot 1's was not -- and it is still answerable, because a SIBLING slot whose record the
+        // Slot 1's was not -- and it is still answerable, because a sibling slot whose record the
         // game did write pairs this body's map with a place name. Dark Moon Bean is saved in
         // `0x0e000000`, slots 2 and 7 are consistent records in that same map, and both say 14000.
         // The stale record's own 28000 (the `Hero` it describes) never reaches the row.
@@ -371,7 +371,7 @@ mod tests {
         for slot in [1usize, 3, 4, 5, 6, 8, 9] {
             assert_eq!(ids[slot], Some(14_000), "slot {slot}");
         }
-        // The stale record is still READABLE -- refusing it is a judgement about whose it is, not a
+        // The stale record is still readable -- refusing it is a judgement about whose it is, not a
         // parse failure, and a change that broke the read would otherwise pass this test.
         let u010 = entry_body(&data, USER_DATA010_NAME).expect("USER_DATA010");
         let record = slot_summary_from_body(u010, 1).expect("slot 1 record parses");

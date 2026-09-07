@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """Prove a staged DLL was built from the source tree you are about to test.
 
-WHY MTIME IS NOT ENOUGH
+Why MTIME is not enough
 -----------------------
 The obvious freshness test -- "artifact newer than its newest source" -- is a claim about
 clocks, not about content. A rebase rewrites mtimes, `touch` rewrites mtimes, and a restored
 build cache can carry either order. It answers "was something written recently", never "was
-THIS binary produced from THAT source".
+this binary produced from that source".
 
 Worse, the failure it needs to catch is silent. `cargo xwin build --release` honours
-`default-members = ["crates/er-quickload"]`, so it builds ONLY the product and exits 0 in a
+`default-members = ["crates/er-quickload"]`, so it builds only the product and exits 0 in a
 fraction of a second having compiled none of the other shells -- indistinguishable from a
 successful incremental build. The stale DLL from last week stays exactly where it was, and a
 run against it produces evidence for code that no longer exists.
 
-WHAT THIS RECORDS INSTEAD
+What this records instead
 -------------------------
-Provenance is captured AT BUILD TIME, because it cannot be reconstructed afterwards. Beside
+Provenance is captured at build time, because it cannot be reconstructed afterwards. Beside
 each artifact, `<artifact>.provenance.json` records:
 
-  * `source_sha`   -- a content hash over every file in the package's FORWARD dependency
+  * `source_sha`   -- a content hash over every file in the package's forward dependency
                       closure (the crates whose source compiles into this DLL), taken from
                       the working tree: tracked files plus untracked non-ignored ones, since
                       cargo compiles what is on disk.
@@ -33,11 +33,11 @@ the build; a mismatch on `fingerprint` means the artifact was replaced by someth
 Either way the answer is "rebuild", and the caller is expected to fail loudly rather than
 launch.
 
-KNOWN LIMIT, STATED RATHER THAN HIDDEN
+Known limit, stated rather than hidden
 --------------------------------------
-Path dependencies that live OUTSIDE this repo -- the sibling `../fromsoftware-rs` checkout
+Path dependencies that live outside this repo -- the sibling `../fromsoftware-rs` checkout
 (`eldenring`, `fromsoftware-shared`) -- are not hashed, because they are not part of this
-working tree. Editing the sibling and not rebuilding will NOT be caught. Those deps are
+working tree. Editing the sibling and not rebuilding will not be caught. Those deps are
 listed in `external_deps` on every provenance record so the gap is visible where it matters.
 
 Usage:
@@ -287,7 +287,7 @@ def selftest() -> int:
         check(len(digest) == 16, f"a built DLL fingerprints to a 16-hex digest ({digest})")
         check(fingerprint_of(artifact) == digest, "fingerprinting is deterministic")
 
-        # Exercise the verdicts against a COPY in a temp dir. An earlier version of this test
+        # Exercise the verdicts against a copy in a temp dir. An earlier version of this test
         # asserted that the real build had no provenance record, which was true only until
         # someone built through scripts/er-build-dlls.sh -- a test whose result depended on
         # whether a sibling file happened to exist proves nothing about the logic.

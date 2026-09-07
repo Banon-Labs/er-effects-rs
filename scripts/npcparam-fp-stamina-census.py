@@ -170,7 +170,7 @@ def parse_paramdef(path):
             bits = int(bits)
             limit = width * 8
             # SoulsFormats normalises dummy8 to u8 before comparing bit types, so a
-            # `u8 x:1` followed by `dummy8 pad:7` shares ONE byte. Not folding them
+            # `u8 x:1` followed by `dummy8 pad:7` shares one byte. Not folding them
             # shifts every later field by a byte.
             norm = "u8" if ftype == "dummy8" else ftype
             if bit_offset == -1 or bit_type != norm or bit_offset + bits > limit:
@@ -234,10 +234,10 @@ def main():
     verdict = "AGREE" if computed_size == measured_stride else "DISAGREE"
     print(f"stride vs paramdef   : {verdict}")
 
-    # WHERE the paramdef drifts away from the real row. A packed PARAM row keeps
+    # Where the paramdef drifts away from the real row. A packed PARAM row keeps
     # every scalar naturally aligned, so the first field whose offset is not a
     # multiple of its own width marks the point past which paramdef-derived
-    # offsets are guesses. Everything BEFORE it is byte-exact.
+    # offsets are guesses. Everything before it is byte-exact.
     drift_at = None
     for off, ftype, name, _count, _bits, width in order:
         if ftype in ("dummy8", "u8", "s8") or width == 1:

@@ -47,7 +47,7 @@ def parse(path: str) -> "OrderedDict[str, list[dict]]":
 
 def summarize_group(mms: str, ticks: list[dict]) -> dict:
     f25 = [t["f_after"] for t in ticks]
-    # which offsets change WITHIN this load's lifetime
+    # which offsets change within this load's lifetime
     changing = {}
     offs = ticks[0]["hdr"].keys()
     for off in offs:
@@ -89,7 +89,7 @@ def main() -> int:
             for off, vals in sorted(s["changing_within"].items()):
                 print(f"    +0x{off:x} CHANGES within this load: {[hex(v) for v in vals]}")
         print()
-    # Cross-epoch divergence: offsets whose FIRST-tick value differs between load1 and each reload.
+    # Cross-epoch divergence: offsets whose first-tick value differs between load1 and each reload.
     if len(sums) >= 2:
         base = sums[0]
         print("== cross-epoch first-tick header divergence (load1 vs each reload) ==")
@@ -101,7 +101,7 @@ def main() -> int:
                 b = s["first_hdr"].get(off)
                 if a != b:
                     print(f"    +0x{off:x}: load1=0x{a:x} reload=0x{b:x}  <-- DIFFERS")
-            # also: what does the reload's LAST tick look like vs its first (the drop signature)
+            # also: what does the reload's last tick look like vs its first (the drop signature)
             drop = {
                 off: (s["first_hdr"].get(off), s["last_hdr"].get(off))
                 for off in s["first_hdr"]

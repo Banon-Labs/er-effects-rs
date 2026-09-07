@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Predict where a possessed creature lands on screen, over the REAL height distribution.
+"""Predict where a possessed creature lands on screen, over the real height distribution.
 
 `er-npc-possess`'s camera layer turns one creature height into a `LockCamParam` row. This
 script is the offline oracle for that arithmetic: it reads every possessable creature's
 `NpcParam.hitHeight` out of the installed regulation, runs a candidate size law over all of
-them, and reports where each one's HEAD would sit on screen and how much headroom it gets --
+them, and reports where each one's head would sit on screen and how much headroom it gets --
 so a law can be judged against 400 real creatures instead of two hand-picked ones.
 
 Everything it needs from the game is measured, not assumed:
 
   * `LockCamParam` row 0 -- camDistTarget 3.8, chrOrgOffset_Y 1.45, camFovY 48.0, rotRangeMinX
     -40. Read with `python3 scripts/er-param-read.py LockCamParam --row 0`.
-  * `camFovY` is the VERTICAL field of view in DEGREES. `CS::ChrExFollowCam::ApplyZoomLerp`
+  * `camFovY` is the vertical field of view in degrees. `CS::ChrExFollowCam::ApplyZoomLerp`
     (1.16.2 0x1403b7560) multiplies it by `GLOBAL_DegreeToRadian` into `CSCam.fov`, and
     `CS::CSPersCam::ToPerspective` (0x1403e9ac0) builds the projection as
     `m11 = cot(fov/2)`, `m00 = cot(fov/2) / aspectRatio` -- the extra `/aspect` on X is what
@@ -79,7 +79,7 @@ LAWS = {"similarity": similarity, "chest": chest}
 def framing(distance: float, pivot: float, height: float, pitch_deg: float = 0.0):
     """Where the subject's head sits, and how much sky is above it.
 
-    `pitch_deg` is `ChrExFollowCam.anglesEuler.x` in degrees, POSITIVE meaning the camera is
+    `pitch_deg` is `ChrExFollowCam.anglesEuler.x` in degrees, positive meaning the camera is
     above the subject looking down (proven: `angleFromXZPlane` at 0x1403b0b70 returns the
     NEGATED elevation of the camera->target vector, and `applyControlMovement` clamps that
     angle between `+0x258` = rotRangeMinX and `+0x25c` = +70 deg).

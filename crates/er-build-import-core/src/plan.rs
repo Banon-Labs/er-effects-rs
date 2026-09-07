@@ -13,11 +13,11 @@
 //! 1. The affinity is an **offset added into the item id** (`Occult` = +1200),
 //!    not an index and not a separate field.
 //! 2. The upgrade level goes in **both** places, exactly as the record above spells
-//!    it: folded into the id (`<id+upgrade>`) AND passed as the separate 16-bit
+//!    it: folded into the id (`<id+upgrade>`) and passed as the separate 16-bit
 //!    `reinforceLv`. The id is the half that is actually read back -- see
 //!    [`armament_item_id`] for the measurement. `EquipParamWeapon::GetEntry`
 //!    normalises to `(paramId / 100) * 100` because the last two digits are the
-//!    LEVEL, not because they are noise; setting only `CSWepGaitemIns::reinforcement`
+//!    level, not because they are noise; setting only `CSWepGaitemIns::reinforcement`
 //!    yields a `+0` weapon whose `GetReinforcement` still answers 25.
 //! 3. `weaponSkill` is the ash of war's **`EquipParamGem` row**, re-tagged with
 //!    the game's gem category (see [`GEM_ITEM_CATEGORY`]). The planner's own
@@ -38,7 +38,7 @@ pub const NO_SKILL: u32 = 0xFFFF_FFFF;
 /// `GetGaItemHandleGem`; `CS::GaitemLookupResult::GetSwordArtsParamId` refuses any item id whose
 /// `& 0xF000_0000` is not `0x8000_0000`, then looks the low 28 bits up in `EquipParamGem`.
 ///
-/// So the 28 bits under this nibble MUST be a gem row, never a `SwordArtsParam` row. The two id
+/// So the 28 bits under this nibble must be a gem row, never a `SwordArtsParam` row. The two id
 /// spaces are easy to swap -- most ashes sit at `gem = arts * 100` -- and swapping them is
 /// SILENT: the value still passes every shape check and simply names a row that does not exist.
 /// That swap is the bug that shipped: the runtime catalog resolved ash names to `SwordArtsParam`
@@ -66,14 +66,14 @@ const INFUSIONS: &[(&str, u32)] = &[
 /// them and duplicating them corrupts the flask UI.
 const NEVER_GRANT: &[&str] = &["Flask of Crimson Tears", "Flask of Cerulean Tears"];
 
-/// The most of any ONE consumable a build import will hand out.
+/// The most of any one consumable a build import will hand out.
 ///
 /// # Why a ceiling exists over the game's own maximum
 ///
 /// [`Entry::max_stored`] is `EquipParamGoods.maxNum`, and that field has a tail this importer
 /// must not follow. Measured against the installed 1.17 `regulation.bin`, 21 ordinary consumables
 /// declare `maxNum = 999` -- Furlcalling Finger Remedy, Ruin Fragment, Roundrock -- and a build
-/// that merely LISTS one of those is not asking for nine hundred of it. Emptying that into the
+/// that merely lists one of those is not asking for nine hundred of it. Emptying that into the
 /// player's inventory is the unasked-for mutation, not the missing feature.
 ///
 /// # Why this number and not a comfortable one
@@ -92,7 +92,7 @@ const MAX_GRANTED_PER_CONSUMABLE: u32 = 99;
 ///
 /// A planner slot carries `{name, order, upgrade, infusion, weaponArt, equipIndex, equipSet}` and
 /// nothing else -- there is no count field anywhere in the document, on tools or on any other
-/// category. So the importer picks, and the only defensible pick is the item's OWN limit rather
+/// category. So the importer picks, and the only defensible pick is the item's own limit rather
 /// than a number invented here: [`Entry::max_stored`], clamped by
 /// [`MAX_GRANTED_PER_CONSUMABLE`].
 ///
@@ -152,7 +152,7 @@ fn consumable_quantity(entry: Option<Entry>) -> u32 {
 /// The two rows declaring 1 are `47000000` and `47010000`, which the message repository does not
 /// name at all, so the catalog never resolves them and this never sees them.
 ///
-/// A row that declares nothing gets ONE, exactly as [`consumable_quantity`] does: handing a player
+/// A row that declares nothing gets one, exactly as [`consumable_quantity`] does: handing a player
 /// the engine's fallback for an item the game has no opinion about is the over-grant this avoids.
 fn ammo_quantity(entry: Option<Entry>) -> u32 {
     entry.and_then(|found| found.max_stored).unwrap_or(1).max(1)
@@ -163,7 +163,7 @@ fn ammo_quantity(entry: Option<Entry>) -> u32 {
 pub struct Grant {
     /// Category-tagged item id with any affinity offset already applied.
     pub item_id: u32,
-    /// Other ids the same NAME resolved to, if the game has more than one row under it.
+    /// Other ids the same name resolved to, if the game has more than one row under it.
     ///
     /// The grant path must treat all of these as "this item" when it asks whether the player
     /// already holds one. Checking only `item_id` is how a build import handed out a second
@@ -179,15 +179,15 @@ pub struct Grant {
     /// Whether [`Self::reinforce_lv`] came from the character-wide `weaponUpgrade` rather than
     /// from this slot's own `upgrade`.
     ///
-    /// THE TWO ARE ON DIFFERENT SCALES, and only for somber armaments. The planner's
+    /// The two are on different scales, and only for somber armaments. The planner's
     /// character-wide number is always regular smithing-stone levels 0..=25 and is mapped down per
     /// armament when it renders (`U_(weaponUpgrade, weapon)` -> `lr[level]`). A per-slot `upgrade`
-    /// is NOT mapped: the planner's own editor caps that input at the mapped maximum -- 10 for a
+    /// is not mapped: the planner's own editor caps that input at the mapped maximum -- 10 for a
     /// somber armament -- writes the typed number straight into the slot, and adds it straight to
     /// the item id when it exports. So a somber armament at `weaponUpgrade: 25` means +10, while
     /// the same armament at `upgrade: 25` would be nonsense the planner cannot produce.
     ///
-    /// Which mapping to apply is therefore decided HERE, at the source of the number, and applied
+    /// Which mapping to apply is therefore decided here, at the source of the number, and applied
     /// in the runtime, which is the only side that can measure whether an armament is somber.
     pub upgrade_is_character_default: bool,
     /// Ash of war as a gem item id ([`GEM_ITEM_CATEGORY`] `| EquipParamGem row`), or
@@ -195,7 +195,7 @@ pub struct Grant {
     pub weapon_skill: u32,
     /// What this grant is, for logs and for the user.
     pub label: String,
-    /// `EquipParamGoods.potGroupId` when the game POT-CAPS this item, else `None`.
+    /// `EquipParamGoods.potGroupId` when the game POT-caps this item, else `None`.
     ///
     /// Carried from [`crate::catalog::Entry::pot_group`], which documents the mechanism. It is on
     /// the grant because it changes what "grant five of these" MEANS: for a pot-capped item the
@@ -203,19 +203,19 @@ pub struct Grant {
     /// grant path that wants to deliver the requested number has to free space in the group
     /// first -- and the group id is what tells it which other carried items would free any.
     pub pot_group: Option<u8>,
-    /// Whether this is an ARMAMENT -- the only kind that mints a per-instance gaitem.
+    /// Whether this is an armament -- the only kind that mints a per-instance gaitem.
     ///
     /// # Why the category nibble cannot answer this
     ///
     /// The runtime used to decide it arithmetically: `item_id & 0xF000_0000 == 0` means the weapon
     /// category, and the weapon category means an armament. That was true only while ammunition
-    /// was unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the SAME nibble,
+    /// was unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the same nibble,
     /// so the test now answers "armament" for a quiver of Bone Arrows -- and answering it wrongly
     /// is not cosmetic. The armament path mints one `GaItemHandle` through
     /// `GetGaitemHandleWeaponWithGem`, writes an upgrade level into the instance and mounts a gem;
     /// none of those exist for ammunition, and a stack of 99 arrows is not one instance.
     ///
-    /// So the fact travels WITH the grant, decided where the catalog kind is still known, rather
+    /// So the fact travels with the grant, decided where the catalog kind is still known, rather
     /// than being re-derived from an id that no longer distinguishes the two.
     pub armament: bool,
 }
@@ -274,21 +274,21 @@ pub fn infusion_offset(infusion: Option<&str>) -> Option<u32> {
 }
 
 /// Split an armament param id back into its base row, affinity name and upgrade level -- the
-/// inverse of [`infusion_offset`] plus [`armament_item_id`], and the arithmetic the EXPORTER runs
+/// inverse of [`infusion_offset`] plus [`armament_item_id`], and the arithmetic the exporter runs
 /// on every equipped weapon.
 ///
 /// An armament id carries three things at once, and the exporter needs all three separated:
 /// `base + affinity_offset + level`, where the affinity is a multiple of [`INFUSION_STEP`] inside
-/// a [`ARMAMENT_ID_BLOCK`] block and the LEVEL is the last two digits.
+/// a [`ARMAMENT_ID_BLOCK`] block and the level is the last two digits.
 ///
-/// **The level MUST come off before the row is named.** `EquipParamWeapon` has no row for a
+/// **The level must come off before the row is named.** `EquipParamWeapon` has no row for a
 /// levelled id -- 16110200 (Keen Cross-Naginata) is a row, 16110217 (the same armament at +17) is
 /// not -- and the game's name getter is an exact `MsgRepositoryImp::LookupEntry`, so it answers
 /// null for anything that is not a row. Leaving the level on therefore does not produce a slightly
-/// wrong name; it produces NO name, and the exporter drops the slot. That is what emptied the
+/// wrong name; it produces no name, and the exporter drops the slot. That is what emptied the
 /// inventory of every exported build: a finished character's armaments are all upgraded, so every
 /// one of them looked unnameable. Verified against the installed regulation
-/// (`scripts/regulation-params.py --contains 16110217 EquipParamWeapon` -> ABSENT).
+/// (`scripts/regulation-params.py --contains 16110217 EquipParamWeapon` -> absent).
 ///
 /// `Standard` comes back as `None` rather than as the string, because that is how the planner
 /// spells it -- a slot with no `infusion` key. Emitting the word would import identically and diff
@@ -333,7 +333,7 @@ pub fn split_armament_id(param_id: u32) -> ArmamentId {
     let row_with_affinity = param_id - u32::from(level);
     let index = (row_with_affinity % ARMAMENT_ID_BLOCK / INFUSION_STEP) as usize;
     let (row, infusion) = match INFUSIONS.get(index) {
-        // Index 0 IS Standard, which the planner writes as an absent field.
+        // Index 0 is Standard, which the planner writes as an absent field.
         Some(_) if index == 0 => (row_with_affinity, None),
         Some((name, offset)) => (row_with_affinity - offset, Some(*name)),
         // An offset past the table is not an affinity at all, so the id is taken whole rather than
@@ -351,7 +351,7 @@ pub fn split_armament_id(param_id: u32) -> ArmamentId {
 /// What an armament param id is made of, once [`split_armament_id`] has taken it apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArmamentId {
-    /// The `EquipParamWeapon` row for this armament WITHOUT its affinity -- the id the message
+    /// The `EquipParamWeapon` row for this armament without its affinity -- the id the message
     /// repository names it by.
     pub row: u32,
     /// The row the affinity variant occupies, i.e. [`Self::row`] plus the affinity offset and
@@ -360,8 +360,8 @@ pub struct ArmamentId {
     pub row_with_affinity: u32,
     /// Affinity name, or `None` for Standard (and for an armament that takes none).
     pub infusion: Option<&'static str>,
-    /// Upgrade level as the GAME counts it: 0..=25 for a regular armament, 0..=10 for a somber
-    /// one. That is also the scale the planner's PER-SLOT `upgrade` uses, so it is exported
+    /// Upgrade level as the game counts it: 0..=25 for a regular armament, 0..=10 for a somber
+    /// one. That is also the scale the planner's per-slot `upgrade` uses, so it is exported
     /// verbatim; its character-wide `weaponUpgrade` is the one on the other scale.
     pub level: u16,
 }
@@ -371,12 +371,12 @@ pub const ARMAMENT_LEVEL_STEP: u32 = 100;
 
 /// The planner's regular-level -> somber-level table, transcribed from the live bundle (`lr`).
 ///
-/// The planner counts EVERY upgrade in regular smithing-stone levels, 0..=25, including for
+/// The planner counts every upgrade in regular smithing-stone levels, 0..=25, including for
 /// armaments that take Somber Smithing Stones: its `getWeaponUpgradeLevel` maps the character's
 /// `weaponUpgrade` through this table (`U_(level, weapon)` -> `lr[level]`) whenever the armament's
 /// `upgrade_material` is `Somber Smithing Stone`, and 0 when it is `None`.
 ///
-/// It applies to the character-wide number ONLY. A build whose `weaponUpgrade` is 25 puts a somber
+/// It applies to the character-wide number only. A build whose `weaponUpgrade` is 25 puts a somber
 /// armament at the game's +10; the same build's per-slot `upgrade: 10` also means +10, because the
 /// planner's slot editor caps that input at the mapped maximum and stores what was typed. Getting
 /// the two the wrong way round is silent -- both numbers are in range, and the armament simply
@@ -390,7 +390,7 @@ pub const MAX_REGULAR_LEVEL: u16 = 25;
 /// Highest level a somber armament reaches.
 pub const MAX_SOMBER_LEVEL: u16 = 10;
 
-/// The GAME level a somber armament ends up at when a planner build asks for `regular`.
+/// The game level a somber armament ends up at when a planner build asks for `regular`.
 ///
 /// ```
 /// use er_build_import_core::plan::somber_level_for_regular;
@@ -408,11 +408,11 @@ pub fn somber_level_for_regular(regular: u16) -> u16 {
         .unwrap_or(MAX_SOMBER_LEVEL)
 }
 
-/// The PLANNER level that describes an armament the game holds at somber `level`.
+/// The planner level that describes an armament the game holds at somber `level`.
 ///
-/// The inverse of [`somber_level_for_regular`], which is one-to-many, so this returns the HIGHEST
-/// regular level that maps back. Used for ONE thing: the document-wide `weaponUpgrade`, which is a
-/// regular-scale number and acts as a CAP on every slot (`min(slot.upgrade, lr[weaponUpgrade])`).
+/// The inverse of [`somber_level_for_regular`], which is one-to-many, so this returns the highest
+/// regular level that maps back. Used for one thing: the document-wide `weaponUpgrade`, which is a
+/// regular-scale number and acts as a cap on every slot (`min(slot.upgrade, lr[weaponUpgrade])`).
 /// Taking the highest is what keeps a maxed somber armament from being capped below its own level.
 ///
 /// ```
@@ -447,7 +447,7 @@ pub fn infusion_names() -> impl Iterator<Item = &'static str> {
     INFUSIONS.iter().map(|(name, _)| *name)
 }
 
-/// The item id an armament instance must carry to READ AS `+level` in the player's hands.
+/// The item id an armament instance must carry to read as `+level` in the player's hands.
 ///
 /// The upgrade level is part of the id, in its last two digits: the character's own weapons come
 /// back from `GaitemInsLookupResult::GetItemId` as `12531125` (base `12530000` + Blood `1100` +
@@ -456,16 +456,16 @@ pub fn infusion_names() -> impl Iterator<Item = &'static str> {
 /// `base + affinity` id is therefore a `+0` weapon, whatever is written to its `reinforcement`
 /// field afterwards.
 ///
-/// THE MISREADING THIS EXISTS TO CORRECT. `EquipParamWeapon::GetEntry` normalises its argument to
+/// The MISREADING this exists to correct. `EquipParamWeapon::GetEntry` normalises its argument to
 /// `(paramId / 100) * 100`, and this module used to conclude from that "the game throws the level
 /// away, so it can only reach the game as `CSWepGaitemIns::reinforcement`". The normalisation is
-/// there for the opposite reason: the last two digits are the LEVEL, so the stat row is found by
+/// there for the opposite reason: the last two digits are the level, so the stat row is found by
 /// stripping them, and the level is read back off the same id by a different consumer. Dropping it
 /// shipped 30 armaments at +0 with `GetReinforcement` cheerfully reporting 25 -- the field was set,
-/// nothing read it. The reference exporter this module is ported from sets BOTH halves, and its
+/// nothing read it. The reference exporter this module is ported from sets both halves, and its
 /// record layout says so in the first line of the module doc: `dd <id+upgrade> ... <reinforceLv>`.
 ///
-/// `level` must already be clamped to a level this armament HAS (see the runtime's
+/// `level` must already be clamped to a level this armament has (see the runtime's
 /// `ReinforceLevels::clamp`); a somber armament asked for +25 would otherwise name a row that does
 /// not exist.
 ///
@@ -494,19 +494,19 @@ impl Entry {
 pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
     let mut out = Plan::default();
 
-    // ARMAMENTS ARE GRANTED IN PAYLOAD ORDER -- the order the build lists them, which is the order
+    // ARMAMENTS are granted in payload order -- the order the build lists them, which is the order
     // the player sees in their inventory and the only order they can check against the planner page.
     //
-    // This USED to be two passes, worn-in-the-active-set first and everything else after, and that
+    // This used to be two passes, worn-in-the-active-set first and everything else after, and that
     // reordering was load-bearing while the equip resolved a copy through
     // `EquipInventoryData::GetItemInventoryIdx`: several copies of one armament differing only by
     // ash share an item id (the ash lives on the gaitem instance), and
-    // `InventoryItemsData::InsertItemIntoLookupMap` keeps the LOWEST index for a repeated id, so the
+    // `InventoryItemsData::InsertItemIntoLookupMap` keeps the lowest index for a repeated id, so the
     // game always answered with the earliest-granted copy. Granting the worn one first was the only
     // way to make that answer right.
     //
     // It is obsolete now: the equip carries each mint's `GaItemHandle` forward and asks
-    // `GetItemIndexByGaitemHandle` (0x14024c460), which names ONE instance and does not care where
+    // `GetItemIndexByGaitemHandle` (0x14024c460), which names one instance and does not care where
     // in the inventory it sits. The reorder bought nothing after that and cost the user the thing
     // they can actually see -- reported 2026-08-23 against build 94252a868b4f2a, where the two worn
     // armaments were granted at positions 1 and 2 while the payload puts them at `order` 2 and 8.
@@ -551,7 +551,7 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
         {
             continue;
         }
-        // THE ONE CATEGORY THAT IS GRANTED IN NUMBERS. Everything else in this function passes a
+        // The one category that is granted in numbers. Everything else in this function passes a
         // literal 1 because one is what the item MEANS: an armament, a piece of armour, a
         // talisman and a great rune are each a single thing to wear, and a sorcery is a single
         // thing to memorise. A consumable is the only kind whose point is the stack.
@@ -567,10 +567,10 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
         };
         push_simple(catalog, Kind::GreatRune, &slot, 1, &mut out);
     }
-    // A TEAR IS LOOKED UP AS A TOOL BUT IS NOT GRANTED LIKE ONE. It goes in the physick, which
+    // A tear is looked up as a tool but is not granted like one. It goes in the physick, which
     // holds exactly two, and the game agrees: every crystal tear row declares `maxNum = 1`. The
     // literal here and `consumable_quantity` would return the same number today; the literal says
-    // that one is the ANSWER rather than a value that happens to be one this patch.
+    // that one is the answer rather than a value that happens to be one this patch.
     for tear in doc.items.crystal_tears.iter().flatten() {
         let slot = Slot {
             name: tear.clone(),
@@ -578,10 +578,10 @@ pub fn plan(doc: &BuildDoc, catalog: &dyn Catalog) -> Plan {
         };
         push_simple(catalog, Kind::Tool, &slot, 1, &mut out);
     }
-    // AMMUNITION, WHICH IS GRANTED IN NUMBERS AND IS STILL NOT A CONSUMABLE. It is looked up in
+    // Ammunition, which is granted in numbers and is still not a CONSUMABLE. It is looked up in
     // its own catalog because it is its own `EquipParamWeapon` subset (see
     // `catalog::Kind::Ammo`), granted at the engine's own quiver limit rather than at one, and
-    // NOT flagged as an armament: it mints no instance, carries no ash and has no upgrade level.
+    // not flagged as an armament: it mints no instance, carries no ash and has no upgrade level.
     for (_, name) in doc.items.ammo.positions() {
         let Some(name) = name else { continue };
         let slot = Slot {
@@ -612,7 +612,7 @@ fn plan_weapon(doc: &BuildDoc, catalog: &dyn Catalog, slot: &Slot, out: &mut Pla
         return;
     };
 
-    // The number is carried forward WITH its provenance rather than resolved here: whether it
+    // The number is carried forward with its provenance rather than resolved here: whether it
     // needs the somber mapping depends on where it came from, and whether the armament is somber
     // is something only the runtime can measure (see `Grant::upgrade_is_character_default`).
     let (reinforce_lv, upgrade_is_character_default) = match slot.upgrade {
@@ -675,7 +675,7 @@ fn push_simple(catalog: &dyn Catalog, kind: Kind, slot: &Slot, quantity: u32, ou
     }
 }
 
-/// The ash of war the build wants on one EQUIPPED armament slot.
+/// The ash of war the build wants on one equipped armament slot.
 ///
 /// Exists so the importer can check its own work. A grant that "succeeded" and an equip that
 /// "succeeded" still say nothing about whether the weapon in the player's hand carries the right

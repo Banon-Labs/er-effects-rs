@@ -1,29 +1,29 @@
 use super::*;
 use er_game_base::fnv1a::fnv1a64_mix;
 
-// The Save Game flow's ONE native confirm box (save-game-flow WP2; reduced to one 2026-07-31).
+// The Save Game flow's one native confirm box (save-game-flow WP2; reduced to one 2026-07-31).
 //
 // Clicking Save Game writes nothing on its own and asks nothing on its own: it opens the
-// destination list. The single question this module builds is asked LATER, and only about a
+// destination list. The single question this module builds is asked later, and only about a
 // destination the user has actually pointed at:
 //
 //   "Are you sure you want to overwrite this file?"   choices Yes / No, default No
 //
-// It is built from the GAME's own `CS::MessageBoxBuilder`, so it is localized, skinned and
+// It is built from the game's own `CS::MessageBoxBuilder`, so it is localized, skinned and
 // input-routed exactly like the native quit confirm -- no bespoke UI, no fabricated input. It is
 // hosted by whichever dialog owns the screen when it is asked: the picker's own `05_010` dialog
 // for the in-game browser, the System/Quit dialog for the OS Save-As (whose own dialog is already
 // gone by then). See `save_flow_box_host_dialog`.
 //
-// TWO BOXES WERE DELETED HERE, and the reason is the whole point of the change. The flow used to
-// open "Are you sure you want to save?" and then "Overwrite your loaded save?" BEFORE showing any
+// Two boxes were deleted here, and the reason is the whole point of the change. The flow used to
+// open "Are you sure you want to save?" and then "Overwrite your loaded save?" before showing any
 // destination, so the user had to predict what they wanted before seeing what was there -- and the
-// destructive answer was the DEFAULT on the second box. Reviewer report: "Prompting to overwrite
+// destructive answer was the default on the second box. Reviewer report: "Prompting to overwrite
 // the current file or not every time up front seems like it will lead to more mistakes." An
 // overwrite confirm attached to a file the user just pointed at cannot be answered by reflex about
 // some other file.
 //
-// RECIPE (disassembled from `eldenring-deobf.bin` 2026-07-28; the native Yes/No confirm
+// Recipe (disassembled from `eldenring-deobf.bin` 2026-07-28; the native Yes/No confirm
 // wrapper `FUN_1407b73d0`, which is what the quit confirm at `FUN_14079d700` calls):
 //
 //     movl $0x17, mode                        ; MSGBOX_BUILDER_MODE_CONFIRM
@@ -37,12 +37,12 @@ use er_game_base::fnv1a::fnv1a64_mix;
 //
 // then the resulting MenuJob is submitted to a dialog's own queue (dialog+0x10) with
 // `MENU_JOB_SUBMIT_RVA`, exactly like the profile-load route. The one place we differ from the
-// native wrapper is the ADD ORDER: `default_last` selects the LAST button added, so a box that
+// native wrapper is the add ORDER: `default_last` selects the last button added, so a box that
 // must default to No adds [Yes, No]. That keeps the default under native control (no raw
 // builder-field pokes). Nothing here needs the reversed [No, Yes] order any more -- the only box
 // that wanted a Yes default was the up-front "Overwrite your loaded save?", and it is gone.
 //
-// The chosen button comes back as the ADD-ORDER index in `dialog+0x25e0` (-1 = cancel/B), so the
+// The chosen button comes back as the add-order index in `dialog+0x25e0` (-1 = cancel/B), so the
 // box records its order and maps the index through it.
 //
 // Prompt text is ours (process-lifetime UTF-16 statics turned into a `CS::MenuString` by the
@@ -117,18 +117,18 @@ pub(crate) fn save_flow_verify_rva(
 }
 
 /// [`save_flow_verify_rva`] for an address about to be DETOURED: same verification, but what comes
-/// back is the UNRESOLVED `base + rva`.
+/// back is the unresolved `base + rva`.
 ///
 /// # Why the two cannot be one function
 ///
-/// Most callers of [`save_flow_verify_rva`] are building a RECIPE of function pointers to CALL, and
+/// Most callers of [`save_flow_verify_rva`] are building a recipe of function pointers to call, and
 /// a call needs the resolved address. A detour does not: `er_hook::MhHook::new` and
-/// `register_union_hook` resolve what they are given, and they must be the ONE resolve that decides
+/// `register_union_hook` resolve what they are given, and they must be the one resolve that decides
 /// where the five bytes land.
 ///
 /// Resolving the same 1.16.2 input twice is harmless -- that is what happens here, once to read the
-/// prologue and once inside the hook API, both reaching the same address. Resolving the OUTPUT is
-/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 SOURCE of another
+/// prologue and once inside the hook API, both reaching the same address. Resolving the output is
+/// the bug: an address can be both a 1.17 destination of one row and the 1.16.2 source of another
 /// (the shift equalling the local function spacing, `B - A == C - B`), and then the second resolve
 /// silently returns a third, unrelated function. Three live detours were measured landing that way
 /// on 2026-08-30. `scripts/check-double-resolved-hook-targets.py` gates the shape.
@@ -208,7 +208,7 @@ pub(crate) fn save_flow_box_recipe_available() -> bool {
 /// captured at the Save Game row press; Box3 overrides it with the live `05_010` picker dialog.
 ///
 /// Why the override exists (RE, 1.16.2 `FUN_1409a4670`, the native ProfileLoadDialog slot
-/// activation): the game submits its OWN "load this profile?" confirm to
+/// activation): the game submits its own "load this profile?" confirm to
 /// `profile_load_dialog + 0x10` with the context `profile_load_dialog + 0x50` -- i.e. a confirm
 /// raised over the picker belongs to the PICKER's job queue, not the System dialog's, whose queue
 /// is still busy with the open picker window job.
@@ -226,12 +226,12 @@ pub(crate) fn save_flow_box_set_host_dialog(dialog: usize) {
 
 /// Build and submit one confirm box against the flow's current host dialog.
 ///
-/// MENU-THREAD ONLY: this calls the native MessageBoxBuilder + MenuJob submit helpers, so it
+/// Menu-thread ONLY: this calls the native MessageBoxBuilder + MenuJob submit helpers, so it
 /// must run in the same ownership context `system_quit_open_profile_load_dialog` does -- the
 /// picker activation hook when a destination is picked inline, and
 /// `system_quit_menu_window_run_post` when that submit had to be deferred to the pump.
 ///
-/// Returns false when the box could not be submitted. A false from a NOT-ready job queue is
+/// Returns false when the box could not be submitted. A false from a not-ready job queue is
 /// retryable (the caller keeps the pending latch and tries on the next menu pump); every other
 /// false is terminal and the caller must abort the flow.
 pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
@@ -261,7 +261,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
         unsafe { std::mem::transmute(recipe.queue_ready) };
     if unsafe { queue_ready(queue) } == 0 {
         // Retryable: the queue still owns a job. The caller leaves the pending latch set.
-        // Log the FIRST deferral per box so a trace shows the submit was attempted and is
+        // Log the first deferral per box so a trace shows the submit was attempted and is
         // waiting, instead of this being an invisible branch between the stage entry and a
         // build timeout. Subsequent retries are silent (this runs per menu pump).
         if SAVE_FLOW_BOX_SUBMIT_DEFERRED.swap(box_id, Ordering::SeqCst) != box_id {
@@ -329,7 +329,7 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
         ));
         return false;
     }
-    // Tag the build BEFORE the submit so the MessageBoxDialog builder hook forwards and
+    // Tag the build before the submit so the MessageBoxDialog builder hook forwards and
     // captures the dialog the job is about to construct instead of suppressing it.
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_EXPECTED.store(box_id, Ordering::SeqCst);
@@ -347,13 +347,13 @@ pub(crate) unsafe fn save_flow_submit_box(box_id: usize) -> bool {
     true
 }
 
-/// Structural identity of a captured confirm box: is `dialog` STILL a live
+/// Structural identity of a captured confirm box: is `dialog` still a live
 /// `CS::MessageBoxDialog` (or any of its subclasses)?
 ///
 /// Checks the vtable's `Update` slot rather than the vtable pointer itself. RE (1.16.2,
 /// 2026-07-28): all five MessageBoxDialog-family vtables in `eldenring-deobf.bin` carry
 /// `FUN_140927d30` in slot 2 -- the base class (rva 0x2b03550), `CS::SaveRetryDialog`
-/// (0x2aaabf8, whose wrapper `FUN_1407af9a0` swaps the vtable AFTER the builder runs) and the
+/// (0x2aaabf8, whose wrapper `FUN_1407af9a0` swaps the vtable after the builder runs) and the
 /// three subclasses at 0x2ae5ae0 / 0x2b06780 / 0x2b220d0. A single hard-coded vtable equality
 /// rejects every one of those but the base, which is exactly the failure mode this project has
 /// already hit once (bd offline-title-modal-is-saveretrydialog). Comparing the slot accepts
@@ -377,7 +377,7 @@ pub(crate) fn save_flow_box_identity(dialog: usize, base: usize) -> (usize, usiz
 }
 
 /// Everything one poll reads out of the live dialog. Kept as a struct so the trace line and
-/// the decision are derived from the SAME snapshot.
+/// the decision are derived from the same snapshot.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SaveFlowBoxSnapshot {
     vtable: usize,
@@ -390,13 +390,13 @@ pub(crate) struct SaveFlowBoxSnapshot {
     emit_state: i32,
 }
 
-/// Poll the captured confirm-box dialog. PURE READS -- safe from the game task.
+/// Poll the captured confirm-box dialog. Pure reads -- safe from the game task.
 ///
-/// THE ANSWER IS THE NATIVE `MenuJobResult`, NOT A CURSOR INDEX (defect fixed 2026-07-28).
+/// The answer is the native `MenuJobResult`, not a cursor index (defect fixed 2026-07-28).
 /// The previous implementation read `+0x25e8` as a "decided" state and `+0x25e0` as the chosen
 /// button. RE of the 1.16.2 ctor `FUN_1409275b0` shows both are written at CONSTRUCTION:
-/// `+0x25e8` is the BUTTON COUNT (2 for a Yes/No confirm) and `+0x25e0` is the DEFAULT CURSOR
-/// INDEX (1 for a default-No box's `[Yes, No]` + `default_last`). So the old poll saw "state 2 >=
+/// `+0x25e8` is the button count (2 for a Yes/No confirm) and `+0x25e0` is the default cursor
+/// index (1 for a default-No box's `[Yes, No]` + `default_last`). So the old poll saw "state 2 >=
 /// decided" on its very first frame and mapped index 1 to `No` -- it answered the user's own dialog
 /// for them, with no input, and aborted their save. That exactly reproduced the measured
 /// `open=1, no=1, abort=1` with the box never touched.
@@ -405,16 +405,16 @@ pub(crate) struct SaveFlowBoxSnapshot {
 ///   * each button gets a `MenuJobResult` from the builder -- `add_yes` -> `Success` (2),
 ///     `add_no` -> `Failed` (3);
 ///   * a press runs `FUN_14078e030` -> `FUN_14078ef20`, which pulls that result out of the
-///     button's command struct (`+0x180`) and either EMITS it through
+///     button's command struct (`+0x180`) and either emits it through
 ///     `CS::MenuJob::EmitResult` (vtable `+0x60`, which then sets the `+0x3b0` latch) or
 ///     stores it at `dialog+0x1e8`, depending on `*(u8*)(dialog+0x127c)`;
 ///   * cancel/auto-close (`FUN_1407ac890`) emits `Failed` through the same slot.
 ///
-/// So we read `+0x1e8` AND latch what the emit hook saw for this exact dialog. Both are the
+/// So we read `+0x1e8` and latch what the emit hook saw for this exact dialog. Both are the
 /// game's own verdict; neither exists until the user answers.
 ///
-/// AND WE DO NOT TRUST A VALUE THAT WAS ALREADY THERE. `+0x1e8` is only believed once it has
-/// CHANGED away from the baseline sampled when the box was built, and it is refused outright
+/// And we do not trust a value that was already there. `+0x1e8` is only believed once it has
+/// changed away from the baseline sampled when the box was built, and it is refused outright
 /// if that baseline was already terminal. That is precisely the discipline the old code
 /// lacked: it read fields that a freshly constructed dialog already carried and called them
 /// the user's answer.
@@ -463,7 +463,7 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
 
     // Which source, if any, is allowed to answer.
     //   * The emit hook is the strongest evidence: it saw the exact `MenuJobResult` the game
-    //     handed the parent for THIS dialog, and it cannot fire before an answer exists.
+    //     handed the parent for this dialog, and it cannot fire before an answer exists.
     //   * `+0x1e8` is the same verdict on the store-instead-of-emit branch, but only once it
     //     has moved off its as-built baseline, and never when that baseline was already
     //     terminal (then the field cannot distinguish "as built" from "answered", so it is
@@ -482,7 +482,7 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
     };
     if answered_state <= MENU_JOB_RESULT_STATE_CONTINUE_MAX {
         if snapshot.closing == 0 {
-            // Still up and un-answered: keep polling. This is the ONLY non-terminal path.
+            // Still up and un-answered: keep polling. This is the only non-terminal path.
             return None;
         }
         // The box emitted its result (the +0x3b0 latch is the last thing EmitResult does) yet
@@ -516,14 +516,14 @@ pub(crate) unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDec
     Some(save_flow_box_finish(box_id, decision))
 }
 
-/// The `MenuJobResult` state the captured box carried AS BUILT (see
+/// The `MenuJobResult` state the captured box carried as built (see
 /// `SAVE_FLOW_BOX_RESULT_BASELINE`).
 pub(crate) fn save_flow_box_result_baseline() -> i32 {
     (SAVE_FLOW_BOX_RESULT_BASELINE.load(Ordering::SeqCst) as u32) as i32
 }
 
 /// Retire the capture slot and bump the counter that matches `decision`. Undecidable gets its
-/// OWN counter so a box we could not read never inflates the "user said No" tally.
+/// own counter so a box we could not read never inflates the "user said No" tally.
 pub(crate) fn save_flow_box_finish(box_id: usize, decision: SaveFlowDecision) -> SaveFlowDecision {
     SAVE_FLOW_BOX_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_EXPECTED.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
@@ -550,7 +550,7 @@ pub(crate) fn save_flow_box_emitted_state(dialog: usize) -> i32 {
     i32::try_from(SAVE_FLOW_BOX_EMIT_STATE.load(Ordering::SeqCst)).unwrap_or(0)
 }
 
-/// Fingerprint of the last logged poll, so the per-frame poll leaves a COMPLETE trace of every
+/// Fingerprint of the last logged poll, so the per-frame poll leaves a complete trace of every
 /// state the box passed through without becoming a per-frame firehose: one line when the box
 /// is first polled and one line every time any observed field changes.
 pub(crate) fn save_flow_box_poll_fingerprint(
@@ -604,12 +604,12 @@ pub(crate) static SAVE_FLOW_BOX_LAST_POLL: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FLOW_BOX_NONE);
 
 /// Observer detour on `CS::MenuJob::EmitResult` (`MENU_JOB_EMIT_RESULT_RVA`, vtable slot
-/// `+0x60`). PURE OBSERVATION: it records the emitted `MenuJobResult` when `this` is the live
+/// `+0x60`). Pure OBSERVATION: it records the emitted `MenuJobResult` when `this` is the live
 /// confirm box and always forwards, so no other MenuJob in the game is affected.
 ///
 /// Why it exists: `FUN_14078ee20` -- the lambda a pressed button runs -- branches on
 /// `*(u8*)(dialog+0x127c)`. On one branch the button's result is stored at `dialog+0x1e8`
-/// (pollable); on the other it goes STRAIGHT into this emit and the field is never written.
+/// (pollable); on the other it goes straight into this emit and the field is never written.
 /// Nothing in the whole image writes `+0x127c` with an immediate, so which branch a given
 /// dialog takes cannot be settled statically -- observing the emit makes the answer
 /// deterministic either way instead of leaving half the presses unreadable.
@@ -644,7 +644,7 @@ pub(crate) unsafe extern "system" fn menu_job_emit_result_hook(
 /// drifted build leaves the hook uninstalled (the poll then relies on `dialog+0x1e8` alone and
 /// reports UNDECIDABLE rather than guessing) instead of detouring the wrong bytes.
 pub(crate) fn install_menu_job_emit_result_hook() {
-    // Fast idempotent exit BEFORE any byte reading or MinHook work. This runs from the
+    // Fast idempotent exit before any byte reading or MinHook work. This runs from the
     // per-tick install driver and again at the Save Game row press, and the target is a busy
     // generic MenuJob method: once it is installed, later calls must touch nothing.
     if MENU_JOB_EMIT_RESULT_INSTALLED.load(Ordering::SeqCst) != MENU_JOB_EMIT_RESULT_NOT_INSTALLED {
@@ -676,7 +676,7 @@ pub(crate) fn save_flow_box_clear() {
     SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     SAVE_FLOW_BOX_HOST_DIALOG.store(0, Ordering::SeqCst);
     // Drop the emit observation with the capture: a latched result must never be read against
-    // a LATER box (that would be one dialog answering for another).
+    // a later box (that would be one dialog answering for another).
     SAVE_FLOW_BOX_EMIT_DIALOG.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_EMIT_STATE.store(0, Ordering::SeqCst);
     SAVE_FLOW_BOX_LAST_POLL.store(0, Ordering::SeqCst);
@@ -685,8 +685,8 @@ pub(crate) fn save_flow_box_clear() {
 
 /// Record a captured confirm-box dialog (called from the MessageBoxDialog builder hook).
 ///
-/// Samples the AS-BUILT `MenuJobResult` state here, at the one moment we know for certain the
-/// user has not answered yet, so the poll can require a CHANGE rather than trusting a value
+/// Samples the as-built `MenuJobResult` state here, at the one moment we know for certain the
+/// user has not answered yet, so the poll can require a change rather than trusting a value
 /// that construction left behind. Also logs the two construction-time fields the old poll
 /// mistook for an answer (button count, default cursor), so a trace shows them being what they
 /// are instead of what they were read as.

@@ -28,25 +28,25 @@ pub const PORTRAIT_EQUIP_OVERRIDE_LEGS_ADDEND: i32 = 300;
 pub const PORTRAIT_EQUIP_PROTECTOR_DEFAULT_PARAM_ID_BASE: i32 = 10000;
 pub const PORTRAIT_EQUIP_PROTECTOR_DEFAULT_PARAM_ID_STRIDE: i32 = 100;
 
-/// Presence bit for a packed `i32` oracle value. A raw 0 means NEVER SAMPLED -- which matters because
+/// Presence bit for a packed `i32` oracle value. A raw 0 means never sampled -- which matters because
 /// 0 is also a perfectly representable (and, for this bug, highly diagnostic) param id.
 pub const PORTRAIT_EQUIP_VALUE_PRESENT: usize = 1usize << 32;
 /// What a packed slot decodes to when it was never sampled. Distinct from every real param id and
 /// from the `-1` "slot legitimately empty" sentinel, so a reader can tell "no data" from "no armor".
 pub const PORTRAIT_EQUIP_VALUE_UNSAMPLED: i32 = i32::MIN;
 
-/// Bits of the per-sample failure mask. Published OR-ed across the window as
-/// `oracle_portrait_equip_bad_mask`, so a failing window names WHICH condition fired.
+/// Bits of the per-sample failure mask. Published or-ed across the window as
+/// `oracle_portrait_equip_bad_mask`, so a failing window names which condition fired.
 /// A non-negative `unk0`/`unkd4`/`unkd8` -- the forced whole-outfit override; the nude root cause.
 pub const PORTRAIT_EQUIP_BAD_OVERRIDE_ACTIVE: usize = 1 << 0;
-/// The effective HEAD id is not the one the target save record carries.
+/// The effective head id is not the one the target save record carries.
 pub const PORTRAIT_EQUIP_BAD_HEAD: usize = 1 << 1;
-/// The effective CHEST id is not the one the target save record carries.
+/// The effective chest id is not the one the target save record carries.
 pub const PORTRAIT_EQUIP_BAD_CHEST: usize = 1 << 2;
-/// The effective HANDS id is not the one the target save record carries. (Until 2026-09-06 this
-/// asserted the BARE-BODY default instead, which made the missing-gauntlets defect score as a pass.)
+/// The effective hands id is not the one the target save record carries. (Until 2026-09-06 this
+/// asserted the bare-body default instead, which made the missing-gauntlets defect score as a pass.)
 pub const PORTRAIT_EQUIP_BAD_HANDS: usize = 1 << 3;
-/// The effective LEGS id is not the one the target save record carries. (Same 2026-09-06 flip.)
+/// The effective legs id is not the one the target save record carries. (Same 2026-09-06 flip.)
 pub const PORTRAIT_EQUIP_BAD_LEGS: usize = 1 << 4;
 
 /// Protector slot indices within the four the oracle covers.
@@ -56,7 +56,7 @@ pub const PORTRAIT_EQUIP_SLOT_HANDS: usize = 2;
 pub const PORTRAIT_EQUIP_SLOT_LEGS: usize = 3;
 
 /// Verdict values for `oracle_portrait_equip_capture_verdict`. Deliberately tri-state: "never sampled"
-/// must NOT read as a pass, which is the `naked_kicks=0` false negative in a different costume.
+/// must not read as a pass, which is the `naked_kicks=0` false negative in a different costume.
 pub const PORTRAIT_EQUIP_CAPTURE_NOT_SAMPLED: usize = 0;
 pub const PORTRAIT_EQUIP_CAPTURE_CLEAN: usize = 1;
 pub const PORTRAIT_EQUIP_CAPTURE_BAD: usize = 2;
@@ -72,28 +72,28 @@ pub struct PortraitEquipSample {
     /// The four `EquipParamProtector` row ids `FUN_1409e6fb0` will actually request, head/chest/hands/
     /// legs, after the override arithmetic.
     pub effective: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
-    /// The same four slots as the TARGET save record carries them, for classification.
+    /// The same four slots as the target save record carries them, for classification.
     pub record: [i32; PORTRAIT_EQUIP_PROTECTOR_SLOT_COUNT],
-    /// The `CS::ModelIns` this sample was taken against, carried so a reader can tell WHEN the
-    /// sample happened relative to the swap. It is deliberately NOT an input to
+    /// The `CS::ModelIns` this sample was taken against, carried so a reader can tell when the
+    /// sample happened relative to the swap. It is deliberately not an input to
     /// `portrait_equip_sample_bad_mask`: the open question (bd er-effects-rs-7m5y) is whether the
     /// non-capture bad frames all precede the model being rebuilt for the new character, and a
     /// value that both classifies and explains would beg that question.
     pub model_ins: usize,
     /// Address of the live `ChrAsm` this sample was read from, so the weapon/handedness latches read
-    /// the SAME object the protector comparison did rather than re-resolving the renderer.
+    /// the same object the protector comparison did rather than re-resolving the renderer.
     pub chr_asm: usize,
 }
 
 /// The bare-body row `CS::ChrAsm::GetDefaultProtectorParamId` returns for a protector slot, and which
-/// the native profile feed equips into HANDS and LEGS on every `set_model_source`.
+/// the native profile feed equips into hands and legs on every `set_model_source`.
 pub fn protector_default_param_id(slot: usize) -> i32 {
     PORTRAIT_EQUIP_PROTECTOR_DEFAULT_PARAM_ID_BASE
         + PORTRAIT_EQUIP_PROTECTOR_DEFAULT_PARAM_ID_STRIDE * slot as i32
 }
 
 /// Replicate `FUN_1409e6fb0`'s protector resolution (deobf 0x1409e7553..0x1409e75b6, every test a
-/// SIGNED `js`) for one slot. The per-slot param id is the baseline; a non-negative override field
+/// signed `js`) for one slot. The per-slot param id is the baseline; a non-negative override field
 /// replaces it outright.
 pub fn portrait_effective_protector_id(
     slot: usize,
@@ -112,10 +112,10 @@ pub fn portrait_effective_protector_id(
     }
 }
 
-/// Classify one sample. Returns the OR of the `PORTRAIT_EQUIP_BAD_*` bits; 0 = this frame would render
+/// Classify one sample. Returns the or of the `PORTRAIT_EQUIP_BAD_*` bits; 0 = this frame would render
 /// the character's own armor.
 ///
-/// ALL FOUR slots are compared against the RECORD's own ids, which is stronger than any absolute
+/// All four slots are compared against the record's own ids, which is stronger than any absolute
 /// row-id floor and needs no unverifiable magic number: an empty slot is `-1` in both places and
 /// passes, exactly as a bare-headed character should. Hands and legs joined head and chest on
 /// 2026-09-06, when the kick started restoring them over the native feed's bare-body defaults.
@@ -130,13 +130,13 @@ pub fn portrait_equip_sample_bad_mask(sample: &PortraitEquipSample) -> usize {
     if sample.effective[PORTRAIT_EQUIP_SLOT_CHEST] != sample.record[PORTRAIT_EQUIP_SLOT_CHEST] {
         mask |= PORTRAIT_EQUIP_BAD_CHEST;
     }
-    // HANDS and LEGS are now held to the SAME standard as head and chest -- the record's own row --
+    // Hands and legs are now held to the same standard as head and chest -- the record's own row --
     // because the kick restores them over the native feed (see
     // `crate::portrait_equip_restore`). They used to be compared against
     // `protector_default_param_id`, i.e. the oracle asserted that a portrait wearing its own
     // gauntlets was the deviation. That was a faithful description of what the feed does and a
     // wrong description of what the portrait should show, and while it held, the defect the user
-    // reported -- no arm armour, no leg armour -- was a PASS in every window this oracle scored.
+    // reported -- no arm armour, no leg armour -- was a pass in every window this oracle scored.
     if sample.effective[PORTRAIT_EQUIP_SLOT_HANDS] != sample.record[PORTRAIT_EQUIP_SLOT_HANDS] {
         mask |= PORTRAIT_EQUIP_BAD_HANDS;
     }
@@ -161,7 +161,7 @@ pub fn portrait_equip_unpack(raw: usize) -> i32 {
 }
 
 /// First writer wins. `compare_exchange` from 0 rather than `.store()` is the whole point: the value
-/// the reader gets belongs to the FIRST frame of the window, not to whichever tick happened to run
+/// the reader gets belongs to the first frame of the window, not to whichever tick happened to run
 /// last before the telemetry writer sampled.
 pub fn portrait_equip_latch_first(cell: &AtomicUsize, value: i32) {
     let _ = cell.compare_exchange(
@@ -201,7 +201,7 @@ mod tests {
     }
 
     /// The exact state our zero-filled image produced: all four slots resolve to rows that do not
-    /// exist, so nothing renders -- default underwear included. This is the sample the OLD oracle
+    /// exist, so nothing renders -- default underwear included. This is the sample the old oracle
     /// scored as a clean 4/4 pass.
     #[test]
     fn a_zeroed_chr_asm_resolves_every_protector_slot_to_a_bogus_row_and_is_flagged() {
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(portrait_equip_sample_bad_mask(&s), 0);
     }
 
-    /// A character wearing NO head or chest armor is legitimately bare there. Comparing against the
+    /// A character wearing no head or chest armor is legitimately bare there. Comparing against the
     /// record rather than an absolute row-id floor is what keeps that from reading as a failure.
     #[test]
     fn an_unarmored_character_is_not_a_failure() {
@@ -258,9 +258,9 @@ mod tests {
         );
     }
 
-    /// THE REPORTED DEFECT, as a test: the record names gauntlets and greaves, and the live ChrAsm
+    /// The reported defect, as a test: the record names gauntlets and greaves, and the live ChrAsm
     /// carries the bare-body rows the native feed forced in. Under the pre-2026-09-06 rule this was
-    /// the DEFINITION of a pass; it is now flagged on both slots, and head and chest -- which the
+    /// the definition of a pass; it is now flagged on both slots, and head and chest -- which the
     /// feed never touches -- stay clean, so the mask names the two that are actually wrong.
     #[test]
     fn the_native_feeds_bare_hands_and_legs_are_now_a_failure() {
@@ -295,8 +295,8 @@ mod tests {
         );
     }
 
-    /// 0 is a representable param id AND this bug's signature, so "never sampled" must not decode to
-    /// it. `compare_exchange` from 0 must also latch the FIRST value, not the last.
+    /// 0 is a representable param id and this bug's signature, so "never sampled" must not decode to
+    /// it. `compare_exchange` from 0 must also latch the first value, not the last.
     #[test]
     fn an_unsampled_slot_never_decodes_to_a_plausible_param_id() {
         let cell = AtomicUsize::new(0);

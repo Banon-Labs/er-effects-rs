@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Armed-vs-disarmed warm-title-rebuild A/B (bd decoupled-diagnostics-architecture-buildplan-2026-07-24).
 #
-# Runs the same-char switch reload TWICE with an IDENTICAL diagnostic set -- the decoupled read-side
-# oracles (er-oracle-title-binding + er-oracle-stream-overlap, in er-telemetry) enabled in BOTH arms:
-#   ARMED    = product autoload/own_load reload (MOD_ARMED=1, DRIVE_MODE=reload)
+# Runs the same-char switch reload twice with an identical diagnostic set -- the decoupled read-side
+# oracles (er-oracle-title-binding + er-oracle-stream-overlap, in er-telemetry) enabled in both arms:
+#   Armed    = product autoload/own_load reload (MOD_ARMED=1, DRIVE_MODE=reload)
 #   DISARMED = telemetry-only, harness-driven native reload (the run49 path; product feature off)
 # Because the diagnostics are decoupled + identical in both arms, any delta between the two oracle
-# streams is attributable to the PRODUCT FEATURE alone. The read: title-binding proxy_handle_nonnull
+# streams is attributable to the product feature alone. The read: title-binding proxy_handle_nonnull
 # True(disarmed) vs False(armed) pins the product hold that deadlocks the armed native Continue; the
 # stream-overlap window is the dip mechanism in both arms.
 #
-# Crash logging is held default-on + CONSTANT in both arms (ER_QUICKLOAD_CRASH_LOG=1); RE-instrumentation
-# markers are left ABSENT. No product-feature toggle differs except MOD_ARMED itself.
+# Crash logging is held default-on + constant in both arms (ER_QUICKLOAD_CRASH_LOG=1); RE-instrumentation
+# markers are left absent. No product-feature toggle differs except MOD_ARMED itself.
 set -uo pipefail
 
 REPO="/home/choza/projects/er-mods-rs"

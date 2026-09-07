@@ -2,10 +2,10 @@
 # Run the read-only Random-Forest function-start finder (FindFunctionStartsRF.java) against a
 # persistent, already-analyzed Ghidra project and print the discovered candidate VAs as JSON.
 #
-#   scripts/ghidra/find-functions-rf.sh [--proj-dir DIR] [--proj-name NAME] \
-#       [--threshold 0.80] [--max-starts 1000] [--min-range 16] [--log FILE]
+#   scripts/ghidra/find-functions-rf.sh [--proj-dir DIR] [--proj-name name] \
+#       [--threshold 0.80] [--max-starts 1000] [--min-range 16] [--log file]
 #
-# Defaults target the persistent ER runtime DUMP project (ermaporch). NOTE: the dump is already
+# Defaults target the persistent ER runtime dump project (ermaporch). NOTE: the dump is already
 # heavily symbolized, so it is mainly a smoke-test target -- few functions remain undiscovered,
 # and its addresses carry the ~0x10 dump-vs-deobf shift (see AGENTS.md). For real address-bearing
 # results, point --proj-dir/--proj-name at the deobf-binary project (scripts/ghidra/import-deobf.sh).
@@ -53,7 +53,7 @@ if [[ -z "$LOG" ]]; then
   LOG="$(mktemp "$TMP/rf-finder.XXXXXX.log")"
 fi
 
-# -process (no -import) reopens the SAVED program; the RF script is read-only so -readOnly is safe.
+# -process (no -import) reopens the saved program; the RF script is read-only so -readOnly is safe.
 "$HEADLESS" "$PROJ_DIR" "$PROJ_NAME" \
   -process \
   -noanalysis \

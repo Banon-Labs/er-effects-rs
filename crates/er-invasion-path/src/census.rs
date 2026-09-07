@@ -12,13 +12,13 @@
 /// bloodstains, messages and other people's bonfire animations, which have positions and no
 /// bodies.
 ///
-/// The list is what gets EXCLUDED rather than what gets included, on purpose. An allow-list of the
+/// The list is what gets excluded rather than what gets included, on purpose. An allow-list of the
 /// phantom types this workspace knows about would silently draw nothing at all if Seamless typed
 /// its remote players as something not on it, and "nothing drawn" is indistinguishable from "the
 /// navmesh found no route". Failing towards drawing an extra character is a visible, correctable
 /// mistake; failing towards drawing nobody is the one that wastes an invasion.
 ///
-/// `Local` (0) is absent for the same reason. The local player is rejected by ADDRESS, which is
+/// `Local` (0) is absent for the same reason. The local player is rejected by address, which is
 /// exact; excluding the type as well would drop a remote player in any session that types them
 /// `Local`, which is precisely the possibility the wide sweep exists to survive.
 const NON_PLAYER_CHR_TYPES: [i32; 7] = [
@@ -34,7 +34,7 @@ const NON_PLAYER_CHR_TYPES: [i32; 7] = [
 /// `ChrType::Npc`, the ordinary map character.
 pub(crate) const NPC_CHR_TYPE: i32 = 5;
 
-/// Is this character kind one a route should be drawn to, GIVEN that it was found in
+/// Is this character kind one a route should be drawn to, given that it was found in
 /// `player_chr_set`?
 ///
 /// Membership in the player set is itself the evidence. The engine puts players there, so a type
@@ -44,7 +44,7 @@ pub(crate) fn is_player_kind(chr_type: i32) -> bool {
     !NON_PLAYER_CHR_TYPES.contains(&chr_type)
 }
 
-/// `ChrType` values the engine NAMES as a real person: the local kind, the phantom kinds, the
+/// `ChrType` values the engine names as a real person: the local kind, the phantom kinds, the
 /// invader kinds, the arena kind.
 ///
 /// `WhiteSummonNpc` (19), `BloodyFingerNpc` (20) and `RecusantNpc` (21) are absent on purpose --
@@ -62,7 +62,7 @@ const NAMED_PLAYER_CHR_TYPES: [i32; 9] = [
 ];
 
 /// Is this character kind one a route should be drawn to, given that it was found by sweeping
-/// EVERY ChrSet in the world?
+/// every ChrSet in the world?
 ///
 /// Strictly an allow-list, and the asymmetry with [`is_player_kind`] is the whole point. The wide
 /// sweep exists only as a fallback for a session that puts players somewhere unexpected, and it

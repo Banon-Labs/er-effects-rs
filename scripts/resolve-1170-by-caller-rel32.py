@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Resolve a 1.16.2 -> 1.17 function pair by decoding the rel32 out of an ALREADY-MAPPED caller.
+"""Resolve a 1.16.2 -> 1.17 function pair by decoding the rel32 out of an already-mapped caller.
 
-WHY THIS EXISTS. `map-rvas-1162-to-1170.py` matches a relocation-masked byte signature. That
+Why this exists. `map-rvas-1162-to-1170.py` matches a relocation-masked byte signature. That
 works on a function with a distinctive body and fails on the ones this project needs most: leaf
-getters, `ret 0` stubs and thunks are SHAPE-AMBIGUOUS -- nine functions in 1.17 look exactly like
+getters, `ret 0` stubs and thunks are shape-ambiguous -- nine functions in 1.17 look exactly like
 `mov rax,[rcx+0x18]; ret`, and the mapper correctly refuses to pick one. It reports
 "9 shape matches, none at the nearest anchor's delta", which is an honest shrug, not an address.
 
 The call graph answers what the bytes cannot. If a caller C is already mapped to C', and C calls
-the target F, then F' is simply whatever C' calls in the SAME POSITION. That is not a similarity
+the target F, then F' is simply whatever C' calls in the same position. That is not a similarity
 score; it is the identity the two images themselves record. It is how `SphereCastClosest` and
 `ChrCtrl::GetPhysicsPosition` were recovered.
 
-THE ALIGNMENT RULE, and why it is index-based rather than offset-based. A tempting shortcut is
-`F' = C' + (F_callsite - C)` -- the same byte offset into the mapped caller. That is WRONG the
+The alignment rule, and why it is index-based rather than offset-based. A tempting shortcut is
+`F' = C' + (F_callsite - C)` -- the same byte offset into the mapped caller. That is wrong the
 moment 1.17 inserts or removes a single instruction anywhere earlier in C, which is exactly the
 drift this whole exercise is about (`STEP_MoveMap` gained two instructions at index 873). So the
-alignment is by CALL INDEX: decode every `call`/`jmp` rel32 in both bodies in order, and require
-the two lists to have the SAME LENGTH before trusting position i. A length mismatch means the
+alignment is by call INDEX: decode every `call`/`jmp` rel32 in both bodies in order, and require
+the two lists to have the same length before trusting position i. A length mismatch means the
 body changed shape and the correspondence is unproven -- the script says so and declines, rather
 than returning a plausible address.
 
 CORROBORATION, not a single witness. A target called from several mapped callers gets one vote
-per caller, and they must AGREE. Agreement across independent callers is much stronger evidence
+per caller, and they must agree. Agreement across independent callers is much stronger evidence
 than any byte pattern, because each caller is a separate derivation. A split vote is reported as
 a conflict and resolves nothing.
 """

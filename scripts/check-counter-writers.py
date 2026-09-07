@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fail the build when a telemetry counter is DECLARED but never WRITTEN anywhere.
+"""Fail the build when a telemetry counter is declared but never written anywhere.
 
-WHY THIS EXISTS, AND WHY `check-oracle-writers.py` DID NOT ALREADY COVER IT.
+Why this exists, and why `check-oracle-writers.py` did not already cover it.
 
 `scripts/check-oracle-writers.py` fires only when `writes == 0 and reads > 0` -- a counter that is
 read to emit an oracle but never written. Its own selftest pins the exclusion:
@@ -9,7 +9,7 @@ read to emit an oracle but never written. Its own selftest pins the exclusion:
     if "NEVER_TOUCHED" in got: failures.append("NEVER_TOUCHED was flagged; unread counters are
                                                 out of scope")
 
-So a counter that is declared and never written and never `.load()`ed is DELIBERATELY invisible to
+So a counter that is declared and never written and never `.load()`ed is deliberately invisible to
 it. That is most of the debt. On 2026-08-31 a census found 151 of the 1,412 statics declared in
 `crates/er-telemetry-core/src/counters.rs` with no write site anywhere in the tree, and only 14 of
 them were on the oracle-writers allowlist -- the other 137 had never been looked at, because
@@ -23,22 +23,22 @@ An unwritten counter is not inert. Three ways it does damage:
     measurement;
   * it is `pub` and re-exported, so it looks like part of the telemetry contract.
 
-WHAT COUNTS AS A WRITE is deliberately the same rule set as `check-oracle-writers.py`, so the two
+What counts as a write is deliberately the same rule set as `check-oracle-writers.py`, so the two
 gates cannot disagree about a given counter: any atomic RMW/store, optionally through an index,
 matched across rustfmt line breaks; plus `&NAME` / `&crate::path::NAME` / `&raw const NAME`,
 because MinHook trampolines are written through a reference handed to the installer.
 
-TWO EXTRA RULES THIS GATE NEEDS AND THE ORACLE GATE DOES NOT.
+Two extra rules this gate needs and the oracle gate does not.
 
-  1. MACRO-CONSTRUCTED NAMES. A write site can name a counter through `paste!`/`concat_idents!` or
+  1. Macro-constructed names. A write site can name a counter through `paste!`/`concat_idents!` or
      a `macro_rules!` `$name` substitution, in which case the literal identifier never appears at
      the write. Deleting such a counter on the strength of a name search is the failure mode this
-     script must not cause, so a file that writes an atomic through a CONSTRUCTED identifier makes
-     the whole census undecidable and the gate REFUSES (exit 2) naming that file. No file in the
+     script must not cause, so a file that writes an atomic through a constructed identifier makes
+     the whole census undecidable and the gate refuses (exit 2) naming that file. No file in the
      tree trips it today. `--selftest` carries the frozen negative for it, and the opposite blind:
-     a benign `$x:ident` macro must NOT make the gate refuse.
+     a benign `$x:ident` macro must not make the gate refuse.
 
-  2. NON-`.rs` WRITE SITES. Counters can be written from generated code emitted by a `build.rs`
+  2. Non-`.rs` write sites. Counters can be written from generated code emitted by a `build.rs`
      into `OUT_DIR`. Those files are scanned when present.
 
 Usage:
@@ -70,7 +70,7 @@ WRITE_OPS = (
     "|compare_exchange_weak|compare_exchange"
 )
 
-# ONE pass per file that yields every written name, instead of one regex per (name, file). The
+# One pass per file that yields every written name, instead of one regex per (name, file). The
 # per-name form is O(names x files) -- 1,412 x ~900 here, which does not finish inside the 30s
 # shell cap. This is the same match, transposed.
 WRITE_ANY_RE = re.compile(
@@ -79,11 +79,11 @@ WRITE_ANY_RE = re.compile(
 READ_ANY_RE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b\s*(?:\[[^\]]{0,64}\])?\s*\.\s*load\s*\(", re.S)
 BY_REF_QUALIFIER = r"(?:(?:raw\s+(?:const|mut)\s+)?(?:(?:crate|self|super|[A-Za-z_]\w*)\s*::\s*)*)"
 # `&NAME` counts as a write (a MinHook trampoline is written through the reference handed to the
-# installer) -- but only a REAL reference. Two shapes look like one and are not, and both were
+# installer) -- but only a real reference. Two shapes look like one and are not, and both were
 # hiding live offenders in the tree on 2026-08-31:
 #
-#   `&& NAME.load(..)`   the second `&` of a boolean AND, immediately followed by the counter. This
-#                        is how TITLE_CUSTOM_COVER_RUN_CALLS -- the fifth AND-term of
+#   `&& NAME.load(..)`   the second `&` of a boolean and, immediately followed by the counter. This
+#                        is how TITLE_CUSTOM_COVER_RUN_CALLS -- the fifth and-term of
 #                        `oracle_title_loaded_character_portrait_rendered`, and the reason that
 #                        oracle could never be true -- read as "written" to every audit run so far.
 #                        `(?<!&)` refuses it.
@@ -97,16 +97,16 @@ DISCARD_REF_RE = re.compile(
     rf"let\s+_\s*(?::[^=]{{0,80}})?=\s*&\s*{BY_REF_QUALIFIER}([A-Z][A-Z0-9_]{{2,}})\b"
 )
 
-# WHERE A NAME-BASED CENSUS CANNOT ANSWER. If a file writes an atomic through an identifier it
-# BUILDS -- `$name.fetch_add(..)` in a `macro_rules!` body, or a `paste!`/`concat_idents!`
+# Where a name-based census cannot answer. If a file writes an atomic through an identifier it
+# builds -- `$name.fetch_add(..)` in a `macro_rules!` body, or a `paste!`/`concat_idents!`
 # construction sitting beside an atomic write -- then the literal counter name never appears at the
 # write site and searching for it proves nothing. Deleting a counter on that evidence is the one
 # outcome this gate must never cause, so such a file makes the census UNDECIDABLE and the gate
-# REFUSES (exit 2) naming the file, rather than reporting its counters as dead.
+# refuses (exit 2) naming the file, rather than reporting its counters as dead.
 #
 # It is deliberately narrow. A `$x:ident` parameter on its own is not enough (half the tree's
 # helper macros take one), and neither is a `paste!` in a file that performs no atomic write at
-# all. As of 2026-08-31 NO file in the tree trips this, so the gate is decidable everywhere; the
+# all. As of 2026-08-31 no file in the tree trips this, so the gate is decidable everywhere; the
 # refusal exists so that the day one appears, the answer is "I cannot tell" and not a deletion.
 MACRO_SUBST_WRITE_RE = re.compile(rf"\$\w+\s*\.\s*(?:{WRITE_OPS})\s*\(")
 MACRO_IDENT_BUILD_RE = re.compile(r"paste\s*!|concat_idents\s*!|\[\s*<\s*\$")
@@ -119,7 +119,7 @@ def census_undecidable(text: str) -> bool:
         return True
     return bool(MACRO_IDENT_BUILD_RE.search(text) and ANY_WRITE_OP_RE.search(text))
 
-# `.claude/worktrees/**` and `.worktrees/**` hold OTHER AGENTS' checkouts of this same repo. They
+# `.claude/worktrees/**` and `.worktrees/**` hold other agents' checkouts of this same repo. They
 # duplicate every counter declaration under a different path, so scanning them both slows the census
 # and attributes a declaration to a sandbox copy instead of the tracked file. `target/` is build
 # output except for generated `OUT_DIR` code, which is added back explicitly below.
@@ -144,10 +144,10 @@ def repo_sources() -> dict[str, str]:
     """Every `.rs` in the tree except build outputs, plus any generated `.rs` under target/*/build."""
     out: dict[str, str] = {}
     for p in REPO.rglob("*.rs"):
-        # RELATIVE parts, not absolute ones -- see the same fix in
+        # Relative parts, not absolute ones -- see the same fix in
         # `scripts/audit-name-derived-offsets.py`. `REPO` is this script's own checkout, and a
         # `git worktree` lives at `<repo>/.worktrees/<name>`, so every absolute path under one
-        # contains `.worktrees` and this skipped the ENTIRE corpus. Run from a worktree the gate
+        # contains `.worktrees` and this skipped the entire corpus. Run from a worktree the gate
         # reported unwritten counters that are written, which is the shape that gets a correct
         # closure rejected during verification.
         if any(part in SKIP_PARTS for part in p.relative_to(REPO).parts):
@@ -231,12 +231,12 @@ def selftest() -> int:
             "let p = &raw const WRITTEN_BY_RAW_REF;\n"
             "WRITTEN_INDEXED[idx].fetch_add(1, Ordering::SeqCst);\n"
             'push_json_usize(body, "oracle_dead", DEAD_READ_ONCE.load(Ordering::SeqCst));\n'
-            # `&&` is not a reference. The `&` of a boolean AND sits directly before the counter.
+            # `&&` is not a reference. The `&` of a boolean and sits directly before the counter.
             "let ok = a != 0\n    && DEAD_BEHIND_LOGICAL_AND.load(Ordering::SeqCst) == 1;\n"
             # a discard binding is not a write
             "let _ = &DEAD_BEHIND_DISCARD;\n"
         ),
-        # FROZEN NEGATIVE. The literal `WRITTEN_FROM_MACRO` never appears at the write; the name
+        # Frozen negative. The literal `WRITTEN_FROM_MACRO` never appears at the write; the name
         # is pasted. An over-broad matcher that only searches for the literal calls it dead and a
         # deletion follows. The census must declare itself UNDECIDABLE here instead.
         "macro.rs": (
@@ -272,8 +272,8 @@ def selftest() -> int:
     # ...and the blind: the macro file must make the census refuse, so nothing is deleted blind.
     if "macro.rs" not in c["undecidable"]:
         failures.append("macro.rs was not called undecidable; a pasted write would read as dead")
-    # ...and the OTHER direction of the same blind: a file that merely mentions an atomic, or merely
-    # uses a `$x:ident` parameter, must NOT make the whole census refuse -- a gate that refuses on
+    # ...and the other direction of the same blind: a file that merely mentions an atomic, or merely
+    # uses a `$x:ident` parameter, must not make the whole census refuse -- a gate that refuses on
     # everything is a gate that never has a verdict.
     benign = dict(sources)
     benign["benign.rs"] = (

@@ -11,14 +11,14 @@
 //! # Loud only when it must be
 //!
 //! Quiet states are drawn at **1%** -- present in a screenshot, effectively invisible while
-//! playing. The single loud state, **25% red**, is a build that is an older PUBLISHED release
+//! playing. The single loud state, **25% red**, is a build that is an older published release
 //! than `main`'s tip: somebody is running code we have already moved past, and a bug report
-//! against it may describe something already fixed. A dirty local tree is NOT that, and is drawn
+//! against it may describe something already fixed. A dirty local tree is not that, and is drawn
 //! as quietly as the tip -- see `er_game_base::build_id::Standing`.
 //!
 //! # Why hudhook rather than the D3D12 compositor
 //!
-//! `er-d3d12-compositor` COPIES an RGBA frame onto the backbuffer; it never blends, so "1%
+//! `er-d3d12-compositor` copies an RGBA frame onto the backbuffer; it never blends, so "1%
 //! opacity" is not expressible through it at all -- the first cut of this watermark had to paint
 //! an opaque dark panel and call it faint. Real alpha through that path would have meant either a
 //! per-frame backbuffer readback (a fence stall inside `Present`) or a blend pipeline with its

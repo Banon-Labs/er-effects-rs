@@ -1,18 +1,18 @@
-//! DIRECT in-process input injection -- the VERIFIED ER input lever (user-confirmed 2026-07-19; the
-//! SendInput/XInput/window-focus path was a DEAD END). No OS input is synthesized: the game's own
+//! Direct in-process input injection -- the verified ER input lever (user-confirmed 2026-07-19; the
+//! SendInput/XInput/window-focus path was a dead end). No OS input is synthesized: the game's own
 //! input memory is written on the game thread each frame.
 //!
 //! Two writes, both ported verbatim from the product with their exact reverse-engineered addresses:
 //!
-//!  1. MENU EVENTS -- the front-end/menu reads a KEYSTATE BITMAP at `inputmgr+0x90+eventId`, edge-
+//!  1. Menu events -- the front-end/menu reads a KEYSTATE BITMAP at `inputmgr+0x90+eventId`, edge-
 //!     triggered (`&1`). `inputmgr = *(base + 0x3d6b7b0)` (CSMenuMan / SelectBot input manager). Tap
-//!     an event by OR-ing bit0 into `inputmgr+0x90+eventId`; the bitmap is re-polled every frame, so
+//!     an event by or-ing bit0 into `inputmgr+0x90+eventId`; the bitmap is re-polled every frame, so
 //!     assert for a couple frames then gap for a clean single edge (no auto-repeat). Verified event
-//!     ids (RE 2026-06-17, `frontend-menu-input-injection-ids-2026`): vertical-move = 0x00 AND 0x45
+//!     ids (RE 2026-06-17, `frontend-menu-input-injection-ids-2026`): vertical-move = 0x00 and 0x45
 //!     (inject both; only Down advances, Up saturates), Confirm/OK = 0x3d. Mirrors the product's
 //!     `menu_input_probe` (crates/er-quickload/src/experiments/continue_load/product_continue.rs).
 //!
-//!  2. STAY-ACTIVE (unfocused input) -- ER clears `[DLUID+0x88d]` every frame it is not
+//!  2. Stay-active (unfocused input) -- ER clears `[DLUID+0x88d]` every frame it is not
 //!     `GetActiveWindow`; re-setting it to 1 lets the injected input apply while the window is
 //!     UNFOCUSED (bd `breakthrough-pad-boundary-injection-moves-char-needs-focus`). `DLUID =
 //!     *(base + 0x485dc18)` (input-device manager). This is why the direct path needs no window focus.
@@ -42,16 +42,16 @@ const HEAP_LO: usize = 0x10000;
 /// tab-switch -- that is mouse-only on native and is the known self-drive gap.
 #[derive(Clone, Copy)]
 pub enum MenuEvent {
-    /// Vertical move DOWN (id 0x00) and UP (id 0x45) -- verified vertical-move ids. Injected singly now
+    /// Vertical move down (id 0x00) and up (id 0x45) -- verified vertical-move ids. Injected singly now
     /// (directional), so nav can stop on a middle row instead of saturating an extreme.
     ///
-    /// RETAINED RE FACT: `MoveDown` is a reversed native-binding event id; the current quit route
+    /// Retained RE FACT: `MoveDown` is a reversed native-binding event id; the current quit route
     /// happens to reach its target with `MoveUp` only. Half of a reversed directional pair is not
     /// scaffolding -- dropping it would discard the id.
     #[allow(dead_code)]
     MoveDown,
-    /// RETAINED, NOT DRIVEN. Nothing constructs this any more: `inputmgr+0x90` turned out to be a
-    /// SHOWN-MENU-WINDOW bitmap indexed by menu-window id (its writer is `CS::MenuWindowJob::Run`
+    /// Retained, not driven. Nothing constructs this any more: `inputmgr+0x90` turned out to be a
+    /// shown-menu-window bitmap indexed by menu-window id (its writer is `CS::MenuWindowJob::Run`
     /// doing `field99_0x90[owningMenuWindow+0x180] |= 1`), so writing an "event id" there asserted a
     /// false menu stack rather than pressing anything. Menu navigation is driven through the
     /// `CS::CSEzMenuViewerPad` readers in `pad_inject` instead. The id is kept because it is reversed
@@ -60,36 +60,36 @@ pub enum MenuEvent {
     #[allow(dead_code)]
     MoveUp,
     /// OptionSetting tab-switch: LEFT/prev tab (id 0x30) and RIGHT/next tab (id 0x31). RE 2026-07-22
-    /// (bd MENU-GAPS-CLOSED): GridControl pager FUN_1407392f0 -> tab handler FUN_14093b760.
+    /// (bd menu-gaps-closed): GridControl pager FUN_1407392f0 -> tab handler FUN_14093b760.
     TabLeft,
-    /// RETAINED RE FACT: the RIGHT/next half (id 0x31) of the tab-switch pair reversed above. The quit
+    /// Retained RE FACT: the RIGHT/next half (id 0x31) of the tab-switch pair reversed above. The quit
     /// route reaches the Quit tab with `TabLeft` alone, so nothing constructs this today -- but the id
     /// is reversed evidence with named Ghidra provenance, not scaffolding.
     #[allow(dead_code)]
     TabRight,
     Confirm,
-    /// Modal-dialog OK/accept (id 0x01). Consumed ONLY by the dialog builder FUN_140e9a920 while a modal
+    /// Modal-dialog OK/accept (id 0x01). Consumed only by the dialog builder FUN_140e9a920 while a modal
     /// CS dialog (connection-error / offline-notice / save-data / ToS popup) is up; a no-op otherwise.
-    /// Tapped EVERY frame to generally accept the 0-N boot-flow popups that block Continue. bd
-    /// HARNESS-must-tap-dialog-OK-0x01-every-frame-2026-07-22.
+    /// Tapped every frame to generally accept the 0-N boot-flow popups that block Continue. bd
+    /// harness-must-tap-dialog-OK-0x01-every-frame-2026-07-22.
     PopupAccept,
 }
 
 impl MenuEvent {
     const fn id(self) -> usize {
         match self {
-            // LIST CURSOR, corrected 2026-09-05 by static RE of both images. The previous pair
-            // (MoveDown 0x00 / MoveUp 0x45) does not navigate anything: across the WHOLE 1.16.2 image
+            // List cursor, corrected 2026-09-05 by static RE of both images. The previous pair
+            // (MoveDown 0x00 / MoveUp 0x45) does not navigate anything: across the whole 1.16.2 image
             // those two ids reach the keystate lookup at three call sites, two of them inside one
-            // 125-byte predicate (FUN_140765780) that reads them TOGETHER to answer "is up-or-down
+            // 125-byte predicate (FUN_140765780) that reads them together to answer "is up-or-down
             // held" -- a guard with 3 xrefs, not a cursor. Injecting them could never move a row,
             // which is why Phase::NavToOptionSetting derailed after 480 frames with the world up and
             // the pause menu open.
             //
             // The real pair is read by the list scroller FUN_14074f3c0, which steps the cursor at
             // +0x1b8 between the bounds at +0x1b0/+0x1b4: FUN_140758e70 -> FUN_14075d8f0(pad, 0x2c)
-            // takes the `index + step` branch (DOWN) and FUN_140758e50 -> FUN_14075d8f0(pad, 0x2d)
-            // takes `index - step` (UP). Both ids appear in the +0x90 census, and 0x2c is one of the
+            // takes the `index + step` branch (down) and FUN_140758e50 -> FUN_14075d8f0(pad, 0x2d)
+            // takes `index - step` (up). Both ids appear in the +0x90 census, and 0x2c is one of the
             // ids getShownMenuFlags itself reads, so they live in the same keystate array we already
             // write -- only the numbers were wrong.
             MenuEvent::MoveDown => 0x2c,
@@ -112,7 +112,7 @@ const MENU_OPEN_GUARD_EVENT_ID: usize = 0x1c;
 /// Request the in-world pause/System menu (02_000_IngameTop) to open, the equivalent one-shot effect of
 /// the native open fn (deobf 0x7ede50): set `popupMenu+0x121 = 1`. Fault-safe; game-thread only. Returns
 /// true once the request was written. Gated on the same guard the native fn uses so it is a no-op when a
-/// menu is already up. bd MENU-GAPS-CLOSED-tabswitch...pausemenu-open-2026-07-22.
+/// menu is already up. bd menu-gaps-closed-tabswitch...pausemenu-open-2026-07-22.
 pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
     let guard = input_manager_ptr + INPUTMGR_BITMAP_90_OFFSET + MENU_OPEN_GUARD_EVENT_ID;
     if unsafe { read_u8(guard) }.is_none_or(|g| g & 1 != 0) {
@@ -137,7 +137,7 @@ pub fn request_open_ingame_menu(input_manager_ptr: usize) -> bool {
 
 /// Resolve the dereferenced input-manager pointer, or `None` before it is initialized.
 pub fn input_manager(base: usize) -> Option<usize> {
-    // RESOLVED, NOT ADDED: this pointer is the root of a chain that ends in raw byte STORES (the
+    // Resolved, not ADDED: this pointer is the root of a chain that ends in raw byte stores (the
     // keystate bitmap and the popup request byte), and every `.data` global moved on 1.17. A raw
     // `base + rva` would read a moved slot, and `>= HEAP_LO` is far too coarse to catch it.
     let address = er_game_base::mem::game_data_addr(
@@ -151,12 +151,12 @@ pub fn input_manager(base: usize) -> Option<usize> {
     unsafe { read_usize(address) }.filter(|p| *p >= HEAP_LO)
 }
 
-// --- NATIVE EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
-// The pause list opens submenus exclusively through MenuJob FACTORIES + CSPopupMenu job submit;
-// there is NO request byte for Equipment (the +0x121/+0x122 request family covers only
+// --- Native EquipTop open (bd er-effects-rs-pe98, RE 2026-07-23) ---
+// The pause list opens submenus exclusively through MenuJob factories + CSPopupMenu job submit;
+// there is no request byte for Equipment (the +0x121/+0x122 request family covers only
 // IngameTop/WorldMap). Equipment row = st_pauseMenuClickHandlerInfoList[0], factory dump
 // 0x140801cb0 (builds the 02_010_EquipTop union job from popup+0x10 alone); submit wrapper dump
-// 0x1407ee2e0 is the SAME one the proven +0x121 IngameTop request path uses (core
+// 0x1407ee2e0 is the same one the proven +0x121 IngameTop request path uses (core
 // CSPopupMenu::StartTopMenuJob dump 0x1407f0c40 pushes the current top job to popup+0xD0 so Back
 // pops natively, and bumps the job serial at popup+0x168). All deobf VAs ground-truthed
 // content-unique via scripts/dump-deobf-shift.py.
@@ -187,7 +187,7 @@ pub fn popup_job_serial(input_manager_ptr: usize) -> u64 {
         .unwrap_or(0) as u64
 }
 
-/// NATIVE top-menu open: build a pause-row MenuJob with the game's own factory (Equipment or
+/// Native top-menu open: build a pause-row MenuJob with the game's own factory (Equipment or
 /// Inventory -- identical `(out, ComponentStack*)` signature) and submit it through the native
 /// CSPopupMenu top-job path (native enqueue + native pump ownership; no Scaleform input). Faithful
 /// nesting requires the pause menu (IngameTop) to already be the top job -- call only after
@@ -201,7 +201,7 @@ fn native_open_top_menu(input_manager_ptr: usize, factory_rva: usize) -> bool {
         return false;
     };
     // Through the 1.17 gate. `base + rva` would call the 1.16.2 address on a build that moved the
-    // function, and this pair BUILDS AND SUBMITS a native MenuJob -- the worst place to land on
+    // function, and this pair builds and submits a native MenuJob -- the worst place to land on
     // whatever now occupies the address.
     let (Ok(factory_addr), Ok(submit_addr)) = (
         er_game_base::mem::game_rva_named(factory_rva as u32, "POPUP_MENU_JOB_FACTORY_RVA"),
@@ -246,7 +246,7 @@ pub fn native_open_inventory_menu(_base: usize, input_manager_ptr: usize) -> boo
     native_open_top_menu(input_manager_ptr, INVENTORY_JOB_FACTORY_RVA)
 }
 
-/// Tap one menu event into the keystate bitmap (edge OR). Fault-safe: only writes once the target
+/// Tap one menu event into the keystate bitmap (edge or). Fault-safe: only writes once the target
 /// byte is confirmed readable. Must be called on the game thread (from the per-frame drive hook) so
 /// the write lands in the same frame the game re-polls the bitmap.
 pub fn tap_menu_event(input_manager_ptr: usize, event: MenuEvent) {
@@ -254,21 +254,21 @@ pub fn tap_menu_event(input_manager_ptr: usize, event: MenuEvent) {
     if unsafe { read_u8(addr) }.is_none() {
         return;
     }
-    // SAFETY: `addr` is a confirmed-readable byte inside the live input manager; OR-ing the edge bit
+    // SAFETY: `addr` is a confirmed-readable byte inside the live input manager; Or-ing the edge bit
     // is exactly what the native input producer does at 0x1407ad509.
     unsafe {
         *(addr as *mut u8) |= MENU_EVENT_PRESSED_BIT;
     }
 }
 
-/// Clear the edge bit for one menu event -- the RELEASE half of [`tap_menu_event`].
+/// Clear the edge bit for one menu event -- the release half of [`tap_menu_event`].
 ///
 /// The tap helper used to leave this to the game, on the assumption that "the native input producer
 /// writes 0 on gap frames -> clean edge release". That assumption was never verified on 1.17, and the
 /// evidence points the other way: run br-20260905-043950-1005 had the game's own getShownMenuFlags
-/// word report 0x100 (our Confirm, id 0x3d) AND 0x10 (Cancel, id 0x1c) at once, during a phase that
-/// injects neither cancel nor anything else -- 0x1c is only ever READ here, as the menu-open guard.
-/// A bit set in that array and never cleared is a button reported HELD, and a menu that acts on
+/// word report 0x100 (our Confirm, id 0x3d) and 0x10 (Cancel, id 0x1c) at once, during a phase that
+/// injects neither cancel nor anything else -- 0x1c is only ever read here, as the menu-open guard.
+/// A bit set in that array and never cleared is a button reported held, and a menu that acts on
 /// edges sees no press at all, which is exactly a Confirm that is consumed and transitions nothing.
 /// Releasing explicitly costs one byte write and removes the assumption.
 pub fn release_menu_event(input_manager_ptr: usize, event: MenuEvent) {
@@ -307,14 +307,14 @@ pub fn keep_input_active(base: usize) -> bool {
     true
 }
 
-/// Title global accept byte RVA (`TITLE_GLOBAL_ACCEPT_BYTE_RVA` in the product constant tree). PRESS
-/// ANY BUTTON is read on the raw-pad layer, NOT the keystate bitmap; the game's own
+/// Title global accept byte RVA (`TITLE_GLOBAL_ACCEPT_BYTE_RVA` in the product constant tree). Press
+/// any button is read on the raw-pad layer, not the keystate bitmap; the game's own
 /// `TitleTopDialog::update` accept-gate advances the parked press-any-button title when this byte is 1
 /// (bd title-global-accept-byte-144589bdc-zeroinput-advance). This is the decoded accept flag, not an
-/// OS input event -- the harness sets it to blow through PRESS ANY BUTTON and open the title menu.
+/// OS input event -- the harness sets it to blow through press any button and open the title menu.
 const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 
-/// Set the title global accept byte = 1 to advance the parked PRESS ANY BUTTON title into its menu.
+/// Set the title global accept byte = 1 to advance the parked press any button title into its menu.
 /// Fault-safe; game-thread only. Returns true once written. A no-op effect once past the title.
 pub fn advance_press_any_button(base: usize) -> bool {
     let addr = er_game_base::mem::game_data_addr(

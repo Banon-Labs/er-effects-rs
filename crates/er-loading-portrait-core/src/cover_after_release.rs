@@ -11,33 +11,33 @@ use crate::loading_cover_host::{
 };
 use crate::prelude::*;
 
-// POST-RELEASE COVER WATCH (user report 2026-08-22: "pressing Escape quickly after the loading
+// Post-release cover watch (user report 2026-08-22: "pressing Escape quickly after the loading
 // screen fades out -- while the location banner is still on screen -- makes the loading screen and
 // portrait briefly reappear and tear down"; timing-dependent on opening the menu swiftly).
 //
-// WHY THIS EXISTS AT ALL. The run that reproduced the defect, br-20260822-184123-fa3d, left ZERO
+// Why this exists at all. The run that reproduced the defect, br-20260822-184123-fa3d, left zero
 // trace in the DLL log. Not a weak trace -- none. Every aggregate counter said the cover was long
 // dead (`BOOT_VIEW_STOPPED` latched and never cleared, `oracle_boot_view_epoch_seq=0`,
-// `oracle_boot_view_fps_bail_resumes=0`), and the only PER-FRAME oracle we own,
-// [`native_ls_exposure_record`], switches ITSELF off in this exact window: it returns unless the
+// `oracle_boot_view_fps_bail_resumes=0`), and the only per-frame oracle we own,
+// [`native_ls_exposure_record`], switches itself off in this exact window: it returns unless the
 // game's `CS::LoadingScreen` ticked within 250 ms, and in that run the native screen stopped
-// ticking ~2.2 s BEFORE our cover stopped. The one moment worth watching was the one moment
+// ticking ~2.2 s before our cover stopped. The one moment worth watching was the one moment
 // nothing watched. This is the mirror of that function for the other side of the release.
 //
-// WHAT IT MEASURES, and what each answer means:
+// What it measures, and what each answer means:
 //
 //   oracle_cover_after_release_samples == 0
-//       the watch never opened. Every zero below is then meaningless -- read this FIRST. It is 0
+//       the watch never opened. Every zero below is then meaningless -- read this first. It is 0
 //       when no cover window has stopped yet, or when every stop is older than the watch span.
 //   oracle_cover_plate_visible_after_release > 0
-//       the GAME's own `CSFakeLoadingScreenImp` cover plate read VISIBLE on a frame that reached
+//       the game's own `CSFakeLoadingScreenImp` cover plate read visible on a frame that reached
 //       Present, after our cover had already released. That is the surface the user described, and
 //       it is the game's, not ours. `_max_run` separates a brief reappearance (short run) from a
 //       plate that simply never went down (one run as long as the watch).
 //   oracle_native_ls_activity_after_release_updates / _fadeouts > 0
 //       the game's own loading screen kept working past our release: `CS::LoadingScreen::Update`
 //       ticks and Scaleform fade-out stamps, measured as deltas against baselines snapshotted at
-//       the stop. A legitimate NEW load starting inside the watch span (a death, a fast travel)
+//       the stop. A legitimate new load starting inside the watch span (a death, a fast travel)
 //       would also show here, so read these next to `oracle_portrait_loadwin_history` rather than
 //       alone.
 //   oracle_in_game_menu_open_first_ms_after_cover_stop
@@ -45,25 +45,25 @@ use crate::prelude::*;
 //       press the report is about. Subtract it from
 //       `oracle_cover_plate_visible_after_release_first_ms` and the answer is the press-to-
 //       reappearance interval, which used to be a hand pairing of a log line against an oracle. 0
-//       means no menu open was seen past a cover stop, which makes any plate hit above NOT the
+//       means no menu open was seen past a cover stop, which makes any plate hit above not the
 //       reported defect. `_edges` / `_last_ms` cover the whole session; see
 //       `in_game_menu_note_run_tick` for what the edge is and what it costs in precision.
 //   oracle_log_epoch_offset_ms
 //       the constant separating this log's `[+Nms]` prefixes from every telemetry `*_ms` above:
 //       `log = telemetry + offset`. Emitted so nobody measures it again by hand.
 //
-// This changes NOTHING that is drawn. It is telemetry, and it deliberately does not attempt a
+// This changes nothing that is drawn. It is telemetry, and it deliberately does not attempt a
 // pixel probe: whether the plate is up is answerable from RAM, and a full-frame readback in the
 // Present path is not something to add before the cheap question has been asked.
 //
-// COST. Two `ReadProcessMemory` self-reads per sampled frame (the fault-guarded singleton walk in
+// Cost. Two `ReadProcessMemory` self-reads per sampled frame (the fault-guarded singleton walk in
 // `fake_loading_screen_visible`) and a handful of relaxed atomics. Bounded by
 // `COVER_AFTER_RELEASE_WATCH_MS` so gameplay does not pay for it forever: after a stop the watch
 // runs for that span and then goes quiet until the next cover window stops.
 
 /// How long past a cover stop the watch samples. The reported defect happens while the location
 /// banner is still up -- seconds, not minutes -- so this is generous by an order of magnitude and
-/// still bounds the per-frame cost to one span per cover window. It is a COST bound, not a
+/// still bounds the per-frame cost to one span per cover window. It is a cost bound, not a
 /// judgement about when a spurious cover may occur.
 const COVER_AFTER_RELEASE_WATCH_MS: u64 = 30_000;
 
@@ -76,7 +76,7 @@ const COVER_AFTER_RELEASE_WATCH_MS: u64 = 30_000;
 /// second is more than an order of magnitude above that, so a slow frame or a hitch cannot be
 /// mistaken for the menu having closed and reopened.
 ///
-/// The threshold is deliberately biased toward UNDER-counting: two genuine opens less than a second
+/// The threshold is deliberately biased toward under-counting: two genuine opens less than a second
 /// apart read as one. That is the safe direction for a stamp meant to be trusted -- a missing edge
 /// is visible as a zero, a fabricated one would be read as the user's press.
 const IN_GAME_MENU_TICK_GAP_MS: u64 = 1_000;
@@ -131,7 +131,7 @@ pub fn cover_after_release_record(base: usize, now_ms: u64) {
             Ordering::SeqCst,
         );
     }
-    // The decisive read: is the game's render-pipeline cover plate up on THIS presented frame?
+    // The decisive read: is the game's render-pipeline cover plate up on this presented frame?
     let visible = unsafe { fake_loading_screen_visible(base) };
     if !visible {
         COVER_PLATE_VISIBLE_AFTER_RELEASE_CUR_RUN.store(0, Ordering::SeqCst);
@@ -147,7 +147,7 @@ pub fn cover_after_release_record(base: usize, now_ms: u64) {
         Ordering::SeqCst,
         Ordering::SeqCst,
     );
-    // First frame of each run only -- a sustained plate is ONE event, and this is the Present hook.
+    // First frame of each run only -- a sustained plate is one event, and this is the Present hook.
     if run == 1 {
         append_autoload_debug(format_args!(
             "COVER-AFTER-RELEASE #{n}: the game's own CSFakeLoadingScreenImp plate is VISIBLE at {now_usize}ms, {}ms after our cover stopped (stop_reason={} native_ls_updates_since_stop={updates} fadeouts_since_stop={fadeouts}) -- this surface is the GAME's, not our compositor's",
@@ -157,21 +157,21 @@ pub fn cover_after_release_record(base: usize, now_ms: u64) {
     }
 }
 
-/// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that START a menu
+/// Note one `02_000_IngameTop` `MenuWindowJob::Run` tick, and stamp the ones that start a menu
 /// session.
 ///
-/// WHY THIS EXISTS. The watch above can say a cover plate came back at ms X. The user's report says
+/// Why this exists. The watch above can say a cover plate came back at ms X. The user's report says
 /// the trigger is pressing Escape quickly after a load, while the location banner is still up.
 /// Nothing stamped that press, so X could only be tied to it by hand -- on a defect whose entire
 /// signature is the interval between the two.
 ///
-/// WHY THIS SIGNAL. `02_000_IngameTop` is the game's own resource name for the in-world pause/System
+/// Why this signal. `02_000_IngameTop` is the game's own resource name for the in-world pause/System
 /// menu (the window `request_open_ingame_menu` opens via `CSPopupMenu+0x121`), and its
 /// `MenuWindowJob` runs once per presented frame while that menu is up and not at all otherwise.
 /// Both halves are ground truth from the shipped DLL's own log of a real session (2026-08-22
 /// 11:41:30 run): zero `02_000_IngameTop` `MenuWindowJob::Run` lines across the first 39.9 s of
 /// boot, character load and gameplay, then a first line at `[+39905ms]` carrying `prev=0x0`,
-/// followed by one line every ~20-60 ms until the log cap. So a tick after a gap is an OPEN.
+/// followed by one line every ~20-60 ms until the log cap. So a tick after a gap is an open.
 ///
 /// Called from the product `MenuWindowJob::Run` post-hook, which already resolves the resource name
 /// to maintain `SYSTEM_QUIT_INGAME_TOP_WINDOW` -- no new hook, no new task, and no per-frame work
@@ -182,7 +182,7 @@ pub fn in_game_menu_note_run_tick(job: usize, window: usize) {
         IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP, IN_GAME_MENU_OPEN_LAST_MS,
         IN_GAME_MENU_OPEN_MS_FIRST_N, IN_GAME_MENU_OPEN_MS_FIRST_N_LEN, IN_GAME_MENU_RUN_LAST_MS,
     };
-    // Read the boot-view clock without STARTING it: every telemetry `*_ms` is measured from that
+    // Read the boot-view clock without starting it: every telemetry `*_ms` is measured from that
     // epoch, so anchoring it here -- from a menu hook, for a stamp -- would move the origin of the
     // whole run's timeline. Before it exists there is no cover window to correlate against anyway.
     let Some(now_ms) = boot_view_epoch_ms_if_anchored() else {
@@ -196,10 +196,10 @@ pub fn in_game_menu_note_run_tick(job: usize, window: usize) {
     }
     let n = IN_GAME_MENU_OPEN_EDGES.fetch_add(1, Ordering::SeqCst) + 1;
     IN_GAME_MENU_OPEN_LAST_MS.store(now, Ordering::SeqCst);
-    // STAMP EVERY EARLY EDGE, ABOVE THE COVER-STOP TEST (2026-08-22, second round). The latch below
-    // only takes edges that land AFTER a cover stop, and the press the user is reporting lands
-    // BEFORE it -- during the release fade. In run br-20260822-184123-fa3d that is exactly what
-    // happened: the after-stop latch recorded the LATER control press at 36537 ms and edge #1, the
+    // Stamp every early edge, above the cover-stop test (2026-08-22, second round). The latch below
+    // only takes edges that land after a cover stop, and the press the user is reporting lands
+    // before it -- during the release fade. In run br-20260822-184123-fa3d that is exactly what
+    // happened: the after-stop latch recorded the later control press at 36537 ms and edge #1, the
     // fast one that caused the defect, left no timestamp anywhere. These two writes are what make a
     // press that precedes the stop recoverable at all.
     let _ = IN_GAME_MENU_OPEN_FIRST_MS.compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst);
@@ -216,7 +216,7 @@ pub fn in_game_menu_note_run_tick(job: usize, window: usize) {
         .compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok();
     let stop_ms = BOOT_VIEW_STOP_MS.load(Ordering::SeqCst) as u64;
-    // One line per OPEN past a cover stop -- rare by construction (the menu is not open during
+    // One line per open past a cover stop -- rare by construction (the menu is not open during
     // gameplay and the tick is de-duplicated above), so this cannot become an IO storm.
     append_autoload_debug(format_args!(
         "IN-GAME MENU OPEN #{n}: the game's own 02_000_IngameTop MenuWindowJob started running at {now}ms, {}ms after our cover stopped (boot_view_stop_ms={stop_ms} first_after_cover_stop={first} job=0x{job:x} window=0x{window:x}) -- correlate this against oracle_cover_plate_visible_after_release_first_ms",
@@ -250,8 +250,8 @@ pub fn log_clock_map_once() {
         return;
     };
     let log_ms = process_log_elapsed_ms() as u64;
-    // BRACKET THE READING. The offset is the difference between two clocks read a few instructions
-    // apart, so anything that delays the thread BETWEEN them -- a Wine scheduler preemption is the
+    // Bracket the reading. The offset is the difference between two clocks read a few instructions
+    // apart, so anything that delays the thread between them -- a Wine scheduler preemption is the
     // realistic one -- inflates it by exactly that delay, and the result would be trusted. Read the
     // telemetry clock again afterwards: if it moved, the two readings were not simultaneous and the
     // difference is not the epoch gap. Re-arm and let a later frame produce a clean pair rather than
@@ -345,12 +345,12 @@ pub fn cover_after_release_write(body: &mut String) {
         "oracle_native_ls_activity_after_release_first_ms",
         NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS.load(Ordering::SeqCst),
     );
-    // THE FADE WINDOW (2026-08-22, second round). Everything above opens only once
-    // `BOOT_VIEW_STOPPED` has latched, and the reported defect happens BEFORE that -- during the
+    // The fade window (2026-08-22, second round). Everything above opens only once
+    // `BOOT_VIEW_STOPPED` has latched, and the reported defect happens before that -- during the
     // release fade. These seven measure the fade window itself:
     //   oracle_boot_view_nonfade_draw_during_fade > 0
     //       the opaque cover path (which rasterizes the portrait) drew while the fade was running.
-    //       That IS the defect. Expected 0; `_first_ms` minus `oracle_boot_view_fade_start_ms` says
+    //       That is the defect. Expected 0; `_first_ms` minus `oracle_boot_view_fade_start_ms` says
     //       how far into the fade it happened.
     //   oracle_boot_view_fade_hold_reasserts > 0
     //       the native-loading hold went true again mid-fade -- the pressure the fix exists to
@@ -413,7 +413,7 @@ pub fn cover_after_release_write(body: &mut String) {
         "oracle_in_game_menu_open_first_ms_after_cover_stop",
         IN_GAME_MENU_OPEN_FIRST_MS_AFTER_COVER_STOP.load(Ordering::SeqCst),
     );
-    // Every edge, not just the ones past a cover stop. A press that lands DURING the release fade
+    // Every edge, not just the ones past a cover stop. A press that lands during the release fade
     // -- the one the report is about -- has no entry in the after-stop latch above, and edge #1's
     // timestamp used to be unrecoverable from telemetry for exactly that reason. A 0 at an index
     // below `_edges` means that edge fired before the boot-view clock was anchored.

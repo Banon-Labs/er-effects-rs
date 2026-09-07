@@ -63,9 +63,9 @@ require_path() {
 	fi
 }
 
-# Tool discovery. Every default below is env-overridable and derived from the CURRENT user's
-# home or PATH; no machine's literal home directory appears. The /mnt/... entries are the
-# retired WSL2 layout and are kept only as LAST-resort candidates -- on a native Linux box they
+# Tool discovery. Every default below is env-overridable and derived from the current user's
+# home or path; no machine's literal home directory appears. The /mnt/... entries are the
+# retired WSL2 layout and are kept only as last-resort candidates -- on a native Linux box they
 # simply do not exist, so they cost one failed stat and never shadow a real install.
 locate_me3() {
 	if [[ -n "$me3_exe" ]]; then
@@ -143,7 +143,7 @@ locate_witchy() {
 
 # WitchyBND's PromptPlus console layer refuses to start when stdout is redirected
 # ("PromptPlus requires a terminal/console without redirection environment!", exit 1), so on a
-# native Linux install the packing calls below MUST go through a PTY wrapper. Absent one we fall
+# native Linux install the packing calls below must go through a PTY wrapper. Absent one we fall
 # back to invoking WitchyBND directly, which is what the WSL2 console path did.
 locate_witchy_pty() {
 	if [[ -n "$witchy_pty" ]]; then

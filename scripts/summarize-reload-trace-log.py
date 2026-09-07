@@ -14,14 +14,14 @@ from typing import TypedDict
 EVENT_RE = re.compile(
     r"^\[(?P<seq>\d+) \+(?P<tick>\d+)ms\] (?P<label>\S+)(?: (?P<phase>ENTER|LEAVE))?(?P<rest>.*)$"
 )
-# `path_len_df0` is a CHARACTER COUNT, so it parses as an integer and NOT as one of the
+# `path_len_df0` is a character count, so it parses as an integer and not as one of the
 # hex/pointer keys. It used to be spelled `df0=0x<hex>` and sat in the pointer alternation right
 # beside `gm` and `pgd`, which is how a `DLString<wchar_t>` length came to be read as an address
 # (`GameMan+0xdf0` is the length member of the `FD4FilePathBase` at `GameMan+0xdd0`; the two save
 # gates `FUN_140679180` and `FUN_14067b100` both test it `!= 0`).
 #
 # LEGACY_DF0_RE keeps the old spelling readable rather than letting it vanish. Dropping it would
-# make every pre-rename log summarize with the field simply ABSENT from `observed_field_values` --
+# make every pre-rename log summarize with the field simply absent from `observed_field_values` --
 # "never observed" where the truth is "observed under the other name", which is the same
 # confident-false-negative this rename exists to remove.
 FIELD_RE = re.compile(

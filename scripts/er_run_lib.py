@@ -1,6 +1,6 @@
 """Shared primitives for the branch-launch pipeline: sleepless waits and run state.
 
-TWO RULES SHAPE EVERYTHING HERE
+Two rules shape everything here
 -------------------------------
 1. **No sleeps as synchronization** (`scripts/check-no-timeouts.py`). Readiness is an
    *event*; a timeout is only a safety backstop. So waiting for a log line blocks on inotify
@@ -42,7 +42,7 @@ RUN_STATE_ROOT = Path(
 class DirectoryWatch:
     """Block until something in `directory` changes, without polling.
 
-    Watches the DIRECTORY rather than a file: the DLL rotates its logs at startup
+    Watches the directory rather than a file: the DLL rotates its logs at startup
     (`<name>.log` -> `<name>.log.prev`), so a watch pinned to an inode would go deaf at
     exactly the moment the interesting run begins.
 
@@ -129,7 +129,7 @@ class WatchSet:
         return any(watch.available for watch in self.watches)
 
     def wait(self, timeout: float) -> bool:
-        """Return on the FIRST event from any watched directory, or on the timeout.
+        """Return on the first event from any watched directory, or on the timeout.
 
         One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
         turn would spend the whole budget on the first quiet directory and never look at the second.
@@ -162,7 +162,7 @@ class WatchSet:
 def game_dir() -> Path:
     """The `ELDEN RING/Game` directory: where the game lives and where every loaded DLL logs.
 
-    One owner, because the path is machine-shaped: this repo now runs a NATIVE Linux Steam
+    One owner, because the path is machine-shaped: this repo now runs a native Linux Steam
     install, the retired WSL2 layout put it under `C:\\SteamLibrary`, and a script carrying its
     own copy of either silently resolves to nothing rather than erroring -- which reads as "the
     file is missing" instead of "you looked in the wrong place". `ME3_STEAM_DIR` overrides it,
@@ -184,7 +184,7 @@ def process_alive(pid: int) -> bool:
         status = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    # "pid (comm) state ..." -- comm can contain spaces and parens, so split on the LAST ')'.
+    # "pid (comm) state ..." -- comm can contain spaces and parens, so split on the last ')'.
     try:
         return status[status.rindex(")") + 1 :].split()[0] != "Z"
     except (ValueError, IndexError):
@@ -302,9 +302,9 @@ class RunState:
         )
 
     def cleanup(self) -> list[str]:
-        """Remove everything this run STAGED. Returns what was actually removed.
+        """Remove everything this run staged. Returns what was actually removed.
 
-        WHAT THE RUN WROTE IS NOT STAGED AND IS NEVER REMOVED. The same directory now holds the
+        What the run wrote is not staged and is never removed. The same directory now holds the
         run's evidence -- me3's output, and every DLL log/telemetry file redirected here at launch
         so the next launch cannot overwrite it the way a game-directory log is overwritten. Only
         the explicit `remove_paths` (profile, sidecar, closure/save inputs) and `run.json` go.
@@ -361,7 +361,7 @@ def collect_dead_runs(root: Path = RUN_STATE_ROOT) -> list[tuple[str, list[str]]
 
 
 def selftest() -> int:
-    """Exercise every primitive, including that the waits return on the EVENT not the timeout."""
+    """Exercise every primitive, including that the waits return on the event not the timeout."""
     import subprocess
     import tempfile
     import time
@@ -438,7 +438,7 @@ def selftest() -> int:
             collect_dead_runs(root)
             check((root / "keep").exists(), "GC leaves a run whose process is still alive alone")
 
-            # THE EVIDENCE MUST SURVIVE CLEANUP. A run's artifacts are redirected INTO its state
+            # The evidence must survive cleanup. A run's artifacts are redirected into its state
             # directory at launch (er-run-branch.py's ARTIFACT_ENV), so a cleanup that removed the
             # directory would destroy exactly what the redirect exists to keep -- and would do it
             # to a finished run, at the moment someone came back to read it.

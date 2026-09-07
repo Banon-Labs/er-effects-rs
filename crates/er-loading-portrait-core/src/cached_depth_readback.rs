@@ -1,15 +1,15 @@
 use crate::prelude::*;
 
-/// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
+/// Readback the largest TEXTURE2D in `start`'s nest excluding whichever texture is found from
 /// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
 /// texture holds the portrait when several same-/different-size textures share the offscreen nest.
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -41,22 +41,22 @@ pub use er_telemetry_core::counters::RB_FAST_BUFSIZE;
 pub use er_telemetry_core::counters::RB_FAST_FENCE;
 pub use er_telemetry_core::counters::RB_FAST_FENCEVAL;
 pub use er_telemetry_core::counters::RB_FAST_LIST;
-/// PER-FRAME readback resource cache (created ONCE on the game device, reused every frame). The original
-/// per-call readback created a fresh command queue + allocator + list + fence + buffer EACH frame; under
+/// Per-frame readback resource cache (created once on the game device, reused every frame). The original
+/// per-call readback created a fresh command queue + allocator + list + fence + buffer each frame; under
 /// the loading screen that mostly failed at resource creation (command-queue creation is limited), so the
 /// readback published only ~4x and the displayed head froze. Caching them lets the per-frame readback be a
 /// cheap reset+copy+wait, so it publishes every frame and the overlay re-uploads the tracking head per
 /// frame. Raw COM pointers owned by these statics (released only on dims change).
 pub use er_telemetry_core::counters::RB_FAST_QUEUE;
 
-/// RAM oracle: number of published frames where the depth key ACTUALLY cut out a background (i.e. the depth
+/// RAM oracle: number of published frames where the depth key actually cut out a background (i.e. the depth
 /// buffer read back with clean bg/head separation and `>0` pixels were set to alpha 0). `oracle_depth_key_
 /// applied` -- a pixel/native semaphore that the transparent-background cutout is live (not a screenshot).
 pub use er_telemetry_core::counters::DEPTH_KEY_APPLIED;
 /// RAM oracle: last frame's background-masked fraction, in whole percent (0..=100). `oracle_depth_key_bg_pct`.
 /// A plausible portrait cutout is a large minority/majority of the frame (bg dominates a centered head).
 pub use er_telemetry_core::counters::DEPTH_KEY_BG_PCT;
-/// Frames whose fresh depth was DEGENERATE for masking (no histogram gap, or a mask cutting under the
+/// Frames whose fresh depth was degenerate for masking (no histogram gap, or a mask cutting under the
 /// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
 /// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
 pub use er_telemetry_core::counters::DEPTH_KEY_DEGENERATE;
@@ -70,16 +70,16 @@ pub use er_telemetry_core::counters::DEPTH_KEY_HIST_DUMPED;
 /// One-shot latch for the no-gap / dims-mismatch `depth-key` skip diagnostic (separate from the success
 /// latch so both a good frame and a skipped frame are each visible once in the log).
 pub use er_telemetry_core::counters::DEPTH_KEY_NOGAP_LOGGED;
-/// Degenerate frames RECOVERED by the second-pass histogram (clear-plane extremes excluded) --
+/// Degenerate frames recovered by the second-pass histogram (clear-plane extremes excluded) --
 /// the backdrop-geometry windows' masks. `oracle_depth_key_second_pass`.
 pub use er_telemetry_core::counters::DEPTH_KEY_SECOND_PASS;
 pub use er_telemetry_core::counters::PROFILE_LOWMASK_SHARE_MAX;
-/// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
-/// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
+/// Per-window MIN transparent share (percent) among published frames (usize::MAX = none published) and
+/// max share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SHARE_MIN;
-/// Keyed+clean frames HELD because their mask/head coherence (IoU) was below MASK_HEAD_IOU_MIN --
+/// Keyed+clean frames held because their mask/head coherence (IoU) was below MASK_HEAD_IOU_MIN --
 /// the "cut the wrong 34%" frames (user 2026-07-03: displayed heads whose backdrop was not keyed
-/// out right; the share floor checks how MUCH is cut, IoU checks WHERE). Plus its window mark.
+/// out right; the share floor checks how much is cut, IoU checks where). Plus its window mark.
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_BADIOU;
 pub use er_telemetry_core::counters::PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK;
 pub use er_telemetry_core::counters::RB_DEPTH_ALLOC;
@@ -88,9 +88,9 @@ pub use er_telemetry_core::counters::RB_DEPTH_BUFSIZE;
 pub use er_telemetry_core::counters::RB_DEPTH_FENCE;
 pub use er_telemetry_core::counters::RB_DEPTH_FENCEVAL;
 pub use er_telemetry_core::counters::RB_DEPTH_LIST;
-/// PER-FRAME DEPTH readback cache (separate from RB_FAST_* so the color and depth readbacks never share a
+/// Per-frame depth readback cache (separate from RB_FAST_* so the color and depth readbacks never share a
 /// command list / fence across the two calls in one draw tick). Same create-once + reset+copy+wait pattern.
-/// The depth sibling is `R32G8X24_TYPELESS` (fmt 19); we copy PLANE 0 (the R32 float depth) and reinterpret
+/// The depth sibling is `R32G8X24_TYPELESS` (fmt 19); we copy plane 0 (the R32 float depth) and reinterpret
 /// each 4-byte texel as `f32`. Raw COM pointers owned by these statics (released only on footprint change).
 pub use er_telemetry_core::counters::RB_DEPTH_QUEUE;
 /// Last RECALCULATED depth-key mask (w, h, per-pixel: 1 = background/cut, 0 = keep). The offscreen depth
@@ -100,25 +100,25 @@ pub use er_telemetry_core::counters::RB_DEPTH_QUEUE;
 pub static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
 /// Incarnation the currently-cached `LAST_DEPTH_MASK` was computed for (0 = none / cleared).
 pub use er_telemetry_core::counters::LAST_DEPTH_MASK_INCARNATION;
-/// FAIL-FAST desync semaphore: count of frames that REUSED the cached depth mask while the live portrait
+/// Fail-fast desync semaphore: count of frames that reused the cached depth mask while the live portrait
 /// incarnation differs from the one the cache was computed for -- a prior character's mask on the new
 /// head. It trips early + deterministically (the 2nd character of a switch chain), so a run can stop in
 /// ~40s instead of six minutes. Exposed as `oracle_portrait_mask_stale_reuse`.
 pub use er_telemetry_core::counters::PROFILE_MASK_STALE_REUSE;
 pub use er_telemetry_core::counters::PROFILE_MASK_STALE_REUSE_LOGGED;
 /// Current portrait character incarnation (drive slot + 1; 0 = unset), set by the per-frame drive so the
-/// mask cache can be tagged with the character it was computed for. A depth mask REUSED across a change
-/// of this value means the PREVIOUS character's silhouette is being applied to the NEW character's head
+/// mask cache can be tagged with the character it was computed for. A depth mask reused across a change
+/// of this value means the previous character's silhouette is being applied to the new character's head
 /// -- the 2nd-character depth-mask desync (user 2026-07-03). See `PROFILE_MASK_STALE_REUSE`.
 pub use er_telemetry_core::counters::PROFILE_PORTRAIT_INCARNATION;
-/// FAIL-FAST mask/head coherence semaphore (the 2nd-character desync is a FRESH-but-WRONG mask: masks are
-/// recomputed every frame, so it is not a cache reuse). Per published frame, IoU of the KEPT cutout region
-/// (mask==0) vs the colour's OWN head (pixels far from the background colour). A correct mask keeps the
-/// head -> high IoU; a fresh mask of a WRONG depth silhouette (stale depth content on the new character)
-/// keeps a region that does not match this head -> low IoU. For DARK characters whose colour-head is a
-/// sliver (Sacred Bean, er-effects-rs-y134) the score is head-COVERAGE instead of symmetric IoU -- see
+/// Fail-fast mask/head coherence semaphore (the 2nd-character desync is a fresh-but-wrong mask: masks are
+/// recomputed every frame, so it is not a cache reuse). Per published frame, IoU of the kept cutout region
+/// (mask==0) vs the colour's own head (pixels far from the background colour). A correct mask keeps the
+/// head -> high IoU; a fresh mask of a wrong depth silhouette (stale depth content on the new character)
+/// keeps a region that does not match this head -> low IoU. For dark characters whose colour-head is a
+/// sliver (Sacred Bean, er-effects-rs-y134) the score is head-coverage instead of symmetric IoU -- see
 /// `mask_head_iou`. `_last` is an oracle; `_total` counts gross
-/// mismatches; a SUSTAINED gross mismatch (STREAK) abort()s during the repro so the run stops fast.
+/// mismatches; a sustained gross mismatch (streak) abort()s during the repro so the run stops fast.
 pub const MASK_HEAD_IOU_MIN: usize = 25;
 pub const MASK_HEAD_ABORT_STREAK: usize = 20;
 pub static PROFILE_MASK_HEAD_IOU_LAST: AtomicUsize = AtomicUsize::new(100);
@@ -129,22 +129,22 @@ pub use er_telemetry_core::counters::RB_COH_ALLOC;
 pub use er_telemetry_core::counters::RB_COH_FENCE;
 pub use er_telemetry_core::counters::RB_COH_FENCEVAL;
 pub use er_telemetry_core::counters::RB_COH_LIST;
-/// COHERENT color+depth readback cache (bug #3 fix). ONE queue/allocator/list/fence records BOTH the
-/// color and depth copies, so they are captured at the SAME GPU submission -- unlike the separate
+/// Coherent color+depth readback cache (bug #3 fix). One queue/allocator/list/fence records both the
+/// color and depth copies, so they are captured at the same GPU submission -- unlike the separate
 /// RB_FAST_* (color) and RB_DEPTH_* (depth) paths, between whose independent fences the game's async
 /// render can advance the RT (color=frameN, depth=frameN+1 -> the mask shape mismatches the head).
 /// Separate readback buffers for color and depth (resized on footprint change). Raw COM owned here.
-// The queue/allocator/list/fence stay SINGLE and shared: the render thread WAITS on the fence each frame,
+// The queue/allocator/list/fence stay single and shared: the render thread waits on the fence each frame,
 // so the GPU is idle before the next reuse and `allocator.Reset()` remains safe with one allocator. Only
-// the readback STAGING BUFFERS ring (Step 2 worker offload), because the worker maps + de-swizzles a slot
-// AFTER the wait while the render thread copies the NEXT frame into a DIFFERENT slot's buffers.
+// the readback staging buffers ring (Step 2 worker offload), because the worker maps + de-swizzles a slot
+// after the wait while the render thread copies the next frame into a different slot's buffers.
 pub use er_telemetry_core::counters::RB_COH_QUEUE;
-/// STAGING-BUFFER RING size (Step 2). 3 slots: one being copied-into by the render thread, one (or more)
+/// Staging-buffer RING size (Step 2). 3 slots: one being copied-into by the render thread, one (or more)
 /// being de-swizzled/consumed by the worker, and headroom so the render thread rarely has to drop.
 pub const RB_COH_RING: usize = 3;
-/// Ring slot lifecycle state. FREE = available for the render thread to claim; BUSY = the render thread
-/// copied into it (or the worker is consuming it). The render thread claims FREE->BUSY with a CAS; the
-/// worker sets it back to FREE after it has finished de-swizzling + publishing (even on panic).
+/// Ring slot lifecycle state. Free = available for the render thread to claim; Busy = the render thread
+/// copied into it (or the worker is consuming it). The render thread claims free->busy with a CAS; the
+/// worker sets it back to free after it has finished de-swizzling + publishing (even on panic).
 pub const RB_SLOT_FREE: usize = 0;
 pub const RB_SLOT_BUSY: usize = 1;
 pub static RB_COH_SLOT_STATE: [AtomicUsize; RB_COH_RING] =
@@ -157,14 +157,14 @@ pub static RB_COH_DBUF: [AtomicUsize; RB_COH_RING] = [const { AtomicUsize::new(0
 pub static RB_COH_DBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
 /// Round-robin frame counter for choosing the next ring slot.
 pub use er_telemetry_core::counters::RB_COH_FRAME;
-/// Frames whose readback was DROPPED because the chosen ring slot was still BUSY (the worker had not
+/// Frames whose readback was dropped because the chosen ring slot was still busy (the worker had not
 /// finished consuming it). Intended backpressure -- the render thread never blocks. Telemetry.
 pub use er_telemetry_core::counters::RB_COH_SLOT_BUSY_DROPS;
 /// One coherently-captured depth frame: `(dw, dh, depth, depth_cand)` -- dimensions, the de-swizzled
 /// f32 depth plane, and the candidate pointer the plane was read from (identity proof).
 pub type CoherentDepth = (u32, u32, Vec<f32>, usize);
 /// Depth captured COHERENTLY with the current color frame, stashed by
-/// `readback_offscreen_fast_coherent` for the SAME draw tick's `apply_depth_alpha_key` to consume via
+/// `readback_offscreen_fast_coherent` for the same draw tick's `apply_depth_alpha_key` to consume via
 /// `take_coherent_depth`. Single render-thread producer/consumer within one tick; the producer always
 /// sets it (coherent success) or clears it (fallback) each frame, so a later frame never reads a stale
 /// depth. `None` -> the mask path reads depth fresh (the legacy separate read).
@@ -172,22 +172,22 @@ pub type CoherentDepth = (u32, u32, Vec<f32>, usize);
 #[allow(dead_code)]
 pub static COHERENT_DEPTH: Mutex<Option<CoherentDepth>> = Mutex::new(None);
 pub use er_telemetry_core::counters::COHERENT_READ_FALLBACK;
-/// Instrumentation the first coherent pass lacked: how many draw ticks the COHERENT color+depth readback
-/// SUCCEEDED (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
-/// run PROVES whether the single-fence path is actually engaging (not silently degrading).
+/// Instrumentation the first coherent pass lacked: how many draw ticks the coherent color+depth readback
+/// succeeded (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
+/// run proves whether the single-fence path is actually engaging (not silently degrading).
 pub use er_telemetry_core::counters::COHERENT_READ_OK;
 
-// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
+// Cached backbuffer READBACK + upload buffers for the alpha-honoring CPU-blend composite (sized to the
 // centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
 // backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
-// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
+// shows through), and writes the blended region back -- all with the existing copy primitives, so no new
 // PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
-// (Design note only: the statics it described are gone, so this is NOT a doc comment -- as `///` it
+// (Design note only: the statics it described are gone, so this is not a doc comment -- as `///` it
 // would silently attach to the next item.)
 
 /// DETERMINISTICALLY resolve the content RT's vkd3d `ID3D12Resource` from a CSGxTexture by following the
-/// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
-/// validating each hop's vtable so a layout change fails closed instead of dereferencing garbage. NO
+/// fixed wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
+/// validating each hop's vtable so a layout change fails closed instead of dereferencing garbage. No
 /// memory scan / QI of arbitrary objects -> nothing to race the teardown free. Returns an AddRef'd ref.
 ///
 /// # Safety
@@ -218,13 +218,13 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
     let in_d3d = |vt: usize| d3d.iter().any(|&(lo, hi)| lo <= vt && vt < hi);
     // RVA of a vtable (vt - base) for logging; usize::MAX if not in the game image.
     let rva = |vt: usize| if vt >= base { vt - base } else { usize::MAX };
-    // DIAGNOSTIC (first few attempts, even on failure): dump the actual chain hops + vtable RVAs so the
-    // exact offsets/vtables for the BUILD-OWN renderer (which differs from the menu ProfileSelect one the
+    // Diagnostic (first few attempts, even on failure): dump the actual chain hops + vtable RVAs so the
+    // exact offsets/vtables for the build-own renderer (which differs from the menu ProfileSelect one the
     // chain was first RE'd from) can be read off the log and the constants corrected.
     let read = |p: usize| unsafe { safe_read_usize(p) }.unwrap_or(0);
     // DIAGNOSTIC: dump the CSOffscreenGxTexture (srv_gx+0x10) field layout -- each qword 0x08..0x60 with
     // its pointee's vtable RVA + whether that pointee is a d3d12 object -- so the path to the real
-    // ID3D12Resource for the BUILD-OWN renderer can be read off the log. Only when h1 is the expected
+    // ID3D12Resource for the build-own renderer can be read off the log. Only when h1 is the expected
     // CSOffscreenGxTexture, throttled to the first ~4 dumps.
     let h1d = read(srv_gx + 0x10);
     if h1d != 0
@@ -296,9 +296,9 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
     Some(res.clone()) // AddRef -- caller owns this ref
 }
 
-/// LIVE-TRACKING readback: resolve the built renderer's content RT ONCE via the DETERMINISTIC GX wrapper
+/// Live-tracking readback: resolve the built renderer's content RT once via the DETERMINISTIC GX wrapper
 /// chain (no scan), cache it AddRef'd, then re-copy the cached resource every frame. The crash that killed
-/// per-frame tracking was the old `find_d3d12_resource_ex` SCAN QI'ing the D3D12 object list every readback
+/// per-frame tracking was the old `find_d3d12_resource_ex` scan QI'ing the D3D12 object list every readback
 /// -- during the menu->world teardown it QIs a freed object -> uncatchable AV. With the deterministic chain
 /// there is no scan, and the cached resource is our built renderer's RT (our lifetime), so per-frame
 /// re-copy is safe through the whole loading screen -> the portrait refreshes without crashing.
@@ -307,10 +307,10 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -318,7 +318,7 @@ pub unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID
 /// `RB_*` D3D12 objects are used without locking.
 ///
 /// Additionally, every call after the first re-copies the raw pointer cached in
-/// `PROFILE_LIVE_RT_RES`, borrowing it as an `ID3D12Resource` WITHOUT re-validating it.
+/// `PROFILE_LIVE_RT_RES`, borrowing it as an `ID3D12Resource` without re-validating it.
 /// That cache is sound only because the resource is our own built renderer's RT; a
 /// caller that tears that renderer down without clearing the cache turns this into a
 /// dereference of freed memory.
@@ -329,21 +329,21 @@ pub unsafe fn readback_cached_content_rgba8(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let cached = PROFILE_LIVE_RT_RES.load(Ordering::SeqCst);
         if cached != 0 {
-            // Re-copy the cached resource -- NO scan, NO chain walk. Borrow then clone (AddRef) to pass by
+            // Re-copy the cached resource -- No scan, no chain walk. Borrow then clone (AddRef) to pass by
             // value into the readback (which drops that clone normally).
             let raw = cached as *mut c_void;
             let res = ID3D12Resource::from_raw_borrowed(&raw)?;
-            // Cached-resource readback: reuse RB_FAST_* objects so this succeeds EVERY frame (the per-call
+            // Cached-resource readback: reuse RB_FAST_* objects so this succeeds every frame (the per-call
             // version created a new queue each frame and mostly failed -> published only ~4x).
             return readback_resource_cached_fast(res.clone());
         }
-        // First resolve: deterministic chain (no scan); else a ONE-TIME scan of the OFFSCREEN nest, then
+        // First resolve: deterministic chain (no scan); else a one-time scan of the OFFSCREEN nest, then
         // cache an AddRef'd ref for all future frames. The build-own (post-Continue) renderer's GX wrapper
         // layout differs from the menu renderer the chain was RE'd from -- the det-resolve-dump shows
-        // h1+0x18 is null there, so hop 2 fails closed; AND scanning `srv_gx` itself finds nothing. The
+        // h1+0x18 is null there, so hop 2 fails closed; And scanning `srv_gx` itself finds nothing. The
         // proven head path is `find_d3d12_resource(start)` over the OFFSCREEN nest (renderer+0xa8) -- the
         // exact resolve `readback_offscreen_rgba8(off)` uses to read back the real head (dumped as slot
-        // 100). The teardown-race AV was a PER-FRAME scan; a one-time scan while the renderer is alive
+        // 100). The teardown-race AV was a per-frame scan; a one-time scan while the renderer is alive
         // mid-loading, cached here, never re-scans -> no race.
         let (resource, how) = match resolve_content_resource_deterministic(srv_gx) {
             Some(r) => (r, "deterministic chain"),
@@ -361,17 +361,17 @@ pub unsafe fn readback_cached_content_rgba8(
 
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
 /// across menu->world teardown. Render thread only: the resolve caches and the shared
 /// `RB_*` D3D12 objects are used without locking.
 ///
-/// This is the RAW inner body with NO `catch_unwind` of its own, so a panic unwinds into
+/// This is the raw inner body with no `catch_unwind` of its own, so a panic unwinds into
 /// whatever called it -- across the game's frames when that caller is a detour. Call it
 /// only from inside an existing `catch_unwind`, as `readback_offscreen_rgba8` does.
 pub unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
@@ -422,7 +422,7 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
         return None;
     }
 
-    // READBACK buffer sized to the footprint, created on the GAME's device so CopyTextureRegion is
+    // READBACK buffer sized to the footprint, created on the game's device so CopyTextureRegion is
     // valid cross-resource.
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_READBACK,
@@ -460,7 +460,7 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
     .ok()?;
     let readback = readback_opt?;
 
-    // OUR OWN DIRECT queue/allocator/list/fence -- never the game's.
+    // Our own direct queue/allocator/list/fence -- never the game's.
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         Priority: 0,
@@ -474,8 +474,8 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
         unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }
             .ok()?;
 
-    // Barrier source COMMON -> COPY_SOURCE, copy subresource 0 into the readback footprint, barrier
-    // back COPY_SOURCE -> COMMON.
+    // Barrier source common -> COPY_SOURCE, copy subresource 0 into the readback footprint, barrier
+    // back COPY_SOURCE -> common.
     unsafe {
         record_transition(
             &list,
@@ -586,7 +586,7 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
 
 /// Per-frame readback of `resource` reusing the CACHED `RB_FAST_*` queue/allocator/list/fence/buffer
 /// (created once on the game device). Identical copy+wait+de-swizzle to `readback_resource_rgba8_inner`
-/// but it does NOT create new D3D12 objects each call -- which is why the per-call version published only
+/// but it does not create new D3D12 objects each call -- which is why the per-call version published only
 /// ~4x under loading (command-queue creation kept failing). With the cache the readback succeeds every
 /// frame so the displayed head follows the cursor. Returns `None` on any failure (draws the last frame).
 ///
@@ -597,7 +597,7 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
 /// `GetDevice` it is used without further validation.
 ///
 /// The `RB_FAST_*` objects are process-global and are reset, recorded into, submitted
-/// and waited on with NO locking, so this may only be called from ONE thread (the render
+/// and waited on with no locking, so this may only be called from one thread (the render
 /// thread). Two concurrent calls corrupt the shared command allocator.
 pub unsafe fn readback_resource_cached_fast(
     resource: ID3D12Resource,
@@ -632,7 +632,7 @@ pub unsafe fn readback_resource_cached_fast(
     if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
         return None;
     }
-    // Create the cached queue/allocator/list/fence ONCE (the list is left Closed so the first Reset works).
+    // Create the cached queue/allocator/list/fence once (the list is left Closed so the first Reset works).
     if RB_FAST_QUEUE.load(Ordering::SeqCst) == 0 {
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -812,7 +812,7 @@ pub unsafe fn readback_resource_cached_fast(
     Some((width, height, out))
 }
 
-/// Per-frame DEPTH readback of the offscreen scene's depth-stencil sibling (the `R32G8X24_TYPELESS`
+/// Per-frame depth readback of the offscreen scene's depth-stencil sibling (the `R32G8X24_TYPELESS`
 /// buffer next to the color RT in the same wrapper nest). Returns `(width, height, depth_f32)` where each
 /// element is the plane-0 R32 float depth. `None` on any failure (the caller then leaves the color buffer
 /// fully opaque -- fail-open, no cutout). Same catch_unwind + never-touch-the-game contract as the color
@@ -824,10 +824,10 @@ pub unsafe fn readback_resource_cached_fast(
 ///
 /// # Safety
 ///
-/// The address argument carries NO precondition: every pointer hop is a fault-tolerant
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
 /// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
 ///
-/// The caller owns LIFETIME. The walk finishes with a real `QueryInterface` on a
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
 /// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
 /// has already freed is an access violation this crate cannot catch. Call only while the
 /// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
@@ -847,7 +847,7 @@ pub unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32
 }
 
 /// Depth twin of `readback_resource_cached_fast`: reset+copy+wait using the dedicated `RB_DEPTH_*` cached
-/// objects, but it copies PLANE 0 (subresource 0 = the R32 float depth of the `R32G8X24_TYPELESS` buffer)
+/// objects, but it copies plane 0 (subresource 0 = the R32 float depth of the `R32G8X24_TYPELESS` buffer)
 /// and reinterprets each 4-byte texel as `f32`. No RB swap / no LOADING_BG_PORTRAIT_FORMAT write (that is
 /// the color format telemetry). The `GetCopyableFootprints(&desc, 0, 1, ..)` call yields the plane-0
 /// footprint directly, so the copy is plane-correct without hand-computing plane sizes.

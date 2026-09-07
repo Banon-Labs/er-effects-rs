@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Enumerate every reference to one or more VAs in a de-Arxan'd ELDEN RING image.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 `map-rvas-1162-to-1170.py` answers "where does this byte shape re-occur". When a function has a
-BYTE-IDENTICAL TWIN -- and this image has several; MSVC emits duplicate bodies that COMDAT folding
+byte-identical TWIN -- and this image has several; MSVC emits duplicate bodies that COMDAT folding
 did not merge -- that question has two answers and no way to choose between them. Byte evidence is
 structurally incapable of separating twins: "the body is byte-identical" is the premise, not the
 discriminator.
@@ -12,10 +12,10 @@ discriminator.
 References can separate them, because the twins are called from different places. This prints, for
 each target VA, every direct `E8`/`E9` rel32 branch that lands on it and every 8-aligned absolute
 qword in the image that holds it (vtable slot, dispatch table, relocated pointer). Compare the
-COUNTS and the SITES for two twins in one build, then the same for their two candidates in the
+counts and the sites for two twins in one build, then the same for their two candidates in the
 other build, and the pairing usually falls out of the asymmetry.
 
-The rel32 scan deliberately decodes at EVERY byte offset rather than only at instruction starts.
+The rel32 scan deliberately decodes at every byte offset rather than only at instruction starts.
 That over-counts: a `0xE8` byte inside an immediate or a displacement is decoded as if it were a
 call. The over-counting is uniform across candidates, so a comparison stays fair, and a genuine
 function entry attracts real hits that dwarf the noise. Do not read a raw count as "this function
@@ -24,7 +24,7 @@ has N callers" -- read it as "candidate A has N and candidate B has M".
 Byte offsets, not instruction indices: every site is reported as an absolute VA, so evidence stays
 usable when an inserted instruction shifts everything after it.
 
-USAGE
+Usage
     python3 scripts/refs-to-va-1162-1170.py 1162 0x140d10370 0x140d103d0
     python3 scripts/refs-to-va-1162-1170.py 1170 0x140d11a40 0x140d11aa0
     python3 scripts/refs-to-va-1162-1170.py both 0x140d103d0

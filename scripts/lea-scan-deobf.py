@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find ANY rip-relative reference (lea reg,[rip+d] = 8D; mov reg,[rip+d] = 8B) to a target VA
+"""Find any rip-relative reference (lea reg,[rip+d] = 8D; mov reg,[rip+d] = 8B) to a target VA
 in the deobfuscated ER image. base 0x140000000, file off == RVA. Reports insn VA + opcode kind."""
 import sys, struct, os
 

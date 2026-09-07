@@ -122,7 +122,7 @@ BOOTSTRAP_PATH="$ARTIFACT_DIR/bootstrap.jsonl"
 BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/bootstrap-state.json"
 CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt"
 AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log"
-# EVERY per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT: the DLL
+# Every per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a harness
 # that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two launches
 # destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to the launch env below)
@@ -133,9 +133,9 @@ INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl"
 BOOT_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl"
 VERDICT_PATH="$ARTIFACT_DIR/windows-proof-render-smoke-verdict.json"
 GAME_DIR="${ER_GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-# THE ONE ARTIFACT THAT CANNOT BE REDIRECTED YET. `er-telemetry-core` resolves this name against the
+# The one artifact that cannot be redirected yet. `er-telemetry-core` resolves this name against the
 # game directory with no env override (`standalone_json_path`), so it stays in GAME_DIR and the
-# copy-after-the-run below is all there is. That copy does NOT survive a crash or a kill, and the
+# copy-after-the-run below is all there is. That copy does not survive a crash or a kill, and the
 # `rm -f` before launch destroys the previous run's file outright. Fixing it is a knob in
 # `crates/er-telemetry-core/src/lib.rs` shaped like `ER_QUICKLOAD_INPUT_TRACE_PATH`.
 STANDALONE_TELEMETRY_JSONL="$GAME_DIR/er-telemetry-timeseries.jsonl"

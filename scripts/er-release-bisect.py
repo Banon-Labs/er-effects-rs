@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Score one `er_quickload.dll` by launching it ALONE and asking whether the game really lived.
+"""Score one `er_quickload.dll` by launching it alone and asking whether the game really lived.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-`scripts/er-run-branch.py` verifies a DLL's provenance against the CURRENT working tree and
+`scripts/er-run-branch.py` verifies a DLL's provenance against the current working tree and
 refuses anything that does not match. That is right for testing your own branch and useless for
 testing a DLL GitHub built from a commit you are not standing on. This tool takes the opposite
 contract: the artifact is authoritative, the tree is irrelevant, and the only question asked is
 whether that build survives its boot window. Walk `main-*` pre-releases newest-first and the
 answer bisects "which build started dying".
 
-Each candidate runs ALONE -- a profile with exactly one `[[natives]]` entry, no Seamless, no
+Each candidate runs alone -- a profile with exactly one `[[natives]]` entry, no Seamless, no
 co-loaded shells -- so a death cannot be blamed on a neighbour. That is also why this does not go
-through `er-dll-closure.py`/`er-gen-me3-profile.py`: their job is to assemble a compatible SET
+through `er-dll-closure.py`/`er-gen-me3-profile.py`: their job is to assemble a compatible set
 from a source tree, and here there is neither a set nor a tree.
 
-WHAT "SURVIVED" MEANS, AND WHY IT IS NOT "THE PROCESS EXISTS"
+What "SURVIVED" means, and why it is not "THE PROCESS EXISTS"
 ------------------------------------------------------------
 bd `er-liveness-oracle-is-thread-count-not-process-existence-2026-08-25`: after a wedged launch
-`eldenring.exe` stays in /proc for MINUTES as a two-thread husk at 0% CPU. Every scan of
+`eldenring.exe` stays in /proc for minutes as a two-thread husk at 0% CPU. Every scan of
 `/proc/*/comm` calls that alive, so an A/B built on process existence measures nothing -- both
 arms are husks. The verdict here therefore comes from `er-teardown.game_status()`: thread count
-AND CPU burn, with the husk rule owned by that module and not restated here.
+and CPU burn, with the husk rule owned by that module and not restated here.
 
 The DLL's own log is read only as corroboration, never as the verdict. Same memory: a log that
-was not rotated is the PREVIOUS run's log, and the me3 line count of a healthy run and a wedged
+was not rotated is the previous run's log, and the me3 line count of a healthy run and a wedged
 one were both 32. This deletes the log before launching, so "no log" means "never reached the
 DLL's install()", and it checks the mtime against the launch instant before believing a word of
 it.
@@ -63,7 +63,7 @@ def _load_teardown():
     Imported rather than reimplemented on purpose. Its docstring records the measurement: a
     survey built on `comm` matching swept 101 processes, reported itself clean, and left 93
     alive -- so a private copy of "is the game gone" here would be wrong in exactly the way that
-    wedges the NEXT launch and scores it as a failure of the next DLL.
+    wedges the next launch and scores it as a failure of the next DLL.
     """
     path = SCRIPTS / "er-teardown.py"
     spec = importlib.util.spec_from_file_location("er_teardown", path)
@@ -94,7 +94,7 @@ BOOT_SLICE_SECONDS = 4.0
 # How long to wait for `eldenring.exe` to appear at all. Game-runtime budget, so it is bounded by
 # the canonical cap rather than by the 30s agent-shell rule.
 BOOT_BUDGET_SECONDS = 120
-# How long the game must stay genuinely running to PASS.
+# How long the game must stay genuinely running to pass.
 ALIVE_SECONDS_DEFAULT = 45
 
 MILLISECONDS = 1000
@@ -123,10 +123,10 @@ def attempt_dir(label: str) -> Path:
 
 
 def autoload_log_path(art: Path | None = None) -> Path:
-    """Where THIS attempt's autoload debug log lives.
+    """Where this attempt's autoload debug log lives.
 
     It used to be the game directory's shared copy, which `score` then `unlink`ed before launching.
-    That deleted somebody ELSE's run -- several sessions launch concurrently here -- and it deleted
+    That deleted somebody else's run -- several sessions launch concurrently here -- and it deleted
     two generations at once, because `er_game_base::log::begin_fresh_run` removes `<name>.prev`
     unconditionally when the live file is absent. With a per-attempt directory there is nothing
     shared to clear and nothing of anyone else's to lose.
@@ -135,7 +135,7 @@ def autoload_log_path(art: Path | None = None) -> Path:
 
 
 def write_single_dll_profile(dll: Path, destination: Path) -> Path:
-    """An me3 profile loading exactly ONE native, so a death has exactly one suspect."""
+    """An me3 profile loading exactly one native, so a death has exactly one suspect."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
         'profileVersion = "v1"\n'
@@ -225,7 +225,7 @@ def wait_for_game_pid(budget_seconds: float) -> int | None:
 
 
 def read_log_evidence(log: Path, launched_at: float) -> dict[str, object]:
-    """The DLL's own last timestamp and tail -- corroboration only, and only if it is THIS run's.
+    """The DLL's own last timestamp and tail -- corroboration only, and only if it is this run's.
 
     A log whose mtime predates the launch is the previous run's file surviving a process that
     died before `install()` rotated it, which reads exactly like a fresh run.
@@ -293,8 +293,8 @@ def score(dll: Path, label: str, alive_seconds: int) -> dict[str, object]:
         # `-o`: offline/solo. launch.sh includes ersc.dll by default (2026-08-24) and a
         # co-loaded Seamless would give any death a second suspect.
         ["bash", str(LAUNCHER), "-o"],
-        # EVERY per-run artifact into THIS attempt's directory. A game-directory artifact is
-        # SINGLE-SLOT (`begin_fresh_run` keeps one generation), so a bisect that scores twenty
+        # Every per-run artifact into this attempt's directory. A game-directory artifact is
+        # single-slot (`begin_fresh_run` keeps one generation), so a bisect that scores twenty
         # builds used to leave evidence for the last two and destroy the other eighteen -- and it
         # took concurrent sessions' logs with it. `read_log_evidence` below reads the redirected
         # copy, so the reader moved with the writer.

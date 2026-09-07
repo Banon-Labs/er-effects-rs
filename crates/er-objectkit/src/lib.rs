@@ -1,4 +1,4 @@
-//! er-objectkit: trace an Elden Ring shader/material back to the OBJECTS that use
+//! er-objectkit: trace an Elden Ring shader/material back to the objects that use
 //! it, and (later milestones) re-render a whole object as in-game.
 //!
 //! M1 (this module set): the offline shader->object trace.

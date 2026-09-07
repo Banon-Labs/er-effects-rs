@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fail when the installed Seamless Co-op is not the ONE build this workspace supports.
+"""Fail when the installed Seamless Co-op is not the one build this workspace supports.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 On 2026-09-02 Seamless Co-op v2.0.0 replaced v1.9.9 under an unchanged file name,
 and every `ersc.dll` fact this repo holds went stale in one move: `show` left
@@ -25,7 +25,7 @@ read what the build scripts actually enforce.  The installed version is the
 rather than inferred from a path, a size or a timestamp, none of which change when
 the build does.
 
-WHAT IT REFUSES TO GUESS
+What it refuses to guess
 ------------------------
 If it cannot find the module, or cannot find the constant, or cannot parse either,
 it says which one and exits 0 -- a missing Seamless is not a failed gate, it is a
@@ -33,14 +33,14 @@ machine without Seamless.  It exits non-zero only for the case it exists to catc
 both sides present, readable, and disagreeing.  That is the same line
 `check-game-version-supported.py` draws, for the same reason.
 
-RELATIONSHIP TO THE BUILD SCRIPT
+Relationship to the build script
 --------------------------------
 `build-support/prologue_build.rs` performs the same identity check, but on the file
 it is about to ground-truth constants against -- which `ER_ERSC_DLL` may redirect to
 an archived copy of the supported build so a developer can still compile.  This gate
-answers the other question: what will the machine actually LOAD.  It honours
+answers the other question: what will the machine actually load.  It honours
 `ERSC_DLL`/`ER_GAME_DIR` (there is no single hard-coded user path in this repo) but
-NOT `ER_ERSC_DLL`, so the build-side escape hatch cannot wave a real mismatch past
+not `ER_ERSC_DLL`, so the build-side escape hatch cannot wave a real mismatch past
 the validation suite.
 
     python3 scripts/check-ersc-version-supported.py
@@ -87,7 +87,7 @@ def game_dir() -> Path:
 
 
 def installed_path() -> Path:
-    """What the game will LOAD.  Deliberately not `ER_ERSC_DLL`; see the module docstring."""
+    """What the game will load.  Deliberately not `ER_ERSC_DLL`; see the module docstring."""
     env = os.environ.get("ERSC_DLL")
     return Path(env) if env else game_dir() / "SeamlessCoop" / "ersc.dll"
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329 # cleanup + its helpers run via the EXIT trap; shellcheck 0.11 drops the
+# shellcheck disable=SC2329 # cleanup + its helpers run via the exit trap; shellcheck 0.11 drops the
 # trap reference from its reachability pass when the script ends with an explicit top-level `exit`.
 set -euo pipefail
 
-# me3 PRODUCTION SMOKETEST: launch Elden Ring through me3 (garyttierney's mod loader) with
-# er_quickload.dll delivered as an me3 [[natives]] profile entry -- NO LazyLoader involved --
+# me3 production SMOKETEST: launch Elden Ring through me3 (garyttierney's mod loader) with
+# er_quickload.dll delivered as an me3 [[natives]] profile entry -- No LazyLoader involved --
 # and verify our settings stick:
 #   * env settings   (*_PATH) must propagate me3 -> compat tool -> game
 #   * flag files     (er-quickload-autoload.txt etc., resolved from the exe dir) must be honored
@@ -14,9 +14,9 @@ set -euo pipefail
 # it never touches the protected/EAC launcher and uses no Steam AppID/URL launch form, so it is
 # in the same approved direct/offline launch class as run-product-continue-direct-probe.sh.
 #
-# LazyLoader was removed as a delivery mechanism (2026-07-04); the staging below is a DEFENSIVE
+# LazyLoader was removed as a delivery mechanism (2026-07-04); the staging below is a defensive
 # transition guard: if a leftover proxy (dinput8.dll + lazyLoad.ini) is still in GAME_DIR it is
-# staged away for the run and restored on teardown, because an active proxy would DOUBLE-LOAD the
+# staged away for the run and restored on teardown, because an active proxy would double-load the
 # DLL (me3 native + chainload = two modules, two DllMains, double hooks). This also makes
 # DLL-attach attribution exact: with no proxy, a bootstrap event can only come from me3.
 
@@ -35,7 +35,7 @@ BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
-# EVERY per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT: the DLL
+# Every per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a harness
 # that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two launches
 # destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to the launch env below)
@@ -53,7 +53,7 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
 
-# DEPRECATED SAVE-SOURCE STAGING: this script's historical non-telemetry mode writes an
+# DEPRECATED save-source STAGING: this script's historical non-telemetry mode writes an
 # er-quickload.toml save_file and stages an isolated gold save. That is no longer release/autoload
 # validation; it is a save-redirect-internals probe only. Normal release validation must use the
 # user/product launcher path: ~/Elden/launch.sh.
@@ -119,7 +119,7 @@ runtime_pids() {
       continue
     fi
     # me3's own Windows-side launcher: part of this run's tree, torn down with it. Match only a
-    # REAL launcher invocation (path-anchored), never prose mentions of the name inside an agent
+    # real launcher invocation (path-anchored), never prose mentions of the name inside an agent
     # shell wrapper's cmdline (a bare substring match self-matched the harness shell that carried
     # this very script's text).
     if [[ "$cmdline" == *"windows-bin/me3-launcher.exe"* || "$cmdline" == *"windows-bin\\me3-launcher.exe"* ]]; then
@@ -160,7 +160,7 @@ restore_lazyloader() {
   done
 }
 
-# The autoload flag file is a PRODUCTION SETTING under test. Unlike the dev probe, back up whatever
+# The autoload flag file is a production setting under test. Unlike the dev probe, back up whatever
 # request the workspace currently has staged and restore it on teardown so the smoke leaves the
 # game dir exactly as found.
 FLAG_BACKUP_DIR=""
@@ -248,12 +248,12 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 preflight() {
-  # Steam MUST be running: me3 launches through the Steam compat tool and reuses Steam's
+  # Steam must be running: me3 launches through the Steam compat tool and reuses Steam's
   # environment (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still
-  # boots but in a DIFFERENT environment -- the DLL's debug log lands elsewhere and
+  # boots but in a different environment -- the DLL's debug log lands elsewhere and
   # Steam-dependent state degrades into a non-representative run. Fail closed rather than
   # burn a launch.
-  # WSL-aware Steam check: on a WSL2 + Windows-Steam box Steam is the WINDOWS process steam.exe,
+  # WSL-aware Steam check: on a WSL2 + Windows-Steam box Steam is the Windows process steam.exe,
   # so a bare `pgrep -x steam` false-negatives and refuses to launch when Steam is actually up
   # (that false negative once cost an entire overnight session). See scripts/steam-running.sh
   # and bd steam-detection-wsl-false-negative-2026-07-18.
@@ -317,7 +317,7 @@ EOF
   exit 0
 fi
 
-# Reset stale per-run evidence BEFORE launch so the readiness watcher cannot read a PRIOR run's
+# Reset stale per-run evidence before launch so the readiness watcher cannot read a prior run's
 # completion and tear the new game down instantly.
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH"
 rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
@@ -329,7 +329,7 @@ echo "me3-profile: wrote $PROFILE_FILE (native: $SMOKE_DLL)"
 stage_lazyloader_away
 stage_autoload_request
 
-# SAVE SOURCE: DEPRECATED staged-save internals path -- isolated writable copy of the gold save,
+# Save SOURCE: DEPRECATED staged-save internals path -- isolated writable copy of the gold save,
 # pointed at via er-quickload.toml save_file; not a release/autoload validation path.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   export ER_QUICKLOAD_TELEMETRY_ONLY=1
@@ -396,7 +396,7 @@ fi
 
 # Launch through me3. The CLI stays alive as the launch owner (analog of the direct probe's Proton
 # parent); killing it + the exact eldenring.exe/me3-launcher.exe pids is the teardown. All
-# ER_QUICKLOAD_* env must survive me3 -> compat tool -> game; the verdict below PROVES whether it did.
+# ER_QUICKLOAD_* env must survive me3 -> compat tool -> game; the verdict below proves whether it did.
 (
   cd "$GAME_DIR"
   ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
@@ -446,10 +446,10 @@ watcher_status=0
 
 collect_me3_logs
 
-# SETTINGS-STICK VERDICT. RAM/in-process telemetry artifacts are the oracles, never screenshots:
+# Settings-stick verdict. RAM/in-process telemetry artifacts are the oracles, never screenshots:
 #   dll_attach        bootstrap.jsonl has dllmain_attach -> me3 native load worked (proxy staged away,
 #                     so no other loader could have produced it)
-#   env_stick         the autoload debug log (whose very PATH comes from env) exists and records the
+#   env_stick         the autoload debug log (whose very path comes from env) exists and records the
 #                     save-override decision -> ER_QUICKLOAD_* env propagated through me3
 #   game_task         the recurring game task registered -> DLL is live on CSTask, not just attached
 #   watcher_pass      .auto/runtime_probe.sh readiness watcher exit (world-stable target)

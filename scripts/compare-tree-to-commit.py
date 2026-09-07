@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report which files in an OUTSIDE checkout differ from a commit in THIS repo, by content.
+"""Report which files in an outside checkout differ from a commit in this repo, by content.
 
 The companion to `compare-worktree-trees.py`, and it exists for the same reason: a
 worktree-isolated agent cannot run `git -C` against a sibling checkout, but it can read that

@@ -2,27 +2,27 @@
 """Behavioral tests for the cupcake signal `last_assistant_unexecuted_promise`.
 
 The signal scans the last-completed assistant turn of the session transcript and returns:
-  * PROMISE:<clause>  -- the turn ENDED on a first-person promise to do concrete work, nothing in the
+  * PROMISE:<clause>  -- the turn ended on a first-person promise to do concrete work, nothing in the
                          turn executed it, no background task or shell is carrying it, and the message
                          did not hand the obligation to the user.
   * ""                -- clean, which includes every one of those four facts being absent.
 
 The false-positive cost is high (a guard that cries wolf gets ignored), so most of this file is the
-NEGATIVE side: the shapes that look like the defect and must stay silent.
+negative side: the shapes that look like the defect and must stay silent.
 
-We drive the real signal against crafted transcript JSONL under a temporary HOME so its
+We drive the real signal against crafted transcript JSONL under a temporary home so its
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
 
-WHY `scripts/audit-selftest-vacuity.py` CALLS THIS FILE "ASSERTED", AND WHY THAT IS NOT A DEFECT.
+Why `scripts/audit-selftest-vacuity.py` calls this file "ASSERTED", and why that is not a defect.
 That tool blinds the `re` module of the process it runs and asks whether the selftest notices. The
-subject here is a SHELL script run as a SUBPROCESS, whose Python is a separate interpreter the
+subject here is a shell script run as a SUBPROCESS, whose Python is a separate interpreter the
 blinding never reaches -- and this file resolves the signal through `Path(__file__).resolve()`, so
 the tool's shadow-root subject-stub path cannot reach it either. The verdict is structural, not a
 statement about these cases, and it is identical at every commit that has touched this file.
-The question it stands in for IS answered, and more sharply, by `scripts/prove-gate-positive-controls.py`:
+The question it stands in for is answered, and more sharply, by `scripts/prove-gate-positive-controls.py`:
 `--only cupcake-signal-tests` stubs the signal silent and always-firing and requires this suite to go
 red both ways, and `--only unexecuted-promise-openers` reverts each of the three fixes behind the
-2026-09-01 present-continuous failure ONE AT A TIME and requires the frozen case below to fail.
+2026-09-01 present-continuous failure one at a time and requires the frozen case below to fail.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ PROJECT_DIR = "/fake/project/er-quickload"
 # The verbatim turn-ending that prompted the guard (user report 2026-08-22).
 THE_INSTANCE = "I'll re-record the directive with the shell metacharacters escaped rather than leave it unsaved."
 
-# The verbatim turn-ending that walked THROUGH the guard (production failure 2026-09-01): OPENER_RE
+# The verbatim turn-ending that walked through the guard (production failure 2026-09-01): OPENER_RE
 # had no bare present continuous, so the opener never matched and the other three facts were never
 # evaluated; no `gh pr close` ran and the PR stayed open until the user asked why. Frozen here as the
 # regression case -- it is the real failure, not a synthetic one.
@@ -58,7 +58,7 @@ def user(text: str) -> dict:
 
 
 def tool_result(tool_use_id: str = "toolu_x", content: str = "ok") -> dict:
-    """A tool-result carrier user event -- must NOT split the assistant turn."""
+    """A tool-result carrier user event -- must not split the assistant turn."""
     return {
         "type": "user",
         "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": content}]},
@@ -135,7 +135,7 @@ def async_agent_result(tool_use_id: str = "toolu_a") -> dict:
 
 
 def background_launch_result(tool_use_id: str = "toolu_bg") -> dict:
-    """What the harness ACTUALLY returns the instant a backgrounded Bash starts: an acknowledgement,
+    """What the harness actually returns the instant a backgrounded Bash starts: an acknowledgement,
     not a result. The real output arrives later as a <task-notification>."""
     return {
         "type": "user",
@@ -167,7 +167,7 @@ def task_notification(tool_use_id: str = "toolu_a", status: str = "completed") -
 
 
 def run_signal(events: list[dict]) -> str:
-    """Write events to a fixture transcript under a temp HOME and return the signal's stdout."""
+    """Write events to a fixture transcript under a temp home and return the signal's stdout."""
     with tempfile.TemporaryDirectory() as home:
         key = PROJECT_DIR.replace("/", "-")
         tdir = Path(home) / ".claude" / "projects" / key
@@ -207,7 +207,7 @@ def silent(out: str) -> bool:
 
 
 def main() -> int:
-    # ---- THE DEFECT ------------------------------------------------------------------------------
+    # ---- The defect ------------------------------------------------------------------------------
 
     # (1) The reported instance: a closing promise, no tool call, nothing running, no word to the user.
     expect(
@@ -217,7 +217,7 @@ def main() -> int:
         "expected PROMISE for a closing promise with no tool call and nothing running",
     )
 
-    # (2) Work earlier in the turn does NOT excuse a promise made after it: the promise is still the
+    # (2) Work earlier in the turn does not excuse a promise made after it: the promise is still the
     # last thing said and still nothing is going to keep it.
     expect(
         "true-positive-promise-after-earlier-work",
@@ -260,7 +260,7 @@ def main() -> int:
         "expected PROMISE once the background subagent has already reported",
     )
 
-    # ---- THE FOUR FALSE POSITIVES THE RULE MUST NOT COMMIT ---------------------------------------
+    # ---- The four false positives the rule must not commit ---------------------------------------
 
     # (F1) Contingent on the user doing something first -- not a violation.
     expect(
@@ -273,7 +273,7 @@ def main() -> int:
         "a promise contingent on the user must not fire",
     )
 
-    # (F2) A directive TO the user -- not a violation. Doubly excluded: "need" is a hedge, not a
+    # (F2) A directive to the user -- not a violation. Doubly excluded: "need" is a hedge, not a
     # commitment, and "need you to" hands the action over.
     expect(
         "false-positive-directive-to-user",
@@ -285,7 +285,7 @@ def main() -> int:
         "a directive to the user must not fire",
     )
 
-    # (F2b) The harder shape: a real action promise sitting NEXT TO a directive to the user. Only the
+    # (F2b) The harder shape: a real action promise sitting next to a directive to the user. Only the
     # hand-over clause can explain the silence here -- its control below fires on the same sentence
     # with the directive removed.
     expect(
@@ -391,7 +391,7 @@ def main() -> int:
         "'report' must not be read as a re-prefixed 'port'",
     )
 
-    # Hyphenated re-forms ARE the same verb, and must still fire -- that is the reported instance.
+    # Hyphenated re-forms are the same verb, and must still fire -- that is the reported instance.
     expect(
         "true-positive-hyphenated-re-form",
         [user("Save it."), assistant_text("I'll re-record the directive.")],
@@ -414,7 +414,7 @@ def main() -> int:
         "a background job from a recent turn must still cover a promise",
     )
 
-    # (F8b) ...but a launch that never reported and has gone STALE must stop covering. A dropped
+    # (F8b) ...but a launch that never reported and has gone stale must stop covering. A dropped
     # notification would otherwise disable the guard for the rest of the session: measured on a real
     # transcript, one un-notified subagent silenced it across the following 2,800 lines, including the
     # exact turn it exists to catch.
@@ -432,7 +432,7 @@ def main() -> int:
         "a background launch that never reported must go stale, not exempt forever",
     )
 
-    # (F9) The REAL harness shape for a backgrounded Bash: an immediate "running in background"
+    # (F9) The real harness shape for a backgrounded Bash: an immediate "running in background"
     # acknowledgement, with the actual result arriving later. That acknowledgement is not a result,
     # and the job must keep covering the promise. (Measured miss: it was read as completion, and a
     # turn with a live background job was flagged.)
@@ -462,7 +462,7 @@ def main() -> int:
         "a notified background job must stop covering new promises",
     )
 
-    # (5) A live background job the promise never mentions is NOT cover. The reported instance had a
+    # (5) A live background job the promise never mentions is not cover. The reported instance had a
     # game launch two lines earlier; the promise was to go re-record a directive, which that launch
     # was never going to do. Deferred behind it is not carried by it.
     expect(
@@ -478,7 +478,7 @@ def main() -> int:
     )
 
     # ---- CONTROLS: each carve-out above must be what silenced it, not luck -----------------------
-    # Same sentences with ONLY the exempting element removed. If a control ever goes silent, the
+    # Same sentences with only the exempting element removed. If a control ever goes silent, the
     # matching false-positive test above has stopped proving anything.
 
     expect(
@@ -543,7 +543,7 @@ def main() -> int:
         "the re-initiation note, not the verb, must be what silences F5",
     )
 
-    # ---- NARROWINGS THAT KEEP THE GUARD QUIET ----------------------------------------------------
+    # ---- NARROWINGS that keep the guard quiet ----------------------------------------------------
 
     # A question hands the turn back; the user knows the ball is theirs.
     expect(
@@ -612,7 +612,7 @@ def main() -> int:
         "a backticked promise must not fire",
     )
 
-    # Only the CLOSING prose is scanned: a mid-turn promise whose turn moved on is the normal shape.
+    # Only the closing prose is scanned: a mid-turn promise whose turn moved on is the normal shape.
     expect(
         "silent-promise-not-in-final-block",
         [
@@ -643,14 +643,14 @@ def main() -> int:
         "a turn with no closing prose must not fire",
     )
 
-    # ---- BARE PRESENT CONTINUOUS ("I'm closing it") ----------------------------------------------
+    # ---- Bare present continuous ("I'm closing it") ----------------------------------------------
     # The hole this guard shipped with, found by it failing in production 2026-09-01. OPENER_RE knew
-    # "I'll" / "I'm going to" / "let me" and NOT the bare present continuous, so the turn below ended
+    # "I'll" / "I'm going to" / "let me" and not the bare present continuous, so the turn below ended
     # on a commitment, nothing ran it, and the other three facts were never evaluated. Present
-    # continuous is the MORE seductive way to make an unkept promise than "I'll", because it reads to
+    # continuous is the more seductive way to make an unkept promise than "I'll", because it reads to
     # a human as already underway.
 
-    # THE INSTANCE, verbatim. Frozen: this exact sentence must halt.
+    # The instance, verbatim. Frozen: this exact sentence must halt.
     expect(
         "true-positive-the-present-continuous-instance",
         [
@@ -661,11 +661,11 @@ def main() -> int:
         "expected PROMISE for the verbatim 'I'm closing it ...' turn-ending",
     )
 
-    # It took TWO fixes, and each must be load-bearing on its own. Controls for both live in
+    # It took two fixes, and each must be load-bearing on its own. Controls for both live in
     # scripts/prove-gate-positive-controls.py (sens/opener-lacks-present-continuous and
     # sens/close-not-an-action), which revert one at a time and require this case to go green again.
-    # Here: the same sentence with a verb that was ALREADY on the allowlist isolates the opener, and
-    # an "I'll close it" isolates the ACTIONS entry.
+    # Here: the same sentence with a verb that was already on the allowlist isolates the opener, and
+    # an "I'll close it" isolates the actions entry.
     expect(
         "true-positive-present-continuous-already-listed-verb",
         [user("What about the branch?"), assistant_text("I'm deleting the stale branch.")],
@@ -679,7 +679,7 @@ def main() -> int:
         "'close' must be a concrete action under the openers that already worked",
     )
 
-    # The three inflections a gerund can take. Resolved against the SAME ACTIONS list, no second
+    # The three inflections a gerund can take. Resolved against the same actions list, no second
     # vocabulary: dropped-e, doubled consonant, and the plain case.
     expect(
         "true-positive-gerund-dropped-e",
@@ -712,7 +712,7 @@ def main() -> int:
         "'I am <gerund>' must fire like \"I'm <gerund>\"",
     )
 
-    # ORDERING REGRESSION. The bare opener is LAST in the alternation on purpose: Python takes the
+    # Ordering regression. The bare opener is last in the alternation on purpose: Python takes the
     # first alternative that matches at a position, not the longest, so a bare "i'm" placed ahead of
     # "i'm going to" would swallow its prefix and hand committed_verb the word "going" -- which is
     # deliberately not an action, silently killing the case above it.
@@ -729,12 +729,12 @@ def main() -> int:
         "'I'm about to <action>' must survive the bare present-continuous alternative",
     )
 
-    # ---- ...AND THE STATIVE USES THAT MUST STAY SILENT -------------------------------------------
-    # Present continuous is ambiguous in a way "I'll" is not, and this repo's prose is FULL of the
+    # ---- ...AND the STATIVE uses that must stay silent -------------------------------------------
+    # Present continuous is ambiguous in a way "I'll" is not, and this repo's prose is full of the
     # ambiguous half. Every one of these is silenced by the pipeline that was already there: the verb
     # simply is not on the concrete-action allowlist, or it is a hedge or a negation.
 
-    # DECLINING to act is the opposite of an unkept promise, and it is this repo's own reporting
+    # Declining to act is the opposite of an unkept promise, and it is this repo's own reporting
     # convention ("report ... rather than fix"). If this ever fires the guard is unusable.
     expect(
         "false-positive-declining-to-act",
@@ -776,7 +776,7 @@ def main() -> int:
         "a negation-family verb in the present continuous must not fire",
     )
 
-    # Narration of work the turn then does. This is the CORRECT shape and the commonest one -- the
+    # Narration of work the turn then does. This is the correct shape and the commonest one -- the
     # existing tool_after check must cover the new opener exactly as it covers "I'll".
     expect(
         "false-positive-present-continuous-then-executed",
@@ -799,7 +799,7 @@ def main() -> int:
     )
 
     # Ongoing background work described in the present continuous. Doubly covered, and the control
-    # below separates the two: "watch" is not an action verb, AND a live job the promise waits on
+    # below separates the two: "watch" is not an action verb, and a live job the promise waits on
     # covers it anyway.
     expect(
         "false-positive-present-continuous-watching-live-work",
@@ -830,7 +830,7 @@ def main() -> int:
         "the allowlist and the live job, not the tense, must be what silences the two above",
     )
 
-    # The halt QUOTES a clause back at the agent, so it must be the promise nearest where the turn
+    # The halt quotes a clause back at the agent, so it must be the promise nearest where the turn
     # stopped. Broadening the opener set makes an incidental early match likelier -- measured on a
     # real halted turn, where the quote moved from the closing sentence back to a table cell.
     expect(

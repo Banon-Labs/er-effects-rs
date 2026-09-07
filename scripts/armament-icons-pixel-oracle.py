@@ -4,19 +4,19 @@
 Two subcommands:
 
   locate  --vanilla V.png --locator L.png [--out box.json] [--viz viz.png]
-      Diff a LOCATOR capture (badge DLL forced to a guaranteed-visible icon) against a
-      VANILLA capture (badge DLL omitted). The connected changed-pixel regions are the
+      Diff a locator capture (badge DLL forced to a guaranteed-visible icon) against a
+      vanilla capture (badge DLL omitted). The connected changed-pixel regions are the
       drawn badges. Emits the bounding boxes (JSON) and a visualization with boxes drawn,
       so the crop rect for the highlighted tile can be confirmed.
 
   verdict --baseline V.png --candidate C.png --stage-box "x,y,w,h" [--threshold T]
-      RESOLUTION-INDEPENDENT: the crop is given in GFX STAGE coordinates (the ER menu stage is
-      fixed 1920x1080). Both images are mapped stage->pixels from their OWN actual dimensions
+      resolution-INDEPENDENT: the crop is given in GFX stage coordinates (the ER menu stage is
+      fixed 1920x1080). Both images are mapped stage->pixels from their own actual dimensions
       (uniform scale for 16:9; letterbox-fit + center offset otherwise), so the same stage-box
       works at any capture resolution. Crop both to that box and compare. Prints one line:
-        SUCCESS  -- candidate differs from the vanilla baseline beyond threshold (glyph present)
-        FAILURE  -- candidate ~matches vanilla (no glyph drawn)
-      and exits 0 (SUCCESS) / 1 (FAILURE). TIMEOUT is decided by the caller (menu never reached).
+        Success  -- candidate differs from the vanilla baseline beyond threshold (glyph present)
+        failure  -- candidate ~matches vanilla (no glyph drawn)
+      and exits 0 (success) / 1 (failure). Timeout is decided by the caller (menu never reached).
 
 The metric is the fraction of pixels whose max per-channel abs difference exceeds 24 (a
 per-pixel change), robust to minor compression/AA noise. Threshold default 0.02 (2% of the

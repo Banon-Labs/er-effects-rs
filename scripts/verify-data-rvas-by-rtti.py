@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Second-opinion the 1.16.2 -> 1.17 DATA map: RTTI identity, accessors, literals, code pointers.
+"""Second-opinion the 1.16.2 -> 1.17 data map: RTTI identity, accessors, literals, code pointers.
 
-WIRING -- ALREADY DONE, and deliberately not by adding a line. `scripts/check.sh` line 818 already
-runs `verify-data-rvas-by-rtti.py --selftest`, and the anchor audit below runs INSIDE that
-selftest: the tracked map must have zero DISAGREE, every verified row must survive two mutations,
+Wiring -- Already done, and deliberately not by adding a line. `scripts/check.sh` line 818 already
+runs `verify-data-rvas-by-rtti.py --selftest`, and the anchor audit below runs inside that
+selftest: the tracked map must have zero disagree, every verified row must survive two mutations,
 the frozen negative must stay unverified, and the unanchored set must match `UNANCHORED` exactly.
 So the enforcement landed without touching `check.sh`, which another agent has in flight.
 
 `--anchors` is the same audit in a human-readable form and is not needed by CI. `--occupancy` and
 `--population` are reporting modes.
 
-WHAT WAS UNAUDITED, AND WHY IT MATTERED
+What was UNAUDITED, and why it mattered
 ---------------------------------------
-Two separate audits of the 1.17 migration closed the CODE side -- 485 of 490 declared game
+Two separate audits of the 1.17 migration closed the code side -- 485 of 490 declared game
 addresses callable, 92 detour sites all detour-safe -- and both ended on the same open sentence:
-DATA addresses are checked by nothing. `getFunctionByAddress` has no opinion about a global, and
+Data addresses are checked by nothing. `getFunctionByAddress` has no opinion about a global, and
 byte equality is worse than no opinion at all, because `.data` at rest is zeros in both builds and
 zeros match. That is how `FIRST_SECTION_RVA` (0x1000, a PE section-boundary sanity bound, not an
 address of anything) earned an `IDENTICAL-WHOLE` verdict: the bytes there really are identical.
@@ -23,62 +23,62 @@ The cost of the hole is measured, not hypothetical. Four singleton globals read 
 2026-08-31; `GameDataMan`'s stale address returned `0x6e614d6e6f697463`, little-endian ASCII
 `"ctionMan"`, because 1.17 parks the RTTI name `.?AVNWSteamConnectionManager@DLNW3@@` there. Their
 deltas were +0x4060, +0x4070, +0x4070 and +0x4080 -- and across the whole tracked map there are
-FOURTEEN distinct deltas (seven in `.data` from +0x4010 to +0x4110, seven in `.rdata` from +0x3000
+fourteen distinct deltas (seven in `.data` from +0x4010 to +0x4110, seven in `.rdata` from +0x3000
 to +0x3160). A single constant is wrong on 46 of the 103 addresses even if you pick the modal one
 per section, so nothing carries a data address forward by arithmetic.
 
-THE FIVE ANCHORS, AND WHAT EACH ONE IS WORTH
+The five anchors, and what each one is worth
 ---------------------------------------------
-Every anchor below is content or evidence about the DESTINATION. None of them is "the bytes at the
+Every anchor below is content or evidence about the destination. None of them is "the bytes at the
 two addresses are equal", and none of them reads the data map for its answer -- the map is only
 what the answer is compared against.
 
   RTTI     A vtable's `[base-8]` CompleteObjectLocator names its class. A mangled name occurring
-           exactly once per image identifies its vtable outright (PROVEN); a repeated name falls
+           exactly once per image identifies its vtable outright (proven); a repeated name falls
            back to the ordinal (ORDINAL). Compiler metadata, no pairing, no pattern matching.
 
-  ACCESSOR The code that READS the global. Every rip-relative reference in 1.16.2 `.text` gets a
-           short window with its displacement blanked; a window that is unique in BOTH images
+  ACCESSOR The code that reads the global. Every rip-relative reference in 1.16.2 `.text` gets a
+           short window with its displacement blanked; a window that is unique in both images
            identifies the same instruction on 1.17, and its displacement says where the global
            went. A neighbourhood that was edited simply stops matching and casts no vote, so an
            edit costs evidence instead of producing a wrong answer. Two agreeing accessors are a
-           fact; ONE is a guess, and is reported as ACCESSOR-WEAK rather than counted.
+           fact; One is a guess, and is reported as ACCESSOR-weak rather than counted.
 
-           This is NOT the data map's own method. That one carries the referencing FUNCTION across
+           This is not the data map's own method. That one carries the referencing function across
            with the function map and re-reads the same instruction, so every row it produces
            depends on the function map being right about that function. This depends on the
            function map not at all.
 
-  LITERAL  For a string, the STRING -- the actual bytes at the target, NUL-terminated, ASCII or
-           UTF-16. Unique per image is PROVEN; repeated falls back to the ordinal. `TextFadeOut`,
+  Literal  For a string, the string -- the actual bytes at the target, NUL-terminated, ASCII or
+           UTF-16. Unique per image is proven; repeated falls back to the ordinal. `TextFadeOut`,
            `PressStart`, `TosTitle/Text` and `m60_42_34_00` occur exactly once in each build.
 
   FNPTR    For a table of code pointers, the pointers. Each slot's 1.16.2 target is looked up in
-           the FUNCTION ledger and the paired 1.17 function must be the qword at the same slot of
+           the function ledger and the paired 1.17 function must be the qword at the same slot of
            the destination. Two agreeing slots required, for the same reason as accessors.
 
-  STRING-  LITERAL, one dereference out. For a datum whose qwords are `wchar_t*`, the strings
-  PTR      those pointers REACH -- required to be the same literal, occurring exactly once in each
+  String-  literal, one dereference out. For a datum whose qwords are `wchar_t*`, the strings
+  PTR      those pointers reach -- required to be the same literal, occurring exactly once in each
            image, at the source's pointee and the candidate's, with no slot disagreeing and the
            identical test failing at every +-0x8/+-0x10 neighbour. Added 2026-08-31, and it moved
            two of the four thinnest rows in the ledger out of UNANCHORED:
            `STEAM_ID_ACCESSOR_CALL_SLOT` (9 slots, "Resolution-WindowScreenWidth" and eight more,
-           though see `string_ptr_identity` on WHOSE slots those are) and
+           though see `string_ptr_identity` on whose slots those are) and
            `PROFILE_OFFSCREEN_SIZE_TABLE` (3, "SYSTEX_Menu_Profile01"). Both had been carried by a
            bracket plus a single agreeing reference; neither is a vtable, neither has
            unique-enough accessors, and their pointers are data rather than code, so all four
            earlier anchors passed over them in silence.
 
-WHAT IS DELIBERATELY *NOT* AN ANCHOR
+What is deliberately *not* an anchor
 -------------------------------------
 Byte equality, a constant delta, and "the address is readable". All three pass on `FIRST_SECTION_RVA`
 and on every zeroed `.data` slot in the image. The selftest plants `0x1000 -> 0x1000` as a frozen
-negative and requires this tool to answer NO-ANCHOR: an over-broad matcher that verifies whatever it
+negative and requires this tool to answer no-ANCHOR: an over-broad matcher that verifies whatever it
 is handed goes red there even though the row is, in the byte sense, perfectly "verified".
 
-WHY THIS SECOND OPINION IS NOT A REPEAT
+Why this second opinion is not a repeat
 ---------------------------------------
-`map-data-rvas-1162-to-1170.py` carries a datum by the CODE that references it: it maps the
+`map-data-rvas-1162-to-1170.py` carries a datum by the code that references it: it maps the
 referencing function onto 1.17 and re-reads the displacement. Every row it produces therefore
 depends on the function map being right about that one function. RTTI depends on none of that.
 A vtable's `[base-8]` qword points at its CompleteObjectLocator, whose TypeDescriptor holds the
@@ -88,22 +88,22 @@ with no pairing, no signature matching and no shared input with the voting metho
 So when both agree, two methods with disjoint failure modes agree. When they disagree, the
 reference vote is wrong or the row is not a vtable, and either way it is worth a stop.
 
-WHAT COUNTS AS PROOF, AND WHAT ONLY COUNTS AS CORROBORATION
+What counts as proof, and what only counts as CORROBORATION
 -----------------------------------------------------------
-A mangled name that occurs EXACTLY ONCE per image identifies its vtable outright: PROVEN.
+A mangled name that occurs exactly once per image identifies its vtable outright: Proven.
 ELDEN RING has plenty of names that occur several times (base subobject vtables, and 5,616 of
 the 10,202 are `std::_Func_impl` / lambda functors whose names repeat). For those the name alone
 is not an identity, so the check falls back to the ORDINAL: if the source is the k-th vtable
 carrying that name in 1.16.2, the destination must be the k-th carrying it in 1.17. Both images
 hold the same 10,202 vtables in the same relative order, so the ordinal is meaningful -- but it
-is an ordering argument, not a unique key, so it is reported as ORDINAL rather than PROVEN.
+is an ordering argument, not a unique key, so it is reported as ORDINAL rather than proven.
 
 A row whose source is not a vtable at all (a plain global, a table of pointers) is N/A here.
 That is most of the map, and it is why this tool does not replace the voting one.
 
-USAGE
+Usage
   python3 scripts/verify-data-rvas-by-rtti.py                 # check the tracked data map
-  python3 scripts/verify-data-rvas-by-rtti.py --anchors       # ALL rows, all five anchors (gate)
+  python3 scripts/verify-data-rvas-by-rtti.py --anchors       # all rows, all five anchors (gate)
   python3 scripts/verify-data-rvas-by-rtti.py --occupancy     # what sits at each 1.17 address
   python3 scripts/verify-data-rvas-by-rtti.py --population    # declared data addresses with no row
   python3 scripts/verify-data-rvas-by-rtti.py --deltas        # + whole-.rdata delta census
@@ -118,15 +118,15 @@ import struct
 import subprocess
 import sys
 
-# MSVC stamps each translation unit's ANONYMOUS NAMESPACE with a per-build hash, so
+# MSVC stamps each translation unit's anonymous NAMESPACE with a per-build hash, so
 # `?A0x7c8d539b` in 1.16.2 is `?A0x8fca6706` in 1.17 for the same namespace. Comparing the
-# raw name therefore fails on a class that is otherwise byte-identical, and it fails SILENTLY
+# raw name therefore fails on a class that is otherwise byte-identical, and it fails silently
 # as a "no counterpart" rather than as a mismatch. Measured on the tracked map:
 # `MenuJobLoadContextVtable` (0x2ac71e0; renamed 2026-08-30 from `SELECTOR_STEP_VTABLE_RVA` --
 # this RTTI class name was correct all along, it was just filed under the old symbol) is
 # `MenuJobWithContext<LoadJobContext@?A0x7c8d539b,
 # lambda_1af212c9...>` in 1.16.2 and the identical name with `?A0x8fca6706` in 1.17 -- the
-# LAMBDA hash is stable across builds, only the namespace tag moves. Nothing else about the
+# lambda hash is stable across builds, only the namespace tag moves. Nothing else about the
 # name is touched; two genuinely different classes still differ.
 ANON_NAMESPACE = re.compile(r"\?A0x[0-9a-f]{8}")
 
@@ -253,7 +253,7 @@ def delta_census(old_cm, new_cm):
 
 
 def bracket(rows, old_cm, new_cm, window=0x20000):
-    """Bracket every NON-vtable row with the nearest RTTI vtables on each side.
+    """Bracket every non-vtable row with the nearest RTTI vtables on each side.
 
     The data map's own `bracket` corroboration uses the data map's own anchors, so it cannot be a
     second opinion about them. RTTI anchors are a different population entirely -- 10,202 vtables
@@ -261,9 +261,9 @@ def bracket(rows, old_cm, new_cm, window=0x20000):
     are dense enough through `.rdata` to put a real fence around a string or a pointer table that
     only one instruction reaches.
 
-    A row AGREES when its delta equals a delta observed on BOTH sides of it. It is INSIDE when
+    A row agrees when its delta equals a delta observed on both sides of it. It is inside when
     the delta merely falls within the neighbours' range (`.rdata` moves as a fine staircase, so
-    landing between two different neighbour deltas is common and is not proof). It DISAGREES when
+    landing between two different neighbour deltas is common and is not proof). It disagrees when
     the delta is outside the bracket entirely -- that is the shape of a row that jumped a
     discontinuity.
     """
@@ -308,9 +308,9 @@ def bracket(rows, old_cm, new_cm, window=0x20000):
 # ANCHOR: the code that reads the global
 # =============================================================================================
 
-# The FIRST `.text` is the real code. `eldenring-deobf-1.17.bin` declares TWO sections called
+# The first `.text` is the real code. `eldenring-deobf-1.17.bin` declares two sections called
 # `.text` -- the second, at RVA 0x4c13000, is 18 MB of tail that no reference in this workspace
-# points into, and scanning it instead of the first returns a clean-looking ZERO rather than an
+# points into, and scanning it instead of the first returns a clean-looking zero rather than an
 # error. So the section table is ENUMERATED and the first match taken, never assumed.
 def first_text(image):
     """`(rva, size)` of the first section named `.text`, read from the image's own headers."""
@@ -333,9 +333,9 @@ def first_text(image):
     raise ValueError("no .text section in the image header")
 
 
-# Rip-relative memory operands, grouped so that ONE regex covers a whole family. A rip-relative
+# Rip-relative memory operands, grouped so that one regex covers a whole family. A rip-relative
 # operand is `mod=00, rm=101` in the modrm byte, which is exactly the eight values below, and the
-# only thing that varies between opcodes is how many IMMEDIATE bytes follow the displacement.
+# only thing that varies between opcodes is how many immediate bytes follow the displacement.
 #
 # The optional REX prefix is inside the pattern rather than enumerated, so `mov eax,[rip+d]` and
 # `mov r12,[rip+d]` are the same family and the displacement position is read from the match
@@ -343,8 +343,8 @@ def first_text(image):
 # this scan reported `refs=0` for all 111 rows: every displacement offset was off by one, and an
 # off-by-one produces a confident empty answer rather than an error.
 #
-# TAIL IS NOT COSMETIC. The displacement is relative to the END of the instruction, so a trailing
-# immediate shifts the arithmetic by its own width -- and an immediate is the NORMAL encoding for
+# Tail is not cosmetic. The displacement is relative to the end of the instruction, so a trailing
+# immediate shifts the arithmetic by its own width -- and an immediate is the normal encoding for
 # a single-byte flag global (`mov byte [rip+d],1` / `cmp byte [rip+d],0`). Scanning only the
 # no-immediate group finds every read of a pointer global and misses every write to a flag.
 _MODRM = b"[\x05\x0d\x15\x1d\x25\x2d\x35\x3d]"
@@ -365,7 +365,7 @@ OPERAND_GROUPS = (
     ("imm8", re.compile(_REX + b"?[\xc6\x80\x83\xf6]" + _MODRM, re.S), 1),
     # ...with an imm32.
     ("imm32", re.compile(_REX + b"?[\xc7\x81\xf7]" + _MODRM, re.S), 4),
-    # two-byte opcodes: movzx/movsx (how a byte flag is READ) and the SSE loads/stores.
+    # two-byte opcodes: movzx/movsx (how a byte flag is read) and the SSE loads/stores.
     (
         "0f",
         re.compile(
@@ -378,7 +378,7 @@ OPERAND_GROUPS = (
 )
 
 # Bytes of context kept around each reference. Measured: at 24 the shape is unique often enough to
-# carry 87 of the 111 rows and NEVER produced a split vote; dropping to 16 bought one extra row and
+# carry 87 of the 111 rows and never produced a split vote; dropping to 16 bought one extra row and
 # introduced sixteen split votes, several of them a single stray site against a 700-vote majority.
 # A shorter window is not a weaker claim that still works, it is a different claim, so it is out.
 ACCESSOR_WINDOW = 24
@@ -395,7 +395,7 @@ def reference_index(image):
     what makes the anchor safe: a shape occurring twice identifies nothing, and is dropped rather
     than allowed to vote.
 
-    Restricted to sites of the SAME family on purpose, and that loses nothing: a window starts at
+    Restricted to sites of the same family on purpose, and that loses nothing: a window starts at
     the instruction's first byte, so any occurrence of it anywhere in the image begins with that
     family's opcode bytes and is therefore a site the family's own scan already found.
     """
@@ -429,7 +429,7 @@ def accessor_votes(old, new, sources):
 
     Cached under `/tmp` keyed by both images' size and mtime, because the two scans cost about ten
     seconds and the selftest below runs the whole audit four times over. The cache holds only the
-    DERIVATION, which depends on the two images and the source address and on nothing else -- in
+    derivation, which depends on the two images and the source address and on nothing else -- in
     particular not on the map being checked, so a mutated map still gets an honest answer.
     """
     sources = sorted(set(sources))
@@ -477,7 +477,7 @@ def accessor_votes(old, new, sources):
             # surfacing rather than averaging away.
             out[src] = (None, 0, len(sites))
     try:
-        # MERGED, not replaced. Writing only the sources of THIS call would evict every other
+        # Merged, not replaced. Writing only the sources of this call would evict every other
         # source from a cache keyed by the images alone -- so a caller asking about one address
         # would silently make the next full run pay the ten seconds again, and the cache would
         # look present while never being usable.
@@ -559,7 +559,7 @@ def _ordinal_of(image, needle, rva):
 
 
 # =============================================================================================
-# ANCHOR: the strings a table POINTS AT
+# ANCHOR: the strings a table points at
 # =============================================================================================
 
 # Slots read out of a candidate table. Same window as the code-pointer anchor below, and for the
@@ -569,9 +569,9 @@ STRING_PTR_SLOTS = 12
 
 
 def string_ptr_identity(old, new, src, dst):
-    """Verdict from the strings the table's POINTERS reach, or `None` when it holds none.
+    """Verdict from the strings the table's pointers reach, or `None` when it holds none.
 
-    WHY A HOP. `literal_identity` above asks what is AT the address, which answers for the four
+    Why a hop. `literal_identity` above asks what is at the address, which answers for the four
     rows that are strings and for nothing else. A table of `wchar_t*` is one dereference away from
     the same evidence and was invisible to every anchor here: it is not a vtable (no RTTI), its
     accessors are not unique enough to vote, and its pointers are data rather than code so the
@@ -581,30 +581,30 @@ def string_ptr_identity(old, new, src, dst):
     `PROFILE_OFFSCREEN_SIZE_TABLE_RVA` are two of the four thinnest addresses in the ledger --
     carried by a bracket alone, with a single agreeing reference each -- and both sit in front of
     `wchar_t*` slots reaching strings that occur
-    EXACTLY ONCE per image: "Resolution-WindowScreenWidth" and "Resolution-WindowScreenHeight" for
+    exactly once per image: "Resolution-WindowScreenWidth" and "Resolution-WindowScreenHeight" for
     the first, "SYSTEX_Menu_Profile01" for the second, each at the source's pointee in 1.16.2 and
     at the candidate's pointee in 1.17. A name that occurs once per image is the same class of
     evidence the RTTI anchor rests on, and it owes nothing to a delta, to a neighbour, or to the
     reference that carried the row into the map.
 
-    The bar is deliberately strict, because ONE slot is enough to promote a row here and a wrong
+    The bar is deliberately strict, because one slot is enough to promote a row here and a wrong
     table would be promoted just as confidently as a right one:
-      * the slot's pointee must be a literal in BOTH images and the SAME literal;
+      * the slot's pointee must be a literal in both images and the same literal;
       * that literal must occur exactly once in each image -- an ordinal fallback is not offered,
         because a repeated string reached through a pointer says nothing about which table holds
         the pointer;
-      * no slot may disagree -- one mismatched slot returns DISAGREE, which is what catches a
+      * no slot may disagree -- one mismatched slot returns disagree, which is what catches a
         destination nudged by eight bytes: the slots shift by one and the strings stop lining up;
-      * and the identical test must FAIL at every +-0x8/+-0x10 neighbour, so the verdict identifies
+      * and the identical test must fail at every +-0x8/+-0x10 neighbour, so the verdict identifies
         an address rather than a neighbourhood.
 
-    THE WINDOW IS TWELVE QWORDS AND THE OBJECT MAY BE SHORTER, which is worth saying plainly, and
+    The window is twelve QWORDS and the object may be shorter, which is worth saying plainly, and
     on this row it is not a hypothetical: `STEAM_ID_ACCESSOR_CALL_SLOT_RVA` (renamed 2026-08-31
-    from `STEAM_INTERFACE_GUARD_RVA`) is ONE qword, an indirect-call slot with exactly one
+    from `STEAM_INTERFACE_GUARD_RVA`) is one qword, an indirect-call slot with exactly one
     reference in the image. The nine slots that carry it here are a graphics-settings key table --
     "Resolution-WindowScreenWidth" through "EffectsQuality" -- that begins at +0x10, after a
     `0x8000000a00000000` filler at +0x8, and belongs to a different object entirely. That does not
-    weaken the claim, because the claim being made is about the POSITION -- the 96 bytes at the
+    weaken the claim, because the claim being made is about the position -- the 96 bytes at the
     candidate hold pointers to the same nine unique strings, in the same order, as at the source --
     and the neighbour test above is what stops that from degenerating into "somewhere around here".
     """
@@ -613,10 +613,10 @@ def string_ptr_identity(old, new, src, dst):
         return "DISAGREE", mismatch
     if not agreed:
         return None
-    # DOES IT SELECT, OR DOES IT MERELY ACCEPT? The same question `fnptr_table_confirms` asks in
+    # Does it select, or does it merely accept? The same question `fnptr_table_confirms` asks in
     # the map generator, and the same answer: a test that also passes one slot either way has not
     # identified an address, it has identified a neighbourhood. Measured on all four rows this
-    # anchor has an opinion about, every offset from -0x40 to +0x40 comes back DISAGREE or
+    # anchor has an opinion about, every offset from -0x40 to +0x40 comes back disagree or
     # withheld and only the candidate itself passes.
     for step in (-0x10, -0x8, 0x8, 0x10):
         near = dst + step
@@ -681,7 +681,7 @@ _FUNCTION_PAIRS = {}
 
 
 def function_pairs():
-    """`{1.16.2 rva: 1.17 rva}` from the FUNCTION ledger -- a different artifact from the data map."""
+    """`{1.16.2 rva: 1.17 rva}` from the function ledger -- a different artifact from the data map."""
     if _FUNCTION_PAIRS:
         return _FUNCTION_PAIRS
     pairs = _FUNCTION_PAIRS
@@ -730,7 +730,7 @@ def fnptr_identity(old, new, src, dst, pairs, text_span):
 
 
 # =============================================================================================
-# ANCHOR: the sites that DISPATCH through a table's code-pointer slots
+# ANCHOR: the sites that dispatch through a table's code-pointer slots
 # =============================================================================================
 
 # Slots read out of a candidate table, and agreeing dispatch sites required. The window is the
@@ -743,8 +743,8 @@ MIN_CALLSITE_SITES = 2
 def callsite_identity(old, new, src, dst, votes, old_span, new_span):
     """Verdict from the call sites that dispatch through the table's slots, or `None`.
 
-    WHY `.pdata` ABSENCE IS NOT FUNCTION ABSENCE, and why that left a hole here. `fnptr_identity`
-    above pairs a table's code pointers through the FUNCTION ledger, which is built from `.pdata`.
+    Why `.pdata` absence is not function absence, and why that left a hole here. `fnptr_identity`
+    above pairs a table's code pointers through the function ledger, which is built from `.pdata`.
     `.pdata` declares only functions with unwind data: it is blind to leaves, and measurably so --
     it covers 235,848 entries against the 367,183 functions Ghidra's own analysis finds in 1.16.2
     (366,673 in 1.17). `MENU_PUMP_KICK_PTR_RVA` falls straight into that gap. Its two slots hold
@@ -754,44 +754,44 @@ def callsite_identity(old, new, src, dst, votes, old_span, new_span):
 
     Ghidra sees both. `getFunctionByAddress` answers `thunk_FUN_1458f4ac8` at `0x1409b3ff0` and
     `thunk_FUN_1405b2d8e` at `0x1409b3fe0` in 1.16.2, and a five-byte thunk at `0x1409b5240` and
-    `0x1409b5230` in 1.17; each has exactly ONE caller, and the callers are `FUN_1409b24e0` and
+    `0x1409b5230` in 1.17; each has exactly one caller, and the callers are `FUN_1409b24e0` and
     `FUN_1409b3730` -- a pair the function ledger already carries, both 2043 bytes, 28 callees,
-    4 callers. The two dispatch sites sit at the SAME body-relative offsets in each, `+0xdb` and
+    4 callers. The two dispatch sites sit at the same body-relative offsets in each, `+0xdb` and
     `+0x780`.
 
     But the thunk itself cannot be the evidence, and that is worth saying rather than glossing:
     `getXrefsTo` returns exactly two references to each of the four, the table slot and the
-    computed call THROUGH that slot. A thunk reachable only from the table has no identity apart
+    computed call through that slot. A thunk reachable only from the table has no identity apart
     from the table, so pairing it by its own content or its own callers would be reading the
     answer out of the question. Following its `jmp` does not help either -- the Arxan gadget chain
     behind it is regenerated per build (1.16.2 spills `r14` where 1.17 spills `rcx`, and ends on
     `xchg` where 1.17 ends on `push/pop`), so there is no byte or mnemonic comparison to make.
 
-    So this anchor reads the SITES instead, one per slot, with the accessor machinery:
-      * a slot counts only when BOTH images hold a first-`.text` address in it, which is what
+    So this anchor reads the sites instead, one per slot, with the accessor machinery:
+      * a slot counts only when both images hold a first-`.text` address in it, which is what
         makes it a code-pointer table rather than a neighbouring global that moved the same way.
         Bracketing is not an anchor in this file and this must not become one by accident, and the
-        gate is what stops it becoming one: WITHOUT it the same two-site rule fires on 54 of the
+        gate is what stops it becoming one: Without it the same two-site rule fires on 54 of the
         116 rows, with it on 8. The 46 it drops are brackets wearing this anchor's clothes --
         `DLUID_SINGLETON_RVA` would have been "corroborated" by the site reading its `+0x8`, which
         is `FD4_PAD_MANAGER_RVA`, a different global that happens to have moved the same distance;
       * that slot's rip-relative reference must have a displacement-blanked 24-byte window
-        occurring exactly ONCE in each image -- the accessor test, unchanged -- and its 1.17
+        occurring exactly once in each image -- the accessor test, unchanged -- and its 1.17
         displacement must land exactly on `dst + offset`;
-      * two such slots are required, and ONE disagreeing slot returns DISAGREE;
+      * two such slots are required, and one disagreeing slot returns disagree;
       * and the whole test must fail at every +-0x8/+-0x10 neighbour.
 
     What that buys over `ACCESSOR-WEAK` is the second instruction. `MENU_PUMP_KICK_PTR_RVA` has a
     single reference to its base, which is why the accessor anchor calls it a guess; the reference
-    to `+0x8` is a DIFFERENT instruction, 0x6a5 bytes away in the same function, identified by its
+    to `+0x8` is a different instruction, 0x6a5 bytes away in the same function, identified by its
     own unique window, and it lands eight bytes further along. Two independently identified
     instructions dispatching through `dst+0` and `dst+8` is a positional claim about the table
     that no single reference can make.
 
     Of the 8 rows it has an opinion about, 7 are vtables the RTTI anchor reaches first, and on all
-    7 it AGREES -- so the one row it actually promotes arrives with the rule already exercised
-    against seven independently-decided answers. Measured against the controls the STRING-PTR
-    precedent set: `dst+-0x8` returns DISAGREE, `dst+-0x10` and `+-0x18` return `None`, dst reverted
+    7 it agrees -- so the one row it actually promotes arrives with the rule already exercised
+    against seven independently-decided answers. Measured against the controls the string-PTR
+    precedent set: `dst+-0x8` returns disagree, `dst+-0x10` and `+-0x18` return `None`, dst reverted
     to the 1.16.2 address returns `None`, another row's address returns `None`, and the frozen
     negative returns `None`.
     """
@@ -874,7 +874,7 @@ def vote_sources(rows):
 
 
 def audit(rows, old, new, old_cm, new_cm):
-    """One verdict per row: the strongest anchor that applies, or NO-ANCHOR.
+    """One verdict per row: the strongest anchor that applies, or no-anchor.
 
     Order is deliberate. RTTI first because it is compiler metadata and involves no matching at
     all; accessors next because two agreeing sites is the strongest evidence available for a
@@ -927,39 +927,39 @@ def audit(rows, old, new, old_cm, new_cm):
     return results
 
 
-# The 19 rows this file's anchors do NOT reach, pinned by name so the set can only shrink.
+# The 19 rows this file's anchors do not reach, pinned by name so the set can only shrink.
 #
-# It is a list rather than a count so a row LEAVING it (someone found evidence) and a row ENTERING
+# It is a list rather than a count so a row leaving it (someone found evidence) and a row entering
 # it (someone lost evidence) are different diffs. The data map still carries every one of them on
 # its own method; what is recorded here is that the independent anchors above do not corroborate
 # them, which is a different and much weaker statement than "verified".
 #
 # Two shapes, and the distinction is the reason the set is not one bucket:
 #
-#   NO-ANCHOR (12) -- zeroed `.data` at rest in BOTH images, reached only from code 1.17 edited
+#   No-anchor (12) -- zeroed `.data` at rest in both images, reached only from code 1.17 edited
 #   around, so no window is unique on both sides. There is nothing to read and nothing to vote
 #   with. `FIRST_SECTION_RVA` is what pretending otherwise looks like.
 #
-#   ACCESSOR-WEAK (7) -- exactly ONE reference site survives the uniqueness test, and it agrees
+#   ACCESSOR-weak (7) -- exactly one reference site survives the uniqueness test, and it agrees
 #   with the map. That is corroboration, not proof: one reference inside a function that happens to
 #   have been edited is how a confident wrong address is produced, so it is counted with the
 #   unverified.
 #
 # `NAV_COST_TABLE_RVA` is the one to read before trying to shrink this set again, because it is
 # where every anchor above genuinely runs out rather than merely not applying. It is 0x400 bytes of
-# ZEROS in both images with no non-zero qword within +-0x200, so there is no content, no pointer
+# zeros in both images with no non-zero qword within +-0x200, so there is no content, no pointer
 # and no neighbour to read. Its three reference sites survive uniqueness in 1.16.2 and match
-# NOTHING in 1.17, and the reason is visible in the bytes: at 0x2ec3a2 the 24-byte window differs
+# nothing in 1.17, and the reason is visible in the bytes: at 0x2ec3a2 the 24-byte window differs
 # from its 1.17 counterpart at 0x2ec3b2 in exactly two places, both rip-relative displacements of
-# OTHER instructions in the window. Masking every operand in the window rather than only the one
+# other instructions in the window. Masking every operand in the window rather than only the one
 # being read -- the treatment `map-rvas-1162-to-1170.py` gives a function signature -- was measured
-# on it: it rescues ONE of the three sites and leaves the other two at nine-plus matches and zero
+# on it: it rescues one of the three sites and leaves the other two at nine-plus matches and zero
 # matches respectively, so the row still falls short of two and the change would have loosened the
-# anchor that carries 58 rows for nothing. So NAV_COST is unanchorable HERE by every method tried,
+# anchor that carries 58 rows for nothing. So NAV_COST is unanchorable here by every method tried,
 # not merely by the one; it is carried by the data map on a bracket and that is all it has.
 #
-# AN ENTRY IS A CONSTANT NAME, OR AN ADDRESS WHERE THERE IS NO NAME. Four rows in the data map are
-# addresses the workspace writes as BARE HEX LITERALS handed to `game_rva`, with no constant
+# An entry is a constant name, or an address where there is no name. Four rows in the data map are
+# addresses the workspace writes as bare HEX LITERALS handed to `game_rva`, with no constant
 # anywhere, so the map keys them `<file>:<line>` -- a string that changes every time somebody edits
 # a line above them. Pinning one of those by "name" would pin a line number into a gate and fail on
 # the next unrelated edit to the menu tracer. `pin_of` therefore uses the constant when the row has
@@ -969,10 +969,10 @@ UNANCHORED = {
     # `crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1248` -- the lazy
     # `CSEblFileManager` slot. ACCESSOR-WEAK: exactly one surviving reference and it agrees. The
     # data map carries it on a bracket (0x3d5b078 and 0x3d5b0f4, both +0x4060, 105 anchors in
-    # +-0x400) plus a shape count of 10 sites each side -- neither of which is an anchor THIS file
+    # +-0x400) plus a shape count of 10 sites each side -- neither of which is an anchor this file
     # computes, which is the whole point of listing it here.
     "0x3d5b088",
-    # `BUFFER_RVA_1162` (added 2026-09-05, `er-npc-possess`'s packet15_receive layout). NO-ANCHOR:
+    # `BUFFER_RVA_1162` (added 2026-09-05, `er-npc-possess`'s packet15_receive layout). No-ANCHOR:
     # zeroed `.data` qword in both images, all 12 rip-relative reference sites unique in 1.16.2
     # `.text` but none of their 24-byte windows recur anywhere in 1.17 -- the referencing code was
     # edited enough that no accessor casts a vote, and the destination holds no string/pointer for
@@ -983,7 +983,7 @@ UNANCHORED = {
     "FAKE_LOADING_SCREEN_SINGLETON_RVA",
     "FD4_IO_POOL_RVA",
     # `GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA` (renamed from the `_RVA` spelling
-    # 2026-09-05; same address throughout). NO-ANCHOR for the same reason as `BUFFER_RVA_1162`: a
+    # 2026-09-05; same address throughout). No-anchor for the same reason as `BUFFER_RVA_1162`: a
     # zeroed `.data` byte in both images, both 1.16.2 reference-window shapes absent from 1.17.
     "GAME_DEBUG_ENABLE_CONTROL_ON_DISACTIVE_WINDOW_DATA_RVA",
     "INNER_TITLE_STATE_TABLE_RVA",
@@ -1023,7 +1023,7 @@ def run_anchors(rows, old, new, old_cm, new_cm, quiet=False):
 
 
 def occupancy(old, new, rows):
-    """What sits at each 1.17 destination, and what a STALE 1.16.2 read would have returned.
+    """What sits at each 1.17 destination, and what a stale 1.16.2 read would have returned.
 
     The point of the second column is the `"ctionMan"` finding: the failure was only recognised
     because someone DECODED the bytes at the stale address instead of checking they were readable.
@@ -1071,10 +1071,10 @@ def sections(image):
 def test_scopes(text):
     """Line ranges under `#[cfg(test)]` / `#[test]`, from brace depth in comment-blanked source.
 
-    Needed because half of what lands in `.rdata` by value is a UNIT TEST -- a deliberately wrong
+    Needed because half of what lands in `.rdata` by value is a unit test -- a deliberately wrong
     address asserted to be rejected, a `PinListGeometry` fixture, a catalogue of item ids that
     happen to fall in the section's range. Reporting those beside a live defect buries it, and
-    filtering them by file name would miss the `#[cfg(test)] mod tests` that sits in the MIDDLE of
+    filtering them by file name would miss the `#[cfg(test)] mod tests` that sits in the middle of
     `save_picker_menu.rs` with production code after it.
     """
     lines = text.split("\n")
@@ -1098,16 +1098,16 @@ def test_scopes(text):
 def population(old, new, rows):
     """Declared addresses that land in `.rdata`/`.data` and hold no row in the data map.
 
-    Resolved through `rva_symbols`, which evaluates VALUES rather than matching spellings. That is
+    Resolved through `rva_symbols`, which evaluates values rather than matching spellings. That is
     the whole point: the data map's own refresh harvests `const *RVA*: usize = 0x..;` and nothing
     else, so an address written as a bare literal at its use site is invisible to it -- and four of
     them are, all read through `game_rva` in the menu tracer, all with no row.
 
-    Each hit is annotated with what the IMAGE says about it, because that is the only thing that
+    Each hit is annotated with what the image says about it, because that is the only thing that
     separates a missing address from a number:
 
       * whether any code in the game image references it rip-relatively, and where those references
-        say it moved to on 1.17. A bound like `MODULE_SPAN_FALLBACK` (0x3000000) has ZERO
+        say it moved to on 1.17. A bound like `MODULE_SPAN_FALLBACK` (0x3000000) has zero
         references -- nothing in `eldenring.exe` addresses it, which is the proof it is arithmetic
         and not an address, arrived at without looking at its name;
       * whether every site that mentions it is inside a `#[cfg(test)]` scope.
@@ -1148,7 +1148,7 @@ def population(old, new, rows):
 
 
 def selftest(old_cm, new_cm):
-    """Positive control AND a regressed control, so a green here cannot be vacuous."""
+    """Positive control and a regressed control, so a green here cannot be vacuous."""
     rows = read_rows(DATA_MAP)
     tally, results = run(rows, old_cm, new_cm, quiet=True)
     checked = tally["PROVEN"] + tally["ORDINAL"]
@@ -1161,7 +1161,7 @@ def selftest(old_cm, new_cm):
         return 1
     print(f"  positive control: {checked} real rows verified clean")
 
-    # NEGATIVE CONTROL. Regress every checked row's destination onto the NEXT vtable in 1.17
+    # Negative control. Regress every checked row's destination onto the next vtable in 1.17
     # and require the check to catch all of them. A matcher that has quietly stopped matching
     # -- an empty name table, a botched ordinal -- passes the green above and fails here.
     new_sorted = sorted(new_cm)
@@ -1188,10 +1188,10 @@ def selftest(old_cm, new_cm):
 # the address of anything, it is 0x1000 in both builds because every PE puts its first section
 # there, and it has already been through this migration's machinery once: it entered
 # `rva-map-1162-to-1170.needed.tsv` as `0x1000 -> 0x1000`, scored `IDENTICAL-WHOLE` on the byte
-# comparison -- correctly, the bytes ARE identical -- and reached the detour-safe table.
+# comparison -- correctly, the bytes are identical -- and reached the detour-safe table.
 #
 # So it is the frozen negative here: a row that byte equality "verifies" and that this file must
-# answer NO-ANCHOR about, because no accessor reads it, it holds no string and it is not a table.
+# answer no-anchor about, because no accessor reads it, it holds no string and it is not a table.
 # A matcher that has widened until it approves whatever it is handed goes red on this row while
 # staying green on all 111 real ones.
 FROZEN_NEGATIVE = 0x1000
@@ -1203,22 +1203,22 @@ def anchor_selftest(old_cm, new_cm):
 
     A green audit means nothing on its own: the rows it passes are the rows it was written from.
     So the tracked map is mutated three ways and the audit is required to catch each. Every mutant
-    is applied to the ROWS IN MEMORY -- nothing is written -- and each is a shape a real regression
+    is applied to the rows in memory -- nothing is written -- and each is a shape a real regression
     takes:
 
-      REVERTED  someone puts a 1.16.2 address back in the destination column, which is exactly what
+      Reverted  someone puts a 1.16.2 address back in the destination column, which is exactly what
                 a bad merge or a half-finished repoint leaves behind;
       NUDGED    the destination is off by eight bytes -- the neighbouring slot, the next vtable
                 entry, one qword into the string. This is the mutant that separates a real anchor
                 from "the address is readable": every wrong-but-plausible address is readable.
-      PLANTED   the frozen negative, which must NOT come back verified.
+      Planted   the frozen negative, which must not come back verified.
     """
     old = open(OLD_IMAGE, "rb").read()
     new = open(NEW_IMAGE, "rb").read()
     rows = read_rows(DATA_MAP)
-    # PRIMED IN ONE PASS, including the frozen negative. The two whole-image scans behind
+    # Primed in one pass, including the frozen negative. The two whole-image scans behind
     # `accessor_votes` cost ten seconds and are only paid when a requested source is missing from
-    # the cache -- so asking for the frozen negative later, on its own, paid for them a SECOND
+    # the cache -- so asking for the frozen negative later, on its own, paid for them a second
     # time and took this selftest from 13s to 25s, which is the vacuity auditor's whole budget.
     accessor_votes(
         old,
@@ -1245,7 +1245,7 @@ def anchor_selftest(old_cm, new_cm):
     }
     print(f"  positive control: {len(verified)} rows verified, {len(pinned)} unanchored")
 
-    # THE MUTANTS RUN BEFORE THE PIN CHECK, deliberately. Both catch a widened matcher, but only
+    # The mutants run before the pin check, deliberately. Both catch a widened matcher, but only
     # the mutants catch it for the right reason: the pin fires because a name moved between two
     # lists, which is bookkeeping, while a surviving mutant is the matcher failing to notice a
     # wrong address. Running the weaker check first would let it return early and leave the strong
@@ -1282,7 +1282,7 @@ def anchor_selftest(old_cm, new_cm):
         return 1
     print(f"  frozen negative: 0x{FROZEN_NEGATIVE:x} answered {code}, as it must")
 
-    # A CONSTANT DELTA IS NOT AN ANCHOR, measured on the map rather than argued. Per-section modal
+    # A constant delta is not an anchor, measured on the map rather than argued. Per-section modal
     # deltas are the best a constant can do, and the count below is how many addresses it still
     # gets wrong -- which is why the anchors above read evidence instead of doing arithmetic.
     per_section = collections.defaultdict(collections.Counter)
@@ -1307,11 +1307,11 @@ def anchor_selftest(old_cm, new_cm):
 
 
 def prove_selftest_catches_regression(old_cm, new_cm):
-    """Break the matcher on purpose and require --selftest to FAIL.
+    """Break the matcher on purpose and require --selftest to fail.
 
     A green selftest only means something if a broken instrument would go red. This
     monkey-patches `judge` into a matcher that waves every vtable row through, re-runs the
-    WHOLE selftest, and fails if that still passes. Eight instruments in this repo were caught
+    whole selftest, and fails if that still passes. Eight instruments in this repo were caught
     reporting false greens on 2026-08-30, several because a filter matched nothing and an
     assertion then passed over the empty set; this is the check that would have caught them.
     """
@@ -1331,7 +1331,7 @@ def prove_selftest_catches_regression(old_cm, new_cm):
         return 1
     print("regression proof OK: a matcher that always agrees fails the selftest")
 
-    # SECOND BLIND, for the anchor layer. The one above breaks `judge`, which is the RTTI half, and
+    # Second blind, for the anchor layer. The one above breaks `judge`, which is the RTTI half, and
     # a green there says nothing about the accessor / literal / code-pointer anchors -- those decide
     # 60 of the 92 verified rows and are exactly the part that had no audit before. So the whole
     # anchor layer is replaced by one that approves every row it is handed, and the selftest must
@@ -1389,7 +1389,7 @@ def main():
     args = ap.parse_args()
 
     # The two de-Arxan'd images are gitignored (copyrighted), so a fresh checkout and CI simply do
-    # not have them. SKIP at exit 0 rather than crash: a gate that cannot run must not be
+    # not have them. Skip at exit 0 rather than crash: a gate that cannot run must not be
     # indistinguishable from a gate that ran and failed.
     for path in (args.old, args.new, args.map):
         if not os.path.isfile(path):
@@ -1436,10 +1436,10 @@ def main():
         if args.population:
             print("\ndeclared .rdata/.data addresses with no row in the map:")
             live = 0
-            # An address that is some row's 1.17 DESTINATION is not a missing row, it is a
+            # An address that is some row's 1.17 destination is not a missing row, it is a
             # deliberate 1.17 spelling -- `er-quickload/build.rs` and `er-save-suppress/build.rs`
             # both name `GameMan` at 0x143d6d988 because the constants they generate are compared
-            # against the bytes of the RUNNING game. Saying "nothing references it" about those
+            # against the bytes of the running game. Saying "nothing references it" about those
             # would be true of the 1.16.2 image and useless.
             destinations = {dst: const for _, dst, const, _ in rows}
             for rva, (sites, (target, agreeing, total)) in sorted(population(old, new, rows).items()):

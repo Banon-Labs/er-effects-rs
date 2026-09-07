@@ -1,59 +1,59 @@
 #!/usr/bin/env python3
 """Refuse a 1.16.2 -> 1.17 ledger that declares the same source address twice.
 
-WHAT THIS CATCHES, AND WHY NOTHING ELSE DID
+What this catches, and why nothing else did
 -------------------------------------------
 `er-game-base/build.rs` reads four address ledgers, concatenates them, and finishes with
 
     rows.sort_unstable();
     rows.dedup_by_key(|(old, _)| *old);
 
-`sort_unstable` orders by the WHOLE tuple, so among rows sharing a source the surviving one is the
-one with the numerically SMALLEST destination. That is not a decision anybody made; it is what
+`sort_unstable` orders by the whole tuple, so among rows sharing a source the surviving one is the
+one with the numerically smallest destination. That is not a decision anybody made; it is what
 `dedup_by_key` does with input it was never promised was unique. Two duplicated sources were sitting
 in the curated ledger on 2026-08-30 -- `0x1408c47c0` (lines 156 and 267) and `0x1409b72b0` (lines 29
-and 76). Both pairs happened to AGREE on the destination, so the emitted maps were correct; had one
+and 76). Both pairs happened to agree on the destination, so the emitted maps were correct; had one
 pair disagreed, the map would have silently taken the lower address and no gate in the tree would
 have said a word.
 
-Nothing gated this. `check-rva-alias-drift.py` gates Rust DECLARATIONS, not ledger rows.
+Nothing gated this. `check-rva-alias-drift.py` gates Rust declarations, not ledger rows.
 `check-1170-translation-collisions.py` gates a destination that is also somebody else's source --
 a different defect. `verify-rva-map-1170.py` verifies a pair; it does not ask whether the pair was
-written down twice. A duplicate DECLARATION had already cost an agent a full session that same day,
+written down twice. A duplicate declaration had already cost an agent a full session that same day,
 which is why this is a gate and not a note.
 
-FOUR RULES, AND THE ONE THAT MUST NOT BE WIDENED
+Four rules, and the one that must not be widened
 ------------------------------------------------
-  R1  CONFLICT              one source, two DIFFERENT destinations, inside one ledger.
-  R2  CROSS-LEDGER CONFLICT one source, different destinations in two different ledgers. The CALL
-                            map and the DETOUR map are assembled from different subsets, so a
+  R1  conflict              one source, two different destinations, inside one ledger.
+  R2  cross-ledger conflict one source, different destinations in two different ledgers. The call
+                            map and the detour map are assembled from different subsets, so a
                             disagreement here can route a call to A and a five-byte MinHook patch
                             to B for the same address.
-  R3  REPEAT DECLARATION    one source on more than one row of a CURATED ledger, EVEN IN AGREEMENT.
-  R4  DUPLICATE LINE        a byte-identical row twice, in any ledger. Needs no column semantics,
+  R3  repeat declaration    one source on more than one row of a curated ledger, even in agreement.
+  R4  duplicate line        a byte-identical row twice, in any ledger. Needs no column semantics,
                             so it cannot be defeated by a column moving.
 
-R3 IS DELIBERATELY NOT APPLIED TO A GENERATED LEDGER, and widening it would make this gate red on
-arrival for a reason that is not a defect. `select-needed-1170-rows.py` emits ONE ROW PER DECLARING
+R3 is deliberately not applied to a generated ledger, and widening it would make this gate red on
+arrival for a reason that is not a defect. `select-needed-1170-rows.py` emits one row per declaring
 NAME: an address the workspace names under four spellings gets four rows, identical but for the
 label column. Measured 2026-08-30, before any edit: 39 such sources in `needed.tsv`, 39 in
-`needed-verified.tsv`, 7 in `data.tsv` -- 85 legitimate repeats. In the CURATED ledger the third
-column is a DERIVATION, not a name, so a second row there is redundancy, and redundancy is where
+`needed-verified.tsv`, 7 in `data.tsv` -- 85 legitimate repeats. In the curated ledger the third
+column is a derivation, not a name, so a second row there is redundancy, and redundancy is where
 drift hides: the two `0x1408c47c0` rows disagreed about whether its `.pdata` record is a chained
-continuation (it is a ROOT; `0x8c47c6` chains TO it), and a reader had no way to know which line
+continuation (it is a root; `0x8c47c6` chains to it), and a reader had no way to know which line
 was current.
 
-WHICH LEDGERS, AND WHAT HAPPENS TO ONE THIS FILE HAS NEVER HEARD OF
+Which LEDGERS, and what happens to one this file has never heard of
 ------------------------------------------------------------------
-The ledger PATHS are parsed out of `crates/er-game-base/build.rs` at run time rather than
-transcribed, so a fifth ledger appearing there is seen immediately. Whether a ledger is CURATED or
-GENERATED cannot be parsed -- and must not be guessed. Header sniffing looks like it would work and
+The ledger paths are parsed out of `crates/er-game-base/build.rs` at run time rather than
+transcribed, so a fifth ledger appearing there is seen immediately. Whether a ledger is curated or
+generated cannot be parsed -- and must not be guessed. Header sniffing looks like it would work and
 does not: `needed-verified.tsv`'s header contains the words "the curated ledger" inside a sentence
-saying it is NOT one. So the classification is an explicit table below, and a ledger constant found
-in `build.rs` that this table does not classify STOPS THE RUN (exit 2) instead of being skipped. A
+saying it is not one. So the classification is an explicit table below, and a ledger constant found
+in `build.rs` that this table does not classify stops the run (exit 2) instead of being skipped. A
 partial view reporting zero duplicates is this defect class wearing a green tick.
 
-USAGE
+Usage
     python3 scripts/check-no-duplicate-ledger-rows.py             # the gate
     python3 scripts/check-no-duplicate-ledger-rows.py --rows      # also list every legitimate repeat
     python3 scripts/check-no-duplicate-ledger-rows.py --selftest  # positive controls, on real data
@@ -75,7 +75,7 @@ BASE = 0x140000000
 
 # How a ledger is allowed to repeat a source address.
 CURATED = "curated"  # one row per source, full stop
-GENERATED = "generated"  # one row per DECLARING NAME, so repeats are expected
+GENERATED = "generated"  # one row per declaring name, so repeats are expected
 SINGLE_COLUMN = "single-column"  # `quarantined()` reads column 0 only; a repeat is inert
 
 # Keyed on BASENAME, because build.rs spells the paths relative to its own crate dir.
@@ -193,7 +193,7 @@ def check_ledgers(ledgers: list[tuple[str, str, str]]) -> tuple[list[str], dict]
             destinations = {row.destination for row in group}
             by_source_globally[source][const_name] = destinations
             if len(destinations) > 1:
-                # R1 -- the dangerous one. build.rs sorts and dedups by source, so the SMALLEST
+                # R1 -- the dangerous one. build.rs sorts and dedups by source, so the smallest
                 # destination wins by accident and the other row vanishes with no diagnostic.
                 lowest = min(destinations)
                 findings.append(
@@ -226,7 +226,7 @@ def check_ledgers(ledgers: list[tuple[str, str, str]]) -> tuple[list[str], dict]
                     )
 
     stats["sources"] = len(by_source_globally)
-    # R2 -- across ledgers. The CALL map and the DETOUR map are built from different subsets, so a
+    # R2 -- across ledgers. The call map and the detour map are built from different subsets, so a
     # disagreement between two files can send a call to one address and MinHook's patch to another.
     for source, per_ledger in sorted(by_source_globally.items()):
         everywhere = set().union(*per_ledger.values())
@@ -243,10 +243,10 @@ def check_ledgers(ledgers: list[tuple[str, str, str]]) -> tuple[list[str], dict]
 
 
 # --------------------------------------------------------------------------------------------
-# Selftest. Every control below runs the REAL `check_ledgers` over a COPY of the REAL tracked
+# Selftest. Every control below runs the real `check_ledgers` over a copy of the real tracked
 # ledgers, so a rule that stopped matching the files as they are actually written fails here.
 #
-# WHY A COPY AND NOT THE TRACKED FILE ITSELF. Planting into the tracked file and restoring it is
+# Why a copy and not the tracked file itself. Planting into the tracked file and restoring it is
 # the stronger proof and was rejected on purpose: roughly a dozen agents are editing these exact
 # ledgers concurrently, and a plant/restore pair that loses the race overwrites somebody's row. The
 # copy carries the real file's real bytes, so the control is over real data either way; what it
@@ -304,7 +304,7 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         copies = _selftest_copy(tmp, ledgers)
 
-        # NEGATIVE CONTROL, and it runs first: the tree as it stands must be green. A gate that
+        # Negative control, and it runs first: the tree as it stands must be green. A gate that
         # cannot be green is deleted rather than obeyed.
         baseline, stats = check_ledgers(copies)
         if baseline:
@@ -332,7 +332,7 @@ def selftest() -> int:
         victim = curated_rows[0]
         generated_victim = generated_rows[0]
 
-        # R3 POSITIVE CONTROL -- the exact defect found on 2026-08-30: a real curated row, repeated
+        # R3 positive control -- the exact defect found on 2026-08-30: a real curated row, repeated
         # verbatim except for its derivation prose, agreeing on the destination.
         repeat = victim.text.split("\t")
         repeat[5 if len(repeat) > 5 else len(repeat) - 1] = "planted repeat declaration"
@@ -347,7 +347,7 @@ def selftest() -> int:
         if check_ledgers(copies)[0]:
             failures.append("R3: removing the plant did not return the gate to green")
 
-        # R1 POSITIVE CONTROL -- same source, different destination. This is the one build.rs
+        # R1 positive control -- same source, different destination. This is the one build.rs
         # resolves by accident.
         conflicting = victim.text.split("\t")
         conflicting[1] = f"0x{victim.destination + 0x1000:x}"
@@ -359,7 +359,7 @@ def selftest() -> int:
         if check_ledgers(copies)[0]:
             failures.append("R1: removing the plant did not return the gate to green")
 
-        # R1 IN A GENERATED LEDGER TOO -- R3's exemption must not exempt a conflict as well.
+        # R1 in a generated ledger too -- R3's exemption must not exempt a conflict as well.
         conflicting = generated_victim.text.split("\t")
         conflicting[1] = f"0x{generated_victim.destination + 0x1000:x}"
         _append(generated[1], "\t".join(conflicting))
@@ -371,8 +371,8 @@ def selftest() -> int:
             )
         _drop_last_line(generated[1])
 
-        # R3 FALSE-POSITIVE CONTROL -- the reason R3 stops at curated ledgers. A second row for an
-        # existing source under a DIFFERENT declaring name is what the generator emits by design;
+        # R3 false-positive control -- the reason R3 stops at curated ledgers. A second row for an
+        # existing source under a different declaring name is what the generator emits by design;
         # flagging it would make the gate red on 85 rows that are not defects.
         second_name = generated_victim.text.split("\t")
         second_name[-1] = "PLANTED_SECOND_NAME_RVA"
@@ -385,7 +385,7 @@ def selftest() -> int:
             )
         _drop_last_line(generated[1])
 
-        # R4 POSITIVE CONTROL -- a byte-identical repeat, which no column semantics are needed to
+        # R4 positive control -- a byte-identical repeat, which no column semantics are needed to
         # see and which therefore survives any column moving.
         _append(generated[1], generated_victim.text)
         found, _ = check_ledgers(copies)
@@ -393,7 +393,7 @@ def selftest() -> int:
             failures.append("R4: a byte-identical repeated row was not flagged")
         _drop_last_line(generated[1])
 
-        # R2 POSITIVE CONTROL -- the same source, mapped differently by two different ledgers.
+        # R2 positive control -- the same source, mapped differently by two different ledgers.
         cross = [
             f"0x{BASE + generated_victim.source:x}",
             f"0x{BASE + generated_victim.destination + 0x2000:x}",

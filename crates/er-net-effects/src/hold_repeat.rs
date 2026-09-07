@@ -1,17 +1,17 @@
 //! Arrow-key hold-to-repeat for the effect selector.
 //!
-//! A press moves ONE step. Moving further is a deliberate hold, and the hold has three phases:
+//! A press moves one step. Moving further is a deliberate hold, and the hold has three phases:
 //!
-//! 1. **LATCH** -- nothing repeats until the key has been down for [`RepeatTimings::latch`].
+//! 1. **latch** -- nothing repeats until the key has been down for [`RepeatTimings::latch`].
 //!    A press is a press however long the finger lingers on it; only a hold that outlasts the
 //!    latch is read as "keep going".
-//! 2. **STEADY** -- repeats arrive one at a time at a fixed [`RepeatTimings::steady`] interval,
+//! 2. **steady** -- repeats arrive one at a time at a fixed [`RepeatTimings::steady`] interval,
 //!    slow enough to watch the selection land on each entry and stop on the one you wanted.
-//! 3. **ACCELERATE** -- only after [`RepeatTimings::accelerate_after`] of steady repeating does
+//! 3. **accelerate** -- only after [`RepeatTimings::accelerate_after`] of steady repeating does
 //!    the interval start shortening, by [`RepeatTimings::accel_step`] per repeat down to
 //!    [`RepeatTimings::min_interval`], for crossing a long catalog.
 //!
-//! The window that matters is phase 2: acceleration is measured from the FIRST REPEAT, not from
+//! The window that matters is phase 2: acceleration is measured from the first repeat, not from
 //! the press, so "held long enough to repeat" and "held long enough to speed up" are two clearly
 //! separate commitments rather than one ramp that starts the instant repeating does.
 //!
@@ -35,7 +35,7 @@ pub(crate) const REPEAT_KEY_COUNT: usize = 4;
 ///   Standalone Input Module and Godot's UI-echo proposal both mirror. A deliberate keypress
 ///   runs 80-150ms and a slow one rarely passes 300ms, so half a second cannot be hit by
 ///   accident.
-/// * `steady` 125ms -- 8 steps/second. Windows' own 20-30/s typematic rate is tuned for TEXT,
+/// * `steady` 125ms -- 8 steps/second. Windows' own 20-30/s typematic rate is tuned for text,
 ///   where a wrong character is trivially deleted; a list selection is not, and Unity's UI
 ///   default is the far slower 10 actions/second. 8/s sits just under that, so releasing on the
 ///   entry you wanted is a reflex rather than a gamble.
@@ -100,7 +100,7 @@ impl HoldRepeat {
         self.keys = [KeyState::default(); REPEAT_KEY_COUNT];
     }
 
-    /// Advance one direction by one poll. Returns whether THIS poll owes a repeat -- at most one,
+    /// Advance one direction by one poll. Returns whether this poll owes a repeat -- at most one,
     /// however late the poll is. A frame hitch therefore costs repeats rather than paying them
     /// back in a burst, which is the difference between a stutter and the selection bolting.
     ///
@@ -319,7 +319,7 @@ mod tests {
             Duration::from_millis(16),
             Duration::from_millis(6_000),
         );
-        // RIGHT is pressed while LEFT is deep into acceleration; it starts from its own latch.
+        // Right is pressed while left is deep into acceleration; it starts from its own latch.
         let press_right = start + Duration::from_millis(6_016);
         assert!(!repeat.observe(RIGHT, true, true, press_right));
         assert!(!repeat.observe(RIGHT, true, false, press_right + Duration::from_millis(400)));

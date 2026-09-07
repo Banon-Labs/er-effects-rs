@@ -1,4 +1,4 @@
-//! THE HUD RETARGET -- "the HP bar, stamina, etc, is tied to the spawned entity when it's in
+//! The HUD RETARGET -- "the HP bar, stamina, etc, is tied to the spawned entity when it's in
 //! control".
 //!
 //! Possession moves the camera, the body and the moveset onto a creature and leaves one thing
@@ -25,13 +25,13 @@
 //!   FP bar empty" with the `NpcParam` value that made it so.
 //! * `detour` (windows only) -- the hook itself, its refusal path and its teardown.
 //!
-//! # What this layer does NOT retarget, and why that is not a shortfall
+//! # What this layer does not retarget, and why that is not a shortfall
 //!
 //! The rune count, the equipped armaments, the great rune bar and the memorised spell slots.
 //! They are read during the original call from `PlayerGameData` (`ChrIns` vtable `+0x168`) and
 //! `GetWeaponGaitemHandleBySlot` (`+0x230`), neither of which an `EnemyIns` implements
 //! meaningfully -- `+0x230` writes 0 and `GetChrAsm` answers 0. Retargeting them would not show
-//! the creature's equipment, it would show an EMPTY equipment HUD, which is why the design
+//! the creature's equipment, it would show an empty equipment HUD, which is why the design
 //! substitutes eight fields rather than the character pointer.
 
 // The offsets, the arithmetic and the report are pure and stay ungated, so `cargo test` proves

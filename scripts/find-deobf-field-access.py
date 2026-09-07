@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Enumerate every instruction in the deobf image that touches ONE struct displacement.
+"""Enumerate every instruction in the deobf image that touches one struct displacement.
 
 The question this answers is the one every entry in a `layout.rs` rests on: *who writes this
 field?* A named constant is only as good as the claim that nothing else moves the value, and that
 claim is a whole-image enumeration -- not a sample.
 
 Why not `find-deobf-bytes.py`: that tool takes a fixed byte pattern, so it can only ask about one
-INSTRUCTION ENCODING at a time. A single `mov` to `[rax+0x1a0]` and the same store to
+instruction encoding at a time. A single `mov` to `[rax+0x1a0]` and the same store to
 `[r11+0x1a0]` differ in the REX prefix, and an SIB-form base differs again -- so a pattern scan
 either misses forms or drowns in them. This decodes the ModRM/SIB itself, so one run covers every
-base register, every prefix and every operand size. It also does NOT silently truncate: it prints
+base register, every prefix and every operand size. It also does not silently truncate: it prints
 what it found, all of it.
 
     python3 scripts/find-deobf-field-access.py 0x1a0
     python3 scripts/find-deobf-field-access.py 0x340 --range 0x1403f0000-0x140480000
     python3 scripts/find-deobf-field-access.py 0x468 --stores-only
 
-The image is FLAT (file offset == RVA, base 0x140000000); override it with `ER_DEOBF_BIN`, which
+The image is flat (file offset == RVA, base 0x140000000); override it with `ER_DEOBF_BIN`, which
 is how you point this at 1.17 (`ER_DEOBF_BIN=eldenring-deobf-1.17.bin`).
 
 **A displacement is not a struct.** Every hit is "some instruction uses displacement N off some
-register", and most large structs have SOMETHING at any given offset -- a 0x1a0 scan finds
+register", and most large structs have something at any given offset -- a 0x1a0 scan finds
 `ChrCtrl.lockOnTagOffset` and several dozen unrelated fields in the same breath. Narrow with
 `--range` to the code that owns the struct, then confirm each survivor by name in Ghidra. This
 tool bounds the search; it does not conclude it.
@@ -38,7 +38,7 @@ DEFAULT_IMG = os.path.join(
 BASE = 0x140000000
 
 # Opcodes that reach memory through a ModRM byte, as (opcode bytes, mnemonic, writes-memory).
-# Deliberately NOT exhaustive over the whole ISA: this is the set that moves a struct field --
+# Deliberately not exhaustive over the whole ISA: this is the set that moves a struct field --
 # integer and SSE loads and stores, plus the arithmetic forms that read one in place.
 OPCODES: list[tuple[bytes, str, bool]] = [
     (b"\x88", "MOV byte store", True),
@@ -97,7 +97,7 @@ PREFIXED: list[tuple[bytes, str, bool]] = [
 def displacement_bytes(disp: int) -> tuple[bytes, int]:
     """The encoded displacement and the ModRM `mod` value that carries it.
 
-    `mod=01` is a SIGNED byte, so only -128..127 encode that way; anything else is `mod=10`,
+    `mod=01` is a signed byte, so only -128..127 encode that way; anything else is `mod=10`,
     four bytes little-endian. Getting this wrong is how a scan misses every access to a field
     below 0x80 -- they are encoded in one byte, not four.
     """

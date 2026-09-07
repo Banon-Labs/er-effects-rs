@@ -9,18 +9,18 @@
 //! * [`TitleAutoloadRoute::NativeContinue`] fires the game's own Continue row. The native chain
 //!   then runs `SetState5` -> world load -> `CS::MoveMapStep::DoSaveStuff`, which deserialises the
 //!   save **in-world**, natively, with every precondition its own caller establishes. This is what
-//!   the DEFAULT save has always done, and it works.
+//!   the default save has always done, and it works.
 //!
 //! * [`TitleAutoloadRoute::TitleTimeFullRead`] is ours: submit / drain / **deserialise at the
-//!   title**, which calls `0x14067b290`. That function has exactly ONE caller in the whole image,
+//!   title**, which calls `0x14067b290`. That function has exactly one caller in the whole image,
 //!   `CS::MoveMapStep::DoSaveStuff`, reachable only from `MoveMapStep::Update` -- the in-world
 //!   step. Calling it from the boot title is calling it outside every precondition its only caller
 //!   sets up, and a picked save died there (`gaitemInsTable[-1]` AV at `0x67141a`). Four separate
-//!   attempts to GATE those preconditions each moved the fault one step later and never removed it,
+//!   attempts to gate those preconditions each moved the fault one step later and never removed it,
 //!   which is what a wrong-place call looks like from the inside.
 //!
 //! So the route is not "picked save vs default save". It is "can the native Continue row be used
-//! at all?", and the answer to THAT is whether the picked slot's `CS::ProfileSummary` record is
+//! at all?", and the answer to that is whether the picked slot's `CS::ProfileSummary` record is
 //! real -- because the native Continue path reads the summary to decide what to load, and the boot
 //! save-data job never populated it for a container the user picked afterwards.
 //!
@@ -52,7 +52,7 @@ impl TitleAutoloadRoute {
 ///
 /// `picked_slot_summary_real` is `profile_slot_fingerprint(slot).0` for the slot the direct source
 /// will load -- level >= 1 and a non-empty name in the live `CS::ProfileSummary` record. Note this
-/// is NOT `saveSlotsStates[slot]`: `MarkProfileIndexAsUsed` sets that flag and nothing else, so a
+/// is not `saveSlotsStates[slot]`: `MarkProfileIndexAsUsed` sets that flag and nothing else, so a
 /// marked slot can still have a blank record, which is exactly the empty-profile dead end the
 /// native Continue path stalls in.
 pub const fn title_autoload_route(
@@ -106,7 +106,7 @@ mod tests {
         );
     }
 
-    /// The regression this change exists to prevent: before it, ANY direct-file source took the
+    /// The regression this change exists to prevent: before it, any direct-file source took the
     /// title-time deserialise, including one whose summary was perfectly readable.
     #[test]
     fn a_readable_summary_is_what_removes_the_title_time_deserialise() {

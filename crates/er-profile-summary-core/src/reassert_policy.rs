@@ -1,11 +1,11 @@
-//! Does the live `CS::ProfileSummary` still describe the character that will actually LOAD?
+//! Does the live `CS::ProfileSummary` still describe the character that will actually load?
 //!
 //! # The assumption this exists to retire
 //!
 //! `picked_refresh`'s module doc used to say the records and the bodies "agree by construction",
-//! because both come from the staged container. They do not. A container carries TWO descriptions
+//! because both come from the staged container. They do not. A container carries two descriptions
 //! of each slot: the `USER_DATA010` profile-summary table, which is what
-//! `CS::ProfileSummary::Deserialize` reads, and the slot BODY, which is what actually deserializes
+//! `CS::ProfileSummary::Deserialize` reads, and the slot body, which is what actually deserializes
 //! into the character. Nothing keeps them in step, and a container assembled by tooling can
 //! disagree with itself. Measured 2026-09-03 on `100-Lilbro/ER0000.co2` (6 of 10 slots disagree):
 //!
@@ -15,7 +15,7 @@
 //! ```
 //!
 //! `Hero` loaded; the loading screen showed `Vagabond`'s face, name and level, because the portrait
-//! and the stats panel both read the RECORD. The body is the truth about what loads, so the record
+//! and the stats panel both read the record. The body is the truth about what loads, so the record
 //! has to be made to agree with it.
 //!
 //! # Why a watch rather than one rewrite
@@ -31,7 +31,7 @@ use er_game_base::fnv1a::{FNV1A64_OFFSET_BASIS, fnv1a64_extend};
 /// One record's identity, as cheaply as a live read can establish it.
 ///
 /// Name plus level, never the map: a record's `+0x30` is written from `GetCurrentMapId` when the
-/// GAME fills it and from the body's saved `BlockId` when this DLL does, and those two legitimately
+/// game fills it and from the body's saved `BlockId` when this DLL does, and those two legitimately
 /// differ on 65 of 726 corpus slots. A map term here would fire on characters that are perfectly
 /// fine (the same trap `portrait_render_slot_semaphore` documents at length).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub const EMPTY_NAME_HASH: u64 = FNV1A64_OFFSET_BASIS;
 /// The name hash both sides of the drift comparison use: FNV-1a 64 over UTF-16 code units in
 /// little-endian byte order, through `er_game_base::fnv1a`.
 ///
-/// The only property that matters is that it is the SAME function for the live record's units and
+/// The only property that matters is that it is the same function for the live record's units and
 /// for the container body's re-encoded name, so it delegates rather than reimplementing.
 #[must_use]
 pub fn name_hash_utf16(units: &[u16]) -> u64 {
@@ -84,7 +84,7 @@ pub const REASSERT_MAX_REWRITES: usize = 4;
 /// How long after the successful refresh the watch stays armed, in autoload ticks (~1 per frame).
 ///
 /// The window it has to cover is "the game's boot ProfileSummary deserialize might still fire",
-/// which in the measured run was 617ms. It must NOT stay armed into gameplay: once in world, the
+/// which in the measured run was 617ms. It must not stay armed into gameplay: once in world, the
 /// game rewrites the loaded slot's record from the live character, so a level-up would look like
 /// drift and this would start rewriting records under a playing character.
 pub const REASSERT_WATCH_TICKS: usize = 900;
@@ -102,13 +102,13 @@ pub enum ReassertStep {
 
 /// Decide this tick.
 ///
-/// `expected` is the identity the container's BODY gives the target slot (`None` until a container
+/// `expected` is the identity the container's body gives the target slot (`None` until a container
 /// has been read). `live` is what the record says right now. `ticks_since_refresh` counts autoload
 /// ticks since the refresh that recorded `expected`.
 ///
-/// A live record that is NOT a character is deliberately `Hold`, not `Rewrite`: a zeroed record is
+/// A live record that is not a character is deliberately `Hold`, not `Rewrite`: a zeroed record is
 /// what a native teardown looks like mid-flight, and re-asserting into one would race the game's
-/// own write rather than correct it. Only a record that confidently describes a DIFFERENT
+/// own write rather than correct it. Only a record that confidently describes a different
 /// character is drift worth acting on.
 #[must_use]
 pub fn reassert_step(

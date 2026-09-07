@@ -4,7 +4,7 @@
 //!
 //! A moveset layer that quietly drops half of a boss's attacks is indistinguishable, from the
 //! player's chair, from one that is broken. Both look like "I press the button and nothing
-//! interesting happens". So every animation the generator LOOKED at appears here: the ones on
+//! interesting happens". So every animation the generator looked at appears here: the ones on
 //! offer with their bucket, rank and reach, and the ones withheld with the reason they were
 //! withheld. If a favourite attack is missing, this file says whether it was denied, and for what.
 //!
@@ -46,7 +46,7 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
     );
     let _ = writeln!(out, "[chr.c{chr_id:04}]");
     let _ = writeln!(out, "# {summary}");
-    // SAID IN WORDS, not left to be inferred from four zeroes in the counts above. A creature whose
+    // Said in words, not left to be inferred from four zeroes in the counts above. A creature whose
     // whole moveset is `movement` answers every attack button with a walk clip, which from the
     // player's chair is indistinguishable from a mod that has stopped working -- and 25 of the 408
     // creatures in the shipped table really are like that (a Balloon Dummy has no attacks, and no
@@ -92,7 +92,7 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
             } else {
                 format!(" plays {}", entry.played)
             };
-            // A GRAB SAYS WHO IT NEEDS. `ThrowParam.DefChrId` is matched exactly against the
+            // A grab says who it needs. `ThrowParam.DefChrId` is matched exactly against the
             // victim's `ChrIns::npcId`, so "grab" on its own would be a half-truth: c2120's grab
             // works on the player and on nothing else in the game. The range is the row's `Dist`.
             let grab = if entry.grab() {
@@ -107,10 +107,10 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
                         }
                     })
                     .collect();
-                // AND WHETHER IT CAN ACTUALLY COMPLETE. A grab whose only victim is the player
+                // And whether it can actually complete. A grab whose only victim is the player
                 // is refused for as long as the possession lasts: the neuter sets
                 // `chrFlags1c5 & 0x10` on the player's body and `IsImmuneToAttack` reads exactly
-                // that bit BEFORE the hit that would start the throw ever reaches `ApplyDamage`.
+                // that bit before the hit that would start the throw ever reaches `ApplyDamage`.
                 // Saying "throws the player" and stopping there would send somebody hunting for a
                 // bug in their own config. A row that also names a creature is not refused, so
                 // the note is only added when every row is the player's.
@@ -124,7 +124,7 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
             } else {
                 String::new()
             };
-            // The prefix is printed only when it is NOT the field write, because that is when it
+            // The prefix is printed only when it is not the field write, because that is when it
             // is worth knowing: the move is fired through PlayAnimationByBehaviorName rather than
             // by writing a field, and the name it is fired under is the one shown.
             let by = if entry.prefix.is_field_write() {
@@ -166,7 +166,7 @@ pub(crate) fn render(chr_id: u32, moveset: &Moveset, summary: &str) -> String {
 ///
 /// # Why the page needs a report at all
 ///
-/// The page is the one piece of moveset state the PLAYER moves, and it is invisible: nothing on
+/// The page is the one piece of moveset state the player moves, and it is invisible: nothing on
 /// screen says whether right arrow has been pressed three times or none. Every other decision in
 /// this file was made offline and is fixed for the possession; this one changes under the player's
 /// hand, so it is the one most worth being able to look up.
@@ -243,7 +243,7 @@ pub(crate) fn pages_block(dispatcher: &Dispatcher) -> String {
 /// beside the file that set it.
 ///
 /// It overwrites the previous possession's moveset report, which is correct: this file always
-/// describes the MOST RECENT press, and the most recent press produced no moveset.
+/// describes the most recent press, and the most recent press produced no moveset.
 pub(crate) fn render_spawn_refusal(chr_id: u32, reason: &str) -> String {
     let mut out = String::new();
     out.push_str(
@@ -337,7 +337,7 @@ mod tests {
             "moves=2 (light=0 heavy=0 ranged=0 movement=2) denied=0",
         );
         assert!(text.contains("HAS NO ATTACK ANIMATIONS"), "{text}");
-        // ...and a creature that HAS attacks must not be told it has none.
+        // ...and a creature that has attacks must not be told it has none.
         let armed = render(4500, &moveset("4500 3000:0:0:1 6000:3:0:0:2"), "summary");
         assert!(!armed.contains("HAS NO ATTACK ANIMATIONS"), "{armed}");
     }
@@ -398,7 +398,7 @@ mod tests {
         assert!(text.contains("plays 3000"), "{text}");
     }
 
-    /// A grab has to say WHO it can be used on, because `ThrowParam.DefChrId` is an exact match
+    /// A grab has to say who it can be used on, because `ThrowParam.DefChrId` is an exact match
     /// and "grab" alone tells the player nothing they can act on.
     #[test]
     fn a_grab_is_labelled_with_the_victim_it_needs_and_the_range() {
@@ -416,7 +416,7 @@ mod tests {
         );
     }
 
-    /// A player-only grab CANNOT complete while the possession is running -- the neuter's
+    /// A player-only grab cannot complete while the possession is running -- the neuter's
     /// invincibility bit is the same one `IsImmuneToAttack` reads, and it drops the hit before
     /// `ApplyDamage` can hand `throwTypeId` to the throw system. Saying "throws the player" and
     /// stopping there sends somebody hunting for a bug in their own config.
@@ -427,7 +427,7 @@ mod tests {
         assert!(text.contains("invincible"), "{text}");
     }
 
-    /// ...but a grab that also names a CREATURE victim is not refused, so it must not carry the
+    /// ...but a grab that also names a creature victim is not refused, so it must not carry the
     /// note. Getting this backwards would tell the player their working grab is broken.
     #[test]
     fn a_grab_that_can_take_a_creature_victim_is_not_marked_refused() {
@@ -491,7 +491,7 @@ mod tests {
         assert!(text.contains("Nothing at all"), "{text}");
     }
 
-    /// The player has to be able to tell a move that CHAINS from one that has to be waited out,
+    /// The player has to be able to tell a move that chains from one that has to be waited out,
     /// because those feel like two different mods and only one of them is a combo.
     #[test]
     fn a_move_says_whether_it_has_a_real_chain_window_or_has_to_be_waited_out() {

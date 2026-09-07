@@ -20,7 +20,7 @@ static PROFILE_EDITOR_STATUS_THROTTLE: AtomicU64 = AtomicU64::new(0);
 /// first-few-then-powers-of-two "no command" writes, and a heartbeat sharing it would make both
 /// cadences depend on how often the other fired.
 static PROFILE_EDITOR_HEARTBEAT_TICKS: AtomicU64 = AtomicU64::new(0);
-/// `PROFILE_SELECT_WINDOW_RUN_TICKS` as of the previous necromancy poll. The DELTA is the signal:
+/// `PROFILE_SELECT_WINDOW_RUN_TICKS` as of the previous necromancy poll. The delta is the signal:
 /// an absolute value cannot distinguish "the view is up" from "the view was up an hour ago".
 static PROFILE_EDITOR_LAST_SEEN_WINDOW_RUNS: AtomicU64 = AtomicU64::new(0);
 static PROFILE_EDITOR_NECROMANCY_POLL_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -86,14 +86,14 @@ fn write_status_text(dir: &PathBuf, text: &str) {
     }
 }
 
-/// Re-stamp `status.txt` so its mtime says THIS process is still reading the control file.
+/// Re-stamp `status.txt` so its mtime says this process is still reading the control file.
 ///
 /// The status file used to be written only when a new command arrived, so the last status of a dead
 /// game sat on disk saying `connected = true` forever and the editor badge believed it. Two saves
 /// were made against that ghost before anyone doubted the badge (2026-08-07: control sequence 62,
-/// ack frozen at 57, game relaunched an hour earlier WITHOUT `ER_PROFILE_05_010_EDITOR_DIR`, so
+/// ack frozen at 57, game relaunched an hour earlier without `ER_PROFILE_05_010_EDITOR_DIR`, so
 /// nothing in the process was reading the directory at all). Liveness has to be something the live
-/// process keeps SAYING, not something a file once claimed.
+/// process keeps saying, not something a file once claimed.
 fn heartbeat_status(dir: &PathBuf) {
     let ticks = PROFILE_EDITOR_HEARTBEAT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
     if !ticks.is_multiple_of(2) {
@@ -331,22 +331,22 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(_base: usize) {
         defer_path_editor_command(&dir, &command);
         return;
     }
-    // THIS PATH NO LONGER TOUCHES GFX OBJECTS AT ALL. It queues, and the row populate applies.
+    // This path no longer touches GFX objects at all. It queues, and the row populate applies.
     //
     // It ran off `FrameBegin` and wrote through component pointers cached on earlier frames. That is
-    // unsound in BOTH directions, and the user found both within half an hour on 2026-08-07:
+    // unsound in both directions, and the user found both within half an hour on 2026-08-07:
     //
-    //   * view ON SCREEN (16:39:16) -- writing to components the menu thread is simultaneously
+    //   * view on screen (16:39:16) -- writing to components the menu thread is simultaneously
     //     laying out. Died in `FUN_14075dc30`.
-    //   * view GONE (17:03:32) -- writing to components whose owner has been destructed. Died in
+    //   * view gone (17:03:32) -- writing to components whose owner has been destructed. Died in
     //     `_purecall` -> `purecall_crash_handler`, a deliberate write of 0xdead to NULL. The
     //     liveness check could not see it coming, because a destructed object's vtable slots hold
-    //     `_purecall`, which IS inside the game image.
+    //     `_purecall`, which is inside the game image.
     //
     // Gating the first case was treating a symptom; the second one crashed a user who had done
     // exactly what the guard asked of them. There is no "safe moment" for a pointer we cached and do
-    // not own. The command is left UN-ACKED and applied by `profile_editor_runtime_tick`, which runs
-    // INSIDE the native row populate -- the one place the game hands us a proxy it is holding alive
+    // not own. The command is left un-ACKED and applied by `profile_editor_runtime_tick`, which runs
+    // inside the native row populate -- the one place the game hands us a proxy it is holding alive
     // on that very frame. Cost: an edit lands on the next populate (scroll the list or reopen Load
     // Character) rather than instantly. That is the price of not killing the process.
     //
@@ -372,8 +372,8 @@ pub(crate) unsafe fn profile_editor_necromancy_tick(_base: usize) {
     } else {
         "the profile view is closed: reopen Load Character and it appears"
     };
-    // NOT `status_for`: that reports "accepted" whenever nothing was unsupported, and a queued
-    // command is neither accepted nor failed. `ack_sequence` stays at the last APPLIED sequence so
+    // Not `status_for`: that reports "accepted" whenever nothing was unsupported, and a queued
+    // command is neither accepted nor failed. `ack_sequence` stays at the last applied sequence so
     // the editor keeps showing the edit as outstanding.
     write_status(
         &dir,
@@ -1039,7 +1039,7 @@ static BUILD_URL_WINDOW_POSITION_SUCCESSES: AtomicUsize = AtomicUsize::new(0);
 /// Centre the System>Quit link field's own 02_990 MenuWindow on the stage.
 ///
 /// Separate from [`apply_path_editor_window_position`] because the two fields answer to different
-/// geometry: the save picker's editor is placed OVER a ProfileSelect row (list centre plus that
+/// geometry: the save picker's editor is placed over a ProfileSelect row (list centre plus that
 /// row's offsets, which the live layout schema can move), while the link field is a modal over the
 /// Quit tab and belongs in the middle of the screen. Sharing the picker's helper would have put the
 /// link field where a ProfileSelect row is -- which is why the Quit tab shipped with no placement
@@ -1094,7 +1094,7 @@ pub(crate) fn reset_path_editor_caret_latch() {
     PATH_EDITOR_CARET_RESOLVED.store(0, Ordering::SeqCst);
 }
 
-/// Put the caret at the END of the prefilled path when the editor opens.
+/// Put the caret at the end of the prefilled path when the editor opens.
 ///
 /// The editor is prefilled with the current path and the caret sits at index 0, so typing prepends to
 /// the path instead of appending to it. No native object owns that caret: the SoftwareKeyboard config
@@ -1176,12 +1176,12 @@ pub(crate) unsafe fn with_text_input_02_990_field<T>(
 ///
 /// # Why SetText and not a write into the field's buffer
 ///
-/// The visible field is the SAME object the accept reads back. The Scaleform half of the software
+/// The visible field is the same object the accept reads back. The Scaleform half of the software
 /// keyboard (`FUN_1407fb050`, the fallback the PC build actually uses once
 /// `SoftwareKeyboardManagerImpl` declines) hands the confirmed text to the job as a `wchar_t const*`
 /// taken from this field, which the job then copies into the controller's `DLString` at `+0x80` --
 /// the exact string [`software_keyboard_text`] reads. So writing the field through the engine's own
-/// setter changes what is DRAWN and what is ACCEPTED in one move, with no second source of truth to
+/// setter changes what is drawn and what is accepted in one move, with no second source of truth to
 /// keep in step. A memcpy into the text buffer would change neither reliably: the field re-lays-out
 /// from its text document, and the editor kit's caret/selection indices would still point into the
 /// old length.
@@ -1242,7 +1242,7 @@ unsafe fn push_text_on_resolved_02_990_field(
     } else {
         0
     };
-    // A named-child resolve that MISSED still hands back a proxy with a game-image vtable, so the
+    // A named-child resolve that missed still hands back a proxy with a game-image vtable, so the
     // datatype word is what says a field is really behind it.
     let resolved = unsafe {
         safe_read_i32(
@@ -1279,7 +1279,7 @@ unsafe fn push_text_on_resolved_02_990_field(
 
 /// Put the caret at the end of whatever the open field currently holds.
 ///
-/// Window-generic on purpose: both fields that load `02_990` want this, and only the PLACEMENT of
+/// Window-generic on purpose: both fields that load `02_990` want this, and only the placement of
 /// the window differs between them. Scoping it to the save picker is why the build-url field opened
 /// with its caret at index 0 and typing prepended to the prefilled link.
 ///
@@ -1389,7 +1389,7 @@ unsafe fn apply_profile_editor_transform_to_proxy(
     // paired getter FUN_140d82c90 divides by the same constant to hand a factor back. Multiplying
     // by 100 here as well applied every live chrome scale 100x too large -- the schema's
     // backing.scale_x = 20 would have landed as a 2000x matrix. The shipped rows look right only
-    // because that value reaches the movie through the ASSET matrix in make_05_010_stats.rs; this
+    // because that value reaches the movie through the asset matrix in make_05_010_stats.rs; this
     // setter runs solely for live chrome edits, which is why the error stayed invisible.
     let scaled =
         unsafe { set_scaleform_value_scale(base, cs_value, transform.scale_x, transform.scale_y) };
@@ -1431,7 +1431,7 @@ unsafe fn scaleform_value_for_component(base: usize, comp: usize) -> Result<usiz
             "component get-value invalid comp=0x{comp:x} vt=0x{comp_vt:x} get=0x{get_value:x}"
         ));
     }
-    // A DESTRUCTED OBJECT PASSES EVERY CHECK ABOVE. Its vtable is the abstract base's, whose slots
+    // A DESTRUCTED object passes every check above. Its vtable is the abstract base's, whose slots
     // hold `_purecall` -- an address inside the game image, so "the pointer looks like game code"
     // says nothing. Calling it writes 0xdead to NULL and takes the process with it.
     if dispatch_target_is_purecall(get_value, base) {
@@ -1452,7 +1452,7 @@ unsafe fn scaleform_value_for_component(base: usize, comp: usize) -> Result<usiz
     Ok(value)
 }
 
-/// Apply EVERY field in the layout, not just the one selected in the browser.
+/// Apply every field in the layout, not just the one selected in the browser.
 ///
 /// The selected field is a UI notion -- which control panel is open -- and was wrongly being used
 /// as the set of things to push live. Because the native row populate rewrites all fields from the

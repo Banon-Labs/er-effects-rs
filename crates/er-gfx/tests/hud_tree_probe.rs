@@ -2,13 +2,13 @@
 //!
 //! # What this answers
 //!
-//! Run 20260728 put a green placeholder square on the QUICK-ITEM slots and on nothing else --
-//! in particular NOT on the two armament slots, which are the whole point of the feature. The
+//! Run 20260728 put a green placeholder square on the quick-item slots and on nothing else --
+//! in particular not on the two armament slots, which are the whole point of the feature. The
 //! injected badge lives inside the shared `ItemIcon` container, so "the badge renders on tiles
 //! A and B but not on tile C" is only possible if C does not actually reach that container.
 //!
 //! Rather than infer that from a screenshot, this walks the movie the way the game does. The
-//! native binder `FUN_1408d1e30` resolves its children from the TILE clip by name, and the
+//! native binder `FUN_1408d1e30` resolves its children from the tile clip by name, and the
 //! armament slot ctor gets its tile from `PlayerHUD/ItemPanel/Item` (right) and
 //! `PlayerHUD/ItemPanel/LeftWep` (left) -- so those two paths, resolved offline, name the exact
 //! sprites that must carry the badge.
@@ -51,7 +51,7 @@ fn sprite(movie: &Movie, id: u16) -> Option<&Vec<Tag>> {
     })
 }
 
-/// `(name, character_id, depth)` for every NAMED placement in a tag stream.
+/// `(name, character_id, depth)` for every named placement in a tag stream.
 fn named(tags: &[Tag]) -> Vec<(String, Option<u16>, u16)> {
     tags.iter()
         .filter_map(|t| match t {
@@ -95,7 +95,7 @@ fn resolve_path(movie: &Movie, path: &str) -> Option<u16> {
 /// AS3 class bound to each character id, from `SymbolClass` (tag 76).
 ///
 /// Load-bearing: Scaleform instantiates a named timeline child only where the parent's AS3
-/// class declares a matching member, so a NEW child injected into a class-bound sprite never
+/// class declares a matching member, so a new child injected into a class-bound sprite never
 /// appears. A classless container is what makes the nested mount work at all.
 fn symbol_classes(movie: &Movie) -> Vec<(u16, String)> {
     movie
@@ -135,7 +135,7 @@ fn hud_armament_tile_structure() {
     //
     // Read straight out of 1.16.2 (`scripts/disas-annotate-strings.py 0x1408cf3c0`). This table
     // is the correction to an earlier wrong reading: the two `FUN_1408d19b0` calls resolve
-    // `Magic` and `Item`, NOT the armaments -- so hooks keyed on `scene+0xb70`/`scene+0x15d8`
+    // `Magic` and `Item`, not the armaments -- so hooks keyed on `scene+0xb70`/`scene+0x15d8`
     // were driving the spell and quick-item slots the whole time.
     const HUD_SLOTS: &[(&str, &str, &str)] = &[
         ("PlayerHUD/ItemPanel/Magic", "scene+0x0b70", "FUN_1408d19b0"),
@@ -203,7 +203,7 @@ fn hud_armament_tile_structure() {
         }
     }
 
-    // The ctor's clip is only the OUTER slot (`Item`/`LeftWep` place a lone `Fade`), so the
+    // The ctor's clip is only the outer slot (`Item`/`LeftWep` place a lone `Fade`), so the
     // sprite the native binder actually receives is further down. Walk until a descendant
     // places `ItemIcon` -- that descendant is the real tile.
     for p in [
@@ -244,11 +244,11 @@ fn hud_armament_tile_structure() {
         }
     }
 
-    // GEOMETRY DEPENDENCY, asserted rather than assumed.
+    // Geometry dependency, asserted rather than assumed.
     //
-    // Sprites 353 (LeftWep/RightWep/quick-item tile) and 386 (spell tile) BOTH qualify for the
-    // badge and BOTH nest into the same `ItemIcon` container 343. The edit injects into a shared
-    // container exactly once, from the FIRST qualifying tile in tag order -- so tag order alone
+    // Sprites 353 (LeftWep/RightWep/quick-item tile) and 386 (spell tile) both qualify for the
+    // badge and both nest into the same `ItemIcon` container 343. The edit injects into a shared
+    // container exactly once, from the first qualifying tile in tag order -- so tag order alone
     // decides whether the badge is sized and positioned for the weapon tile or the spell tile.
     // Only the weapon tile ever shows a badge, so if 386 ever sorted first the badge would be
     // laid out against a tile the player never sees it on.
@@ -296,10 +296,10 @@ fn hud_armament_tile_structure() {
     }
 }
 
-/// Where the injected badge actually lands, in WEAPON-TILE pixel coordinates.
+/// Where the injected badge actually lands, in weapon-tile pixel coordinates.
 ///
 /// The nested mount places the badge inside the `ItemIcon` container, so its authored matrix is
-/// in CONTAINER space and says nothing directly about where the player sees it. This composes
+/// in container space and says nothing directly about where the player sees it. This composes
 /// the two transforms to get the tile-space rect, and checks it against the `AttributeIcon` the
 /// badge is supposed to mirror -- same size, same vertical band, opposite horizontal side.
 ///
@@ -370,9 +370,9 @@ fn hud_badge_lands_mirrored_on_the_weapon_tile() {
         (tile_y - attr_y).abs() < 0.5,
         "badge y {tile_y} should match AttributeIcon y {attr_y}"
     );
-    // Mirrored horizontally about the tile centre. A placement anchors its clip's LEFT edge, so
+    // Mirrored horizontally about the tile centre. A placement anchors its clip's left edge, so
     // reflecting a box that spans [attr_x, attr_x + w] gives [-(attr_x + w), -attr_x] -- the
-    // mirrored box's own left edge is the negated RIGHT edge, not the negated left edge.
+    // mirrored box's own left edge is the negated right edge, not the negated left edge.
     const BADGE_RENDER_PX: f32 = 37.0;
     let w = BADGE_RENDER_PX * attr_s;
     let attr_right = attr_x + w;

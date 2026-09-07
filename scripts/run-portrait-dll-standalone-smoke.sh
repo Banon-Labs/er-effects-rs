@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Bounded standalone smoke for the individually-shippable loading-portrait DLL
-# (crates/er-loading-portrait). Proves er_loading_portrait.dll loads ALONE
-# through me3 (no product er_quickload.dll -- NEVER both in one profile: double
+# (crates/er-loading-portrait). Proves er_loading_portrait.dll loads alone
+# through me3 (no product er_quickload.dll -- Never both in one profile: double
 # Present detour / double MinHook), attaches in the live process, and its Present
 # compositor path runs, with zero crash-log entries.
 #
 # Teardown is semaphore-driven from the DLL's own log, which this run redirects
 # into $ART_DIR (ER_QUICKLOAD_LOADING_PORTRAIT_PATH / _CRASH_LOG_PATH, 2026-08-31);
 # the monitor falls back to $GAME_DIR by existence in case the env does not survive
-# me3 -> Proton. PASS bar for a no-load boot: the attach line
+# me3 -> Proton. Pass bar for a no-load boot: the attach line
 # ("loaded module_base="), the Present hook's first hit line, then HOLD_SECONDS
 # alive past that hit with a clean crash log. "portrait-frame:" compositor lines
-# CANNOT be required here: compose_portrait_stats_rgba returns None (hidden
+# cannot be required here: compose_portrait_stats_rgba returns None (hidden
 # frames, no log) until a save load publishes portrait/stats content, and
 # standalone has no autoload -- if any appear they are logged as a bonus. The
 # canonical runtime cap (.auto/runtime_timeout_cap_seconds) is the idle/stall
-# backstop. This is a lifecycle/render-path smoke, NOT the full portrait feature
+# backstop. This is a lifecycle/render-path smoke, not the full portrait feature
 # proof; that stays with the product profile probes.
 set -euo pipefail
 
@@ -59,9 +59,9 @@ PY
 mkdir -p "$ART_DIR"
 cp -f "$DLL_SRC" "$ART_DIR/er_loading_portrait.dll"
 me3_write_profile "$ART_DIR/portrait-dll-standalone.me3" "$ART_DIR/er_loading_portrait.dll"
-# NOTHING IS DELETED FROM THE GAME DIRECTORY HERE. This used to be
+# Nothing is deleted from the game directory here. This used to be
 #     rm -f "$GAME_DIR/er-loading-portrait.log" "$GAME_DIR/er-loading-portrait-crash-log.txt"
-# to guarantee the lines the monitor read below belonged to THIS run. It destroyed two runs at
+# to guarantee the lines the monitor read below belonged to this run. It destroyed two runs at
 # once: the live file, and -- because `er_game_base::log::begin_fresh_run` unconditionally removes
 # a stale `<name>.prev` when the live file is absent -- the generation behind it. Neither of them
 # was this run's. The freshness those deletes bought comes from the redirect instead: the two
@@ -72,9 +72,9 @@ echo "portrait-dll-smoke: launching me3 with ONLY er_loading_portrait.dll (cap $
 # Launch from GAME_DIR: me3 resolves its launcher payload from CWD-relative rust
 # target dirs (bd me3-launch-cwd-must-lack-rust-target-dir), and the DLL writes its
 # log into the game process CWD -- both need GAME_DIR, exactly like the probe scripts.
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT:
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT:
 # the DLL rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run
-# before last, and several sessions launch concurrently here. `me3_launch` is a shell FUNCTION,
+# before last, and several sessions launch concurrently here. `me3_launch` is a shell function,
 # so an `env VAR=... me3_launch` prefix would not work -- the redirects are exported instead.
 # `ER_RUN_ARTIFACT_DIR` is what a watcher reads to find this run rather than the game directory.
 export ER_RUN_ARTIFACT_DIR="$ART_DIR"
@@ -119,11 +119,11 @@ log_name, crash_log_name, art_dir = sys.argv[2], sys.argv[3], sys.argv[4]
 cap_seconds, hold_seconds = int(sys.argv[5]), int(sys.argv[6])
 game_dir, repo_root, launch_epoch = sys.argv[7], sys.argv[8], float(sys.argv[9])
 
-# RESOLVE BY EXISTENCE, AND ONLY FILES NEWER THAN THIS LAUNCH. The redirects above are exported
+# Resolve by existence, and only files newer than this launch. The redirects above are exported
 # into the game's environment, but the DLL only honours them if the env survives me3 -> Proton; if
 # it does not, it falls back to the game directory rather than writing nowhere. A monitor that
 # knows only one of the two calls a healthy run silent. `newer_than` is the other half: the game
-# directory still holds the PREVIOUS run's copy of both files (nothing deletes them any more), and
+# directory still holds the previous run's copy of both files (nothing deletes them any more), and
 # a reader that resolves at t=0 would bind to it, count its attach line, and report last week's
 # run as this one's.
 sys.path.insert(0, os.path.join(repo_root, 'scripts'))
@@ -212,11 +212,11 @@ for pid in game_pids():
     except OSError:
         pass
 
-# A COPY ONLY FOR THE FALLBACK CASE. When the redirect took, both files are already in
+# A copy only for the FALLBACK case. When the redirect took, both files are already in
 # `art_dir` and this is a no-op -- copying a file onto itself raises `SameFileError`, and doing it
-# under a `try` would hide the case where the source really is elsewhere. When the env did NOT
+# under a `try` would hide the case where the source really is elsewhere. When the env did not
 # survive the launch chain the DLL wrote into the game directory, and this is the only chance to
-# get a copy into the run's own directory. Either way NOTHING is deleted: the game-directory file
+# get a copy into the run's own directory. Either way nothing is deleted: the game-directory file
 # stays where it is, because it is the next run's `.prev` and somebody else's evidence.
 for name in (log_name, crash_log_name):
     src = artifact(name)

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""THE UNEXECUTED-TEST GATE. Fail when a crate declares `#[test]` functions that no gate
+"""The UNEXECUTED-test gate. Fail when a crate declares `#[test]` functions that no gate
 in this repo ever runs.
 
 # The class this closes
 
-`default-members = ["crates/er-quickload"]` means a bare `cargo test` selects ONE of the
+`default-members = ["crates/er-quickload"]` means a bare `cargo test` selects one of the
 workspace's 64 crates. Every other crate reaches a gate only by being named explicitly in
 `scripts/check.sh`, `scripts/check-rust-build.sh` or `.github/workflows/check.yml` -- and
 nothing checked that the naming was complete. Two instances were found on 2026-08-31, both
 by accident, neither by a gate:
 
-  * `er-save-suppress` did not COMPILE for the host at all (9 errors: a windows `cdylib`'s
+  * `er-save-suppress` did not compile for the host at all (9 errors: a windows `cdylib`'s
     items read as dead on Linux, and `[workspace.lints.rust] warnings = "deny"` promotes
     that to a hard error). Its 31 unit tests had never executed once.
   * `er-build-export` -- the crate that produces the share link, 93 tests including the
@@ -26,22 +26,22 @@ point -- nothing in the repo would have said otherwise if they had not.
 
 # What "runs" means here, and why counting crates is not enough
 
-A crate being named in a `cargo test` line does NOT mean its tests run. `cargo test -p
+A crate being named in a `cargo test` line does not mean its tests run. `cargo test -p
 er-quit-menu-core` reports "ok. 43 passed" over a crate with 73 `#[test]` functions: the
 other 30 live under `#[cfg(windows)] mod ...` and do not exist on the host -- not
 compiled, not listed, not failed, not counted. Measured, both numbers, 2026-08-31.
 
-So this gate classifies every test by the TARGET able to execute it (see
+So this gate classifies every test by the target able to execute it (see
 `scripts/test_target_inventory.py`) and requires a runner on that target:
 
-  * host-runnable tests need a HOST `cargo test` naming the crate;
-  * windows-only tests need a WINDOWS `cargo xwin test` naming the crate (check-rust-build.sh
+  * host-runnable tests need a host `cargo test` naming the crate;
+  * windows-only tests need a Windows `cargo xwin test` naming the crate (check-rust-build.sh
     runs those under wine);
   * integration tests in `tests/*.rs` need a runner that is not restricted to `--lib`.
 
 # Orphaned files
 
-A third class, found while building this: `#[test]` functions in a file that NO module
+A third class, found while building this: `#[test]` functions in a file that no module
 tree reaches -- not declared with `mod`, not `include!`d. cargo never compiles it, so the
 tests are not merely unrun, they are not even built, and nothing anywhere says so.
 
@@ -53,12 +53,12 @@ already uses for `oracle-writers-allowlist.txt`, `counter-writers-allowlist.txt`
 -- each carrying a reason, which is enforced: an entry with nothing after the `#` is a
 failure, because an unexplained exemption is the thing the file exists to prevent.
 
-It is a RATCHET, not a list, and that is the whole design. An offender not listed fails, so
-nothing new lands quietly. An entry that is no longer an offender ALSO fails, so wiring a
+It is a ratchet, not a list, and that is the whole design. An offender not listed fails, so
+nothing new lands quietly. An entry that is no longer an offender also fails, so wiring a
 crate up is not finished until its line is deleted, and the file cannot become an
 append-only graveyard whose length has stopped meaning anything. The ceiling on the
-`no-host-runner` class is ZERO and is not a number to bump: on 2026-08-31 this gate reported
-251 unrun test functions across 15 crates and PASSED, because check.sh had it commented out;
+`no-host-runner` class is zero and is not a number to bump: on 2026-08-31 this gate reported
+251 unrun test functions across 15 crates and passed, because check.sh had it commented out;
 on 2026-09-01 all 251 were wired into check.sh, all 251 passed, and the gate was re-armed.
 The lesson is not in the 251 -- it is that the count was printed accurately, for a day,
 where nothing read it.
@@ -69,12 +69,12 @@ An audit that stops matching reports a clean tree over a broken one -- the failu
 audits in this repo shipped in one week. So `--selftest` does two things before the live
 check is trusted:
 
-  1. A frozen synthetic crate exercising EVERY gating mechanism this workspace uses -- a
+  1. A frozen synthetic crate exercising every gating mechanism this workspace uses -- a
      `#[cfg(windows)] mod` declaration, a file-level `#![cfg(windows)]`, a `#[cfg(...)]`
-     written AFTER `#[test]` on the same function, `include!` splicing, `#[path]`, and a
+     written after `#[test]` on the same function, `include!` splicing, `#[path]`, and a
      non-default feature -- with exact expected counts per class. A classifier that stops
      seeing one of those mechanisms changes a number here and goes red.
-  2. Live properties: each mechanism must still be OBSERVED in the real workspace, so a
+  2. Live properties: each mechanism must still be observed in the real workspace, so a
      fixture that has drifted away from the code fails too. Properties rather than frozen
      totals, deliberately: several agents edit this tree concurrently and a frozen total
      goes red on somebody else's new test, which teaches people to bump the number.
@@ -85,23 +85,23 @@ check is trusted:
      Plus a false-positive control (a fully covered fixture must be silent) and a negative
      control (a crate with no tests is not a finding).
   4. The allowlist ratchet, in both directions: an entry excuses the crate it names and
-     SAYS SO, a stale entry fails, an entry of the wrong kind does not excuse, and an entry
+     says so, a stale entry fails, an entry of the wrong kind does not excuse, and an entry
      with no reason or an invented kind is rejected. An allowlist proved only in the
      excusing direction is not a ratchet, it is an off switch.
 
 `--prove-selftest-catches-regression` blinds the windows matcher and requires the selftest
-itself to fail. The stronger, direct proof -- plant each defect in the REAL tree, run the
-REAL gate -- is `scripts/prove-gate-positive-controls.py --only test-target-coverage`:
+itself to fail. The stronger, direct proof -- plant each defect in the real tree, run the
+real gate -- is `scripts/prove-gate-positive-controls.py --only test-target-coverage`:
 three sensitivity controls (a crate un-named on the batch line, a stale allowlist entry, an
 orphaned file) and two specificity controls (new tests in an already-covered crate, and a
-crate covered by a DIFFERENT runner source) which must stay green. It is not wired into
+crate covered by a different runner source) which must stay green. It is not wired into
 check.sh because it mutates tracked files while it runs.
 
 The classifier was calibrated by hand on 2026-08-31 against real cargo output; the
 per-crate numbers are in the table below and each is reproducible with
 `cargo test -p X --all-targets -- --list` (host) or
 `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine cargo xwin test --lib -p X --target
-x86_64-pc-windows-msvc -- --list` (windows). Those commands are NOT run from here: a cold
+x86_64-pc-windows-msvc -- --list` (windows). Those commands are not run from here: a cold
 cross-compile plus a wine launch is minutes, and every subprocess in this repo is capped at
 30 seconds.
 """
@@ -122,19 +122,19 @@ import test_target_inventory as tti  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# THE EXEMPTION LIST LIVES IN A FILE, NOT HERE (2026-09-01). Both lists below used to be
+# The exemption list lives in a file, not here (2026-09-01). Both lists below used to be
 # Python dict literals at this spot, which is the wrong place for them twice over: an addition
 # reads as a code change and slides past review in a diff full of them, and nothing enforced
 # the other direction, so an entry stayed after the thing it excused was fixed. They are now
 # scripts/unexecuted-tests-allowlist.txt, in the shape this repo already uses for
 # oracle-writers-allowlist.txt / counter-writers-allowlist.txt / rva-alias-allowlist.txt: an
-# unlisted offender is red, AND a listed non-offender is red, so the list can only shrink.
+# unlisted offender is red, and a listed non-offender is red, so the list can only shrink.
 ALLOWLIST_NAME = "unexecuted-tests-allowlist.txt"
 
 # The exemption kinds the file may use. `no-host-runner` is the one with teeth: its ceiling is
-# ZERO and it is not a number to bump, because "this crate's tests cannot run on a host" is the
+# zero and it is not a number to bump, because "this crate's tests cannot run on a host" is the
 # exact sentence the 251 unrun tests would have been filed under if anyone had bothered to file
-# them. A windows-only cdylib does NOT qualify -- its tests belong in the `cargo xwin test
+# them. A windows-only cdylib does not qualify -- its tests belong in the `cargo xwin test
 # --lib` list in check-rust-build.sh, which runs them under wine.
 ALLOWLIST_KINDS = ("feature-gated", "orphaned-file", "no-host-runner")
 
@@ -210,11 +210,11 @@ def load_allowlist(root: Path) -> Allowlist:
         entries[key] = (kind, reason)
     return Allowlist(entries, errors)
 
-# MEASURED PROPERTIES, not frozen totals. `cargo test -- --list` counts were measured for
+# Measured properties, not frozen totals. `cargo test -- --list` counts were measured for
 # each of these on 2026-08-31 and are recorded in --verify-against-cargo below, but they are
-# NOT asserted as literals here: three agents are editing this workspace concurrently and a
+# not asserted as literals here: three agents are editing this workspace concurrently and a
 # frozen total goes red on somebody else's new test, which trains people to bump the number
-# instead of reading it. What IS asserted is the mechanism each crate demonstrates -- the
+# instead of reading it. What is asserted is the mechanism each crate demonstrates -- the
 # thing a blinded matcher destroys. Exact-number calibration lives in
 # `--verify-against-cargo`, which runs the real cargo commands and is deliberately not in
 # check.sh (it costs a windows cross-compile and a wine run).
@@ -417,8 +417,8 @@ def evaluate(
             else:
                 notes.append(f"orphaned (acknowledged): {rel} -- {excused}")
 
-    # THE RATCHET'S OTHER DIRECTION. Everything above fails on an offender that is not
-    # allowlisted. This fails on an allowlist entry whose offender is GONE -- without it the
+    # The ratchet'S other direction. Everything above fails on an offender that is not
+    # allowlisted. This fails on an allowlist entry whose offender is gone -- without it the
     # file is append-only, every fix leaves behind a line claiming debt that no longer exists,
     # and the list stops being readable as a count of what is actually unrun.
     failures.extend(allow.stale())
@@ -435,7 +435,7 @@ BARE_COUNT = re.compile(r"(\d+) test\(s\)")
 def count_unrun_tests(failures: list[str]) -> int:
     """How many `#[test]` functions the findings cover.
 
-    findall, NOT search. One crate's finding can carry SEVERAL clauses -- "50 host lib tests;
+    findall, not search. One crate's finding can carry several clauses -- "50 host lib tests;
     37 host integration tests" -- and `re.search` returns the first and drops the rest. That is
     not hypothetical: the headline this gate printed on 2026-08-31 was "251 test function(s)
     that never execute" when the true count was 288, because er-build-export's 37 integration
@@ -642,7 +642,7 @@ def selftest(blind_windows: bool) -> int:
     if blind_windows:
         tti.requires_windows = lambda cfg: False  # type: ignore[assignment]
 
-    # ---- 1. SYNTHETIC EXACTNESS. Every gating mechanism this workspace uses, in one
+    # ---- 1. Synthetic EXACTNESS. Every gating mechanism this workspace uses, in one
     #         frozen fixture, with exact expected counts. This is the part a blinded
     #         matcher cannot survive, and it does not drift when somebody adds a test.
     with tempfile.TemporaryDirectory() as td:
@@ -675,7 +675,7 @@ def selftest(blind_windows: bool) -> int:
                     f"feat={got.feature_gated} unreach={got.unreachable})"
                 )
 
-    # ---- 1b. LIVE PROPERTIES. The mechanisms above must still be observed in the real
+    # ---- 1b. Live properties. The mechanisms above must still be observed in the real
     #          workspace, so a fixture that has drifted away from the code goes red too.
     live = {c.name: c for c in tti.inventory(REPO_ROOT)}
     for name, expr, why in LIVE_PROPERTIES:
@@ -690,7 +690,7 @@ def selftest(blind_windows: bool) -> int:
                 f"host_only={c.lib.host_only} feat={c.lib.feature_gated})"
             )
 
-    # ---- 2. The gate must FIRE on an uncovered crate, and STOP firing when covered.
+    # ---- 2. The gate must fire on an uncovered crate, and stop firing when covered.
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         covered_sh = (
@@ -724,7 +724,7 @@ def selftest(blind_windows: bool) -> int:
             problems.append(f"removing the host runner did not fire: {failures}")
         if "1 host integration tests" not in joined:
             problems.append(f"integration target not reported: {failures}")
-        # ...and the HEADLINE must count BOTH clauses of that one finding. `plain` loses 2 lib
+        # ...and the headline must count both clauses of that one finding. `plain` loses 2 lib
         # tests and 1 integration test in the same message; a summariser that reads only the
         # first clause reports 2. That is the exact bug that made the live gate announce 251
         # when the number was 288 -- caught here rather than in a message nobody re-derives.
@@ -735,7 +735,7 @@ def selftest(blind_windows: bool) -> int:
             )
 
     with tempfile.TemporaryDirectory() as td:
-        # (b) keep the HOST runner for nativey but drop the WINDOWS one. The host run
+        # (b) keep the host runner for nativey but drop the Windows one. The host run
         #     reports "ok. 1 passed" while 2 tests never execute -- the er-quit-menu-core
         #     shape, and the one a crate-granularity check cannot see.
         root = _write_fixture(
@@ -801,7 +801,7 @@ def selftest(blind_windows: bool) -> int:
         if "NO module tree reaches" not in " ".join(failures):
             problems.append(f"an orphaned test file was not caught: {failures}")
 
-    # ---- 3. THE RATCHET, driven in both directions. An allowlist that only ever excuses is
+    # ---- 3. The ratchet, driven in both directions. An allowlist that only ever excuses is
     #         not a ratchet, it is an off switch, so each of these is a way it can rot: an
     #         entry that stops excusing anything, an entry whose kind does not match the
     #         offence, an entry with no reason, and an entry naming a kind that does not exist.
@@ -824,13 +824,13 @@ def selftest(blind_windows: bool) -> int:
     if not any("plain" in n and "deliberate" in n for n in notes):
         problems.append(f"an allowlisted crate was excused SILENTLY, with no note: {notes}")
 
-    # (g) THE SHRINK-ONLY HALF. Wire the same crate up and the entry must now FAIL as stale.
+    # (g) the shrink-only half. Wire the same crate up and the entry must now fail as stale.
     #     Without this the file is append-only and every fix leaves a line behind.
     failures, _ = with_allowlist(covered_sh, "plain  no-host-runner  # deliberate\n")
     if not any("no longer an offender" in f for f in failures):
         problems.append(f"a stale allowlist entry was not reported: {failures}")
 
-    # (h) the KIND is load-bearing, not decoration: an entry of the wrong kind must not excuse.
+    # (h) the kind is load-bearing, not decoration: an entry of the wrong kind must not excuse.
     failures, _ = with_allowlist(uncovered_sh, "plain  feature-gated  # wrong kind\n")
     if not any(f.startswith("plain:") and "host lib tests" in f for f in failures):
         problems.append(f"a wrong-kind allowlist entry wrongly excused the crate: {failures}")
@@ -859,7 +859,7 @@ def selftest(blind_windows: bool) -> int:
 
 
 def prove_selftest_catches_regression() -> int:
-    """Blind the windows matcher and require the selftest to go RED."""
+    """Blind the windows matcher and require the selftest to go red."""
     proc = subprocess.run(
         [sys.executable, __file__, "--selftest", "--blind-windows-matcher"],
         cwd=REPO_ROOT,
@@ -874,7 +874,7 @@ def prove_selftest_catches_regression() -> int:
         )
         print(proc.stdout, file=sys.stderr)
         return 1
-    # ...and it must go red for the RIGHT REASON. A selftest that was already failing on an
+    # ...and it must go red for the right reason. A selftest that was already failing on an
     # unrelated assertion satisfies "returncode != 0" while proving nothing about the matcher,
     # which is exactly the shape of instrument this repo keeps getting bitten by. Demand the
     # specific windows findings.

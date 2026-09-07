@@ -2,16 +2,16 @@ use crate::prelude::*;
 
 // === Loading-screen player-stats text (er-effects-rs-jsm) =========================================
 //
-// PIVOT (user 2026-07-06): rather than fight to layer the head UNDER the native tips, we CONTROL the
-// surface -- suppress the native loading tips + "press to advance" key guide, and render OUR OWN text
-// (the local character's stats) on top of the head in the Present overlay, using the GAME'S OWN menu
-// font via `er_gfx::raster::RasterFont`. The font-independent pieces (the unified line FORMAT and the
+// Pivot (user 2026-07-06): rather than fight to layer the head under the native tips, we control the
+// surface -- suppress the native loading tips + "press to advance" key guide, and render our own text
+// (the local character's stats) on top of the head in the Present overlay, using the game'S own menu
+// font via `er_gfx::raster::RasterFont`. The font-independent pieces (the unified line format and the
 // CPU text raster) live in the cross-platform `stats_lines` module so the one-layout-everywhere
 // guarantee is host-tested (bd er-effects-rs-qic7); this module wires the font capture, the stats
 // read, and the overlay composite around them.
 
 // --- Game menu font: captured at runtime from the game's own Scaleform file-open, or from an env
-// --- diagnostic .gfx on disk. NOTHING is embedded (per the no-game-derived-binaries rule).
+// --- diagnostic .gfx on disk. Nothing is embedded (per the no-game-derived-binaries rule).
 /// Raw captured `font.gfx` bytes (copied out of the game's Scaleform MemoryFile in the file-open hook).
 static MENU_FONT_GFX_CAPTURED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 /// The parsed, cached menu font (built once from the captured `font.gfx` bytes).
@@ -19,7 +19,7 @@ static MENU_FONT_RASTER: std::sync::OnceLock<er_gfx::raster::RasterFont> =
     std::sync::OnceLock::new();
 
 /// Capture the game's menu font from the Scaleform file-open hook. Reads the returned MemoryFile's raw
-/// GFX payload (same guarded read `title_05_000_swap_to_stripped` uses) and stores a COPY (never retains
+/// GFX payload (same guarded read `title_05_000_swap_to_stripped` uses) and stores a copy (never retains
 /// the game pointer). Called for any file-open whose URL looks like the menu font; one-shot.
 ///
 /// # Safety
@@ -112,7 +112,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     }
     // Slot source = the make-before-break portrait target (second-character fix, user-reported
     // 2026-07-06): during a System-Quit switch the user-picked slot (SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT,
-    // set at the confirm press) names the character being LOADED, while ac0 still names the resident OLD
+    // set at the confirm press) names the character being loaded, while ac0 still names the resident old
     // character until the deserialize flips it -- so the ac0-first read rendered character 1's record
     // (which the still-resident char-1 PGD then "validated" as live) under character 2's loading screen.
     // Same priority as portrait_target_slot(), keeping the boot-time best_active_slot fallback.
@@ -148,37 +148,37 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     let record_name = String::from_utf16_lossy(&units[..len]);
     let record_level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
     let map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
-    // WHOSE NAME AND LEVEL: THE BODY'S, NOT THE RECORD'S (bd er-effects-rs-ccud).
+    // Whose name and LEVEL: The body'S, not the record'S (bd er-effects-rs-ccud).
     //
     // The record is filled by `CS::ProfileSummary::Deserialize` from the container's `USER_DATA010`
-    // table; the character that actually loads comes from the slot BODY, and a container can
+    // table; the character that actually loads comes from the slot body, and a container can
     // disagree with itself -- measured 2026-09-03, 6 of 10 slots, including `slot 4 body 'Hero'
     // lvl 7` against `USER_DATA010 'Vagabond' lvl 9`. The user watched `Vagabond RL 9` sit above
     // `Hero`'s own attributes for a whole loading screen, because the attributes below already come
-    // from the body cache while these two lines did not. The record still GATES the read (below):
+    // from the body cache while these two lines did not. The record still gates the read (below):
     // it is what catches picker-row garbage, and a slot with no body cache still falls back to it.
     let name = profile_slot_name(slot).unwrap_or_else(|| record_name.clone());
     let level = profile_slot_level(slot).unwrap_or(record_level);
-    // THE RECORD MUST BE A CHARACTER BEFORE ANY OF IT IS RENDERED (2026-08-30).
+    // The record must be a character before any of it is rendered (2026-08-30).
     //
-    // These bytes are GAME-OWNED and this mod writes them. The in-game save picker stages its
+    // These bytes are game-owned and this mod writes them. The in-game save picker stages its
     // browse rows straight into the live records -- `save_picker_write_row_records` memsets each
-    // 0x2a0-byte record to zero and copies the row LABEL into the name field -- so a record can
+    // 0x2a0-byte record to zero and copies the row label into the name field -- so a record can
     // hold `[..] EldenRing` or `[ new ]` with every other field zero. The user watched exactly
     // those two strings render as character names beside `RL 0` on three loading screens, because
     // the picker's restore was gated behind a sticky `committed` flag and never ran (fixed in
     // `save_swap_profile_table.rs`; this gate is the independent second half, and it holds
     // whatever else ever writes these records).
     //
-    // TWO THINGS THE FAILURE PROVED, WORTH NOT RE-DERIVING:
-    //  * the ATTRIBUTE lines were byte-identical across each garbage/live pair (`HP 522 FP 78
-    //    Stamina 97`, `VIG 15 MND 10 END 11 STR 14`) because they come from the decoded `.sl2`
-    //    slot cache below, not from this record. "Wrong stats" was ONLY the name plus `RL 0`.
+    // Two things the failure proved, worth not RE-DERIVING:
+    //  * the attribute lines were byte-identical across each garbage/live pair (`HP 522 FP 78
+    //    Stamina 97`, `VIG 15 MND 10 end 11 STR 14`) because they come from the decoded `.sl2`
+    //    slot cache below, not from this record. "Wrong stats" was only the name plus `RL 0`.
     //  * the `pgd_validated` filter below worked exactly as designed: it refused the live PGD
     //    *because* this record was garbage (no name/level match), which is why the panel fell back
     //    to the correct cached attributes instead of the level-9 default template.
     //
-    // So refuse the whole read and draw NOTHING, as the portrait already refuses to publish a head
+    // So refuse the whole read and draw nothing, as the portrait already refuses to publish a head
     // it cannot attribute. The counter is what keeps that blank distinguishable from the feature
     // being switched off.
     let verdict =
@@ -193,11 +193,11 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         }
         return None;
     }
-    // Live PlayerGameData ONLY if it provably holds the LOADING slot's character. Before the save
+    // Live PlayerGameData only if it provably holds the loading slot's character. Before the save
     // deserializes, PGD is the game's default level-9 template (name empty, stats
-    // [15,10,11,14,13,9,9,7]) -- NOT the slot being loaded -- so trusting it renders another
+    // [15,10,11,14,13,9,9,7]) -- Not the slot being loaded -- so trusting it renders another
     // character's stats under the right name (user-reported 2026-07-06). Prove ownership by matching
-    // the slot-scoped ProfileSummary record: identical non-empty name AND identical level.
+    // the slot-scoped ProfileSummary record: identical non-empty name and identical level.
     let pgd = unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }
         .filter(|&p| valid(p));
     let pgd_validated = pgd.filter(|&pgd| {
@@ -217,7 +217,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
                 unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
                 unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0)
                     as u32,
-                // Weapon level off the SAME validated PGD as the attributes and vitals: the pointer has
+                // Weapon level off the same validated PGD as the attributes and vitals: the pointer has
                 // already been proved to own the loading slot's character (name + level match the
                 // slot-scoped ProfileSummary record), so this cannot pair one character's stats with
                 // another's `WL`. An implausible byte reads as unknown rather than being rendered.
@@ -232,9 +232,9 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
             }
             let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
             // Unified layout (bd er-effects-rs-qic7): pre-mount, the effective max vitals come
-            // from the save slot's serialized PlayerGameData (STORED MaxHealth/MaxFP/MaxSP ==
+            // from the save slot's serialized PlayerGameData (stored MaxHealth/MaxFP/MaxSP ==
             // runtime current_max_*; located by the same rune-level-invariant scan as the
-            // attributes) so the boot loading screen renders the SAME five-line panel as
+            // attributes) so the boot loading screen renders the same five-line panel as
             // subsequent live loads. [0,0,0] (rendered as `--`) only when the save is unreadable.
             let [hp, fp, stam] = profile_slot_vitals(slot).unwrap_or([0; 3]);
             // Same `.sl2` slot cache the attributes and vitals come from, so the whole panel describes
@@ -259,7 +259,7 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
 
 /// The rendered loading-screen stats text, keyed by the exact display `lines` it renders. The game
 /// thread rebuilds it whenever the loading slot's lines differ (character switch, record->live
-/// upgrade); the render thread composites it. ONE mutex guards bitmap + key together so a window
+/// upgrade); the render thread composites it. One mutex guards bitmap + key together so a window
 /// reset racing a build can never strand a key without its bitmap (which would suppress rebuilds and
 /// blank the text for the whole window).
 pub struct StatsTextCache {
@@ -297,10 +297,10 @@ static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
     std::sync::Mutex::new(None);
 
 /// Build the stats-text bitmap from the slot's stats + game menu font, into `STATS_TEXT_CACHE`.
-/// CONTENT-KEYED (second-character fix, user-reported 2026-07-06): rebuild exactly when the loading
+/// Content-KEYED (second-character fix, user-reported 2026-07-06): rebuild exactly when the loading
 /// slot's formatted lines differ from what is currently rendered, never a per-window one-shot latch.
-/// The old `STATS_TEXT_LIVE` latch re-armed AFTER the window reset (this tick keeps running until
-/// load_done + cover-down go idle) with the PREVIOUS character's still-resident PlayerGameData, so a
+/// The old `STATS_TEXT_LIVE` latch re-armed after the window reset (this tick keeps running until
+/// load_done + cover-down go idle) with the previous character's still-resident PlayerGameData, so a
 /// System-Quit switch showed character 1's stats through character 2's entire loading screen. With
 /// content keying a stale bitmap self-heals the moment the new slot's record reads differently, and
 /// identical ticks stay cheap no-ops. Called on the loading screen from the game thread; silently waits
@@ -332,14 +332,14 @@ pub unsafe fn maybe_build_stats_text() {
     if unchanged {
         return;
     }
-    // PROPORTIONAL FONT SIZE (user 2026-07-06): the stats text is composited INTO the head render target,
-    // which is then aspect-cover UPSCALED to the backbuffer -- so a FIXED-pixel em_px changes its on-screen
+    // Proportional font size (user 2026-07-06): the stats text is composited into the head render target,
+    // which is then aspect-cover UPSCALED to the backbuffer -- so a fixed-pixel em_px changes its on-screen
     // size whenever the render resolution changes (halving the RT 2056->1028 doubled the on-screen text).
-    // Size the font as a constant FRACTION of the RT height instead (shared consts in `stats_lines`, so
-    // every build path uses the SAME em sizing). rt_dim is the offscreen size we patch the portrait RT
+    // Size the font as a constant fraction of the RT height instead (shared consts in `stats_lines`, so
+    // every build path uses the same em sizing). rt_dim is the offscreen size we patch the portrait RT
     // to (confirmed == oracle_ls_portrait_h).
-    // The HIGH dword -- the RT HEIGHT, which is what the paragraph above has always said this sizes
-    // against. It read the LOW dword (width) instead, and the two agree only because the RT is
+    // The high dword -- the RT height, which is what the paragraph above has always said this sizes
+    // against. It read the low dword (width) instead, and the two agree only because the RT is
     // square, so the bug was invisible: a 2056x1542 render would have silently grown the text 33%.
     // That widening was tried and reverted on 2026-09-07 (see `PROFILE_OFFSCREEN_SIZE_TARGET`); this
     // read is corrected anyway, because a latent dependency on width == height is worth removing
@@ -432,7 +432,7 @@ pub fn stats_text_available() -> bool {
 }
 
 /// Reset the per-load stats-text cache so the next load starts from a clean (no-text) frame and its
-/// first build logs. Correctness does NOT depend on this reset: the content key in
+/// first build logs. Correctness does not depend on this reset: the content key in
 /// `maybe_build_stats_text` rebuilds on any line change even if a post-reset tick re-caches the old
 /// character. `STATS_TEXT_BUILT` is a cumulative oracle and is deliberately not reset.
 pub fn stats_text_window_reset() {
@@ -447,13 +447,13 @@ pub fn stats_text_window_reset() {
     }
 }
 
-/// Tip-refresh detour: NO-OP the original (er-effects-rs-jsm PIVOT) so the native tip title/body are never
+/// Tip-refresh detour: No-OP the original (er-effects-rs-jsm pivot) so the native tip title/body are never
 /// set and the `Main` tip clip stays faded out -- our overlay player-stats text owns the tip region. Only
 /// active while our loading portrait path is enabled; otherwise it calls through so vanilla tips render.
 ///
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's knowledge-tip
+/// Do not call this directly. It is the detour body MinHook installs over the game's knowledge-tip
 /// refresh, so it may only be entered by that patched call site, on the game thread that made the
 /// call, with the arguments and `extern "system"` ABI the original declares.
 ///
@@ -474,7 +474,7 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
     if !portrait_overlay_enabled() {
         return;
     }
-    // Suppress: after the movie set the tip, BLANK the title + body handles so no native tip renders --
+    // Suppress: after the movie set the tip, blank the title + body handles so no native tip renders --
     // our overlay player-stats text owns the region. Fault-guarded (the SetText core gates on the handle
     // type, so a stale handle is a safe no-op). Runs on the game/render thread.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -508,7 +508,7 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
 }
 
 /// Tip-advance "enabled"-predicate detour (er-effects-rs-jsm refinement): while our loading portrait
-/// path is active, report the advance action as DISABLED (return 0). The base `MenuWindow::Update`
+/// path is active, report the advance action as disabled (return 0). The base `MenuWindow::Update`
 /// trigger loop then never fires the advance press (the press is a true no-op -- the action's only body
 /// is `gotoAndPlay('FadeOut')`, whose downstream tip-refresh we already blank), and the per-update
 /// keyguide composer drops the action from the keyguide list, so the "press [button] to advance" prompt
@@ -516,7 +516,7 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
 ///
 /// # Safety
 ///
-/// Do NOT call this directly. It is the detour body MinHook installs over the game's tip-advance
+/// Do not call this directly. It is the detour body MinHook installs over the game's tip-advance
 /// enabled predicate, so it may only be entered by that patched call site, on the game thread that
 /// made the call, with the arguments and `extern "system"` ABI the original declares.
 ///
@@ -556,8 +556,8 @@ pub fn install_tip_suppression_hook() {
             return;
         }
     }
-    // TWO INDEPENDENT DETOURS (2026-08-30). This was a bare `let Ok(..) else { return; }` with no
-    // log, so a refused tip-refresh RVA on 1.17 silently took the tip-ADVANCE detour with it -- the
+    // Two independent DETOURS (2026-08-30). This was a bare `let Ok(..) else { return; }` with no
+    // log, so a refused tip-refresh RVA on 1.17 silently took the tip-advance detour with it -- the
     // one whose own comment says its failure is meant to "log and continue rather than abort the
     // batch". A refusal is now local and named, and the pair is honestly reported.
     // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
@@ -590,7 +590,7 @@ pub fn install_tip_suppression_hook() {
                 }
                 // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
                 // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                // address -- so letting the handle go does NOT uninstall the hook.
+                // address -- so letting the handle go does not uninstall the hook.
             }
             Err(status) => {
                 append_autoload_debug(format_args!(
@@ -616,7 +616,7 @@ pub fn install_tip_suppression_hook() {
                     advance_target = target2;
                     // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
                     // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-                    // address -- so letting the handle go does NOT uninstall the hook.
+                    // address -- so letting the handle go does not uninstall the hook.
                 } else {
                     append_autoload_debug(format_args!(
                         "stats-text: tip-advance queue_enable failed for 0x{target2:x}"
@@ -664,7 +664,7 @@ pub struct Rgba8Src<'a> {
     pub h: u32,
 }
 
-/// Alpha-blend tightly-packed RGBA8 `src` OVER `dst` (`dw`x`dh`) at top-left `(x0, y0)`
+/// Alpha-blend tightly-packed RGBA8 `src` over `dst` (`dw`x`dh`) at top-left `(x0, y0)`
 /// (`src.a`/`1-src.a`). Clips to `dst`. Used to lay the rendered stats text over the head/backbuffer.
 pub fn blend_rgba_over(dst: &mut [u8], dw: u32, dh: u32, src: Rgba8Src<'_>, x0: i32, y0: i32) {
     let Rgba8Src {

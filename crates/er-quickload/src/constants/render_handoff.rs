@@ -1,40 +1,40 @@
 // ================================================================================================
-// RENDER-HANDOFF FREEZE -- reverse-engineered addresses & struct offsets (1.16.2)
+// render-HANDOFF freeze -- reverse-engineered addresses & struct offsets (1.16.2)
 // ================================================================================================
 //
 // Provenance: static RE via the Ghidra runtime dump + deobf ground-truthing, 2026-07-18.
 //
-// STALE-PROVENANCE WARNING (2026-08-01): the trailing `// dump 0x...` annotations below were
-// produced by `dump-deobf-shift.py` against the 1.16.1 dump. For 1.16.2 the shift is ZERO for
-// BOTH `.text` and `.rdata`, so the live VA equals the dump VA and those parentheticals name
+// Stale-provenance warning (2026-08-01): the trailing `// dump 0x...` annotations below were
+// produced by `dump-deobf-shift.py` against the 1.16.1 dump. For 1.16.2 the shift is zero for
+// both `.text` and `.rdata`, so the live VA equals the dump VA and those parentheticals name
 // addresses that are simply wrong for the current game. Do not use them to locate anything --
 // query the 1.16.2 MCP instead. They are kept only as a record of where each value came from.
 // (`dump-deobf-shift.py` itself is now cross-version and actively misleading; see AGENTS.md.)
 //
 // See bd memories:
-//   - render-handoff-freeze-worldreswait-loadlist-root-2026-07-18   (GATE 1: loadlist / WorldResWait)
-//   - render-handoff-freeze-second-gate-requestcode-2026-07-18       (GATE 2: STEP_Finish / requestCode)
+//   - render-handoff-freeze-worldreswait-loadlist-root-2026-07-18   (gate 1: loadlist / WorldResWait)
+//   - render-handoff-freeze-second-gate-requestcode-2026-07-18       (gate 2: STEP_Finish / requestCode)
 //   - re-correction-second-gate-requestcode-stepfinish-2026-07-18    (the polarity correction)
 //
-// ADDRESS CONVENTION: constants ending `_RVA` are DEOBF/live RVAs (VA - 0x140000000), i.e. usable as
-// `game_module_base() + RVA` to CALL or PATCH the live binary. Values noted "dump 0x..." are Ghidra
-// dump VAs (for SEMANTICS only -- NEVER call a dump VA directly). Anything flagged REGION-ESTIMATE was
-// NOT exactly ground-truthed and MUST be re-verified with disasm before being called/patched.
+// Address CONVENTION: constants ending `_RVA` are DEOBF/live RVAs (VA - 0x140000000), i.e. usable as
+// `game_module_base() + RVA` to call or patch the live binary. Values noted "dump 0x..." are Ghidra
+// dump VAs (for semantics only -- Never call a dump VA directly). Anything flagged region-estimate was
+// not exactly ground-truthed and must be re-verified with disasm before being called/patched.
 //
-// The freeze has TWO independent gates on the in-memory redirect load path:
-//   GATE 1 (fixed for the -1 case): the world-res loadlist virtual path is never built, so the dest
+// The freeze has two independent gates on the in-memory redirect load path:
+//   Gate 1 (fixed for the -1 case): the world-res loadlist virtual path is never built, so the dest
 //           WorldBlockRes is never created and STEP_WorldResWait (mms child step 3) stalls.
-//   GATE 2 (open): even after the MoveMap chain reaches its FINISH label, `requestCode`
+//   Gate 2 (open): even after the MoveMap chain reaches its finish label, `requestCode`
 //           (InGameStep+0xd8) is stuck at 1 and never advances to 2, because MoveMapStep::STEP_Finish
 //           cannot pass its completion sub-gate (2-tick warmup / testNetStep finish / CSRemo-idle).
 //           requestCode==2 is what STEP_MoveMap_Update needs to hand off; while it stays 1 the
 //           per-frame ChrIns omission update keeps `draw_group` off and the loading cover stays.
-//           NOTE (polarity): CSMenuMan+0x798 != 0 is the HEALTHY stable-in-world marker -- draining it
-//           BOUNCES to title. Do NOT drain +0x798 and do NOT force requestCode=2.
+//           NOTE (polarity): CSMenuMan+0x798 != 0 is the healthy stable-in-world marker -- draining it
+//           bounces to title. Do not drain +0x798 and do not force requestCode=2.
 
-// ---- GATE 1: loadlist / WorldResWait chain (deobf RVAs, ground-truthed) ----
+// ---- Gate 1: loadlist / WorldResWait chain (deobf RVAs, ground-truthed) ----
 // InGameStep::RequestMoveMap is REQUEST_MOVE_MAP_RVA (0xaebdc0) in constants/gaitem_restore.rs.
-/// `InGameStep::STEP_MoveMap_LoadlistInit` -- builds the world-res loadlist ONLY if
+/// `InGameStep::STEP_MoveMap_LoadlistInit` -- builds the world-res loadlist only if
 /// `worldloadlistlistVirtualPath.size != 0`, then `CreateLoadlistlistFileCap` -> `+0x238`.
 #[allow(dead_code)]
 pub(crate) const STEP_MOVEMAP_LOADLIST_INIT_RVA: usize =
@@ -55,8 +55,8 @@ pub(crate) const WORLDRESWAIT_FIELDAREA_GATE_RVA: usize = 0x624bd0; // dump 0x14
 #[allow(dead_code)]
 pub(crate) const WORLDBLOCKRES_UPDATE_RE_RVA: usize = 0x614870;
 /// `GameMan::SetMoveMapStepBlockId(out, in)` -- writes GameMan+0x14 (moveMapStepBlockId). NOTE: the
-/// INITIAL load's RequestMoveMap param_2 does NOT read +0x14; it traces to GameMan+0xc30. So this is
-/// NOT the initial-load fix (only later transitions). Kept for completeness.
+/// initial load's RequestMoveMap param_2 does not read +0x14; it traces to GameMan+0xc30. So this is
+/// not the initial-load fix (only later transitions). Kept for completeness.
 #[allow(dead_code)]
 pub(crate) const SET_MOVEMAP_STEP_BLOCKID_RVA: usize =
     er_game_base::rva::SET_MOVE_MAP_STEP_BLOCK_ID_RVA;
@@ -67,12 +67,12 @@ pub(crate) const GET_MOVEMAP_STEP_BLOCKID_RVA: usize = 0x679340; // dump 0x14067
 #[allow(dead_code)]
 pub(crate) const IS_NON_DEBUG_AREA_RVA: usize = 0x720210; // dump 0x140720310
 
-// ---- GATE 2: STEP_Finish / requestCode advance chain (deobf RVAs, ground-truthed unless noted) ----
+// ---- Gate 2: STEP_Finish / requestCode advance chain (deobf RVAs, ground-truthed unless noted) ----
 /// `InGameStep::STEP_MoveMap_Update` -- advances `requestCode` (InGameStep+0xd8) 1->2 when the
 /// MoveMapStep child signals finished (`MOVEMAP_CHILD_FINISHED_POLL_RVA`).
 #[allow(dead_code)]
 pub(crate) const STEP_MOVEMAP_UPDATE_RE_RVA: usize = er_title_flow::INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA; // dump 0x140aec810
-/// `MoveMapStep::STEP_Finish` -- the mms child FINISH step. Reaches terminal (`requestedState=-1`) only
+/// `MoveMapStep::STEP_Finish` -- the mms child finish step. Reaches terminal (`requestedState=-1`) only
 /// after: (1) 2-tick warmup `field_0xb0 >= 2`; (2) testNetStep child finish+reset; (3) CSRemo-idle gate.
 #[allow(dead_code)]
 pub(crate) const STEP_MOVEMAP_FINISH_RVA: usize = 0xaf5a20; // dump 0x140af5b10
@@ -82,14 +82,14 @@ pub(crate) const STEP_MOVEMAP_FINISH_RVA: usize = 0xaf5a20; // dump 0x140af5b10
 pub(crate) const MOVEMAP_CHILD_FINISHED_POLL_RVA: usize = 0xeb5530; // dump 0x140eb5550
 // REMOVED 2026-08-01: `EZ_CHILDSTEP_RESET_RVA = 0xeb54e0` was a MID-FUNCTION address. The
 // 1.16.2 dump resolves 0x140eb54e0 to entry 0x140eb54c0 (size 111,
-// `FUN_140eb54c0(EzChildStepBase*)`), i.e. it pointed 0x20 bytes INTO the function. Calling or
+// `FUN_140eb54c0(EzChildStepBase*)`), i.e. it pointed 0x20 bytes into the function. Calling or
 // hooking it would have executed from the middle of a prologue-established frame. It was never
 // referenced, so this is removing a loaded gun rather than fixing a live crash -- and the
 // correct entry was already declared below as EZ_CHILDSTEP_RESET_PINNED_RVA. Note that "PINNED"
-// there marks the CORRECTED value; it is not the dedupe suffix it looks like (unlike
+// there marks the corrected value; it is not the dedupe suffix it looks like (unlike
 // EZ_CHILDSTEP_REQUEST_FINISH{,_PINNED}_RVA, which really are two names for one address).
-/// `EzChildStepBase::RequestFinish` -- forces a child stepper toward finish. LAST-RESORT lever on the
-/// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
+/// `EzChildStepBase::RequestFinish` -- forces a child stepper toward finish. Last-resort lever on the
+/// MoveMap child wrapper (`InGameStep+0xe0`) after WorldRes is resident; may skip STEP_Finish teardown,
 /// so prefer satisfying the real sub-gate. Verify state before use.
 #[allow(dead_code)]
 pub(crate) use er_title_flow::EZ_CHILDSTEP_REQUEST_FINISH_RVA;
@@ -99,12 +99,12 @@ pub(crate) use er_title_flow::EZ_CHILDSTEP_REQUEST_FINISH_RVA;
 #[allow(dead_code)]
 pub(crate) const STEP_REQUEST_WAIT_RVA: usize = 0xaecc10; // dump 0x140aecd00
 /// `CS::MenuJobQueue::ExecuteMenuJob` -- generic MenuJob drain (runs Execute vfptr[2], zeroes slot on
-/// ShouldContinue). NOTE: NOT run on +0x798 by CSMenuManImp::Update (that slot is the stable marker).
+/// ShouldContinue). NOTE: Not run on +0x798 by CSMenuManImp::Update (that slot is the stable marker).
 #[allow(dead_code)]
 pub(crate) const EXECUTE_MENU_JOB_RE_RVA: usize = er_title_flow::EXECUTE_MENU_JOB_RVA; // dump 0x1407a96f0
 /// CSRemo-idle gate `FUN_140a9cdb0` (checked inside STEP_Finish): reads `GLOBAL_CSRemo+8`, returns idle
-/// via `vt+0x18` OR (`vt+0x50 == 1 && +0x1a == 0`). A dangling remo/cutscene keeps this returning
-/// not-idle. REGION-ESTIMATE deobf -- VERIFY with disasm before calling/patching.
+/// via `vt+0x18` or (`vt+0x50 == 1 && +0x1a == 0`). A dangling remo/cutscene keeps this returning
+/// not-idle. Region-estimate deobf -- Verify with disasm before calling/patching.
 #[allow(dead_code)]
 pub(crate) const CSREMO_IDLE_GATE_RVA_ESTIMATE: usize = 0xa9cca0; // dump 0x140a9cdb0 (est; verify)
 
@@ -113,7 +113,7 @@ pub(crate) const CSREMO_IDLE_GATE_RVA_ESTIMATE: usize = 0xa9cca0; // dump 0x140a
 /// render handoff. Cleared to 0 only by STEP_RequestWait when CSMenuMan+0x798 == 0 (== end session).
 #[allow(dead_code)]
 pub(crate) const INGAMESTEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
-/// `InGameStep+0xe0` -- the MoveMap child-step WRAPPER (EzChildStep); its stepper ptr is at wrapper+0x8.
+/// `InGameStep+0xe0` -- the MoveMap child-step wrapper (EzChildStep); its stepper ptr is at wrapper+0x8.
 #[allow(dead_code)]
 pub(crate) const INGAMESTEP_MOVEMAP_CHILD_WRAPPER_E0_OFFSET: usize = 0xe0;
 /// EzChildStep wrapper -> inner stepper pointer. Null == finished; non-null == still running.
@@ -151,7 +151,7 @@ pub(crate) const MOVEMAPSTEP_GLOBAL_DISABLE_RVA: usize = 0x3d7_0847;
 pub(crate) const CHRCTRL_LUA_EVENT_FLAGS_E8_OFFSET: usize = 0xe8;
 /// `ChrCtrl+0xe9` -- native `disableMove`; the same movement gate requires it to be false.
 pub(crate) const CHRCTRL_DISABLE_MOVE_E9_OFFSET: usize = 0xe9;
-/// `CSMenuMan+0x798` -- NowLoading cover MenuJob slot (the STABLE-session marker; != 0 is HEALTHY).
+/// `CSMenuMan+0x798` -- NowLoading cover MenuJob slot (the stable-session marker; != 0 is healthy).
 #[allow(dead_code)]
 pub(crate) const CSMENUMAN_NOWLOADING_JOB_798_OFFSET: usize = 0x798;
 /// `CSMenuMan+0x72c` -- `loadingScreenData.field_0xc`, zeroed by deobf `FUN_14067a410` when changing
@@ -163,8 +163,8 @@ pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD_C_72C_OFFSET: usize = 0x72c;
 pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET: usize = 0x730;
 // ---- STEP_Finish sub-gate reads (pinned 2026-07-18, bd render-handoff-freeze-second-gate-pins) ----
 // STEP_Finish reaches terminal (requestedState=-1, letting STEP_MoveMap_Update set requestCode 1->2)
-// only when: warmup (+0xb0) >= 2 AND testNetStep child finished AND the CSRemo-idle gate passes.
-/// `MoveMapStep.testNetStep` EzChildStep WRAPPER offset. Its inner stepper ptr is at wrapper+0x8
+// only when: warmup (+0xb0) >= 2 and testNetStep child finished and the CSRemo-idle gate passes.
+/// `MoveMapStep.testNetStep` EzChildStep wrapper offset. Its inner stepper ptr is at wrapper+0x8
 /// (== MoveMapStep+0x110): stepper == 0 -> finished/skipped; != 0 -> still running (offline-hang suspect).
 #[allow(dead_code)]
 pub(crate) const MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET: usize = 0x108;
@@ -182,7 +182,7 @@ pub(crate) const EZ_CHILDSTEP_RESET_PINNED_RVA: usize =
 /// NowLoading/FakeLoading globals; flagged estimate but in-range.)
 #[allow(dead_code)]
 pub(crate) const GLOBAL_CSREMO_RVA: usize = 0x3d6ea58;
-/// CSRemoImp+0x8 -> CSRemoMan* (`remoMan`). remoMan == null == CSRemo-init gap (gate BUSY).
+/// CSRemoImp+0x8 -> CSRemoMan* (`remoMan`). remoMan == null == CSRemo-init gap (gate busy).
 #[allow(dead_code)]
 pub(crate) const CSREMO_REMOMAN_08_OFFSET: usize = 0x08;
 /// CSRemoMan+0xd0 (qword) -- pending-remo/request signal (the `[0x1a]` index x8 in the decomp). != 0

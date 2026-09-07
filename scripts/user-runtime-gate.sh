@@ -20,7 +20,7 @@ EOF
     return 2
   fi
   local token_text
-  # `read` returns NON-ZERO when it hits EOF without a trailing newline, having already stored the
+  # `read` returns non-zero when it hits EOF without a trailing newline, having already stored the
   # line it read. The old `|| token_text=""` threw that value away, so a perfectly valid token file
   # written with `printf '%s'` was refused and the diagnostic below printed an empty `token:` --
   # which reads as "the file is empty" and sends the next person hunting the wrong fault (observed

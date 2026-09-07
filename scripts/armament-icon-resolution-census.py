@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Reproduce `er-armament-icons`' Ash-of-War icon resolution offline, HUD path vs MENU path.
+"""Reproduce `er-armament-icons`' Ash-of-War icon resolution offline, HUD path vs menu path.
 
-WHY THIS EXISTS: the two surfaces resolve the same ash through *different* code and
+Why this EXISTS: the two surfaces resolve the same ash through *different* code and
 disagree. The menu path (`crates/er-armament-icons/src/lib.rs`, `real_icon_id = gem_icon_id`)
-draws ONLY the `EquipParamGem` item icon and hides the badge when there is none. The HUD path
+draws only the `EquipParamGem` item icon and hides the badge when there is none. The HUD path
 (`crates/er-armament-icons/src/hud_badge.rs:441-445`) additionally falls back to
 `SwordArtsParam.iconId`, a different icon family. This script says, for every ash, what each
 surface would draw -- so the divergence is a table instead of a bug report.

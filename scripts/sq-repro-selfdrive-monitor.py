@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Agent-owned self-driving System->Quit->Load-Profile repro run + monitor.
 
-Arms the controller-free XInput harness in PROFILE-LOAD-SWITCH mode via two game-dir
+Arms the controller-free XInput harness in profile-load-switch mode via two game-dir
 marker files, deploys the freshly-built DLL, launches ER through me3 (the same offline
 path me3_live_launch uses), and watches the DLL debug log for:
   - the sq-repro autopilot phase transitions (proves the harness self-drives, no human input)
-  - the SWITCH-ORACLE step-3 (WORLD RES WAIT) stall (blk_ls=0x0) = the repro
+  - the switch-oracle step-3 (world RES wait) stall (blk_ls=0x0) = the repro
   - LOADED_STABLE (world entered = no stall / a fix worked)
   - game exit (crash/close)
 
-The REAL sync signal is the RAM-derived SWITCH-ORACLE semaphore in the log; the wall-clock
-CAP is only a safety backstop (NOT the primary sync). Tears the game down immediately on a
+The real sync signal is the RAM-derived switch-oracle semaphore in the log; the wall-clock
+cap is only a safety backstop (not the primary sync). Tears the game down immediately on a
 verdict (tear-down-on-insight) and removes the markers so the next manual launch is normal.
 
 Usage: python3 scripts/sq-repro-selfdrive-monitor.py <log_start_offset> [cap_seconds]
@@ -28,15 +28,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from er_artifact_env import artifact_source_dirs, resolve_artifact  # noqa: E402
 
-# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+# Where this run'S artifacts actually are.
 #
-# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
-# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# Launchers redirect the DLL's per-run artifacts into the run's own directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is single-SLOT: `er_game_base::log::begin_fresh_run` renames
 # `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
-# last. A monitor pinned to the game directory therefore finds NOTHING for a redirected run and
+# last. A monitor pinned to the game directory therefore finds nothing for a redirected run and
 # reports a perfectly healthy run as silent -- a false negative indistinguishable from the very stall
 # this monitor exists to catch. `resolve_artifact` looks in the run directory first and falls back to
-# the game directory, by EXISTENCE, and the inotify watch below covers BOTH for the same reason.
+# the game directory, by existence, and the inotify watch below covers both for the same reason.
 #
 # The `/mnt/c/SteamLibrary/...` default was WSL-era and does not exist on a native Linux Steam box:
 # every read against it came back empty, which reads as "the DLL wrote nothing".
@@ -61,11 +61,11 @@ DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_quickload.dll")
 DEPLOY_DLL_WIN = r"C:\Users\choza\er-quickload-live\er_quickload.dll"
 MARKERS = [
     os.path.join(GAMEDIR, "er-quickload-system-quit-repro.txt"),
-    # Select the PROFILE-LOAD-SWITCH mode. NOT er-quickload-system-quit-allow-profile-load.txt: that
-    # opt-in makes the ProfileSelect slot-activate FORWARD to the guarded native load instead of
-    # DIRECT-ARMING the save-safe switch, so quickload_phase never advances and the switch never runs.
+    # Select the profile-load-switch mode. Not er-quickload-system-quit-allow-profile-load.txt: that
+    # opt-in makes the ProfileSelect slot-activate forward to the guarded native load instead of
+    # direct-arming the save-safe switch, so quickload_phase never advances and the switch never runs.
     os.path.join(GAMEDIR, "er-quickload-system-quit-load-switch.txt"),
-    # STAY-ACTIVE: force ER's input-accept flag every tick (headless launch leaves the window
+    # Stay-ACTIVE: force ER's input-accept flag every tick (headless launch leaves the window
     # unfocused). Combined with the foreground-force + SendInput, this lets keyboard input route.
     os.path.join(GAMEDIR, "er-quickload-stay-active.txt"),
 ]
@@ -76,7 +76,7 @@ ME3_STDOUT = "/tmp/sq-repro-me3-stdout.txt"  # data artifact (allowed in /tmp)
 
 # Deterministic readiness (repo no-sleep policy): block on inotify game-dir file-change events with a
 # bounded select() timeout as the hard safety cap -- never a bare sleep. The DLL debug log grows inside
-# GAMEDIR, so an inotify MODIFY/CREATE event is the real readiness signal (new log bytes to scan); POLL
+# GAMEDIR, so an inotify MODIFY/CREATE event is the real readiness signal (new log bytes to scan); Poll
 # only bounds how long we block before re-checking process liveness / the RAM-derived semaphore.
 _IN_MODIFY = 0x00000002
 _IN_CREATE = 0x00000100
@@ -98,7 +98,7 @@ except OSError:
 
 
 def wait_for_change(timeout):
-    # Return when a game-dir file changes (log append) OR the timeout safety cap elapses, then the loop
+    # Return when a game-dir file changes (log append) or the timeout safety cap elapses, then the loop
     # re-reads the log + re-checks process liveness. Readiness is the inotify event; the cap only bounds it.
     watch = [_inotify_fd] if _inotify_fd >= 0 else []
     ready, _, _ = select.select(watch, [], [], timeout)
@@ -141,8 +141,8 @@ def main():
     print(f"launched me3 pid={p.pid}; markers armed; watching log from offset {START_OFFSET}", flush=True)
 
     # Shared semaphore-progress watchdog (bd runtime-teardown-semaphore-progress-watchdog): the
-    # monitor's OLD stall detector keyed on blk_ls=0, which the 2-arg getter fix made non-null, so it
-    # no longer fired and every run went to the full cap. Replace it with the agreed THREE-condition
+    # monitor's old stall detector keyed on blk_ls=0, which the 2-arg getter fix made non-null, so it
+    # no longer fired and every run went to the full cap. Replace it with the agreed three-condition
     # teardown.
     from semaphore_watchdog import (  # pyright: ignore[reportMissingImports]
         ProgressWatchdog,
@@ -166,12 +166,12 @@ def main():
     game_seen = False
     verdict = None
 
-    # THREE-condition teardown (user directive 2026-07-17):
+    # Three-condition teardown (user directive 2026-07-17):
     #  (1) LOADED_STABLE (world entered + held)  -> terminal success (+small flush delay)
-    #  (2) no world-load PROGRESS for ~1s after the second-load confirm -> progress-idle stall
-    #  (3) CAP seconds -> hard backstop
+    #  (2) no world-load progress for ~1s after the second-load confirm -> progress-idle stall
+    #  (3) cap seconds -> hard backstop
     # Progress = MONOTONIC high-water marks only, never liveness: loaded_stable_frames, max mms_step,
-    # and the max block load-phase blk_35 (which cycles 0/2/7 while wedged, so we track its HIGH-water
+    # and the max block load-phase blk_35 (which cycles 0/2/7 while wedged, so we track its high-water
     # so oscillation is not mistaken for progress). Armed only after the second-load confirm so boot /
     # first-autoload coarse phases cannot false-stall.
     watchdog = ProgressWatchdog(

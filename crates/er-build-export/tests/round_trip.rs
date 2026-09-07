@@ -27,12 +27,12 @@ use er_build_import_core::model;
 /// A quickbar position near each end of the run, so an off-by-one in either direction shows up.
 const QUICKBAR_FIRST: u32 = 0;
 const QUICKBAR_LAST: u32 = 7;
-/// A pouch position near each end of ITS run, expressed the way the payload does -- past the
+/// A pouch position near each end of its run, expressed the way the payload does -- past the
 /// quickbar.
 const POUCH_FIRST: u32 = QUICKBAR_SLOTS as u32;
 const POUCH_LAST: u32 = QUICKBAR_SLOTS as u32 + POUCH_SLOTS as u32 - 1;
 
-/// The four ammunition names, in the order the ENGINE's slots run: `Arrow1, Bolt1, Arrow2, Bolt2`.
+/// The four ammunition names, in the order the engine's slots run: `Arrow1, Bolt1, Arrow2, Bolt2`.
 /// Deliberately two arrows and two bolts with distinguishable names, because the failure this
 /// guards is an interleave that puts a bolt in an arrow slot -- which four identical names, or
 /// four arrows, would not reveal.
@@ -75,7 +75,7 @@ fn round_trip(doc: &BuildExportDoc) -> model::BuildDoc {
 
 /// A catalog holding every name the fixture uses, under the kind the planner files it as.
 ///
-/// Ids are arbitrary and distinct -- nothing here asserts on an id, only on WHICH POSITION each
+/// Ids are arbitrary and distinct -- nothing here asserts on an id, only on which position each
 /// name reached, and distinct ids are what makes a swapped pair visible.
 fn catalog() -> MapCatalog {
     let mut catalog = MapCatalog::new();

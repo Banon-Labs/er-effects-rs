@@ -1,15 +1,15 @@
-"""Where a function ENDS, for every offline tool in this repo that decodes forward.
+"""Where a function ends, for every offline tool in this repo that decodes forward.
 
-THE ONE RULE THIS MODULE EXISTS TO ENFORCE
+The one rule this module exists to enforce
 ------------------------------------------
 A linear x86-64 decode starting at an address in the de-Arxan'd images is trustworthy only
-INSIDE one function. Past the `ret` the decoder is reading inter-function padding and the
-deobfuscator's LEFTOVER BYTES -- not a uniform `cc`/`90` run -- so it RESYNCHRONISES into
+inside one function. Past the `ret` the decoder is reading inter-function padding and the
+deobfuscator's leftover bytes -- not a uniform `cc`/`90` run -- so it RESYNCHRONISES into
 plausible-looking instructions that were never assembled, including branches. Anything that
 decides a verdict on those bytes is deciding it on noise.
 
-The class has been found FIVE times as of 2026-08-31, each time as a forward decode bounded by
-a byte COUNT instead of by a function EXTENT:
+The class has been found five times as of 2026-08-31, each time as a forward decode bounded by
+a byte count instead of by a function EXTENT:
 
   1. `audit-1170-hook-targets.py::patch_safe` read a flat 0x400 from the hook target. On a
      14-byte leaf that is 0x3f2 bytes of the neighbours, and it manufactured a
@@ -21,30 +21,30 @@ a byte COUNT instead of by a function EXTENT:
   4. A trampoline walk that counted bytes past its own `ret`.
   5. `check-singleton-field-offsets.py::_follow` walked five instructions from a
      `mov r64,[rip+SessionManager]` at 1.17 `0x140257d0f`, whose function `.pdata` ends at
-     `0x140257d22`, and collected `lea edx,[rax+0x18]` at `0x140257d28` -- SIX BYTES into the
+     `0x140257d22`, and collected `lea edx,[rax+0x18]` at `0x140257d28` -- Six bytes into the
      next function, where `rax` holds something else. That phantom was the sole evidence for the
      gate's headline claim that "SessionManager gains one field in 1.17". The same walk invented
-     `CS::PlayerGameData +0xe5` in BOTH images, 0x17 bytes past the declared end each time --
-     symmetric, so it never showed up as a LOST field either.
+     `CS::PlayerGameData +0xe5` in both images, 0x17 bytes past the declared end each time --
+     symmetric, so it never showed up as a lost field either.
 
-THREE SOURCES, MOST AUTHORITATIVE FIRST
+Three sources, most authoritative first
 ---------------------------------------
-  1. `.pdata` declares a function STARTING at the address -- the linker's own answer, with chunk
+  1. `.pdata` declares a function starting at the address -- the linker's own answer, with chunk
      runs merged by `function_regions` so a split function's extent is the whole run rather than
      its first couple of dozen bytes.
-  2. `.pdata` declares one CONTAINING it. The address is then mid-function, which is a separate
+  2. `.pdata` declares one containing it. The address is then mid-function, which is a separate
      question, but the enclosing extent is still the right bound for reading its bytes.
   3. Neither: an unwindless leaf. The x64 ABI omits unwind data for a function that allocates no
      stack and calls nothing, so ELDEN RING's small getters have no `.pdata` entry at all --
-     `.pdata` is blind across 146,715 holes and a missing entry is NOT a missing function. Its
+     `.pdata` is blind across 146,715 holes and a missing entry is not a missing function. Its
      end is DECODED by `verify-rva-map-1170.py::leaf_extent`, the watermark rule that refuses to
      stop at a `ret` some earlier branch reaches past.
 
-Measured over the 425 rows both detour ledgers admit, in BOTH images: 359 declared, 0 enclosed,
+Measured over the 425 rows both detour ledgers admit, in both images: 359 declared, 0 enclosed,
 66 decoded leaves, 0 unknown. `body_end` returning None is a fallback nothing in the current
-tables takes, and a caller that gets None must REFUSE rather than substitute a byte count.
+tables takes, and a caller that gets None must refuse rather than substitute a byte count.
 
-WHY IT LIVES HERE AND NOT IN THE TOOL THAT FIRST NEEDED IT
+Why it lives here and not in the tool that first needed it
 ----------------------------------------------------------
 It was written inside `scripts/audit-1170-hook-targets.py`. Four more tools then needed the same
 answer, and a second implementation of extent resolution is the next divergence bug -- the rule's
@@ -63,7 +63,7 @@ import os
 import sys
 
 BASE = 0x140000000
-# A body longer than this is read only this far. It is a CAP on top of an extent, never the
+# A body longer than this is read only this far. It is a cap on top of an extent, never the
 # window: `body_end` supplies the window, and this only stops a pathological decode of a
 # 0x20000-byte function when a caller has no interest past the first kilobyte.
 DEFAULT_SCAN_CAP = 0x400
@@ -72,10 +72,10 @@ _VERIFY = None
 
 
 def verify_rules():
-    """`scripts/verify-rva-map-1170.py`, imported for its FUNCTION EXTENT rules.
+    """`scripts/verify-rva-map-1170.py`, imported for its function extent rules.
 
-    IMPORTED, NOT RE-DERIVED. That file already imports `audit-1170-hook-targets.py` for
-    `trampoline_walk`; both imports are LAZY -- inside a function, on first use -- so neither
+    Imported, not RE-derived. That file already imports `audit-1170-hook-targets.py` for
+    `trampoline_walk`; both imports are lazy -- inside a function, on first use -- so neither
     module executes the other at import time and the cycle never closes. The sibling's name has
     hyphens in it, so it is loaded by path rather than by `import`.
     """
@@ -98,7 +98,7 @@ _SECTION_KIND = None
 def section_rules():
     """`scripts/check-ledger-section-kind.py`, imported for its PE section table reader.
 
-    IMPORTED, NOT RE-DERIVED, for the same reason `verify_rules` is: that file already owns the
+    Imported, not RE-derived, for the same reason `verify_rules` is: that file already owns the
     "is this VA executable" question for ledger rows, including the detail that decides the whole
     thing -- section size is `max(virtual, raw)`, so the 1.17 `.data`'s zero-filled tail (VSZ
     0xd51bc4 against RSZ 0x249e00) counts as inside `.data` rather than outside every section.
@@ -126,8 +126,8 @@ _SECTIONS = {}
 def executable_at(blob, va):
     """Is `va` inside a section this image marks IMAGE_SCN_MEM_EXECUTE?
 
-    THE OTHER HALF OF "DO NOT DECODE THIS". A decode that does not establish where the function
-    ENDS and a decode that does not establish that the destination is CODE AT ALL are the same
+    The other half of "DO NOT DECODE THIS". A decode that does not establish where the function
+    ends and a decode that does not establish that the destination is code at all are the same
     disease, and the second one produced the most extreme instance found so far: the deleted
     `docs/recon/rva-1170-detour-audited.tsv` promoted 85 rows on an "unwindless leaf" clause, and
     all 85 named non-executable memory. The clause cannot fire on a real leaf by accident and it
@@ -162,7 +162,7 @@ _REGIONS = {}
 def declared_functions(blob):
     """`({begin: end}, {begin}, [(begin, end)])` for `blob`: chunk runs merged, once per image.
 
-    Cached because callers ask per ADDRESS while the parse walks the whole `.pdata` table and the
+    Cached because callers ask per address while the parse walks the whole `.pdata` table and the
     sorted span list is 175k entries. Re-parsing `.pdata` per candidate row is what turned a
     409-row run into minutes. The blob itself is kept in the cache value so its `id` cannot be
     recycled under the key while the entry is alive.
@@ -176,7 +176,7 @@ def declared_functions(blob):
 
 
 def inside_declared_function(rva, spans):
-    """The `(begin, end)` of a declared function that STRICTLY contains `rva`, or None."""
+    """The `(begin, end)` of a declared function that strictly contains `rva`, or None."""
     lo, hi = 0, len(spans)
     while lo < hi:
         mid = (lo + hi) // 2
@@ -196,10 +196,10 @@ def body_end(blob, va, limit=DEFAULT_SCAN_CAP):
     rather than falling back to a byte count. See the module docstring for the three sources and
     for the five times this was got wrong by not asking.
 
-    `limit` bounds only the DECODE arm (source 3), where there is no declaration to stop at and
+    `limit` bounds only the decode arm (source 3), where there is no declaration to stop at and
     it is the one thing standing between the sweep and the rest of the image.
     """
-    # NOT CODE IS NOT A FUNCTION. Checked first, because the leaf arm below is exactly where a
+    # Not code is not a function. Checked first, because the leaf arm below is exactly where a
     # data address gets mistaken for a function: `.pdata` declares nothing for either, so the
     # sweep happily decodes `.data` and hands back an "extent". See `executable_at` for the 85
     # rows that reached a detour verdict that way.
@@ -219,7 +219,7 @@ def body_slice_end(blob, va, cap=None):
     """`body_end` expressed as an absolute file offset for slicing, capped.
 
     Returns the offset one past the function's last byte, or `None` when the extent is unknown.
-    `cap`, when given, is an upper bound in BYTES FROM `va` applied on top of the extent -- a cap
+    `cap`, when given, is an upper bound in bytes from `va` applied on top of the extent -- a cap
     is legitimate, a cap standing in for the extent is the bug.
     """
     end = body_end(blob, va)

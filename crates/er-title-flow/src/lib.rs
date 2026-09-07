@@ -5,17 +5,17 @@
 // crates, and the `host` function-pointer boundary. title_load_step_hooks.rs is the
 // verbatim head of the source title_tick_cover.rs, split at a function boundary so
 // both files clear the repo's hard file-size gate.
-// PARITY: DEBT -- see constants_moved.rs; the split that created these two files kept the
+// PARITY: Debt -- see constants_moved.rs; the split that created these two files kept the
 // import blocks intact so the diff read as a move rather than a rewrite.
 #![allow(unused_imports)]
-// PARITY: DEBT -- this suppresses clippy::missing_safety_doc (a clippy::all lint) for the
-// WHOLE crate, so this crate's reported zero rests on it rather than on written contracts.
+// PARITY: Debt -- this suppresses clippy::missing_safety_doc (a clippy::all lint) for the
+// whole crate, so this crate's reported zero rests on it rather than on written contracts.
 // The unsafe fns here read live game memory and each needs a real `# Safety` section.
 #![allow(clippy::missing_safety_doc)]
-// WINDOWS-ONLY BY CONSTRUCTION, AND THE RUST SIDE HAS TO SAY SO. Cargo already pulls the game
+// Windows-only by construction, and the Rust side has to say so. Cargo already pulls the game
 // bindings (`eldenring`, `fromsoftware-shared`, `er-hook`, `er-loading-portrait-core`, `er-save-loader`,
 // `er-tpf`, `windows`) only under `[target.'cfg(windows)'.dependencies]`; until 2026-08-23 the
-// source imported them unconditionally, so a HOST `cargo test -p er-quickload --lib` died with 31
+// source imported them unconditionally, so a host `cargo test -p er-quickload --lib` died with 31
 // unresolved-import errors that read like the caller's own change had broken something. `check.sh`
 // runs this suite through `cargo xwin test --target x86_64-pc-windows-msvc`, so the shipping target
 // always satisfied the imports and nothing ever went red. `boot_hold` and the constant table stay
@@ -25,7 +25,7 @@
 // NOTE the absence of the sibling shells' `#![cfg_attr(not(windows), allow(dead_code,
 // unused_imports))]` (er-armament-icons et al). Those crates need it because a host build compiles
 // their shell with its only callers cfg'd out; here the host build is `boot_hold` plus the plain
-// constant table, every item `pub`, and it is warning-CLEAN under the workspace
+// constant table, every item `pub`, and it is warning-clean under the workspace
 // `[workspace.lints.rust] warnings = "deny"` (verified 2026-08-23). Adding the allow anyway would
 // hide nothing today and real host debt tomorrow, so it is deliberately not here.
 

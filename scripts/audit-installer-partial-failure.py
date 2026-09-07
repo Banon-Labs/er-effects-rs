@@ -1,55 +1,55 @@
 #!/usr/bin/env python3
-"""SWEEP 1 detector: which hook/patch installers lose SIBLING hooks to one refusal?
+"""Sweep 1 detector: which hook/patch installers lose sibling hooks to one refusal?
 
-On 1.17 an address with no verified mapping is REFUSED by design. An installer that
-turns that refusal into a function-level `return`/`?` kills every OTHER hook it was
+On 1.17 an address with no verified mapping is refused by design. An installer that
+turns that refusal into a function-level `return`/`?` kills every other hook it was
 going to install -- so one unmapped address silently disables a dozen working ones
 (bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`).
 
-This flags a function when BOTH hold:
+This flags a function when both hold:
   * it performs 2+ install/resolve actions (siblings exist to lose), and
-  * it has an ABORT construct (`?`, `.unwrap()`, `return`, `let ... else { .. return }`)
+  * it has an abort construct (`?`, `.unwrap()`, `return`, `let ... else { .. return }`)
     that is not inside a `continue`-shaped or labelled-block-shaped recovery.
 
-It deliberately over-reports: the output is a review list, NOT a verdict, and it is a
-MANUAL TOOL -- deliberately not wired into `scripts/check.sh`. What follows is why, and
+It deliberately over-reports: the output is a review list, not a verdict, and it is a
+manual tool -- deliberately not wired into `scripts/check.sh`. What follows is why, and
 what became of the nineteen rows it printed on 2026-08-31.
 
-WHY THIS DOES NOT GATE
+Why this does not gate
 ======================
-Its stated subject is now covered precisely by two gates that DO run:
+Its stated subject is now covered precisely by two gates that do run:
 
   * `scripts/check-hook-batch-abort.py` -- the batched path. `MhHook::new` + `queue_enable`
-    + `MH_ApplyQueued` is the ONLY shape that can leave an already-created detour stranded,
+    + `MH_ApplyQueued` is the only shape that can leave an already-created detour stranded,
     because the `register_*_hook` registrars call `MH_EnableHook` immediately and never
     touch MinHook's pending set. That gate enumerates the batched universe exactly.
   * `scripts/check-detour-rva-coverage.py` -- the addresses that go missing in the first place.
 
 This one keys on `return`-appears-anywhere with two or more actions, which cannot tell an
 abort apart from a re-entry guard, a module-base early-out, or the "nothing queued, so
-nothing to apply" check that the CORRECT fix for the P0 introduces. Wiring it would mean
+nothing to apply" check that the correct fix for the P0 introduces. Wiring it would mean
 bolting a fifteen-row acknowledgement list onto a matcher whose own rule cannot distinguish
 the rows -- a green that means nothing.
 
-THE NINETEEN ROWS OF 2026-08-31, ADJUDICATED
+The nineteen rows of 2026-08-31, ADJUDICATED
 ============================================
-  4  matcher fault, now FIXED: the INSTALL pattern matched the function's own `fn NAME(`
+  4  matcher fault, now FIXED: the install pattern matched the function's own `fn NAME(`
      declaration, putting all four of er-hook's single-hook dispatch wrappers over the
      `actions >= 2` bar. See `body_of`. The count is 15 after the fix.
-  1  REAL DEFECT, now fixed: `er-refill-all/src/runtime.rs::install` registered
-     `DepositoryDialog::ctor` before `::dtor` through an IMMEDIATE-ENABLE registrar, so a
+  1  real defect, now fixed: `er-refill-all/src/runtime.rs::install` registered
+     `DepositoryDialog::ctor` before `::dtor` through an immediate-enable registrar, so a
      refused dtor address left the ctor detour armed with nothing to clear the latch it
      sets -- and the caller registers the FrameBegin task regardless of the early return,
      so `tick()` read through a freed `DepositoryDialog*` every frame for the rest of the
      session. Fixed by registering the dtor first, which makes both partial states inert.
   3  already remediated, flagged only by the coarse `return` rule: the two 2026-08-30
      per-hook-latch rewrites (`title_resources_stats_text.rs`, `stats_loading_text.rs`) and
-     `install_scaleform_handler_lifecycle_guard`, which is DECLARED ATOMIC with a reason.
+     `install_scaleform_handler_lifecycle_guard`, which is declared atomic with a reason.
  11  correct by construction: re-entry guards, `MH_Initialize` early-outs, module-base
      guards, read-only probes that merely call `write_global_u8`, and per-hook recovery
      that the rule cannot see.
 
-ZERO were a live queued-but-never-applied batch failure. Run `--selftest` to see the
+Zero were a live queued-but-never-applied batch failure. Run `--selftest` to see the
 positive controls fire.
 """
 import re
@@ -71,18 +71,18 @@ RECOVERY = re.compile(r'\bcontinue\b|\bbreak\s+\'')
 
 
 def body_of(mask):
-    """The masked text from the opening brace onwards -- the SIGNATURE removed.
+    """The masked text from the opening brace onwards -- the signature removed.
 
     `mask` begins at the `fn NAME(` declaration, and several of the install primitives this
-    scans for ARE themselves functions in `er-hook`, so a declaration scored a hit on itself.
+    scans for are themselves functions in `er-hook`, so a declaration scored a hit on itself.
     Counting the signature put all four of er-hook's single-hook dispatch wrappers over the
     `actions >= 2` threshold and onto the review list as batch installers, which they are not:
     `register_union_hook`, `register_union_hook_resolved`, `register_union_hook_runtime_derived`
-    and `register_shared_hook_with_budget` each bind exactly ONE target and delegate. Four of
+    and `register_shared_hook_with_budget` each bind exactly one target and delegate. Four of
     the nineteen 2026-08-31 findings were this and nothing else.
 
     Name-comparison does not fix it, because `INSTALL` matches `register_union_hook` as a
-    PREFIX of `fn register_union_hook_resolved` -- the matched text and the function name are
+    prefix of `fn register_union_hook_resolved` -- the matched text and the function name are
     different strings, so the self-hit survives the comparison. Dropping the signature does fix
     it, and it also drops the parameter list, where a `stub: [u8; STUB_LEN]` argument name can
     collide with nothing but noise.

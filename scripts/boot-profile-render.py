@@ -61,7 +61,7 @@ def extract_milestones(log: list[tuple[int, str]]) -> list[tuple[str, int]]:
             if label not in found and re.search(rx, msg):
                 found[label] = ms
     # Sort by actual time: some markers (e.g. the early own-stream observer) interleave, so
-    # MILESTONES declaration order is not the wall-clock order. Time order = correct waterfall.
+    # milestones declaration order is not the wall-clock order. Time order = correct waterfall.
     return sorted(((label, found[label]) for _, label in MILESTONES if label in found), key=lambda kv: kv[1])
 
 
@@ -136,11 +136,11 @@ def phase_windows(milestones, end_ms):
 def verdict(util, max_active, wall_ms, busiest_frac):
     """Classify a phase.
 
-    `busiest_frac` = (CPU ms of the single busiest thread) / wall_ms. A value near 1.0 means ONE
+    `busiest_frac` = (CPU ms of the single busiest thread) / wall_ms. A value near 1.0 means one
     thread was pegged for the whole phase. Combined with low all-core `util`, that is the missed-
-    parallelism signature: one core saturated while the other N-1 idle. This is checked BEFORE the
+    parallelism signature: one core saturated while the other N-1 idle. This is checked before the
     wait-bound test, because a single pegged thread on a 16-core box still yields low overall util
-    yet is emphatically NOT wait-bound -- it is serialized CPU work that could be parallelized.
+    yet is emphatically not wait-bound -- it is serialized CPU work that could be parallelized.
     """
     if wall_ms < 150:
         return "trivial"

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# IS THE PRE-PUSH GATE ACTUALLY INSTALLED -- BY EITHER OF THE TWO ROUTES GIT CAN TAKE?
+# Is the pre-push gate actually installed -- By either of the two routes git can take?
 #
 # Measured 2026-08-31, twice, in the same direction both times: the hook layer failing open while
 # looking installed.
 #
-#   * This clone's `core.hooksPath` was the ABSOLUTE path
+#   * This clone's `core.hooksPath` was the absolute path
 #     /home/banon/projects/er-effects-rs/.githooks, left behind by commit 39a919e0, which renamed
 #     the repository directory to er-mods-rs. Git resolved its hooks directory to somewhere that no
-#     longer existed, so NO hook ran at all -- not the main-push guard, not the gate suite
+#     longer existed, so no hook ran at all -- not the main-push guard, not the gate suite
 #     -- and nothing said so, because a hook that cannot be found is indistinguishable from a hook
 #     that passed.
 #
@@ -18,19 +18,19 @@
 #
 # So this asserts, in the order they fail:
 #   1. core.hooksPath is set at all;
-#   2. it RESOLVES to a real directory holding an executable pre-push;
-#   3. the configured value is RELATIVE. An absolute path is correct until the day the checkout
+#   2. it resolves to a real directory holding an executable pre-push;
+#   3. the configured value is relative. An absolute path is correct until the day the checkout
 #      moves or is renamed, and then it is silently wrong;
-#   4. THE FALLBACK IS SAFE TOO. $GIT_COMMON_DIR/hooks must hold scripts/hooks-fallback-shim
+#   4. The FALLBACK is safe too. $GIT_COMMON_DIR/hooks must hold scripts/hooks-fallback-shim
 #      verbatim, under every name scripts/hooks/ carries -- so that whichever way git resolves the
 #      hook, the same checks run. Checks 1-3 describe a value that several tools write (beads
 #      rewrites core.hooksPath: see the header of scripts/hooks-fallback-shim), so the fallback is
 #      not a theoretical path. Byte-identical, not merely present: a stale shim is the 2026-07-27
 #      failure with a newer date on it.
-#   5. THE HOOK GIT WILL RUN IS *OURS*. Checks 1-4 are all about WHERE the hook is; none of them
+#   5. The hook git will run is *ours*. Checks 1-4 are all about where the hook is; none of them
 #      opens it. See check_hook_identity below for the measured hazard that closes -- in one
 #      sentence: `bd hooks install` honours an existing core.hooksPath and writes its own shims
-#      INTO IT, which here is the version-controlled scripts/hooks, and every check above stays
+#      into it, which here is the version-controlled scripts/hooks, and every check above stays
 #      green afterwards because a hook is still installed and still executable.
 #
 # Not run in CI: a fresh runner has no local hook configuration and does not push.
@@ -41,17 +41,17 @@ fail() {
 	cat >&2 <<'FIXEOF'
 
 fix:  bash scripts/install-git-hooks.sh
-then: git config --get core.hooksPath        # must print a RELATIVE path: scripts/hooks
+then: git config --get core.hooksPath        # must print a relative path: scripts/hooks
 FIXEOF
 	exit 1
 }
 
 check_repo() {
 	local root=$1 configured resolved
-	# THE STATE THAT ARRIVES WITH IT. Twice on 2026-08-31 -- once observed live, 21 seconds after
+	# The state that arrives with it. Twice on 2026-08-31 -- once observed live, 21 seconds after
 	# the fact -- .git/config was rewritten with [core] reduced to exactly the four keys a fresh
 	# `git init` writes (repositoryformatversion, filemode, bare, logallrefupdates), with `bare`
-	# flipped to true and `hooksPath` GONE, in a SINGLE write, everything below [core] untouched.
+	# flipped to true and `hooksPath` gone, in a single write, everything below [core] untouched.
 	# One writer replacing the whole section, not two `git config` edits; still unattributed (`bd
 	# dolt push`, `bd remember` and nested `git worktree add` were each measured innocent). What it
 	# looks like from inside is `fatal: this operation must be run in a work tree` out of every git
@@ -72,7 +72,7 @@ check_repo() {
 	check_fallback "$root"
 }
 
-# THE ROUTE GIT TAKES WHEN core.hooksPath IS GONE. Skipped when the checkout carries no shim
+# The route git takes when core.hooksPath is gone. Skipped when the checkout carries no shim
 # template (an older tree, and the selftest fixtures), because there is then nothing to compare
 # against and the shape simply does not exist yet.
 check_fallback() {
@@ -96,10 +96,10 @@ check_fallback() {
 		"$fallback_dir" "$(cd -- "$root/scripts/hooks" && echo *)"
 }
 
-# WHAT EACH HOOK MUST STILL CALL. A manifest of invocations rather than a hash, deliberately:
+# What each hook must still call. A manifest of invocations rather than a hash, deliberately:
 # these hooks are edited often and legitimately, and a gate that forces a digest to be
 # regenerated on every edit gets switched off instead of updated. Every entry here is a script
-# whose ABSENCE is the whole failure -- the 2026-07-27 fallback ran neither
+# whose absence is the whole failure -- the 2026-07-27 fallback ran neither
 # check-committed-compiles.sh nor the gate suite and looked installed for five weeks.
 # A hook name with no entry gets the byte-identity checks only; add its calls here when it grows
 # any.
@@ -127,8 +127,8 @@ hook_required_invocations() {
 	esac
 }
 
-# 0 = worktree file matches the blob committed at HEAD, 1 = it differs, 2 = no such blob to
-# compare against (an unborn HEAD, or a path not yet committed -- both real states, neither a
+# 0 = worktree file matches the blob committed at head, 1 = it differs, 2 = no such blob to
+# compare against (an unborn head, or a path not yet committed -- both real states, neither a
 # finding).
 tracked_matches_head() {
 	local root=$1 rel=$2 tmpf rc=0
@@ -144,12 +144,12 @@ tracked_matches_head() {
 	return "$rc"
 }
 
-# IS THE HOOK GIT WILL RUN *OURS*? The question checks 1-4 cannot ask, because none of them opens
+# Is the hook git will run *ours*? The question checks 1-4 cannot ask, because none of them opens
 # the file.
 #
-# MEASURED 2026-08-31, in a throwaway repo: `bd hooks install` HONOURS an existing
-# core.hooksPath and writes its five shim files INTO THAT DIRECTORY. Here core.hooksPath is
-# `scripts/hooks`, which is VERSION-CONTROLLED, so one `bd hooks install` -- a command every
+# Measured 2026-08-31, in a throwaway repo: `bd hooks install` honours an existing
+# core.hooksPath and writes its five shim files into that directory. Here core.hooksPath is
+# `scripts/hooks`, which is version-controlled, so one `bd hooks install` -- a command every
 # agent in this tree is one keystroke from, and which `bd doctor` is a front door to -- replaces
 # the tracked pre-commit and pre-push with beads' shims. Checks 1-4 all stay green afterwards: a
 # hook is still installed, still executable, at exactly the configured path. The next agent then
@@ -157,25 +157,25 @@ tracked_matches_head() {
 #
 # Three depths, because each sees a state the other two cannot:
 #
-#   (a) WHAT GIT WILL EXECUTE is either scripts/hooks/<name> itself, a byte-identical copy of it,
+#   (a) what git will execute is either scripts/hooks/<name> itself, a byte-identical copy of it,
 #       or one of the two WRAPPERS this repo ships -- scripts/hooks-fallback-shim and
 #       .githooks/<name>. Those two are allowed to differ because they exec the tracked file
 #       instead of reimplementing it, and clones exist configured for either directory. Content
 #       identity is not assertable for a wrapper (its whole job is to have different bytes), so
 #       the weaker property asserted there is: it is byte-identical to a wrapper this repo
 #       ships, that wrapper still names scripts/hooks/, and it matches its own committed blob.
-#       This is the check for core.hooksPath aimed somewhere ELSE entirely (`.beads/hooks` is
+#       This is the check for core.hooksPath aimed somewhere else entirely (`.beads/hooks` is
 #       the literal beads writes when the key is absent; see the header of
 #       scripts/hooks-fallback-shim for the binary's own strings).
 #
-#   (b) scripts/hooks/<name> IS BYTE-IDENTICAL TO THE BLOB COMMITTED AT HEAD. In today's
+#   (b) scripts/hooks/<name> is byte-identical to the BLOB committed at head. In today's
 #       configuration git executes the worktree file directly, so (a) compares that file with
 #       itself and proves nothing; the committed blob is the only independent copy in existence.
 #       An overwrite shows up here the moment it lands, before anyone commits it. The cost is
 #       that an UNCOMMITTED edit to a hook is also a refusal -- which is the intended reading:
 #       the thing gating the push should be the thing a reviewer can see.
 #
-#   (c) scripts/hooks/<name> STILL INVOKES THE GATE IT EXISTS TO RUN. (b) is defeated by a single
+#   (c) scripts/hooks/<name> still INVOKES the gate it exists to run. (b) is defeated by a single
 #       commit, and "somebody committed the weaker hook" is not hypothetical here -- it is the
 #       2026-07-27 fallback's entire life story. hook_required_invocations above is that floor.
 check_hook_identity() {
@@ -191,7 +191,7 @@ check_hook_identity() {
 		[[ -f "$exe" ]] || fail "scripts/hooks/$name is version-controlled but $exe does not exist, so git runs no $name at all"
 		[[ -x "$exe" ]] || fail "$exe is not executable; git skips a non-executable hook without a word, so nothing runs"
 
-		# (a) -- only meaningful when git will execute a DIFFERENT file from the tracked one.
+		# (a) -- only meaningful when git will execute a different file from the tracked one.
 		if ! [[ "$exe" -ef "$src" ]]; then
 			accepted=""
 			cmp -s "$src" "$exe" && accepted="$src"
@@ -199,7 +199,7 @@ check_hook_identity() {
 				for wrapper in "$shim" "$root/.githooks/$name"; do
 					[[ -f "$wrapper" ]] || continue
 					cmp -s "$wrapper" "$exe" || continue
-					# A WRAPPER EARNS ITS EXEMPTION BY FORWARDING. Both of this repo's
+					# A wrapper earns its exemption by forwarding. Both of this repo's
 					# wrappers exec scripts/hooks/<name> rather than carrying their own
 					# copy of the checks -- which is the divergence .githooks/pre-push's
 					# own header exists to warn about. One that stops naming that
@@ -231,7 +231,7 @@ check_hook_identity() {
 		done < <(hook_required_invocations "$name")
 	done
 
-	# THE WRAPPERS ARE EXECUTED TOO -- the shim whenever core.hooksPath goes missing, .githooks/*
+	# The WRAPPERS are executed too -- the shim whenever core.hooksPath goes missing, .githooks/*
 	# in any clone configured for that directory -- so hold both to (b). Their bytes must differ
 	# from the hook's; what must not differ is their bytes from their own committed blob.
 	for wrapper in scripts/hooks-fallback-shim .githooks/pre-commit .githooks/pre-push; do
@@ -254,42 +254,42 @@ check_hook_identity() {
 # absolute hooksPath whose directory has been renamed out from under it, and a fallback directory
 # holding a weaker stub than the real hook -- and require a refusal for each.
 if [[ "${1:-}" == "--selftest" ]]; then
-	# A HOOK'S ENVIRONMENT REDIRECTS EVERY FIXTURE COMMAND BELOW AT THE REAL REPOSITORY, AND THAT
-	# IS THE WRITER THAT KEPT BLANKING core.hooksPath: IT IS THIS SCRIPT.
+	# A hook'S environment REDIRECTS every fixture command below at the real repository, and that
+	# is the writer that kept BLANKING core.hooksPath: It is this script.
 	#
-	# ...BUT ONLY WHEN THE PUSH CAME FROM A LINKED WORKTREE, which is the detail two agents
+	# ...BUT only when the push came from a linked WORKTREE, which is the detail two agents
 	# contradicted each other over on 2026-08-31 and which decides whether this is a real route or
 	# only a theoretical one. Both were measuring correctly; they were measuring different repos.
 	# scripts/measure-git-hook-env.sh settles it on git 2.55, and refuses to report at all unless it
 	# saw hooks actually fire (a hook that never ran reports the same empty environment as one that
 	# inherited nothing):
-	#   MAIN checkout   pre-push -> GIT_EDITOR, GIT_EXEC_PATH, GIT_PREFIX. No GIT_DIR.
-	#   LINKED WORKTREE pre-push -> the same PLUS GIT_DIR=<main>/.git/worktrees/<name>.
+	#   Main checkout   pre-push -> GIT_EDITOR, GIT_EXEC_PATH, GIT_PREFIX. No GIT_DIR.
+	#   Linked WORKTREE pre-push -> the same plus GIT_DIR=<main>/.git/worktrees/<name>.
 	#                               (also pre-commit, prepare-commit-msg, post-checkout)
 	#
-	# That GIT_DIR's basename is not `.git`, so `git init` under it concludes the repository is BARE
-	# and writes core.bare = true into the SHARED <main>/.git/config -- which is where the "fatal:
+	# That GIT_DIR's basename is not `.git`, so `git init` under it concludes the repository is bare
+	# and writes core.bare = true into the shared <main>/.git/config -- which is where the "fatal:
 	# this operation must be run in a work tree" came from. `git -C <dir>` does not override
 	# GIT_DIR, so `config core.hooksPath <abs>` and `config --unset core.hooksPath` landed there
 	# too. Every negative control "passed" because the fixture was reading the real repo's value, so
 	# the gate failed itself, on damage it had just done, once per push.
 	#
-	# NOT what an earlier version of this comment claimed, and worth stating so nobody re-derives
-	# it: `git init` re-run on an existing repo drops NO keys -- a sentinel [core] key survives it
+	# Not what an earlier version of this comment claimed, and worth stating so nobody re-derives
+	# it: `git init` re-run on an existing repo drops no keys -- a sentinel [core] key survives it
 	# in every form (cwd inside or outside, with or without a path argument, GIT_DIR set or not).
-	# [core] here only ever held five keys, so unsetting hooksPath leaves four that merely LOOK like
+	# [core] here only ever held five keys, so unsetting hooksPath leaves four that merely look like
 	# a fresh init.
 	#
 	# Reproduced 2026-08-31 against the historical file, GIT_DIR aimed at a linked worktree:
-	#   849cc89b -> shared config: core.bare=true AND core.hooksPath UNSET  (the observed damage)
+	#   849cc89b -> shared config: core.bare=true and core.hooksPath UNSET  (the observed damage)
 	#   db109e1d -> shared config: core.bare=true                          (it restores hooksPath)
 	#   bb9fe569 -> config unchanged                                       (the unset below)
 	#
 	# shellcheck disable=SC2046  # word splitting is the point: one variable name per word.
 	unset $(git rev-parse --local-env-vars)
-	# ...AND THEN PROVE IT, because the unset above is only as good as the list it unsets. The
+	# ...AND then prove it, because the unset above is only as good as the list it unsets. The
 	# snapshot below does not care which variable or which route: if this selftest changes the
-	# ambient config AT ALL, it goes red instead of silently disarming the push gate it exists to
+	# ambient config at all, it goes red instead of silently disarming the push gate it exists to
 	# protect. Belt and braces on purpose -- the measurement above is of one git version, and the
 	# failure it guards is invisible from inside (with GIT_DIR exported the 849cc89b version left
 	# this repo's core.hooksPath UNSET and still printed "selftest passed").
@@ -298,10 +298,10 @@ if [[ "${1:-}" == "--selftest" ]]; then
 	[[ -f "$ambient_config" ]] && ambient_before=$(cat "$ambient_config")
 
 	tmp=$(mktemp -d "${TMPDIR:-/tmp}/er-hooks-installed-selftest.XXXXXX")
-	# INVOKED INDIRECTLY, by the `trap ... EXIT` below. ShellCheck 0.11 does not follow trap
+	# Invoked indirectly, by the `trap ... EXIT` below. ShellCheck 0.11 does not follow trap
 	# handlers, so it reported SC2329 and `shellcheck scripts/check-git-hooks-installed.sh` in
 	# scripts/check.sh exited 1 -- a gate red since this function landed, in the one file whose
-	# whole subject is gates that fail without saying so. (The prose goes ABOVE the directive:
+	# whole subject is gates that fail without saying so. (The prose goes above the directive:
 	# a following comment line beginning with the word `shellcheck` is parsed as another
 	# directive and becomes a hard SC1073 parse error.)
 	# shellcheck disable=SC2329
@@ -318,11 +318,11 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit "$rc"
 	}
 	trap selftest_cleanup EXIT
-	# The fixture's pre-push must satisfy check (c) or every POSITIVE arm below turns red for the
-	# wrong reason, so it NAMES the three scripts the real hook runs. It does not run them: what is
+	# The fixture's pre-push must satisfy check (c) or every positive arm below turns red for the
+	# wrong reason, so it names the three scripts the real hook runs. It does not run them: what is
 	# under test here is the checker, not the gate.
 	fixture_hook=$'#!/usr/bin/env bash\n# stands in for the real hook, which runs:\n#   scripts/git-pre-push-block-main.sh\n#   scripts/check-committed-compiles.sh\n#   scripts/check.sh\nexit 0\n'
-	# The MUTANT, in the measured shape of the hazard: `bd hooks install` honours an existing
+	# The mutant, in the measured shape of the hazard: `bd hooks install` honours an existing
 	# core.hooksPath and writes shims like this one into it -- here, into version control.
 	beads_shim=$'#!/bin/sh\n# beads git hook (managed by bd)\nexec bd hooks run pre-push "$@"\n'
 
@@ -364,7 +364,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	fi
 
-	# The 2026-07-27 shape: a fallback that exists, is executable, and is WEAKER than the real hook.
+	# The 2026-07-27 shape: a fallback that exists, is executable, and is weaker than the real hook.
 	printf '#!/usr/bin/env bash\nexit 0\n' >"$tmp/after/.git/hooks/pre-push"
 	chmod 0755 "$tmp/after/.git/hooks/pre-push"
 	if "$0" "$tmp/after" >/dev/null 2>&1; then
@@ -400,7 +400,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	}
 
-	# --- CONTENT IDENTITY. Everything above proves a hook is INSTALLED. These prove it is OURS,
+	# --- Content identity. Everything above proves a hook is installed. These prove it is ours,
 	# which is a different claim, and this repo has been burned by conflating them twice.
 
 	# (a)+(c): the overwrite in place -- the tracked hook replaced where it stands. This is
@@ -418,7 +418,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	}
 
-	# (a): core.hooksPath REDIRECTED at another directory -- the other shape beads writes, and the
+	# (a): core.hooksPath redirected at another directory -- the other shape beads writes, and the
 	# one where the tracked hook is left untouched and simply stops being the one git runs.
 	mkdir -p "$tmp/after/.beads/hooks"
 	printf '%s' "$beads_shim" >"$tmp/after/.beads/hooks/pre-push"
@@ -428,7 +428,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		echo "[check-git-hooks-installed] SELFTEST FAIL: core.hooksPath aimed at a foreign directory holding a foreign pre-push was accepted" >&2
 		exit 1
 	fi
-	# ...and the SPECIFICITY arm: a relocated directory holding the forwarding shim is legitimate,
+	# ...and the specificity arm: a relocated directory holding the forwarding shim is legitimate,
 	# because that shim execs the tracked hook rather than replacing it. A gate red on every
 	# wrapper is a gate people route around.
 	cp -f "$tmp/after/scripts/hooks-fallback-shim" "$tmp/after/.beads/hooks/pre-push"
@@ -438,8 +438,8 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	}
 
-	# THE OTHER WRAPPER THIS REPO SHIPS: .githooks/<name>, kept because clones exist configured
-	# for that directory. It is a forwarder, so its bytes MUST differ from the hook's -- content
+	# The other wrapper this REPO SHIPS: .githooks/<name>, kept because clones exist configured
+	# for that directory. It is a forwarder, so its bytes must differ from the hook's -- content
 	# identity is not assertable for it, and the property that replaces it is that it still names
 	# scripts/hooks/. Prove both directions, or the exemption is a hole with a comment on it.
 	mkdir -p "$tmp/after/.githooks"
@@ -461,7 +461,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 	rm -rf -- "$tmp/after/.githooks"
 	git -C "$tmp/after" config core.hooksPath scripts/hooks
 
-	# --- (b) AND (c) IN ISOLATION. Each mutant below is invisible to the other layer, which is the
+	# --- (b) and (c) in isolation. Each mutant below is invisible to the other layer, which is the
 	# only way to show that both are load-bearing rather than one covering for the other.
 	# Plumbing, not `git add`: this repo forbids the porcelain form.
 	fixture_commit() {
@@ -479,7 +479,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	}
 
-	# (b) alone: an uncommitted edit that keeps EVERY required invocation, so the invocation floor
+	# (b) alone: an uncommitted edit that keeps every required invocation, so the invocation floor
 	# cannot see it and only the committed blob can.
 	printf '%s# appended after the commit\n' "$fixture_hook" >"$tmp/after/scripts/hooks/pre-push"
 	if "$0" "$tmp/after" >/dev/null 2>&1; then
@@ -488,7 +488,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 	fi
 	printf '%s' "$fixture_hook" >"$tmp/after/scripts/hooks/pre-push"
 
-	# (c) alone: the same overwrite, COMMITTED, so (b) is satisfied and the invocation floor is the
+	# (c) alone: the same overwrite, committed, so (b) is satisfied and the invocation floor is the
 	# only thing left standing. One commit is all it takes to defeat a blob comparison -- which is
 	# exactly how the 2026-07-27 stub lived for five weeks.
 	printf '%s' "$beads_shim" >"$tmp/after/scripts/hooks/pre-push"
@@ -506,7 +506,7 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	}
 
-	# --- THE LINKED WORKTREE, the third place git can resolve a hook from. A RELATIVE
+	# --- The linked WORKTREE, the third place git can resolve a hook from. A relative
 	# core.hooksPath is resolved against the WORKTREE's top-level, so the file git runs there is
 	# that worktree's own copy -- which can be overwritten independently of the main checkout's.
 	git -C "$tmp/after" worktree add -q -b hooks-selftest-wt "$tmp/wt" HEAD || {
@@ -524,9 +524,9 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		exit 1
 	fi
 
-	# THE NEGATIVE CONTROL FOR THE UNSET ABOVE, because the bug it fixes is invisible from inside:
+	# The negative control for the UNSET above, because the bug it fixes is invisible from inside:
 	# with GIT_DIR inherited every assertion still ran, still printed, and still passed the two
-	# POSITIVE cases -- only the refusals stopped refusing, and the damage landed somewhere this
+	# positive cases -- only the refusals stopped refusing, and the damage landed somewhere this
 	# script never looks. So re-run the whole selftest with GIT_DIR aimed at a repository that must
 	# not be touched, and compare its config byte for byte. If the unset ever regresses, the
 	# fixtures land in the bystander and this fails instead of the next person's checkout.

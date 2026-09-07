@@ -47,27 +47,27 @@
 //!   decision table; the host product still owns the dialog thread, telemetry flush, and
 //!   process exit.
 //!
-//! # The screen cover is the CALLER's decision, not this crate's
+//! # The screen cover is the caller's decision, not this crate's
 //!
 //! Under the 2026-07-30 user decision the dim belongs to product (B) and the boot dialog
-//! must NOT be dimmed. The extracted `os_pick_validated` preserves that caller-decides
+//! must not be dimmed. The extracted `os_pick_validated` preserves that caller-decides
 //! shape through the [`host::PickerCoverFactory`] seam: the System>Quit product shim passes
 //! a factory that arms its dim, and the boot flow passes [`os_dialog::no_picker_cover`].
 //! Same behavior, expressed across a crate boundary instead of an in-crate enum.
 //!
-//! # The OS-native surface is a REQUIREMENT, not an option
+//! # The OS-native surface is a requirement, not an option
 //!
 //! We never force a user onto an in-game picker we built (user principle 2026-07-30).
 //! Both places that draw one -- this crate's boot picker and `er-quit-menu-core`'s in-game
 //! browse rows -- must offer the OS-native dialog as a selectable surface. That is why the
-//! comdlg32 mechanism and the `os_native_save_picker` config key live HERE, in the crate
+//! comdlg32 mechanism and the `os_native_save_picker` config key live here, in the crate
 //! both products depend on, rather than being duplicated: `er-quit-menu-core` gets the fallback
 //! surface through its one-way dependency on this crate.
 //!
 //! # Linking this crate is not arming it
 //!
-//! `er-quit-menu-core` statically links this crate, so a profile containing ONLY the standalone
-//! product-(B) DLL still offers the OS-native surface. It must NOT thereby acquire (A)'s
+//! `er-quit-menu-core` statically links this crate, so a profile containing only the standalone
+//! product-(B) DLL still offers the OS-native surface. It must not thereby acquire (A)'s
 //! boot missing-save behavior. Two mechanisms, and only the second is a guarantee:
 //!
 //! 1. the `boot-flow` cargo feature, which `er-quit-menu-core` turns off. This isolates the
@@ -102,13 +102,13 @@ pub use os_dialog::*;
 pub use slots::*;
 pub use surface::*;
 
-/// Scratch directory for one test, keyed by PROCESS as well as by name.
+/// Scratch directory for one test, keyed by process as well as by name.
 ///
 /// Every filesystem test in this crate wants a directory it can wipe on entry and then assert the
-/// exact contents of. `std::env::temp_dir()` is ONE directory shared by every process on the
+/// exact contents of. `std::env::temp_dir()` is one directory shared by every process on the
 /// machine -- and under this repo's wine runner `%TEMP%` resolves to the host `/tmp`, so a
-/// windows-target test binary lands in the same place a host one does. A FIXED name therefore
-/// names the SAME directory in two test binaries at once, and two at once is the normal case
+/// windows-target test binary lands in the same place a host one does. A fixed name therefore
+/// names the same directory in two test binaries at once, and two at once is the normal case
 /// here: two agents running `scripts/check.sh` concurrently, the gate run twice over, or a second
 /// checkout of this repo. The two runs then delete each other's files mid-test, and the
 /// assertions fail with nothing whatever wrong in the code under test -- the worst shape of test
@@ -121,8 +121,8 @@ pub use surface::*;
 /// removable` came from a `remove_dir_all` that lost the race to remove it. With the pid in the
 /// name, 80 of 80 are green.
 ///
-/// It lives at CRATE scope rather than inside any one `#[cfg(test)]` module so the whole crate
-/// shares ONE implementation. Private per-module copies are exactly how the fixed names got here
+/// It lives at crate scope rather than inside any one `#[cfg(test)]` module so the whole crate
+/// shares one implementation. Private per-module copies are exactly how the fixed names got here
 /// in the first place: three modules each grew their own `scratch_dir`, so there was no single
 /// place a fix could land and reach all of them.
 #[cfg(test)]

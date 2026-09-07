@@ -1,31 +1,31 @@
 //! Standalone ME3-loadable shell for the world-map invasion-spawn warp feature.
 //!
 //! Loading this DLL through a me3 `[[natives]]` entry is what turns the feature on: the
-//! shell installs a standalone host seam whose gate answers YES, so profile inclusion IS the
+//! shell installs a standalone host seam whose gate answers yes, so profile inclusion is the
 //! toggle and no env var or marker file is involved.
 //!
-//! # What it does today: ORACLE 1 only
+//! # What it does today: Oracle 1 only
 //!
-//! It registers ONE recurring game task (`CSTaskImp` / `FrameBegin`, the same registration
+//! It registers one recurring game task (`CSTaskImp` / `FrameBegin`, the same registration
 //! `er-telemetry` uses) which drives `er_invasion_warp_core::sampler`: a fail-closed read of the
 //! live `CSAutoInvadePoint` coordinate table, re-taken until the totals settle, published as
 //! `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` into
 //! `er-invasion-warp-telemetry.json` and this DLL's log next to the executable.
 //!
-//! It still installs NO detours, patches nothing, and writes nothing into the engine. Oracles
+//! It still installs no detours, patches nothing, and writes nothing into the engine. Oracles
 //! 2-5 (list rows, selected id, requested warp, final position) need the world-map interception
 //! that is still only a design (docs/plans/world-map-invasion-warp.md), so they remain names.
 //! Nothing here can start, fake or spoof invasion/multiplayer/session state -- the feature
 //! reads one coordinate table.
 //!
-//! Unlike `er-loading-portrait` this DLL is safe to load ALONGSIDE `er_quickload.dll`:
+//! Unlike `er-loading-portrait` this DLL is safe to load alongside `er_quickload.dll`:
 //! it owns no Present detour and no MinHook instance. That stays true only while it installs
 //! nothing; the first detour it adds must go through the `er-hook` union.
 
 // A cdylib whose every consumer is `DllMain` and the game hooks/tasks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out, so
 // `dead_code`/`unused_imports` there report the cfg, not real debt (measured 2026-08-21: 119 on
-// the host, 0 on the shipping target). The SHIPPING target (x86_64-pc-windows-msvc) carries the
+// the host, 0 on the shipping target). The shipping target (x86_64-pc-windows-msvc) carries the
 // full deny with no allows. `check.sh` host-runs this crate's tests, which is why the host build
 // has to stay clean at all.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -51,10 +51,10 @@ use std::path::{Path, PathBuf};
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 const LOG_FILE_NAME: &str = "er-invasion-warp.log";
-/// Rewritten (not appended) on every publish, so the file always holds the CURRENT oracle
+/// Rewritten (not appended) on every publish, so the file always holds the current oracle
 /// values rather than a history a reader has to scroll to the end of.
 const TELEMETRY_FILE_NAME: &str = "er-invasion-warp-telemetry.json";
-/// The WARP document, kept separate from the catalog one on purpose: both are rewritten in
+/// The warp document, kept separate from the catalog one on purpose: both are rewritten in
 /// place, so sharing a filename would let whichever wrote last erase the other's evidence.
 const WARP_TELEMETRY_FILE_NAME: &str = "er-invasion-warp-run.json";
 
@@ -108,7 +108,7 @@ fn gate_on() -> bool {
 }
 
 /// Install the standalone host seam: log sink -> this DLL's own log file, telemetry sink ->
-/// this DLL's own JSON document, feature gate ON.
+/// this DLL's own JSON document, feature gate on.
 fn install_standalone_host() -> bool {
     er_invasion_warp_core::install_host(er_invasion_warp_core::InvasionWarpHost {
         append_autoload_debug: standalone_log,
@@ -134,7 +134,7 @@ fn spawn_catalog_task() {
     let _ = std::thread::Builder::new()
         .name("er-invasion-warp".to_owned())
         .spawn(|| {
-            // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and
+            // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and
             // hung a boot. er_game_base::wait backs off in user space and gives up.
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
@@ -164,9 +164,9 @@ fn spawn_catalog_task() {
                     // SAFETY: game task thread with the world up; every read inside is fault-closed
                     // and each map is read at most once per session.
                     unsafe { crate::map_hooks::harvest_resident_msb_points(frame) };
-                    // What destination a SEAMLESS invasion picked. Seamless does not use the
+                    // What destination a seamless invasion picked. Seamless does not use the
                     // .aip/MSB InvasionPoint tables at all, and the code that chooses a target
-                    // is inside the part of ersc.dll Themida encrypted -- but the ANSWER lands
+                    // is inside the part of ersc.dll Themida encrypted -- but the answer lands
                     // in CSGameMan where anything can read it. Passive: no hook on ersc's path,
                     // so it cannot perturb the thing it is measuring.
                     //
@@ -185,7 +185,7 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
-                    // `map_pins = false` withholds BOTH map hooks -- see the key's docs on
+                    // `map_pins = false` withholds both map hooks -- see the key's docs on
                     // `LocalInvasionConfig`. Read per tick rather than latched at attach because
                     // the config is hot-reloaded; the installers are idempotent, so flipping the
                     // key on mid-session arms them and flipping it off simply stops re-arming
@@ -220,8 +220,8 @@ fn spawn_catalog_task() {
                         );
                     }
                     // Advertise this host's current map on its own Steam lobby, so an invader can
-                    // ASK for a location instead of sampling and rejecting. Gated internally on the
-                    // block having CHANGED, so a host standing still costs one string compare.
+                    // ask for a location instead of sampling and rejecting. Gated internally on the
+                    // block having changed, so a host standing still costs one string compare.
                     //
                     // Republishing is the whole point: Seamless writes its advertisement once at
                     // CreateLobby and never again (measured -- 7 SetLobbyData calls at creation,
@@ -240,7 +240,7 @@ fn spawn_catalog_task() {
                     // until it lands rather than being installed once at attach and failing
                     // silently. It changes nothing unless `hunt = true` is in the config.
                     // Learn which lobby Seamless advertises on, by watching it declare one.
-                    // Must be installed before publishing can do anything: publish now REFUSES
+                    // Must be installed before publishing can do anything: publish now refuses
                     // until this observer has seen the declaration, rather than guessing from a
                     // struct offset that pointed at the wrong lobby in every run.
                     // `steam_hooks = false` withholds all three -- see the key's docs. Read from
@@ -263,7 +263,7 @@ fn spawn_catalog_task() {
                         er_invasion_warp_core::oracles::publish_lobby_oracles(publishes, refusals);
                         let (hooked, filters) = crate::lobby_publish::hunt_tally();
                         er_invasion_warp_core::oracles::publish_hunt_oracles(hooked, filters);
-                        // Writing the counters is not the same as PUBLISHING them: the telemetry
+                        // Writing the counters is not the same as publishing them: the telemetry
                         // document is otherwise only written by the catalog sampler, which stops
                         // once the totals latch -- seconds into a run, and long before anyone
                         // hunts. Without this the file freezes at zero while the counters climb.
@@ -273,14 +273,14 @@ fn spawn_catalog_task() {
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //
-                    // SAFETY: same game-task context. Walks the ONE live ViewModel's span -- read
+                    // SAFETY: same game-task context. Walks the one live ViewModel's span -- read
                     // from the engine's own `CSPopupMenu+0x250` slot and required to match the one
                     // the injection recorded -- and writes only to rows that still point into this
                     // DLL's leaked param slab, so a span whose ViewModel was destroyed is refused.
                     unsafe {
                         crate::map_live_pins::restyle_live_pins();
                     }
-                    // Make blocks harvested SINCE this world entry visible, by retargeting rows the
+                    // Make blocks harvested since this world entry visible, by retargeting rows the
                     // constructor already reserved. Refuses unless the engine's own slots agree it
                     // is safe: the ViewModel read live from `CSPopupMenu+0x250`, no dialog attached,
                     // and the row list still beginning where our span was recorded.
@@ -312,16 +312,16 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
-            // ONE sink for both refusal channels, installed before anything resolves an address.
+            // One sink for both refusal channels, installed before anything resolves an address.
             //
             // Every cdylib statically links its own copy of `er-hook` and `er-game-base`, so an
-            // uninstalled sink is silent PER DLL -- and this DLL had none. `HOOK REFUSED` and
+            // uninstalled sink is silent per DLL -- and this DLL had none. `HOOK REFUSED` and
             // `ADDRESS REFUSED` lines, the two things that say a 1.16.2 address did not survive
             // 1.17, were being written to nowhere while the map surface simply failed to appear.
             // `set_hook_logger` installs the address-resolution sink too.
             er_hook::set_hook_logger(standalone_log);
             // Beside the hook sink, and for the same reason one level worse. A panic in this
-            // cdylib crosses an `extern "system"` boundary and becomes an ABORT, which does NOT
+            // cdylib crosses an `extern "system"` boundary and becomes an abort, which does not
             // dispatch to a vectored handler -- so `er_crash_logging` writes no record, no
             // `-latest`, no module list, and the process simply vanishes. Measured 2026-09-04:
             // the F9 cross-area warp killed the game repeatedly and every run's crash log held
@@ -391,14 +391,14 @@ mod tests {
         }
     }
 
-    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
-    /// `std::env::temp_dir()` is ONE directory shared by every process on the machine, so a name
-    /// keyed only by `tag` is the same directory -- and here the same FILE, since the leaf is the
+    /// `std::env::temp_dir()` is one directory shared by every process on the machine, so a name
+    /// keyed only by `tag` is the same directory -- and here the same file, since the leaf is the
     /// fixed artifact name this DLL writes -- in two test binaries at once. Two at once is the
     /// ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the gate
     /// run twice over, or a second checkout. The test below writes a long document, overwrites it
-    /// with a short one and requires the short one to have TRUNCATED the long one; a second
+    /// with a short one and requires the short one to have truncated the long one; a second
     /// process writing its own long document into that same path between this one's rewrite and
     /// its read-back makes the truncation look as though it never happened.
     ///

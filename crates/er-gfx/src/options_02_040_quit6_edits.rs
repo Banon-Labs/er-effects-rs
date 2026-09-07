@@ -1,13 +1,13 @@
-// PROVENANCE. Edits 1-2 were emitted by `scripts/gfx_tag_diff.py --emit-rust` from a vanilla /
+// Provenance. Edits 1-2 were emitted by `scripts/gfx_tag_diff.py --emit-rust` from a vanilla /
 // edited pair of local extracted game files under target/gfx-work (that pair carried the original
-// FOUR-cell Quit tab):
+// four-cell Quit tab):
 //   A (vanilla): len=44007 sha256=170996c2376bb14675fe1bb308c3ce82c28bec0deafbfc8e40bd8fef0e99e4b4
 //   B (4-cell) : len=44057 sha256=15bdbb85d90192b1440f0b0b1aa2893da52510a4692e8ccddd2b6dde4ed0bd6e
 //
-// Edit 3 -- the `Item_2_0` cell that makes the Quit tab FIVE rows -- is authored here rather than
+// Edit 3 -- the `Item_2_0` cell that makes the Quit tab five rows -- is authored here rather than
 // diffed out of a hand-edited movie, because it is one `PlaceObject2` whose every field is copied
 // from the cell directly above it. Its bytes were produced by re-deriving the SWF `MATRIX`
-// bit-packing from the two cells already in this table and confirming the encoder reproduces BOTH
+// bit-packing from the two cells already in this table and confirming the encoder reproduces both
 // of them byte-for-byte before it was used to emit a third:
 //
 //   flags 0x26  = HasCharacter | HasMatrix | HasName, exactly as edits 1-2
@@ -18,8 +18,8 @@
 //                 (55 px) step down the column, the same step that separates row 0 (ty = 4500)
 //                 from row 1 (ty = 5600).
 //
-// Edit 4 -- the `Item_2_1` cell that makes the Quit tab SIX rows -- was authored the same way and
-// held to the same gate: the MATRIX encoder was re-derived and made to reproduce edits 2, 3 AND the
+// Edit 4 -- the `Item_2_1` cell that makes the Quit tab six rows -- was authored the same way and
+// held to the same gate: the matrix encoder was re-derived and made to reproduce edits 2, 3 and the
 // `Item_2_0` of edit 4-as-it-then-was byte-for-byte before it was allowed to emit a fourth cell.
 //
 //   flags 0x26  = HasCharacter | HasMatrix | HasName, exactly as the others
@@ -29,15 +29,15 @@
 //                 the new cell is right-aligned under it), ty = 6700 twips (identical to Item_2_0,
 //                 so it shares that row) -- the corner the 2x3 grid was missing.
 //
-// SIX IS THE EASY CASE, AND IT REPLACED THE HARD ONE. Five items in a 2x3 grid left a RAGGED last
+// Six is the easy case, and it replaced the hard one. Five items in a 2x3 grid left a ragged last
 // row: the native measure loop probed an `Item_2_1` that was not there, the mouse hit test walked a
 // sixth cell that could never be hovered, and reaching the bottom row by pad relied on
-// `FUN_14073b0c0` walking BACK along the row after index 5 was refused. All of that reasoning was
+// `FUN_14073b0c0` walking back along the row after index 5 was refused. All of that reasoning was
 // correct and is now moot -- the grid is full, `cols * rows == SetItemCount == 6`, and no cell the
 // engine probes for is absent.
 //
-// The correctness gate is NOT this comment: `apply_edits` refuses any `new_tag` that does not parse
-// as exactly one tag AND re-serialize to these exact bytes, and `crates/er-gfx/tests/options_02_040.rs`
+// The correctness gate is not this comment: `apply_edits` refuses any `new_tag` that does not parse
+// as exactly one tag and re-serialize to these exact bytes, and `crates/er-gfx/tests/options_02_040.rs`
 // asserts the derived movie's fingerprint, its six grid-cell names, and the geometry the native
 // measure loop reads off them.
 pub const OPTIONS_02_040_QUIT6_EDITS: &[TagEdit] = &[

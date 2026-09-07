@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch Elden Ring through approved direct/offline ME3 with only er_better_refills.dll loaded,
 # then immediately leave the game open for manual QA.
-# This script deliberately does NOT install an EXIT trap that kills the run: the live process is
+# This script deliberately does not install an exit trap that kills the run: the live process is
 # handed to the user, and the printed teardown command is the explicit cleanup trail. Hook-active
 # waiting defaults to 0 because readiness proof must not block a user-inspection handoff.
 set -euo pipefail

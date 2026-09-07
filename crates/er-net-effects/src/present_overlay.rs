@@ -26,7 +26,7 @@ static OVERLAY_TOGGLE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_TOGGLE_KEYS: AtomicUsize = AtomicUsize::new(0);
 /// The button the last frame committed to, shared rather than owned by the render-loop struct.
 ///
-/// When this module is a GUEST there is no `NetEffectsOverlay` instance -- the host owns the only
+/// When this module is a guest there is no `NetEffectsOverlay` instance -- the host owns the only
 /// render loop -- so the state the draw needs between frames cannot live in `self`.
 static TOGGLE_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
@@ -56,8 +56,8 @@ const LINE_COLOR: [f32; 4] = [0.96, 0.94, 0.88, 1.0];
 ///
 /// `ui` is a live `&Ui` supplied by the overlay host for the duration of this call.
 unsafe extern "C" fn guest_draw(frame: *const er_build_watermark_core::overlay_host::OverlayFrame) {
-    // Adopt the host's imgui context and allocators BEFORE touching `ui`. Without this the
-    // context global in THIS DLL is null and `ui.io()` faults on the first field read.
+    // Adopt the host's imgui context and allocators before touching `ui`. Without this the
+    // context global in this DLL is null and `ui.io()` faults on the first field read.
     // SAFETY: `frame` is the pointer the host just handed us, live for this call.
     let Some(ui) = (unsafe { er_build_watermark_core::overlay_host::adopt_frame(frame) }) else {
         return;
@@ -67,7 +67,7 @@ unsafe extern "C" fn guest_draw(frame: *const er_build_watermark_core::overlay_h
 
 /// Put the bar on screen, hosting the imgui context or joining whoever already does.
 ///
-/// BOTH paths draw the identical bar. Which one is taken is decided by load order, and load
+/// Both paths draw the identical bar. Which one is taken is decided by load order, and load
 /// order is not something this crate gets to choose: me3 loads natives in profile order, so
 /// `er_build_watermark.dll` (b) is mapped before `er_net_effects.dll` (n) and would otherwise
 /// win the swapchain by alphabet. Before this, losing that race meant the bar was installed,
@@ -88,7 +88,7 @@ pub(crate) fn install_present_overlay_hook(hmodule_raw: usize) {
         return;
     }
 
-    // Nobody hosts one YET -- but the claim below waits for the game's window before it touches
+    // Nobody hosts one yet -- but the claim below waits for the game's window before it touches
     // the mutex, and every other would-be host is waiting on that same window. So the probe above
     // was taken before anyone could have designated themselves, and losing the mutex here means a
     // host appeared in between. Ask again on that path rather than giving up: a single stale probe
@@ -171,7 +171,7 @@ pub(crate) fn overlay_toggle_keys() -> usize {
 /// Expand the bar, or minimize it back -- the keyboard's half of the `[+]` button.
 ///
 /// Lives here rather than in `effects` because `OVERLAY_COLLAPSED` is read by the render thread
-/// every frame and is deliberately the ONE place the collapsed state lives; mirroring it into the
+/// every frame and is deliberately the one place the collapsed state lives; mirroring it into the
 /// game-thread state would lag the render loop by a frame (see `effects::selector_input_state`).
 pub(crate) fn toggle_collapsed_by_key() -> bool {
     let now_collapsed = !OVERLAY_COLLAPSED.fetch_xor(true, Ordering::Relaxed);
@@ -204,7 +204,7 @@ pub(crate) fn set_collapsed_by_command(collapsed: bool) {
 }
 
 /// The host-side render loop. Carries no state of its own: everything the draw needs between
-/// frames lives in the statics above, because the GUEST path has no instance to hold it.
+/// frames lives in the statics above, because the guest path has no instance to hold it.
 struct NetEffectsOverlay;
 
 impl ImguiRenderLoop for NetEffectsOverlay {
@@ -233,7 +233,7 @@ impl ImguiRenderLoop for NetEffectsOverlay {
     /// Keep the click that hits our own button away from the game.
     ///
     /// Elden Ring reads the mouse through DirectInput, which never touches this window procedure,
-    /// so this alone does NOT stop the click becoming an attack -- `input_suppression` blanks the
+    /// so this alone does not stop the click becoming an attack -- `input_suppression` blanks the
     /// left button in the DirectInput state for that. This closes the legacy-message half of the
     /// same hole, and only while the pointer is inside the button.
     fn message_filter(&self, io: &Io) -> MessageFilter {
@@ -244,11 +244,11 @@ impl ImguiRenderLoop for NetEffectsOverlay {
     }
 }
 
-/// Draw the bar. The ONLY drawing path, taken identically whether this module hosts the imgui
+/// Draw the bar. The only drawing path, taken identically whether this module hosts the imgui
 /// context or is a guest inside another module's render loop -- so the two cannot drift and a
 /// bug can never be "only in the guest case".
 fn draw_bar(ui: &Ui) {
-    // Counted HERE, not in the host `render()`, because the guest path does not go through it.
+    // Counted here, not in the host `render()`, because the guest path does not go through it.
     // Keeping the counters on the host path made `hudhook_render_count` read 0 for a bar that was
     // drawing perfectly well as a guest -- an oracle that reports the old bug's exact signature
     // for a working feature is worse than no oracle.

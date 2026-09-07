@@ -2,17 +2,17 @@
 """Map 1.16.2 game addresses onto ELDEN RING 1.17 by relocation-aware byte content.
 
 ELDEN RING 1.17 (PE FileVersion 2.7.0.0) shipped 2026-08-27 and moved code. Every game address
-in this workspace is a 1.16.2 RVA, and `er-hook`'s build gate now REFUSES to install a detour on
+in this workspace is a 1.16.2 RVA, and `er-hook`'s build gate now refuses to install a detour on
 an unrecognised build rather than corrupt it -- so what used to be one crash per launch is a list
 of addresses to re-point. This turns that list into a table.
 
-WHY THE MATCHER LIVES HERE
+Why the MATCHER lives here
 --------------------------
 `build_masked_pattern` below is this script's own; nothing is imported from elsewhere. An earlier
 version of this note said the matcher came from `scripts/dump-deobf-shift.py`. That tool was
-DELETED on 2026-08-31 and this file never imported it -- the claim was stale on both counts.
+deleted on 2026-08-31 and this file never imported it -- the claim was stale on both counts.
 
-It is worth recording WHY that tool is gone, because the trap it fell into is the one this script
+It is worth recording why that tool is gone, because the trap it fell into is the one this script
 exists to avoid. It mapped `dump-exec.bin` <-> `eldenring-deobf.bin`, and its dump side was still
 the **1.16.1** runtime dump: cross-version by two patches, with a region table describing a shift
 staircase that does not exist between the images anyone still uses. It could not be repaired,
@@ -23,18 +23,18 @@ The region assist is deliberately absent here for the same reason: there is no m
 1.16.2->1.17 region table, and an *estimate* is exactly the kind of plausible-but-wrong address
 that lands mid-function.
 
-WHAT A RESULT MEANS
+What a result means
 -------------------
-A mapping is a CANDIDATE, not a licence to hook. The matcher wildcards relocation-sensitive
+A mapping is a candidate, not a licence to hook. The matcher wildcards relocation-sensitive
 operand bytes and requires a unique hit, which is strong, but a function whose body genuinely
 changed in 1.17 can still match on its unchanged prologue while its behaviour differs -- and a
 mid-function match is worse than no match. Before any mapped address is written into code, read
 the 1.17 function and confirm it does the same job.
 
-WHERE THE ANCHORS COME FROM (2026-09-01)
+Where the anchors come from (2026-09-01)
 ----------------------------------------
 Pass 2 settles an ambiguous address by the delta of the nearest mapping it trusts. Until this
-date the only mappings it trusted were other addresses in the SAME invocation that happened to
+date the only mappings it trusted were other addresses in the same invocation that happened to
 match uniquely -- so mapping one address alone could never use an anchor at all, and the answer
 depended on what else the caller had typed. It now also reads `VERIFIED_LEDGER`, where every pair
 has been compared instruction by instruction by `verify-rva-map-1170.py`. Measured over every
@@ -43,7 +43,7 @@ has been compared instruction by instruction by `verify-rva-map-1170.py`. Measur
 `scripts/measure-1170-anchor-coverage.py` is what produced those numbers and will produce them
 again for any range.
 
-USAGE
+Usage
     python3 scripts/map-rvas-1162-to-1170.py 0x1407ada40 0x14025f5f0
     python3 scripts/map-rvas-1162-to-1170.py --from-refusal-log <er-quickload-autoload-debug.log>
     python3 scripts/map-rvas-1162-to-1170.py --tsv docs/recon/rva-map-1162-to-1170.tsv 0x...
@@ -63,11 +63,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _resolve_image(env_var, filename):
-    """Locate a deobf image: explicit env override, then this checkout, then the MAIN worktree.
+    """Locate a deobf image: explicit env override, then this checkout, then the main worktree.
 
     The two deobf images are gitignored multi-hundred-MB RE inputs that live beside the primary
     checkout and are never copied per worktree. Running this script from a `git worktree` therefore
-    used to die with `missing image: <worktree>/eldenring-deobf.bin` and a suggestion to REGENERATE
+    used to die with `missing image: <worktree>/eldenring-deobf.bin` and a suggestion to regenerate
     it -- advice that is both expensive and wrong, since the file exists and is one directory away.
     Falling back to the main worktree is what makes the mapper usable from an agent worktree at all;
     the env override matches `ER_DEOBF_BIN` in `scripts/find-deobf-bytes.py` so the two tools take
@@ -79,7 +79,7 @@ def _resolve_image(env_var, filename):
     local = os.path.join(ROOT, filename)
     if os.path.exists(local):
         return local
-    # `git rev-parse --git-common-dir` points at the PRIMARY checkout's `.git` from inside a
+    # `git rev-parse --git-common-dir` points at the primary checkout's `.git` from inside a
     # linked worktree (and at our own `.git` otherwise), so its parent is the main working tree.
     try:
         import subprocess
@@ -106,13 +106,13 @@ DST_IMAGE = _resolve_image("ER_DEOBF_BIN_1170", "eldenring-deobf-1.17.bin")
 BASE = 0x140000000
 # Signature lengths tried, longest first. A long signature is the strong evidence, but it also
 # reaches past short functions into whatever follows them -- `GetScadutreeBlessing` is 25 bytes,
-# so a 40-byte signature drags in the next function and fails to match when THAT moved. Falling
+# so a 40-byte signature drags in the next function and fails to match when that moved. Falling
 # back through shorter windows recovers those; the length that succeeded is reported, because a
 # 16-byte match is materially weaker evidence than a 40-byte one.
 SIGNATURE_LADDER = (40, 32, 24, 16)
 # Signature length handed to the matcher when the caller pins one.
 DEFAULT_SIGNATURE_BYTES = SIGNATURE_LADDER[0]
-# Ground truth from the er-ersc-sigshim work: both were established by reading the LIVE 1.17
+# Ground truth from the er-ersc-sigshim work: both were established by reading the live 1.17
 # process and disassembling both images, so they are facts, not predictions. `--selftest` asserts
 # the mapper reproduces them -- a matcher that cannot re-derive a known answer cannot be trusted
 # with an unknown one.
@@ -124,11 +124,11 @@ KNOWN_MAPPINGS = {
     0x1422222D8: 0x142224238,
 }
 # The four addresses er-effects-rs-4uw5.13 was filed about, with their 1.17 values established
-# INDEPENDENTLY of this matcher: `docs/recon/rva-map-1162-to-1170.needed-verified.tsv` carries all
-# four at IDENTICAL-WHOLE, ratio 1.000, BOTH-ENTRIES, derived from the whole-image `.pdata`
+# independently of this matcher: `docs/recon/rva-map-1162-to-1170.needed-verified.tsv` carries all
+# four at identical-whole, ratio 1.000, both-entries, derived from the whole-image `.pdata`
 # alignment rather than from any byte search.
 #
-# Every one of them was UNRESOLVED here until 2026-09-01, and every one of them resolves now ONLY
+# Every one of them was unresolved here until 2026-09-01, and every one of them resolves now only
 # because the ledger supplies a nearby delta. That is what makes this fixture worth its runtime:
 # delete one of the eight anchor rows added to `rva-map-1162-to-1170.verified.tsv` and `--selftest`
 # goes red naming the address, which is the only thing standing between those rows and somebody
@@ -178,13 +178,13 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
 
     What survives is opcode shape and register allocation, which is what identifies a function.
 
-    SEARCHING vs. GATING -- what `rip_only` is for
+    Searching vs. GATING -- what `rip_only` is for
     ----------------------------------------------
-    The masking above is tuned for FINDING a function: a candidate set is fine, and the caller
-    then reads the match. A detour's install-time prologue GATE has the opposite need. It already
+    The masking above is tuned for finding a function: a candidate set is fine, and the caller
+    then reads the match. A detour's install-time prologue gate has the opposite need. It already
     knows the address and is asking "is this the right function", so masking a register-base
     displacement would make `SAVE_REQUEST_RETRACT_B72_SIG` (`mov byte [rax+0xb72],0`) accept
-    `..._B73_SIG` -- the field offset is the ONLY thing telling the two apart. `rip_only=True`
+    `..._B73_SIG` -- the field offset is the only thing telling the two apart. `rip_only=True`
     narrows the mask to the strict subset that a gate can justify: the displacement of a
     RIP-relative memory operand, which re-encodes on every build because both the instruction and
     the global it names move. Everything else stays compared.
@@ -246,21 +246,21 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
 
 # How many shape matches may be collected before the signature is treated as identifying nothing.
 #
-# THIS USED TO BE 9, AND THE 9 WAS COSTING CORRECT ANSWERS. The loop below appended `while
+# This used to be 9, and the 9 was costing correct answers. The loop below appended `while
 # len(hits) <= 8`, so a signature matching 51 times reported the first 9 and pass 2 chose among
 # those. Measured on the address this ticket is about: `0x1409a4670`'s real 1.17 address is
-# `0x1409a5810`, which is the THIRTY-NINTH of 51 shape matches at the 40-byte rung -- thirty past
+# `0x1409a5810`, which is the thirty-ninth of 51 shape matches at the 40-byte rung -- thirty past
 # where the list ended. `rva-map-1162-to-1170.tsv` records the consequence in its own words,
 # "UNRESOLVED: 9 shape matches, none at the nearest anchor's delta (+0x11a0)", and +0x11a0 is
 # exactly the delta `0x1409a5810` sits at. The anchor was right, the delta was right, and the
 # answer had been trimmed off the list before pass 2 could see it.
 #
 # The ceiling is kept, because an over-wildcarded pattern really can match thousands of times and
-# collecting them all is a memory problem rather than evidence. What CHANGED with it is what
+# collecting them all is a memory problem rather than evidence. What changed with it is what
 # reaching it MEANS: a list this long is now a refusal in `map_one` rather than a list, and the
 # reason is that letting it through made the answer depend on the cutoff.
 #
-# THE ARBITRARINESS THAT FORCED THAT, measured over all 1,121 `.pdata` entries of the three regions
+# The ARBITRARINESS that forced that, measured over all 1,121 `.pdata` entries of the three regions
 # this ticket names. 227 of them produce a list that reaches the ceiling -- compiler-generated
 # unwind funclets and vtable stubs, e.g. `0x1409a07a0` and fourteen neighbours 0x40 apart, whose
 # masked shape is `sub rsp,N; mov [rsp],-2; ...; lea rax,[rip+X]; mov [rdx],rax` with every
@@ -274,28 +274,28 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
 # thousands of times, "the bytes at the predicted address have that shape too" is nearly free, and
 # the resolution would rest entirely on the region delta with the byte check contributing nothing
 # while appearing to corroborate. The region-delta method already exists and says so plainly --
-# `docs/recon/rva-map-1162-to-1170.functions.tsv`, paired by masked-signature identity ACROSS
+# `docs/recon/rva-map-1162-to-1170.functions.tsv`, paired by masked-signature identity across
 # `.pdata` -- and that is where an address of this shape should be looked up.
 #
-# ONE KNOB, TWO INDEPENDENT FIXES, MERGED 2026-09-03. `main` reached the same diagnosis from the
+# One KNOB, two independent fixes, merged 2026-09-03. `main` reached the same diagnosis from the
 # same bd ticket on the same day and raised the cap to `MAX_SHAPE_CANDIDATES = 512`, which is the
-# same knob under another name; the merge keeps ONE, and keeps this one, because 512 still
+# same knob under another name; the merge keeps one, and keeps this one, because 512 still
 # TRUNCATES -- it hands pass 2 the 512 lowest-addressed matches and says nothing -- whereas
 # reaching 2048 here is a refusal. Both names cannot survive: `scripts/check.sh` and
 # `docs/recon/rva-map-1162-to-1170.verified.tsv` both name `CANDIDATE_CEILING` and its 2048, and a
 # second constant would be a second answer to "how many is too many". `main`'s measurements are
 # not discarded with its name -- they are folded into `find_unique` below, including the one that
-# licenses any ceiling at all: the widest LEGITIMATE list ever observed is 83.
+# licenses any ceiling at all: the widest legitimate list ever observed is 83.
 CANDIDATE_CEILING = 2048
 
 
 def find_unique(haystack, pattern, mask):
     """Every offset where `pattern` matches under `mask`, up to `CANDIDATE_CEILING` of them.
 
-    THE CAP MUST NOT TRUNCATE IN IMAGE ORDER, and until 2026-09-01 it did. It was 9, and
+    The cap must not TRUNCATE in image order, and until 2026-09-01 it did. It was 9, and
     `bytes.find` walks the image low-to-high, so what reached the second pass was "the first nine
     matches in the 1.17 image", not "the matches". Any function whose shape recurs nine or more
-    times BELOW its own address was unresolvable no matter how good the regional anchor was: the
+    times below its own address was unresolvable no matter how good the regional anchor was: the
     right answer had already been cut off before the anchor was consulted, and the note read
     `9 shape matches, none at the nearest anchor's delta`, which reads like a disagreement and was
     a truncation.
@@ -306,7 +306,7 @@ def find_unique(haystack, pattern, mask):
     hiding `0x140875590`, `0x1409a4ed0` and `0x140920c90`, the other three addresses
     bd er-effects-rs-4uw5.13 was filed about; all four are the `ANCHORED_MAPPINGS` fixture above.
 
-    AND THIS IS WHY A CEILING IS STILL SAFE: across the whole work list the widest list a genuine
+    And this is why a ceiling is still SAFE: across the whole work list the widest list a genuine
     signature produced is 83, at the ladder's shortest 16-byte rung. `CANDIDATE_CEILING` sits an
     order of magnitude past that, so nothing legitimate can fall off the end -- a list that reaches
     it is a statement about the compiler's shapes, not about a function, and `map_one` refuses it
@@ -377,13 +377,13 @@ def map_one(source, target, va, args):
 # How far away a unique mapping may be and still speak for this address. The 1.16.2 -> 1.17 shift
 # is locally constant but changes FAST: measured around `GetScadutreeBlessing`, a neighbour
 # 0x320 bytes away shifts by -0x20 while one 0xb27 bytes away shifts by +0x10. So the anchor is
-# the SINGLE nearest unique mapping, not a consensus of everything in a wide window -- an early
+# the single nearest unique mapping, not a consensus of everything in a wide window -- an early
 # version of this demanded unanimity over 0x40000 and resolved nothing.
 REGION_RADIUS = 0x8000
 
-# The curated ledger, read as an ANCHOR POOL rather than as a lookup table.
+# The curated ledger, read as an anchor pool rather than as a lookup table.
 #
-# WHY IT IS READ AT ALL. Until this was wired up, pass 2's anchors came only from OTHER addresses
+# Why it is read at all. Until this was wired up, pass 2's anchors came only from other addresses
 # in the same invocation that happened to map uniquely -- so mapping one address alone could never
 # use an anchor, and the tool's answer depended on what else the caller happened to type on the
 # command line. Every pair in this file was verified instruction-by-instruction by
@@ -391,20 +391,20 @@ REGION_RADIUS = 0x8000
 # being thrown away. The file already held six rows inside `0x9axxxx`, one of them 0x720 from the
 # address that reported "no anchor nearby".
 #
-# WHAT IT IS NOT. It is not consulted for the answer. An anchor contributes only its DELTA, and
+# What it is not. It is not consulted for the answer. An anchor contributes only its delta, and
 # only to arbitrate between shape candidates the matcher found in the image itself; a row for the
 # very address being mapped is skipped (see `regional_delta`), because reading an address out of a
 # table is a lookup and reporting it as a derivation would launder one into the other.
 #
-# AND WHY `rva-map-1162-to-1170.needed-verified.tsv` IS NOT THE DEFAULT, though it is far larger
+# And why `rva-map-1162-to-1170.needed-verified.tsv` is not the default, though it is far larger
 # and `--anchors` will happily take it. Its pairs come from `functions.tsv`, which is the
-# whole-image REGION-DELTA alignment. Anchoring on them would feed the region delta back in as the
+# whole-image region-delta alignment. Anchoring on them would feed the region delta back in as the
 # evidence for choosing by region delta -- exactly the circularity that makes an over-wildcarded
 # signature worthless here (see `CANDIDATE_CEILING`). The curated ledger's rows were each
 # established by a comparison of their own.
 VERIFIED_LEDGER = os.path.join(ROOT, "docs", "recon", "rva-map-1162-to-1170.verified.tsv")
 
-# Verdicts whose row may anchor. Every one of these asserts the two WHOLE bodies were compared and
+# Verdicts whose row may anchor. Every one of these asserts the two whole bodies were compared and
 # agreed, which is what makes the pair -- and therefore its delta -- a fact worth deferring to.
 #
 # The prefix verdicts are deliberately absent. `IDENTICAL` stopped at a `ret` or at the decode
@@ -430,7 +430,7 @@ def load_anchors(paths):
     """`(old_va, new_va)` pairs from verdict ledgers, for pass 2 to take deltas from.
 
     Rows whose verdict is not in `ANCHOR_VERDICTS` are skipped rather than trusted quietly: a
-    `DIVERGES` row is evidence AGAINST its pair, and anchoring on it would spread one wrong
+    `DIVERGES` row is evidence against its pair, and anchoring on it would spread one wrong
     address across a whole region.
     """
     pairs = []
@@ -490,7 +490,7 @@ def settle(results, pending, anchors=()):
     def regional_delta(va):
         """Delta of the nearest established mapping within `REGION_RADIUS`, or `None`.
 
-        `other != va` is the whole of the circularity guard. A ledger row FOR this address would
+        `other != va` is the whole of the circularity guard. A ledger row for this address would
         otherwise be distance 0, win every time, and hand back the ledger's own answer dressed as
         a derivation -- which is the one thing a reader of this table must be able to rule out.
         """
@@ -531,7 +531,7 @@ def resolve_all(source, target, addresses, args, anchors=()):
     Pass 1 keeps only signatures that matched exactly once -- strong evidence on its own. Pass 2
     takes each remaining address's candidate list and keeps the candidate whose delta equals the
     delta the nearest established mapping agrees on. Anything that survives neither pass is
-    reported UNRESOLVED, which is the honest answer: a wrong address here is a mid-function
+    reported unresolved, which is the honest answer: a wrong address here is a mid-function
     detour, and a blank cell costs a Ghidra lookup while a wrong one costs a crash.
     """
     results, pending = map_all(source, target, addresses, args)
@@ -546,7 +546,7 @@ def selftest(source, target, args):
     # uniquely 0x320 bytes away with the same -0x20 delta; supplying it is what a real run gets
     # for free from the rest of the work list.
     #
-    # Deliberately run with NO ledger, so this half stays a test of the byte path alone.
+    # Deliberately run with no ledger, so this half stays a test of the byte path alone.
     anchor_fixture = 0x14025F2D0
     resolved = resolve_all(
         source, target, list(KNOWN_MAPPINGS) + [anchor_fixture], args
@@ -559,7 +559,7 @@ def selftest(source, target, args):
         if found != expected:
             failures.append(old_va)
 
-    # THE CANDIDATE CEILING, pinned to the measurement that motivated raising it. If this ever
+    # The candidate ceiling, pinned to the measurement that motivated raising it. If this ever
     # stops holding, the number in `CANDIDATE_CEILING`'s comment has gone stale and the claim that
     # a 9-deep list was losing answers no longer has anything behind it.
     ceiling_va, ceiling_expected = 0x1409A4670, 0x1409A5810
@@ -574,8 +574,8 @@ def selftest(source, target, args):
         print(f"  ok   {ceiling_va:#x}: {ceiling_expected:#x} is match {rank + 1} of {len(hits)}, "
               "which the old 9-deep candidate cap cut off")
 
-    # THE LEDGER PATH, and the reason the anchor rows are not decoration. Each address is resolved
-    # ALONE -- one-element work list -- so nothing but `verified.tsv` can supply the delta.
+    # The ledger path, and the reason the anchor rows are not decoration. Each address is resolved
+    # alone -- one-element work list -- so nothing but `verified.tsv` can supply the delta.
     anchors = load_anchors([VERIFIED_LEDGER])
     for old_va, expected in ANCHORED_MAPPINGS.items():
         found, note = resolve_all(source, target, [old_va], args, anchors)[old_va]
@@ -640,7 +640,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # RE-EXEC UNDER uv IF capstone IS ABSENT, the bootstrap `check-leaf-extent-pdata-coverage.py`
+    # RE-EXEC under uv if capstone is absent, the bootstrap `check-leaf-extent-pdata-coverage.py`
     # and `verify-thunk-rva-1170.py` already carry. There is no system pip here, so
     # `build_masked_pattern`'s decoder import died with a bare ImportError at exit 1 --
     # indistinguishable from a real finding, and the reason `--selftest` could not be a check.sh

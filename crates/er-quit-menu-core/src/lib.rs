@@ -11,16 +11,16 @@
 //!   `QuitRow`/`QuitRowFacts`/`QuitRowVerdict` resolver and the single gate on the
 //!   irreversible `ExitProcess(0)`. Fully host-testable; the cleanest thing here.
 //! * `dialog_handlers` -- `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` (1601): the
-//!   AddCancelButton row CLONER, the row ROUTER (which is also what suppresses the native
+//!   AddCancelButton row CLONER, the row router (which is also what suppresses the native
 //!   Return-to-Desktop action), the Save Game label substitution and its save calls, the
 //!   ProfileSelect submit, and the PR-#103 Scaleform ctor/dtor double-free skip.
 //! * `browse` -- `startup_hooks/quit_menu/save_picker_menu.rs` (944): the in-game
 //!   `05_010_ProfileSelect` browse surface (row staging, activation, menu-pump rebuild and
 //!   resubmit, browse stats lines, the list-builder re-stage hook).
-//! * `surface` -- `startup_hooks/save_picker/save_picker_surface.rs` (222): THE one place that decides
+//! * `surface` -- `startup_hooks/save_picker/save_picker_surface.rs` (222): The one place that decides
 //!   which picker surface opens, plus the destination decisions both surfaces share.
 //! * `dim` -- `startup_hooks/quit_menu/save_picker_dim_overlay.rs` (876): the layered GDI window
-//!   that covers the game while an OS dialog is up. IN-GAME QUIT-MENU CASE ONLY.
+//!   that covers the game while an OS dialog is up. In-game quit-menu case only.
 //! * `os_entry` -- the two System>Quit entrypoints in the product shim
 //!   `startup_hooks/save_picker/save_picker_os_dialog.rs` (`os_open_save_picker_load`,
 //!   `os_open_save_dest_picker`). The comdlg32 mechanism they call now lives in
@@ -31,13 +31,13 @@
 //! * `profile_preview` -- the quit-menu half of
 //!   `startup_hooks/quit_menu/save_swap_profile_table.rs` (1050): the foreign-save ProfileSummary
 //!   preview, the swap/restore, and the recommit after the return-title save. Its
-//!   `force_profile_render_tick` half is PRODUCT (the loading-screen profile-model render
+//!   `force_profile_render_tick` half is product (the loading-screen profile-model render
 //!   drive, called from the task registration and the title tick) and stays behind.
 //! * `install` -- `install_system_quit_duplicate_button_hook`, today in
 //!   `startup_hooks/diagnostics/layout_global_hooks.rs`: the single entry point that installs the
 //!   whole feature.
 //!
-//! # Boundary this crate does NOT cross: save suppression
+//! # Boundary this crate does not cross: save suppression
 //!
 //! "The Save Game menu row and the flow it drives" is this crate. "Save suppression and
 //! save-redirect internals" is NOT: `er-save-suppress` is already its own crate with its

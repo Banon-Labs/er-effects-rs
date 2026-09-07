@@ -305,15 +305,15 @@ pub fn install_window_reconfig_observer_hooks() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// EARLY FINAL-GEOMETRY APPLY -- the product fix for the mid-boot black flashes.
+// Early final-geometry apply -- the product fix for the mid-boot black flashes.
 //
 // Observed (run 195813, exact frame correlation): the game applies its display config at ~+11.4s
 // with MoveWindow(resize-in-place to monitor size) + SetWindowPos(FRAMECHANGED), and each
-// geometry-CHANGING call costs 2-7 black presented frames while XWayland remaps the surface;
+// geometry-changing call costs 2-7 black presented frames while XWayland remaps the surface;
 // the two later calls that change nothing produce no flash at all. So: apply the final monitor
-// rect ourselves as soon as the game window exists -- BEFORE the first present, while the screen
+// rect ourselves as soon as the game window exists -- Before the first present, while the screen
 // is legitimately black -- and the game's own reconfiguration becomes a chain of no-ops.
-// The boot pump holds its FIRST self-present until this declares a result, so no pixel can reach
+// The boot pump holds its first self-present until this declares a result, so no pixel can reach
 // the screen at pre-final geometry. Config-respecting: WINDOWED mode skips the apply entirely.
 
 /// Attach-relative ms when the early apply finished, and the applied (w<<16|h) pack.
@@ -472,7 +472,7 @@ pub fn apply_startup_window_final_geometry() {
     }
 
     // Mirror the game's own +11s sequence exactly (resize + FRAMECHANGED reposition), just early.
-    // SWP_NOACTIVATE | SWP_NOOWNERZORDER: our EARLY reposition must NOT activate/foreground the game window.
+    // SWP_NOACTIVATE | SWP_NOOWNERZORDER: our early reposition must not activate/foreground the game window.
     // Without SWP_NOACTIVATE, Windows activates the target as a side effect of SetWindowPos, so this early
     // apply (which fires up to a few times during boot) yanked focus to the game -- user-reported 2026-07-15
     // "the DLL is changing focus". We only relocate the window; the game's own launch activation is untouched.

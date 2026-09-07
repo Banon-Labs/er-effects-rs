@@ -1,28 +1,28 @@
-// MSB PARSE TRACE -- the one measurement that collapses the phase-2 reload freeze.
+// MSB PARSE trace -- the one measurement that collapses the phase-2 reload freeze.
 //
-// MOVED VERBATIM out of the product DLL's
+// Moved verbatim out of the product DLL's
 // `crates/er-quickload/src/experiments/startup_hooks/diagnostics/msb_parse_trace.rs` on
-// 2026-08-25. There it was installed UNCONDITIONALLY at process attach, so every player carried a
+// 2026-08-25. There it was installed unconditionally at process attach, so every player carried a
 // detour on this callback for the sake of a log nothing in the product read back. The body, the
 // sampling order and every log string are unchanged; only the sink moved (`er-diag-harness.log`
 // instead of the product's crash log) and the counters are now this crate's own.
 //
-// `MsbFileCap::msbResCap` (+0x90) has EXACTLY ONE writer on 1.16.2: the load-complete callback at
+// `MsbFileCap::msbResCap` (+0x90) has exactly one writer on 1.16.2: the load-complete callback at
 // RVA 0x21bbf0, which does
 //     content = FD4FileCap::AcquireContent(cap);
 //     if (content != 0 && header_ok) { msbResCap = MsbRepository::GetOrCreate(name, content, size); }
 //     FD4FileCap::ReleaseContent(cap);
-// and returns NORMALLY when `content` is null -- nothing errors, nothing retries, and `loadState` is
+// and returns normally when `content` is null -- nothing errors, nothing retries, and `loadState` is
 // already 4. WorldBlockRes case 2 then waits on `msbResCap != 0` forever with no timeout.
 //
 // The cap-identity capture (bd `cap-identity-capture-rc1-lp0-name-resolved-2026-07-30`) narrowed the
-// cause to two possibilities that NO passive read can separate, because both leave identical state
+// cause to two possibilities that no passive read can separate, because both leave identical state
 // behind (`st=4, bytes=0x0, lp=0x0, ct=0x0`):
-//   A. the callback FIRES for the m28 msb with a null content -> the READ came back empty
-//   B. the callback NEVER FIRES for it -> `AddFileCap` cache-hit, no `PushFileCap`, no load process
+//   A. the callback fires for the m28 msb with a null content -> the read came back empty
+//   B. the callback never fires for it -> `AddFileCap` cache-hit, no `PushFileCap`, no load process
 // Only watching the writer itself tells them apart, so watch the writer itself.
 //
-// This is a TRACE, not a guard: it forwards to the trampoline unconditionally and changes no game
+// This is a trace, not a guard: it forwards to the trampoline unconditionally and changes no game
 // state. It reads `msbResCap` before and after the real call, so the log line states outright
 // whether that invocation produced a resource. Rate-limited, because on a cold boot this fires for
 // every msb in the world.
@@ -56,9 +56,9 @@ static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// Total msb load-complete callbacks observed. Read from the `msb-parse #N` log lines.
 static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Callbacks that returned with `msbResCap` STILL null -- i.e. the content was null and the parse
+/// Callbacks that returned with `msbResCap` still null -- i.e. the content was null and the parse
 /// silently short-circuited. Every one of these is a cap that will wedge `WorldBlockRes` case 2 if a
-/// block ever waits on it, so a non-zero value here IS the freeze precursor.
+/// block ever waits on it, so a non-zero value here is the freeze precursor.
 static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
 
 /// Queues the msb-parse trace detour. Idempotent. The caller applies the MinHook queue once for
@@ -112,7 +112,7 @@ pub(crate) unsafe extern "system" fn msb_parse_trace_hook(cap: usize) {
     } else {
         0
     };
-    // Sampled BEFORE the call: the callback's own `ReleaseContent` can drop the buffer and null the
+    // Sampled before the call: the callback's own `ReleaseContent` can drop the buffer and null the
     // load process on the way out, so reading these afterwards would describe the cleanup rather
     // than the inputs the parse actually saw.
     let (load_process, load_state) = if cap > PTR_SANITY_MIN {
@@ -143,7 +143,7 @@ pub(crate) unsafe extern "system" fn msb_parse_trace_hook(cap: usize) {
         MSB_PARSE_TRACE_NULL_RESULTS.fetch_add(1, Ordering::SeqCst);
     }
 
-    // Log every call that produced NOTHING (the interesting case -- these are the caps that will
+    // Log every call that produced nothing (the interesting case -- these are the caps that will
     // wedge case 2), but rate-limit the successful ones, which number in the hundreds on a cold
     // boot and would otherwise bury the failures.
     let interesting = after == 0;
@@ -153,10 +153,10 @@ pub(crate) unsafe extern "system" fn msb_parse_trace_hook(cap: usize) {
         } else {
             String::from("<badcap>")
         };
-        // WITHIN-RUN CONTROL for the DLC-virtual-root theory. These caps are named
+        // Within-run control for the DLC-virtual-root theory. These caps are named
         // `mapstudio_dlc2:/m28_*.msb`, and `mapstudio_dlc2` is a DLIO virtual-root alias that the
-        // title start-game flow registers EMPTY and only `STEP_LoadListWait` fills in. Dumping the
-        // alias HERE -- where load 1 demonstrably succeeds -- is what makes a later EMPTY reading
+        // title start-game flow registers empty and only `STEP_LoadListWait` fills in. Dumping the
+        // alias here -- where load 1 demonstrably succeeds -- is what makes a later empty reading
         // mean something: without a known-good baseline, "everything reads empty" is
         // indistinguishable from a broken vector walk. Bounded to the first few calls of each
         // outcome because the null path fires ~13x/second during the stall and the walk is not free.

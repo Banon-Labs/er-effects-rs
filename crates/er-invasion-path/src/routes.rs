@@ -55,7 +55,7 @@ pub(crate) struct Snapshot {
 ///
 /// # Why this is not just an enumeration index
 ///
-/// Colouring by position in the roster means the roster's ORDER decides the colour, and the
+/// Colouring by position in the roster means the roster's order decides the colour, and the
 /// roster is sorted by distance -- so two players swapping places as they run would swap colours
 /// mid-fight. The whole point of "N players, N colours" is that a colour identifies a person, so
 /// a slot is bound to a `FieldInsHandle` and released only when that player is gone.

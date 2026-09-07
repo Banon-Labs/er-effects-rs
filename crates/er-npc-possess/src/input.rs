@@ -2,7 +2,7 @@
 //!
 //! # Why this polls instead of hooking
 //!
-//! `er-enemynpc-effects` detours `IDirectInputDevice8::GetDeviceState` because it needs to SUPPRESS
+//! `er-enemynpc-effects` detours `IDirectInputDevice8::GetDeviceState` because it needs to suppress
 //! the trigger key -- blanking the byte so the game does not also act on it. This DLL does not
 //! suppress anything, so it takes the cheaper path `er-refill-all` already proved: poll
 //! `GetAsyncKeyState` and `XInputGetState` from the game's own FrameBegin task.
@@ -12,12 +12,12 @@
 //! `[[shared]]` row in `scripts/me3-dll-conflicts.toml`, a union-shaped handler and a proof that it
 //! chains rather than installing a second MinHook instance on the same prologue -- the exact
 //! configuration that cost this repo a full day when two DLLs did it accidentally. Layer 1 needs
-//! none of that to know a key was pressed. If a later layer needs to STEAL an input from the game
+//! none of that to know a key was pressed. If a later layer needs to steal an input from the game
 //! rather than merely observe it, that is when the detour is earned, and it must go through
 //! `er_hook::register_shared_hook` with a row in that table.
 //!
-//! The thread matters: `GetAsyncKeyState`'s low bit is "pressed since the previous call ON THIS
-//! THREAD", and under Wine/Proton it only reports reliably from the thread the game itself polls
+//! The thread matters: `GetAsyncKeyState`'s low bit is "pressed since the previous call on this
+//! thread", and under Wine/Proton it only reports reliably from the thread the game itself polls
 //! on. FrameBegin is that thread.
 
 // Windows-only crate in practice; the edge state below is pure logic and stays ungated so its
@@ -38,7 +38,7 @@ pub(crate) struct InputSample {
     pub(crate) keyboard_pressed: bool,
     /// ...or on the pad.
     pub(crate) gamepad_pressed: bool,
-    /// The radial chord is held RIGHT NOW. A level, not an edge: it opens a wheel while held.
+    /// The radial chord is held right now. A level, not an edge: it opens a wheel while held.
     pub(crate) radial_held: bool,
     /// The radial hold started or stopped on this poll -- the only radial transition worth a log
     /// line, since the level itself is true for as long as a thumb is on the button.
@@ -63,7 +63,7 @@ impl InputSample {
 /// make releasing the pad look like releasing the keyboard.
 #[derive(Debug)]
 pub(crate) struct Edges {
-    /// The chord the keyboard latch below is ABOUT. Without it a pad rebind would clear that
+    /// The chord the keyboard latch below is about. Without it a pad rebind would clear that
     /// latch, and a key held at that instant then reads as `down && !was_down` -- a press nobody
     /// made, fired by editing an unrelated line of the config file.
     keyboard: Option<Chord>,
@@ -86,14 +86,14 @@ impl Edges {
         }
     }
 
-    /// Move onto new bindings, seeding from the pad sample taken THIS frame.
+    /// Move onto new bindings, seeding from the pad sample taken this frame.
     ///
     /// `buttons` is not decoration. If the player is holding the new chord at the instant a reload
     /// binds it, a cleared latch makes the very next poll read `held && !was_held` -- a press
     /// nobody made, fired by the act of saving the file. Seeding from the live sample says "this
     /// is an ongoing hold", and the next genuine press is the one after they let go.
     ///
-    /// The keyboard latch is CLEARED rather than seeded, and only when the KEYBOARD binding is
+    /// The keyboard latch is cleared rather than seeded, and only when the keyboard binding is
     /// what moved: `GetAsyncKeyState` cannot be sampled here without consuming its
     /// pressed-since-last-call bit, so there is nothing honest to seed it from. Each of the three
     /// bindings is compared separately for the same reason the pad latch is seeded -- an edit to
@@ -234,15 +234,15 @@ pub(crate) const fn read_pad_buttons() -> u16 {
     0
 }
 
-/// Controller 0's LEFT thumbstick, raw. `None` when no pad is connected.
+/// Controller 0's left thumbstick, raw. `None` when no pad is connected.
 ///
 /// A second `XInputGetState` call rather than widening [`read_pad_buttons`]'s return, because the
-/// two have different lifetimes in the frame: the buttons are sampled BEFORE the config reload so
+/// two have different lifetimes in the frame: the buttons are sampled before the config reload so
 /// a rebind can seed its latch from them, and the stick is read much later and only while
 /// something is possessed. Threading a tuple from the first call down to the second consumer would
 /// tie an ordering constraint that exists for the latches onto a reader that does not have one.
 ///
-/// Deadzone and normalisation are NOT applied here -- they belong to
+/// Deadzone and normalisation are not applied here -- they belong to
 /// [`crate::possess::intent::Stick`], where they are testable on the host. This function is the
 /// one untestable line.
 #[cfg(windows)]
@@ -260,7 +260,7 @@ pub(crate) const fn read_left_stick() -> Option<(i16, i16)> {
 /// The keyboard standing in for the left stick: four held keys as one unit-scaled axis pair.
 ///
 /// Returns `None` when nothing is held, which is the same answer a resting stick gives, so the
-/// caller cannot tell a keyboard from a pad and does not have to. A diagonal is NOT normalised
+/// caller cannot tell a keyboard from a pad and does not have to. A diagonal is not normalised
 /// here: `Stick::from_axes` clamps a magnitude over 1, so W+D arrives as (1, 1) and leaves as a
 /// unit vector pointing where the two keys point.
 pub(crate) fn read_move_keys(
@@ -287,14 +287,14 @@ const PAD_RIGHT_SHOULDER: u16 = 0x0200;
 
 /// How far a trigger must travel to count as pressed.
 ///
-/// `r2` and `l2` are ANALOG on an XInput pad -- they are not in `wButtons` at all, which is why
+/// `r2` and `l2` are analog on an XInput pad -- they are not in `wButtons` at all, which is why
 /// `er_hotkey_config`'s chord vocabulary has no spelling for them and why they need a reader of
 /// their own. Microsoft's own documented dead zone is 30/255; this is deliberately higher, because
 /// a moveset button that fires a heavy attack on a resting finger is worse than one that needs a
 /// firm pull.
 const TRIGGER_PRESSED: u8 = 96;
 
-/// EVERYTHING THE MOVESET LAYER READS IN ONE FRAME, AND FROM ONE PAD READ.
+/// Everything the MOVESET layer reads in one frame, and from one PAD read.
 ///
 /// Returns `(face, page)`, both held/not-held bitfields:
 ///
@@ -303,10 +303,10 @@ const TRIGGER_PRESSED: u8 = 96;
 /// * `page` is the two attack-set page keys in [`crate::moveset::dispatch::Hand::index`] order --
 ///   bit 0 the right hand's, bit 1 the left hand's.
 ///
-/// LEVELS, not edges -- [`FaceEdges`] turns both into presses. Keeping the two apart means the pad
+/// Levels, not edges -- [`FaceEdges`] turns both into presses. Keeping the two apart means the pad
 /// read stays the one untestable line in this file and the edge logic is proved on the host.
 ///
-/// ONE `XInputGetState`, because it is the expensive call here: with no controller attached it
+/// One `XInputGetState`, because it is the expensive call here: with no controller attached it
 /// walks the driver stack and costs on the order of a millisecond, on the game's own `FrameBegin`
 /// thread, every frame. Reading it twice to answer two questions about the same gamepad state would
 /// pay that twice for nothing -- and worse, the two reads could disagree, so a d-pad tap could land
@@ -326,7 +326,7 @@ pub(crate) fn read_moveset_inputs(buttons: crate::settings::ButtonSettings) -> (
     let down = |chord: Option<Chord>, pad_chord: PadChord| -> bool {
         chord.is_some_and(chord_held) || pad_chord.held_in(pad_buttons)
     };
-    // THE HELD BIT ONLY, never `GetAsyncKeyState`'s pressed-since-last-call bit. `crate::picker`
+    // The held bit only, never `GetAsyncKeyState`'s pressed-since-last-call bit. `crate::picker`
     // polls the same two arrow keys through `chord_held` every frame and consumes that bit, so an
     // edge built on it would lose presses depending on which module happened to run first. A
     // held-level edge through [`FaceEdges`] cannot.
@@ -340,11 +340,11 @@ pub(crate) const fn read_moveset_inputs(_buttons: crate::settings::ButtonSetting
     (0, 0)
 }
 
-/// The mouse half of the same four inputs, matching the game's OWN default keyboard layout:
+/// The mouse half of the same four inputs, matching the game's own default keyboard layout:
 /// `r1` left click, `r2` shift + left click, `l1` right click, `l2` shift + right click.
 ///
 /// Copied from vanilla rather than invented so a keyboard player's fingers already know it, and so
-/// this needs no new config surface. A shifted click reports ONLY the shifted input, or every
+/// this needs no new config surface. A shifted click reports only the shifted input, or every
 /// heavy attack would fire a light one alongside it.
 #[cfg(windows)]
 fn read_mouse_face_inputs() -> u8 {
@@ -379,7 +379,7 @@ pub(crate) struct FaceEdges {
 }
 
 impl FaceEdges {
-    /// Feed one frame's levels, get back the bits that went down THIS frame.
+    /// Feed one frame's levels, get back the bits that went down this frame.
     pub(crate) const fn feed(&mut self, held: u8) -> u8 {
         let pressed = held & !self.held;
         self.held = held;
@@ -389,8 +389,8 @@ impl FaceEdges {
 
 /// One keyboard edge for the optional chord.
 ///
-/// BOTH bits of `GetAsyncKeyState` are used and the low one is not optional: it means "pressed
-/// since the previous call on this thread", so it catches a press that happened AND was released
+/// Both bits of `GetAsyncKeyState` are used and the low one is not optional: it means "pressed
+/// since the previous call on this thread", so it catches a press that happened and was released
 /// between two frames -- a tap shorter than 16ms, which is an ordinary keypress.
 #[cfg(windows)]
 pub(crate) fn keyboard_edge(chord: Chord, was_down: &mut bool) -> bool {
@@ -424,7 +424,7 @@ pub(crate) const fn keyboard_edge(_chord: Chord, _was_down: &mut bool) -> bool {
     false
 }
 
-/// Is this chord held RIGHT NOW? A level read, not an edge.
+/// Is this chord held right now? A level read, not an edge.
 ///
 /// The picker needs levels rather than edges because it auto-repeats: an edge detector cannot
 /// tell "held for forty frames" from "pressed once", and a 408-row list that steps once per
@@ -432,8 +432,8 @@ pub(crate) const fn keyboard_edge(_chord: Chord, _was_down: &mut bool) -> bool {
 /// [`crate::picker::RepeatLatch`], where it is testable; this is the untestable line that feeds
 /// it.
 ///
-/// ONLY THE HELD BIT IS READ, never `GetAsyncKeyState`'s low "pressed since the previous call"
-/// bit -- but calling this still CLEARS that bit for the key, because Windows clears it on read
+/// Only the held bit is read, never `GetAsyncKeyState`'s low "pressed since the previous call"
+/// bit -- but calling this still clears that bit for the key, because Windows clears it on read
 /// regardless of which bit the caller looked at. So a chord shared with the possess hotkey would
 /// have its taps stolen if this ran first, which is why `crate::picker::tick` is documented to
 /// run after the possess edge has been sampled.
@@ -507,7 +507,7 @@ mod tests {
         assert!(edges.feed(both, false).gamepad_pressed, "pressed again");
     }
 
-    /// The radial is a LEVEL, not an edge: it opens a wheel for as long as it is held, so it must
+    /// The radial is a level, not an edge: it opens a wheel for as long as it is held, so it must
     /// stay true on every poll rather than firing once.
     #[test]
     fn the_radial_reports_a_level_and_flags_only_the_transitions() {
@@ -525,7 +525,7 @@ mod tests {
         assert!(sample.radial_changed, "the hold ended");
     }
 
-    /// THE PHANTOM PRESS. Saving the config while resting on the chord that the save BINDS must
+    /// The phantom press. Saving the config while resting on the chord that the save binds must
     /// not fire the feature.
     #[test]
     fn rebinding_onto_an_already_held_chord_does_not_fire() {
@@ -554,8 +554,8 @@ mod tests {
         assert!(!sample.radial_changed, "already held when it was bound");
     }
 
-    /// THE LATCH THAT MUST NOT BE COLLATERAL DAMAGE. Editing the PAD chord clears the pad latch;
-    /// clearing the KEYBOARD latch at the same time would make a key held at that instant read as
+    /// The latch that must not be collateral damage. Editing the PAD chord clears the pad latch;
+    /// clearing the keyboard latch at the same time would make a key held at that instant read as
     /// `down && !was_down` on the next poll -- a press fired by saving an unrelated line.
     #[test]
     fn a_pad_rebind_leaves_the_keyboard_latch_alone() {
@@ -567,7 +567,7 @@ mod tests {
             "the keyboard binding did not move, so its latch must not have been touched"
         );
 
-        // ...and moving the KEYBOARD binding does clear it, because the new key has never been
+        // ...and moving the keyboard binding does clear it, because the new key has never been
         // sampled and `GetAsyncKeyState` cannot be probed here without eating its edge bit.
         let mut moved = bindings("select+start", "dpad_down");
         moved.keyboard = Some(er_hotkey_config::keys::parse_chord("F9").expect("F9"));
@@ -575,7 +575,7 @@ mod tests {
         assert!(!edges.keyboard_was_down());
     }
 
-    /// Rebinding onto the SAME bindings is not a move, and must not disturb either latch --
+    /// Rebinding onto the same bindings is not a move, and must not disturb either latch --
     /// otherwise every reformat of the config file re-primes the edges mid-hold.
     #[test]
     fn rebinding_onto_the_same_bindings_is_not_a_move() {

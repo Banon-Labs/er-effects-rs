@@ -51,7 +51,7 @@ pub(crate) const VECTORED_FIRST_HANDLER: u32 = 1;
 pub(crate) const MAX_AV_LOG_LINES: usize = 256;
 pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
 /// NTSTATUS severity field (bits 30-31) and its "error" value. The VEH's catch-all arm logs only
-/// ERROR-severity exceptions: that admits the whole crash family (stack overflow, fastfail, heap
+/// error-severity exceptions: that admits the whole crash family (stack overflow, fastfail, heap
 /// corruption, illegal instruction, C++/Rust throw) while excluding the codes the process raises as
 /// routine control flow -- `DBG_PRINTEXCEPTION_C` (0x40010006), the MSVC thread-name exception
 /// (0x406D1388, both severity `informational`) and our own #BP/single-step traps (severity
@@ -59,7 +59,7 @@ pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
 pub(crate) const EXCEPTION_SEVERITY_MASK: u32 = 0xC000_0000;
 pub(crate) const EXCEPTION_SEVERITY_ERROR: u32 = 0xC000_0000;
 /// The exception codes this DLL's own failures arrive as, none of which were logged before
-/// 2026-07-30 because the VEH gated ALL logging on `EXCEPTION_ACCESS_VIOLATION_CODE`.
+/// 2026-07-30 because the VEH gated all logging on `EXCEPTION_ACCESS_VIOLATION_CODE`.
 pub(crate) const EXCEPTION_STACK_OVERFLOW_CODE: u32 = 0xC000_00FD;
 pub(crate) const EXCEPTION_ILLEGAL_INSTRUCTION_CODE: u32 = 0xC000_001D;
 pub(crate) const EXCEPTION_HEAP_CORRUPTION_CODE: u32 = 0xC000_0374;
@@ -72,15 +72,15 @@ pub(crate) const EXCEPTION_NONCONTINUABLE_CODE: u32 = 0xC000_0025;
 /// Dedicated budget for the process-fatal codes, kept separate from the general one so a C++/Rust
 /// throw storm can never spend the budget that has to be there for the single stack-overflow line.
 pub(crate) const MAX_FATAL_EXCEPTION_LOG_LINES: usize = 4;
-/// Shared budget for every other ERROR-severity code (first-chance C++ throws are frequent).
+/// Shared budget for every other error-severity code (first-chance C++ throws are frequent).
 pub(crate) const MAX_OTHER_EXCEPTION_LOG_LINES: usize = 24;
 /// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
 /// RtlExitUserProcess, NtTerminateProcess).
 pub(crate) const CRASH_EXIT_TARGET_COUNT: usize = 4;
 // Hardware write-watchpoint on GameMan+0xc30 (the save-mount map write): set DR0 to
-// &c30 + DR7 to a 4-byte data-write breakpoint on the game threads, so the EXACT
-// writing instruction (vanilla OR Seamless/ERSC) traps into our VEH with its RIP +
-// call stack -- no guessing which function does the deserialize. Win64 CONTEXT field
+// &c30 + DR7 to a 4-byte data-write breakpoint on the game threads, so the exact
+// writing instruction (vanilla or Seamless/ERSC) traps into our VEH with its RIP +
+// call stack -- no guessing which function does the deserialize. Win64 context field
 // offsets (fixed by the ABI) + the debug-register encodings.
 pub(crate) const EXCEPTION_SINGLE_STEP_CODE: u32 = 0x80000004;
 pub(crate) const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
@@ -118,13 +118,13 @@ pub(crate) const C30_WATCH_TICK_BIAS: usize = 1;
 pub(crate) const C30_WATCH_ARM_COUNT_NONE: i32 = 0;
 pub(crate) static C30_WATCH_LAST_ARM_TICK: AtomicUsize = AtomicUsize::new(C30_WATCH_NEVER_ARMED);
 pub(crate) use er_telemetry_core::counters::C30_WATCH_HITS;
-/// 16-byte alignment for the stack CONTEXT buffer (Get/SetThreadContext require it);
+/// 16-byte alignment for the stack context buffer (Get/SetThreadContext require it);
 /// mask = align-1. Over-allocate by CONTEXT_ALIGN then round the pointer up.
 pub(crate) const CONTEXT_ALIGN: usize = 16;
 pub(crate) const CONTEXT_ALIGN_MASK: usize = 0xf;
 pub(crate) const CONTEXT_ZERO_FILL: u8 = 0;
 pub(crate) const C30_WATCH_ARM_INCREMENT: i32 = 1;
-/// OpenThread bInheritHandle = FALSE.
+/// OpenThread bInheritHandle = false.
 pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
 /// Monotonic per-frame counter that paces the watchpoint re-arm cadence without
 /// taking the EffectsState lock before the player check.

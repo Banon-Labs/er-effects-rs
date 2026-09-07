@@ -28,10 +28,10 @@ pub const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 /// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
 /// remaps proved crash-prone.
 ///
-/// 1.16.2 re-verification (er-effects-rs-3t4m): the ctor ENTRY is `0x2a2020`. The previous value
+/// 1.16.2 re-verification (er-effects-rs-3t4m): the ctor entry is `0x2a2020`. The previous value
 /// `0x2a20e0` was the 1.16.1 entry (byte-proven: the 1.16.1 runtime dump holds the exact prologue
 /// `48 89 4c 24 08 53 56 57 41 56 48 83 ec 38` at 0x2a20e0, and the 1.16.2 dump/deobf hold it at
-/// 0x2a2020); in 1.16.2, 0x2a20e0 is the MID-BODY instruction `MOV [RSI+0x38],RAX` (+0xc0, zero
+/// 0x2a2020); in 1.16.2, 0x2a20e0 is the mid-body instruction `MOV [RSI+0x38],RAX` (+0xc0, zero
 /// xrefs). A MinHook detour installed there is entered mid-frame, so its trampoline continues the
 /// ctor epilogue at an rsp displaced by the detour call frame and the final RET pops a garbage
 /// stack slot -> deterministic stack-exec access violation the first time the helper is
@@ -84,7 +84,7 @@ pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_HOOK_INSTALLED;
 pub use er_telemetry_core::counters::LOADING_SCREEN_GFX_FADEOUT_LAST_MS;
 /// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
 /// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
-/// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
+/// (`this+0xb88`). er-effects-rs-jsm PIVOT: we no-OP it (skip the original) so the native tip title/body
 /// are never set -- our own player-stats text (overlay) shows in the tip region instead. Installed before
 /// the widget ctor so even the ctor's one-shot initial tip is suppressed.
 pub const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90a300;
@@ -98,11 +98,11 @@ pub const KNOWLEDGE_TIP_TITLE_HANDLE_OFFSET: usize = 0xb28;
 pub const KNOWLEDGE_TIP_BODY_HANDLE_OFFSET: usize = 0xb88;
 /// `CS::KnowledgeLoadingScreen` tip-advance "enabled" predicate lambda (dump `FUN_14090a1b0` ->
 /// deobf/live `0x14090a0c0`, content-matched shift -0xf0). `fn(functor) -> bool`; true only while the
-/// Main clip label == "Normal". The ctor registers ONE native menu action (input id 0x186be -- the
+/// Main clip label == "Normal". The ctor registers one native menu action (input id 0x186be -- the
 /// keyguide's "press to advance the tip"): the base `MenuWindow::Update` trigger loop fires the action
-/// only when this predicate returns true, AND the per-update keyguide composer (vtable slot 7 -> slot 4)
+/// only when this predicate returns true, and the per-update keyguide composer (vtable slot 7 -> slot 4)
 /// lists an action in the keyguide only while its enabled predicate is true. Forcing false therefore
-/// BOTH no-ops the advance press and durably hides the keyguide prompt (a one-shot SetText blank on the
+/// both no-ops the advance press and durably hides the keyguide prompt (a one-shot SetText blank on the
 /// keyguide handle `this+0x380` would be overwritten by the per-update re-composition). The lambda is
 /// reached only through this screen's `_Func_impl` vftable, so no other menu is affected.
 /// (bd loading-keyguide-and-tip-advance-RE-2026-07-06.)
@@ -128,10 +128,10 @@ pub const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
 pub const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
 pub const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
 pub const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
-/// The `CS::LoadingScreen` member CSScaleformValue that its OWN authored fade-out is played on --
+/// The `CS::LoadingScreen` member CSScaleformValue that its own authored fade-out is played on --
 /// the single handle that separates the loading screen's fade from every other menu's.
 ///
-/// DERIVED FROM THE IMAGE, not inferred from a name. `LOADING_SCREEN_GFX_FADEOUT_RVA` (0x90a0a0,
+/// Derived from the image, not inferred from a name. `LOADING_SCREEN_GFX_FADEOUT_RVA` (0x90a0a0,
 /// 1.17 `0x14090b240`) is a 23-byte thunk and its whole body is the derivation:
 ///
 /// ```text
@@ -144,7 +144,7 @@ pub const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
 /// The object it lands on is the same one `sample_loading_screen_bar` publishes as
 /// `LOADING_SCREEN_LAST_THIS`: `CS::LoadingScreen::Update` (1.17 `0x14090b850`) reads `+0xa38`
 /// (data), `+0xa48` (gauge) and `+0xab0` (enabled) off that pointer, which are the three offsets
-/// declared directly above this line. So `LOADING_SCREEN_LAST_THIS + 0xad8` IS the loading
+/// declared directly above this line. So `LOADING_SCREEN_LAST_THIS + 0xad8` is the loading
 /// screen's fade-out clip, and any other `this` reaching the goto wrapper belongs to some other
 /// movie.
 ///
@@ -166,9 +166,9 @@ pub const LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET: usize = 0x24;
 /// `menu_load_entries` is a Fisher-Yates-shuffled 1..=34 array (the 34 loading-screen artwork/tip
 /// variants) and `current_menu_load_index` picks the active one; `replace_tex_info` /
 /// `requested_replace_tex_info` are the Scaleform texture-replacement handoff that swaps that artwork into
-/// the movie; `countdown` is the minimum-display timer. IMPORTANT: `load_done` (+0xed) is a load-COMPLETE
+/// the movie; `countdown` is the minimum-display timer. IMPORTANT: `load_done` (+0xed) is a load-complete
 /// latch (`Update` copies it from `request_load_done`, which the map-load system raises) -- it reads true
-/// AFTER the load finishes and lingers into gameplay, so it is NOT a "loading screen is visible" signal.
+/// after the load finishes and lingers into gameplay, so it is not a "loading screen is visible" signal.
 /// Singleton = `*(base + RuntimeGlobalRva::NowLoadingSingleton)`.
 #[repr(C)]
 pub struct CSNowLoadingHelperImp {

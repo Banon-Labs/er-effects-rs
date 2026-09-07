@@ -21,12 +21,12 @@ static VISIBLE_ROWS: AtomicUsize = AtomicUsize::new(0);
 ///
 /// The roster is fixed once the loader finishes, but the standings are not: the release lookup
 /// answers on a background thread seconds into the run, and a watermark that never recomputed
-/// would stay quiet having learned that something IS behind and not shown it.
+/// would stay quiet having learned that something is behind and not shown it.
 const REBUILD_EVERY_RENDERS: usize = 120;
 
 /// Process-wide name of the watermark owner.
 ///
-/// hudhook's own install latch is a plain `static` and statics are PER DLL, so two of our DLLs
+/// hudhook's own install latch is a plain `static` and statics are per DLL, so two of our DLLs
 /// each calling `Hudhook::apply()` would both believe they were first and double-hook `Present`.
 /// A named kernel object is visible across every module in the process, which is exactly the
 /// scope the question has. `Local\` keeps it per-session rather than machine-wide.
@@ -81,7 +81,7 @@ impl ImguiRenderLoop for WatermarkOverlay {
             self.rebuild();
         }
         self.renders = self.renders.wrapping_add(1);
-        // Guests FIRST, and before any early return. This module hosts the only imgui context in
+        // Guests first, and before any early return. This module hosts the only imgui context in
         // the process, so an early return here is not "the watermark drew nothing" -- it is every
         // other overlay in the process drawing nothing, which is exactly the failure that made
         // er-net-effects' bar vanish.
@@ -92,7 +92,7 @@ impl ImguiRenderLoop for WatermarkOverlay {
         }
 
         let [screen_width, _] = ui.io().display_size;
-        // The foreground draw list, so the watermark sits above the game AND above any imgui
+        // The foreground draw list, so the watermark sits above the game and above any imgui
         // window another overlay in this process happens to be drawing.
         let draw_list = ui.get_foreground_draw_list();
         let row_height = layout::FONT_SIZE_PX;
@@ -128,9 +128,9 @@ pub fn visible_rows() -> usize {
 
 /// How a bid to host the overlay turned out.
 ///
-/// The two failures are NOT interchangeable and collapsing them into one `false` is what made
+/// The two failures are not interchangeable and collapsing them into one `false` is what made
 /// this whole class of bug unreadable. [`LostToAnotherModule`](OverlayClaim::LostToAnotherModule)
-/// PROVES a host exists and the caller should register as a guest; [`NoWindow`](
+/// proves a host exists and the caller should register as a guest; [`NoWindow`](
 /// OverlayClaim::NoWindow) means this process never got a window and nobody will host anything.
 /// Reporting the second as though it were the first, or either as an ABI mismatch, sends the
 /// reader hunting a version skew that is not there.
@@ -141,14 +141,14 @@ pub enum OverlayClaim {
     Won,
     /// Another module created the mutex first. It is the host, or is a few instructions from
     /// designating itself one -- so the correct response is to register as a guest, retrying
-    /// across that gap, NEVER to give up.
+    /// across that gap, never to give up.
     LostToAnotherModule,
     /// No visible, non-empty top-level window appeared for this process within the bounded wait.
     /// There is nothing to host an overlay on and no host to join.
     NoWindow,
 }
 
-/// Claim process-wide ownership of the hudhook overlay, returning whether THIS call won.
+/// Claim process-wide ownership of the hudhook overlay, returning whether this call won.
 ///
 /// Prefer [`claim_overlay_ownership`]: this bool form cannot distinguish losing the mutex from
 /// never getting a window, and a caller that must decide whether to become a guest needs to know
@@ -168,12 +168,12 @@ pub fn claim_owner() -> bool {
 /// The handle is never closed, on purpose: ownership must last as long as the process, and
 /// closing it would destroy the mutex once no other opener held it, letting a later-loading DLL
 /// believe it was first and install a second hook. Nothing is leaked in the Rust sense -- a Win32
-/// `HANDLE` is `Copy` with no `Drop`, so simply not calling `CloseHandle` IS the retention.
+/// `HANDLE` is `Copy` with no `Drop`, so simply not calling `CloseHandle` is the retention.
 pub fn claim_overlay_ownership() -> OverlayClaim {
     use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
 
-    // WAIT FOR THE GAME'S WINDOW FIRST, and do it here because this is the one function every
+    // Wait for the game'S window first, and do it here because this is the one function every
     // would-be host calls -- er-build-watermark, er-net-effects and er-invasion-path all route
     // their `Hudhook::apply()` through this claim, so the precondition belongs here rather than
     // in three copies that can drift apart.
@@ -184,19 +184,19 @@ pub fn claim_overlay_ownership() -> OverlayClaim {
     // window: GetClientRect returns 0x80070578, the unwrap panics, and a panic crossing an
     // `extern "system"` callback is an abort.
     //
-    // MEASURED 2026-08-29, in two different modules and therefore not a property of either:
+    // Measured 2026-08-29, in two different modules and therefore not a property of either:
     // er_build_watermark died that way 229 ms after the first backbuffer draw, and with that shell
     // excluded er_net_effects -- the next module to win this very claim -- died identically at
-    // +2060 ms. A third run of the same binaries did NOT die and reached a mapped window, which is
+    // +2060 ms. A third run of the same binaries did not die and reached a mapped window, which is
     // what makes it a race against window creation, and what makes waiting the fix rather than a
     // hope. The wait is bounded; a window that never appears costs a claim, not a process.
     //
-    // AND IT IS WHY A LOSER MUST RE-PROBE FOR THE HOST. Before this wait existed the claim was a
+    // And it is why a loser must RE-probe for the host. Before this wait existed the claim was a
     // bare `CreateMutexW` -- microseconds after a caller's "does anyone host this?" probe, so a
     // module that lost the mutex had almost certainly seen the winner already. The wait moved the
-    // mutex attempt to SECONDS after that probe, and worse, it releases every would-be host at the
+    // mutex attempt to seconds after that probe, and worse, it releases every would-be host at the
     // same instant (they are all waiting on the same window). So the losers' probes are now taken
-    // uniformly BEFORE any module could possibly have designated itself host, and a caller that
+    // uniformly before any module could possibly have designated itself host, and a caller that
     // treats its one stale probe as final never draws again. See `OverlayClaim`.
     if !er_game_base::game_window::wait_for_process_window() {
         return OverlayClaim::NoWindow;
@@ -220,7 +220,7 @@ pub fn claim_overlay_ownership() -> OverlayClaim {
     OverlayClaim::Won
 }
 
-/// Draw the watermark rows onto an EXISTING imgui frame.
+/// Draw the watermark rows onto an existing imgui frame.
 ///
 /// For a module that already owns a hudhook render loop and should carry the watermark inside it
 /// rather than have a second overlay installed behind its back. Recomputes the roster on the
@@ -257,7 +257,7 @@ pub fn draw_rows(ui: &Ui, log: fn(std::fmt::Arguments<'_>)) {
     });
 }
 
-/// Install a STANDALONE watermark overlay, if no other module in this process owns hudhook.
+/// Install a standalone watermark overlay, if no other module in this process owns hudhook.
 ///
 /// Returns whether this call became the owner. A `false` return is the ordinary, correct outcome
 /// for every module after the first, and is not an error.

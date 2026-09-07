@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Record the ER portrait run: capture ONLY the Elden Ring window at 60fps native res, then extract
+# Record the ER portrait run: capture only the Elden Ring window at 60fps native res, then extract
 # 60fps frames, then open the output folder. Privacy: captures only the steam_app_1245620 window region.
-# TIME-BOUNDED so it can never hang (the previous version stuck on an unbounded `wait`).
+# Time-bounded so it can never hang (the previous version stuck on an unbounded `wait`).
 set -u
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 OUT=${ER_QUICKLOAD_PORTRAIT_VIDEO_OUT:-"$REPO_ROOT/target/portrait-video"}
-# Clear IN PLACE (do NOT rm -rf the dir -- that swaps the inode and any open file-manager window goes empty).
+# Clear in place (do not rm -rf the dir -- that swaps the inode and any open file-manager window goes empty).
 mkdir -p "$OUT/frames"
 rm -f "$OUT"/frames/*.jpg "$OUT"/run-60fps-native.mkv "$OUT"/*.log 2>/dev/null || true
 VIDEO="$OUT/run-60fps-native.mkv"
@@ -49,7 +49,7 @@ echo "ER window: $GEOM -- recording (hard 30s cap via timeout)"
 timeout --signal=INT 30 wf-recorder -g "$GEOM" -r 60 -f "$VIDEO" >> "$OUT/wf-recorder.log" 2>&1 &
 REC_PID=$!
 
-# Record until the smoke run ends OR a 55s hard cap -- never an unbounded wait.
+# Record until the smoke run ends or a 55s hard cap -- never an unbounded wait.
 for _ in $(seq 1 30); do
   kill -0 "$SMOKE_PID" 2>/dev/null || break
   pause_s 1

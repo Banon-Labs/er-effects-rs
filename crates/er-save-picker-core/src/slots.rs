@@ -9,7 +9,7 @@ pub struct SaveSlotInfo {
     pub level: i32,
 }
 
-/// Parse the ACTIVE character slots out of a save container's bytes, returning slot index, name,
+/// Parse the active character slots out of a save container's bytes, returning slot index, name,
 /// and level for each occupied slot in order.
 ///
 /// Empty means either the bytes are not a readable save or the save contains no active character

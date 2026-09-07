@@ -1,7 +1,7 @@
 //! Fresh-per-run debug log for the focus-input shell.
 //!
 //! The path resolves through `er_game_base::log::redirected_artifact_path`, which is the launcher's
-//! redirect first and `er-focus-input.log` BESIDE `eldenring.exe` otherwise. A bare CWD-relative
+//! redirect first and `er-focus-input.log` beside `eldenring.exe` otherwise. A bare CWD-relative
 //! name would be wrong here for the same reason it was wrong twice on 2026-09-04: the game's working
 //! directory is not the game directory under every launch path, so the file lands somewhere no
 //! artifact collector looks and the run reads as "the shell never logged".

@@ -3,7 +3,7 @@
 //! The row's Location is `ProfileSummary` record `+0x34`, which lives only in `USER_DATA010`. When a
 //! save's summary table disagrees with its bodies (a save-manager artifact), that field describes the
 //! wrong character and there is no block-to-place-name function in the game to recompute it from. If
-//! the id is ALSO serialized inside `USER_DATA00N`, it can be recovered per character instead.
+//! the id is also serialized inside `USER_DATA00N`, it can be recovered per character instead.
 //!
 //! Method: take only the slots whose record demonstrably describes the body in that slot (record
 //! `block_id` == body saved map), collect every body offset holding the record's `place_name_id` as a

@@ -18,12 +18,12 @@
 //! `er-armament-icons`'s `gfx_equip_hook` uses; the constants below are duplicated from it
 //! rather than shared because the two DLLs ship independently, and each notes the other.
 //!
-//! # Identification is by CONTENT, not by name
+//! # Identification is by content, not by name
 //!
 //! The parse path has no URL, only bytes. The movie is recognised by its GFX magic, its own
 //! declared length, and an FNV fingerprint of the whole file. That is deliberately strict: it
-//! recognises the VANILLA world-map movie and nothing else, so a player running another menu
-//! mod that replaces `02_120_worldmap.gfx` gets THEIR movie untouched. They lose the red icon
+//! recognises the vanilla world-map movie and nothing else, so a player running another menu
+//! mod that replaces `02_120_worldmap.gfx` gets their movie untouched. They lose the red icon
 //! (the pins fall back to a vanilla frame -- see
 //! [`er_invasion_warp_core::param_row::invasion_pin_icon_id`]) and keep their mod, which is the right
 //! way round.
@@ -61,7 +61,7 @@ const WORLD_MAP_VANILLA_FNV1A64: u64 = 0xed66_8483_91a2_d273;
 
 /// Vanilla `01_080_emergencynotice.gfx` -- the announcement banner, fingerprinted the same way.
 ///
-/// This is the surface the rejection notice is written to. Its one text field ships LEFT-aligned
+/// This is the surface the rejection notice is written to. Its one text field ships left-aligned
 /// inside a box ~1726 px wide, so a short line sat against the far edge; the edit centres it. Kept
 /// in step with `er-gfx`'s own corpus test, which asserts the identical pair.
 const NOTICE_VANILLA_LEN: usize = 3_205;
@@ -99,10 +99,10 @@ static DERIVE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the red pin frame is actually in front of the game.
 ///
-/// This is what decides the pins' icon id, and it is deliberately an OBSERVED fact rather than a
+/// This is what decides the pins' icon id, and it is deliberately an observed fact rather than a
 /// build-time constant: if the swap never happened -- another mod owns the movie, the hook did
 /// not arm, the derive failed -- then pointing the pins at the red frame would point them at an
-/// EMPTY frame and they would render no icon at all. Reading the outcome keeps the failure mode
+/// empty frame and they would render no icon at all. Reading the outcome keeps the failure mode
 /// "pins look like a vanilla icon" instead of "pins are invisible".
 #[must_use]
 pub fn red_pin_frame_installed() -> bool {
@@ -136,7 +136,7 @@ fn parse_sig(sig: &str) -> Option<(Vec<u8>, Vec<bool>)> {
     (!bytes.is_empty()).then_some((bytes, mask))
 }
 
-/// Find `sig` in `text`, requiring it to occur EXACTLY once.
+/// Find `sig` in `text`, requiring it to occur exactly once.
 ///
 /// Uniqueness is the point: a signature that matches twice does not identify a function, and
 /// hooking the wrong one of two candidates patches a prologue we never verified.
@@ -169,7 +169,7 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    // RESOLVED, and never satisfied by zero -- same defect and same fix as the identical guard in
+    // Resolved, and never satisfied by zero -- same defect and same fix as the identical guard in
     // `er-armament-icons::gfx_equip_hook`. The `MemoryFile` vtable moved 0x2ba4c80 -> 0x2ba7d70 on
     // 1.17, so this comparison could not match and the map-movie swap stopped happening silently;
     // and `game_data_addr` answers 0 on a refusal, which `unwrap_or(0)` above would have matched.
@@ -193,7 +193,7 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
     {
         return;
     }
-    // The File's +0x20 is the ALLOCATION size, which the loader rounds up; the movie's own
+    // The File's +0x20 is the allocation size, which the loader rounds up; the movie's own
     // declared length (u32 at +4) is the content length. Gating on the allocation size instead
     // is how this pattern previously matched nothing at all.
     let declared = {
@@ -384,13 +384,13 @@ pub unsafe fn install_world_map_gfx_hook(base: usize) -> usize {
         ));
         return 0;
     };
-    // `scan_unique` found this address by matching `PARSE_SIG` inside the RUNNING image's `.text`,
+    // `scan_unique` found this address by matching `PARSE_SIG` inside the running image's `.text`,
     // so it is already a 1.17 address. `register_union_hook` would translate it against a table
     // keyed by 1.16.2 RVAs -- a table that structurally cannot contain a runtime-derived address --
-    // and answer REFUSED, which is what was turning this hook off on 1.17 for an address the scan
+    // and answer refused, which is what was turning this hook off on 1.17 for an address the scan
     // had got right. A ledger row would be worse than the refusal: the address would be translated
     // a second time and land mid-function. The runtime-derived entry point skips the version
-    // TRANSLATION and keeps the validation -- `detour_site::write_site_is_sound` asks the running
+    // translation and keeps the validation -- `detour_site::write_site_is_sound` asks the running
     // image's own `.pdata` whether this is a function entry with room for MinHook's five bytes.
     match unsafe {
         er_hook::register_union_hook_runtime_derived(

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Extract a `const NAME: &[u8] = &[ ... ];` byte array from a Rust source file
-into a raw binary file. Reads the REAL file bytes (no rtk redaction)."""
+into a raw binary file. Reads the real file bytes (no rtk redaction)."""
 import sys, re
 
 def extract(src_path, const_name):

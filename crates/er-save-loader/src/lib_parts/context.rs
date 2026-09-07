@@ -28,8 +28,8 @@ const MENU_OTHER_LOAD_STATE_PTR: usize = NativeSaveMenuRva::MenuOtherLoadStatePt
 pub const SET_SAVE_SLOT_RVA: u32 = NativeSaveMenuRva::SetSaveSlot as u32;
 pub const SAVE_REQUEST_PROFILE_RVA: u32 = NativeSaveMenuRva::SaveRequestProfile as u32;
 pub const REQUEST_SAVE_RVA: u32 = NativeSaveMenuRva::RequestSave as u32;
-// 0x67b940 WRITES a combined character+system save (serialises via 0x67dc00 and a
-// DLMemoryOutputStream, submits BOTH entries, sets GameMan->saveState = 1). It does not
+// 0x67b940 writes a combined character+system save (serialises via 0x67dc00 and a
+// DLMemoryOutputStream, submits both entries, sets GameMan->saveState = 1). It does not
 // load. Renamed 2026-08-01; matches er-save-suppress's SAVE_DISPATCH_* family.
 const SAVE_DISPATCH_COMBINED_RVA: u32 = er_game_base::rva::SAVE_DISPATCH_COMBINED_RVA as u32;
 const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
@@ -61,35 +61,35 @@ pub struct SaveLoadRequest {
     pub own_stepper: bool,
     /// Arm the menu-free cold-char-mount save-IO load through the same reliable channel.
     pub cold_char_mount: bool,
-    /// Arm the SAVE-SAFE verify-only OWN-LOAD buffer-feed probe through the same reliable channel.
+    /// Arm the save-safe verify-only own-load buffer-feed probe through the same reliable channel.
     /// When set, the DLL hooks the FSM-gated save read (`0x67b100`), feeds it our sliced plaintext
     /// `.sl2` slot body, calls the native parser (`0x67b290`), and reads back GameMan+0xc30 + the
     /// PlayerGameData fingerprint -- no `SetState5`, no autosave, no `continue_confirm`.
     pub own_load: bool,
-    /// Arm the FINAL OWN-LOAD step: after the proven verify-only parse yields a REAL c30 + real
-    /// character, fire the GUARDED `continue_confirm`/`SetState5` to stream the character into the
-    /// PLAYABLE world. SAVE-WRITING (`SetState5` autosaves): only fires behind the hard c30/fingerprint
+    /// Arm the final own-load step: after the proven verify-only parse yields a real c30 + real
+    /// character, fire the guarded `continue_confirm`/`SetState5` to stream the character into the
+    /// playable world. Save-writing (`SetState5` autosaves): only fires behind the hard c30/fingerprint
     /// guard in `own_load_continue_drive`. Off by default so the verify-only `own_load` stays safe.
     pub own_load_continue: bool,
-    /// Arm the OWN-LOAD m28 direct-enqueue lever: on our menu-free OWN-LOAD path (after our own
+    /// Arm the own-load m28 direct-enqueue lever: on our menu-free own-load path (after our own
     /// `continue_confirm` fired), call `FD4::FD4FileCap::AddDefaultFileLoadProcess` ourselves on the
     /// player block's (m28, area 0x1c) FD4FileCap(s) so the FD4 workers stream the block to residency.
-    /// Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave. Off by default and
-    /// double-gated (it ALSO requires `OWN_LOAD_CONTINUE_FIRED`), so it can never fire on a vanilla
+    /// Reaches only world-asset file-load streaming -- no save IO, cannot autosave. Off by default and
+    /// double-gated (it also requires `OWN_LOAD_CONTINUE_FIRED`), so it can never fire on a vanilla
     /// native menu load. Env `ER_QUICKLOAD_OWN_DISPATCH=1` / `own_dispatch=1` in the autoload file.
     pub own_dispatch: bool,
-    /// Arm the menu-free LoadGame-JOB install lever: instead of the guarded `continue_confirm`/
-    /// `SetState5`, BUILD the native LoadGame `MenuJobWithContext<LoadJobContext>` (factory
-    /// `FUN_140826510`) and INSTALL it into the title owner's `+0x130` MenuJob slot (assign helper
+    /// Arm the menu-free LoadGame-job install lever: instead of the guarded `continue_confirm`/
+    /// `SetState5`, build the native LoadGame `MenuJobWithContext<LoadJobContext>` (factory
+    /// `FUN_140826510`) and install it into the title owner's `+0x130` MenuJob slot (assign helper
     /// `FUN_1407a9560`), replacing the idle `IfElseJob`. `STEP_MenuJobWait` then ticks it each frame,
     /// self-builds, deserializes the save, and streams the world -- no `SetState5`, no save write.
-    /// SAVE-SAFE (build + first-tick deser only READ the save). Off by default; double-gated -- it
-    /// ALSO requires `OWN_LOAD_CONTINUE_FIRED`-style arming via `own_load`. Env
+    /// Save-safe (build + first-tick deser only read the save). Off by default; double-gated -- it
+    /// also requires `OWN_LOAD_CONTINUE_FIRED`-style arming via `own_load`. Env
     /// `ER_QUICKLOAD_OWN_LOAD_INSTALL_JOB=1` / `own_load_install_job=1` in the autoload file.
     pub own_load_install_job: bool,
-    /// PATH B "own the load" PRIVATE-PUMP lever. When set (with `own_load`), the verify-only parse is
-    /// followed by BUILD of the LoadGame `MenuJobWithContext` with REAL mss-derived ctx; the recurring
-    /// game task then ticks its `Run` PRIVATELY every frame to completion (deser -> m28 stream) and, on
+    /// Path B "own the load" private-pump lever. When set (with `own_load`), the verify-only parse is
+    /// followed by build of the LoadGame `MenuJobWithContext` with real mss-derived ctx; the recurring
+    /// game task then ticks its `Run` privately every frame to completion (deser -> m28 stream) and, on
     /// `state==Success`, drives the title->ingame transition via the guarded `SetState5`. No
     /// owner+0x130 install, no MenuJobQueue, no CSMenuMan dialog -- the menu-free subsystem rebuild.
     /// Off by default. Env `ER_QUICKLOAD_OWN_LOAD_PUMP=1` / `own_load_pump=1` in the autoload file.
@@ -116,12 +116,12 @@ pub enum SaveLoadMethod {
 pub struct SaveLoadContext {
     pub game_module_base: usize,
     /// True once the natural title flow has handed off into the live menu/save state (first
-    /// system-profile save). Conservative legacy gate -- it only flips AFTER the player advances past
+    /// system-profile save). Conservative legacy gate -- it only flips after the player advances past
     /// the press-any-button title.
     pub title_handoff_complete: bool,
-    /// True once the engine is "filled enough" to build+drive the LoadGame job WITHOUT the title being
-    /// advanced: GameDataMan -> menuSystemSaveLoad -> a PLAUSIBLE TitleFlowContext are all present. This
-    /// is the BYPASS arming signal -- it goes true at the title (GameFlow up) without the system-save
+    /// True once the engine is "filled enough" to build+drive the LoadGame job without the title being
+    /// advanced: GameDataMan -> menuSystemSaveLoad -> a plausible TitleFlowContext are all present. This
+    /// is the bypass arming signal -- it goes true at the title (GameFlow up) without the system-save
     /// handoff, so the direct own-load can arm and skip the frontend entirely. See
     /// `loadgame_build_ctx_ready` in the DLL (loadgame-build-ctx-ready-precondition-2026-06-22).
     pub loadgame_build_ctx_ready: bool,
@@ -294,20 +294,20 @@ impl SaveLoader {
         self.request.cold_char_mount
     }
 
-    /// Whether the autoload config armed the SAVE-SAFE verify-only OWN-LOAD buffer-feed probe.
+    /// Whether the autoload config armed the save-safe verify-only own-load buffer-feed probe.
     #[must_use]
     pub const fn own_load(&self) -> bool {
         self.request.own_load
     }
 
-    /// Whether the autoload config armed the FINAL guarded `continue_confirm`/`SetState5` world-stream
-    /// step after the verify-only OWN-LOAD parse. SAVE-WRITING when it fires (behind the c30 guard).
+    /// Whether the autoload config armed the final guarded `continue_confirm`/`SetState5` world-stream
+    /// step after the verify-only own-load parse. Save-writing when it fires (behind the c30 guard).
     #[must_use]
     pub const fn own_load_continue(&self) -> bool {
         self.request.own_load_continue
     }
 
-    /// Whether the autoload config armed the OWN-LOAD m28 direct-enqueue lever
+    /// Whether the autoload config armed the own-load m28 direct-enqueue lever
     /// (`AddDefaultFileLoadProcess` on the player block's FD4FileCap[s]). Reaches only world-asset
     /// file-load streaming -- no save IO. Double-gated by `OWN_LOAD_CONTINUE_FIRED` at fire time.
     #[must_use]
@@ -315,17 +315,17 @@ impl SaveLoader {
         self.request.own_dispatch
     }
 
-    /// Whether the autoload config armed the menu-free LoadGame-JOB install lever (build the native
+    /// Whether the autoload config armed the menu-free LoadGame-job install lever (build the native
     /// LoadGame `MenuJobWithContext` and install it into the title owner's `+0x130` MenuJob slot).
-    /// SAVE-SAFE (build + first-tick deser only read the save). Off by default.
+    /// Save-safe (build + first-tick deser only read the save). Off by default.
     #[must_use]
     pub const fn own_load_install_job(&self) -> bool {
         self.request.own_load_install_job
     }
 
-    /// Whether the autoload config armed the PATH B menu-free PRIVATE-PUMP lever (build the LoadGame
-    /// `MenuJobWithContext` with REAL mss-derived ctx, then tick its `Run` privately each frame to
-    /// completion + drive the transition on Success). SAVE-SAFE at build; only the final SetState5
+    /// Whether the autoload config armed the path B menu-free private-pump lever (build the LoadGame
+    /// `MenuJobWithContext` with real mss-derived ctx, then tick its `Run` privately each frame to
+    /// completion + drive the transition on Success). Save-safe at build; only the final SetState5
     /// transition writes, and it stays guarded. Off by default.
     #[must_use]
     pub const fn own_load_pump(&self) -> bool {
@@ -392,7 +392,7 @@ impl SaveLoader {
                 if !self.request.require_title_bootstrap
                     || context.title_handoff_complete
                     // BYPASS: the engine being filled enough to build the LoadGame job (plausible
-                    // TitleFlowContext) is sufficient to arm the direct own-load AT THE TITLE, without
+                    // TitleFlowContext) is sufficient to arm the direct own-load at the title, without
                     // waiting for the natural press-any-button -> menu handoff. This is what lets us skip
                     // the frontend entirely (boot-singleton-order-bypass-feasible-2026-06-22).
                     || context.loadgame_build_ctx_ready
@@ -548,15 +548,15 @@ fn parse_bool(value: &str) -> bool {
 }
 
 /// The experimental-direct-menu-load gate as the DLL sees it (mirror of the DLL's
-/// `experimental_direct_menu_load_enabled` in `gating.rs`): armed by EITHER the
-/// `ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD` env var OR the
+/// `experimental_direct_menu_load_enabled` in `gating.rs`): armed by either the
+/// `ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD` env var or the
 /// `er-quickload-experimental-direct-menu-load.txt` flag file next to the game exe.
 ///
-/// `from_env` previously consulted only the env var. A run that armed the gate via the FILE (the
+/// `from_env` previously consulted only the env var. A run that armed the gate via the file (the
 /// product/portrait smoke) but supplied the method via `ER_QUICKLOAD_AUTOLOAD_METHOD=direct_menu_load`
 /// therefore had its `DirectMenuLoad` method silently downgraded to `SaveRequested` here -> the DLL's
 /// `arm_product_autoload_from_request` never set `PRODUCT_AUTOLOAD_ARMED` -> `product_core_autoload_tick`
-/// never ran -> only the slot-less accept-byte fallback advanced the menu, which starts a NEW GAME
+/// never ran -> only the slot-less accept-byte fallback advanced the menu, which starts a new game
 /// (a fresh Vagabond, not the configured save). Honoring the same file flag here keeps the host request
 /// and the DLL gate consistent so the env-method + file-flag combination arms the product path.
 fn experimental_direct_menu_load_gate_enabled() -> bool {
@@ -574,7 +574,7 @@ fn experimental_direct_menu_load_gate_enabled() -> bool {
 }
 
 /// Pure downgrade policy: `DirectMenuLoad` is the experimental product path, so it is neutralized to
-/// `SaveRequested` UNLESS the experimental gate is enabled. Only `DirectMenuLoad` is gated this way
+/// `SaveRequested` unless the experimental gate is enabled. Only `DirectMenuLoad` is gated this way
 /// (other `Direct*` methods are unaffected). Pure (no env/fs reads) so the policy is unit-testable;
 /// callers resolve the gate and pass it in.
 const fn should_downgrade_direct_menu_load(

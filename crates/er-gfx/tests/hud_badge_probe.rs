@@ -1,12 +1,12 @@
 //! Probe: does the movie-agnostic badge edit resolve the HUD movie's quick-slot tiles?
 //!
 //! `01_000_fe.gfx` holds the in-game equip strip. Sprite 353 is the tile behind `LeftWep`,
-//! `RightWep` AND the quick-item slot; 386 is the spell tile; 355/357 are the small quick-item
+//! `RightWep` and the quick-item slot; 386 is the spell tile; 355/357 are the small quick-item
 //! cycle previews. None of them place `ArtsIcon`, so they take [`BadgeMount::NestInItemIcon`] --
-//! and all of them SHARE one `ItemIcon` container (sprite 343), so a single nested injection
+//! and all of them share one `ItemIcon` container (sprite 343), so a single nested injection
 //! necessarily covers the whole strip and the runtime decides which slots show it.
 //!
-//! This is a structural probe, not a product gate: the HUD movie is deliberately NOT in
+//! This is a structural probe, not a product gate: the HUD movie is deliberately not in
 //! `TARGETS` until the HUD populate hook exists, because the badge clip carries the plate and
 //! an unpopulated badge would park a permanent empty plate on the player's HUD.
 //!
@@ -132,7 +132,7 @@ fn hud_movie_badge_edit_derives() {
     }
 
     // The quick-slot tiles themselves must be untouched -- they are AS3 class-bound
-    // (`_01_000_FE_fla.N2_50` etc.), so a new named child on the TILE would never instantiate.
+    // (`_01_000_FE_fla.N2_50` etc.), so a new named child on the tile would never instantiate.
     for tile in [353u16, 355, 386] {
         let (Some(a), Some(b)) = (sprite(&v, tile), sprite(&e, tile)) else {
             continue;

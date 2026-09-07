@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Bounded vanilla (-v, no DLL) control run for the Windows-crash A/B.
 
-Launches `~/Elden/launch.sh -v` (me3 offline, NO er_quickload.dll), watches the
+Launches `~/Elden/launch.sh -v` (me3 offline, no er_quickload.dll), watches the
 `eldenring.exe` process lifetime, then tears down ER + me3. Data artifacts go to
 target/runtime-probe/ (repo-local /tmp writes for artifacts are allowed; only
 source belongs in the repo).
 
-Signal: vanilla ER should boot and SIT at the title screen alive for the full window.
+Signal: vanilla ER should boot and sit at the title screen alive for the full window.
   - survived_to_cap -> clean boot, no early crash  => the 0x67141a crash is DLL-specific (ours)
   - exited_early    -> vanilla itself is unstable here (crash not ours / environment)
   - never_started   -> me3/launch failure (inconclusive)
@@ -19,7 +19,7 @@ from er_artifact_env import artifact_env  # noqa: E402
 
 # argv[1] = artifact label (subdir); argv[2:] = launch.sh flags (['-o'] = DLL profile without
 # Seamless, ['-v'] = vanilla). Pass the flag explicitly: since 2026-08-24 launch.sh includes
-# ersc.dll by default, so NO flag now means a Seamless run -- not the DLL-only control arm.
+# ersc.dll by default, so no flag now means a Seamless run -- not the DLL-only control arm.
 LABEL = sys.argv[1] if len(sys.argv) > 1 else 'boot-ab'
 LAUNCH_ARGS = sys.argv[2:]
 # Derived, not hard-coded to one developer's home: this script used to carry `/home/banon` literals
@@ -53,7 +53,7 @@ def me3_pids():
 
 start = time.monotonic()
 log = open(ART + '/vanilla-launch.out', 'w')
-# EVERY per-run artifact into THIS probe's directory. A game-directory artifact is SINGLE-SLOT --
+# Every per-run artifact into this probe's directory. A game-directory artifact is single-slot --
 # `er_game_base::log::begin_fresh_run` keeps one generation -- so two launches lose the run before
 # last, and several sessions launch concurrently here. The vanilla arm (`-v`) loads no DLL and
 # writes none of these, but the same invocation takes `-o` for the DLL arm, which does.

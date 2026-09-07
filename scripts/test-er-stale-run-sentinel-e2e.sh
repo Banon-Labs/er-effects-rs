@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end proof of scripts/er-stale-run-sentinel.sh against a REAL process.
+# End-to-end proof of scripts/er-stale-run-sentinel.sh against a real process.
 #
-# WHY THIS EXISTS SEPARATELY FROM `--selftest`
+# Why this exists separately from `--selftest`
 # -------------------------------------------
 # `--selftest` proves the CLASSIFIER: given a profile, does a path get the right verdict. It
 # deliberately never calls `teardown`, because scripts/check.sh runs it and a real game may be live.
@@ -12,12 +12,12 @@
 # A decoy binary named `me3` carries `-p <synthetic profile>` on its command line, so the sentinel
 # must discover the profile from /proc exactly as it would for a real run:
 #
-#   inert path (scripts/frida-trace-ersc.py, .cupcake/*.rego)  -> decoy must SURVIVE
-#   crate that builds an UNLOADED DLL (er-armament-icons)      -> decoy must SURVIVE
-#   crate in the loaded closure (er-game-base)                 -> decoy must be KILLED
+#   inert path (scripts/frida-trace-ersc.py, .cupcake/*.rego)  -> decoy must survive
+#   crate that builds an unloaded DLL (er-armament-icons)      -> decoy must survive
+#   crate in the loaded closure (er-game-base)                 -> decoy must be killed
 #
-# NOT wired into scripts/check.sh on purpose: it calls `teardown`, and a gate that can kill the
-# user's game is not a gate you run unattended. It REFUSES (exit 2) if a real run is live, so
+# Not wired into scripts/check.sh on purpose: it calls `teardown`, and a gate that can kill the
+# user's game is not a gate you run unattended. It refuses (exit 2) if a real run is live, so
 # running it by hand can never take down a session in progress.
 #
 # Usage: bash scripts/test-er-stale-run-sentinel-e2e.sh
@@ -31,7 +31,7 @@ export ER_SENTINEL_LOG
 fails=0
 DECOY=""
 
-# Invoked by the EXIT trap below, which shellcheck does not model.
+# Invoked by the exit trap below, which shellcheck does not model.
 # shellcheck disable=SC2329
 cleanup() {
   [[ -n "$DECOY" ]] && kill -KILL "$DECOY" 2>/dev/null
@@ -55,7 +55,7 @@ path = '/nonexistent/er_quickload.dll'
 path = '/nonexistent/er_invasion_warp.dll'
 TOML
 
-# comm comes from the executable's basename, so the decoy must BE a binary called `me3`. A copied
+# comm comes from the executable's basename, so the decoy must be a binary called `me3`. A copied
 # python interpreter is used because it accepts arbitrary trailing argv (which becomes the `-p
 # <profile>` the sentinel has to parse out of /proc/<pid>/cmdline) and blocks on demand.
 if ! cp -f "$(command -v python3)" "$TMPDIR_E2E/me3" 2>/dev/null; then

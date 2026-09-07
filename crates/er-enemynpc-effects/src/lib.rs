@@ -76,7 +76,7 @@ static TOTAL_REMOVED: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(windows)]
 fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
-    // BOUNDED (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
+    // Bounded (2026-08-29). This was `loop { yield_now() }`. On 1.17 the singleton did not turn
     // up promptly and two such loops starved the wineserver: the game reached 104 CPU ticks in
     // three minutes while these threads burned 19,000 each, half of it system time. See
     // er_game_base::wait for the measurement.
@@ -107,7 +107,7 @@ fn consume_hotkey_presses() {
     }
     let enabled = !ENABLED.fetch_xor(true, Ordering::SeqCst);
 
-    // WRITE IT BACK. Without this the toggle is a per-session thing and every launch starts off,
+    // Write it back. Without this the toggle is a per-session thing and every launch starts off,
     // which for a feature you turn on and leave on is the same as not remembering it at all. The
     // write re-reads the file first, so it also picks up an edit made since the last poll.
     let outcome = config::persist_enabled(enabled);
@@ -256,12 +256,12 @@ fn spawn_game_task() {
 fn install() {
     log::reset_log_file();
     let config = config::init_config();
-    // RESTORE. `enabled` is written back on every toggle, so whatever the player left it as is
+    // Restore. `enabled` is written back on every toggle, so whatever the player left it as is
     // what the file says now; starting from the built-in `false` regardless would make the
     // write-back pointless.
     //
     // The store is direct rather than through `apply_enabled_state` because that one also
-    // SCHEDULES the strip sweep when the state is off, and at attach there is nothing charmed to
+    // schedules the strip sweep when the state is off, and at attach there is nothing charmed to
     // strip -- it would spend the first frame walking the world to remove an effect from nobody
     // and say so in the log.
     ENABLED.store(config.enabled, Ordering::SeqCst);
@@ -290,9 +290,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-enemynpc-effects", crate::charm_log);
         er_hook::set_hook_logger(crate::charm_log);

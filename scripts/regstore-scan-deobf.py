@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Find REGISTER-relative 64-bit stores `mov [base+disp32], reg64` to a given struct offset
+"""Find register-relative 64-bit stores `mov [base+disp32], reg64` to a given struct offset
 in the dearxan-DEOBFUSCATED ER mapped image. Complements store-scan-deobf.py (which only
 finds RIP-relative writers of a *global* VA). Use this to locate where a struct field at a
 known offset (e.g. CS::MenuWindowJob +0xa8 / +0xe8) is written.

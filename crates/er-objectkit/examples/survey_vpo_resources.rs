@@ -1,7 +1,7 @@
 //! Survey vertex-shader resource complexity across bundles: translate the first `.vpo`
 //! of each bundle, reflect its SPIR-V, and report how many uniform/storage/texture
-//! bindings it uses. The goal is to find the SIMPLEST native object vertex shader (ideally
-//! one with NO storage buffer = no GPU-instance/descriptor path) that the offline draw
+//! bindings it uses. The goal is to find the simplest native object vertex shader (ideally
+//! one with no storage buffer = no GPU-instance/descriptor path) that the offline draw
 //! harness can satisfy with synthetic cbuffers without a GPUVM fault.
 //!
 //! Run: `cargo run -p er-objectkit --example survey_vpo_resources`.

@@ -1,9 +1,9 @@
-//! Pure (host-testable) loading-screen stats layer: the line FORMAT and the CPU text
+//! Pure (host-testable) loading-screen stats layer: the line format and the CPU text
 //! raster, split out of the windows-only `stats_loading_text` module (bd
-//! er-effects-rs-qic7) so the ONE unified layout is provable off-target.
+//! er-effects-rs-qic7) so the one unified layout is provable off-target.
 //!
-//! UNIFIED LAYOUT (user decision 2026-07-30): the boot/autoload loading screen and every
-//! subsequent load screen render the SAME five-line panel -- name; RL+WL;
+//! Unified layout (user decision 2026-07-30): the boot/autoload loading screen and every
+//! subsequent load screen render the same five-line panel -- name; RL+WL;
 //! HP/FP/Stamina; VIG..STR; DEX..ARC. The old divergence (the HP line was dropped when
 //! live PlayerGameData was not yet validated, 361x148 vs 361x184) is gone:
 //! [`format_stats_lines`] always emits the HP line, with the stored save-slot vitals
@@ -19,25 +19,25 @@
 /// The local character's loading-screen stats (er-effects-rs-jsm). Read from the
 /// loading-screen-safe ProfileSummary record (name/level) + live PlayerGameData when up
 /// (attributes, HP/FP/Stamina, weapon level), falling back to the `.sl2` slot cache
-/// (attributes, stored max vitals AND weapon level) pre-load.
+/// (attributes, stored max vitals and weapon level) pre-load.
 pub struct LoadingScreenStats {
     pub name: String,
     pub level: i32,
-    pub attributes: [i32; 8], // VIG,MND,END,STR,DEX,INT,FAI,ARC
+    pub attributes: [i32; 8], // VIG,MND,end,STR,DEX,INT,FAI,ARC
     pub max_hp: u32,
     pub max_fp: u32,
     pub max_stamina: u32,
     /// Highest weapon upgrade level (`PlayerGameData::matching_weapon_level`), or `None`
-    /// when no source could supply it. `Some(0)` is a REAL answer -- a character with
+    /// when no source could supply it. `Some(0)` is a real answer -- a character with
     /// nothing upgraded -- and is deliberately distinct from `None` ("we do not know").
     pub weapon_level: Option<u8>,
     pub attr_source_live: bool,
 }
 
-/// PROPORTIONAL FONT SIZE (user 2026-07-06): 48px was tuned at the 2056 RT, so
+/// Proportional font size (user 2026-07-06): 48px was tuned at the 2056 RT, so
 /// `em_px = dim * STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM` keeps the text the
 /// same on-screen size at any render resolution. Shared by the RT-composited build and
-/// the screen-scale Present-overlay build so both use the SAME em sizing.
+/// the screen-scale Present-overlay build so both use the same em sizing.
 pub const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
 /// The reference RT dimension the 48px em was tuned at.
 pub const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
@@ -46,7 +46,7 @@ pub const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
 /// placeholder idiom as [`fmt_vital`], but keyed on `None` rather than 0, because `WL 0`
 /// is a true statement about a character who has upgraded nothing.
 ///
-/// The `WL` token itself is NEVER dropped -- unlike the ProfileSelect row header, whose
+/// The `WL` token itself is never dropped -- unlike the ProfileSelect row header, whose
 /// whole `WL` group disappears when the value is unknown. That panel is a single line of
 /// prose; this one is a fixed five-line block whose bitmap is composited at a stable
 /// height, so a token appearing when live data arrives mid-screen would move the text.
@@ -68,9 +68,9 @@ fn fmt_vital(v: u32) -> String {
     }
 }
 
-/// Lay the stats out as display lines -- the ONE layout used on every loading screen
-/// (boot/autoload AND subsequent loads): name; RL+WL; HP/FP/Stamina; the 8 attributes
-/// over two lines. The HP line is UNCONDITIONAL (bd er-effects-rs-qic7): the line count
+/// Lay the stats out as display lines -- the one layout used on every loading screen
+/// (boot/autoload and subsequent loads): name; RL+WL; HP/FP/Stamina; the 8 attributes
+/// over two lines. The HP line is unconditional (bd er-effects-rs-qic7): the line count
 /// (and so the bitmap height) is identical whether the vitals came from the save slot,
 /// live PlayerGameData, or are still unknown (`--`).
 pub fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
@@ -182,7 +182,7 @@ pub fn render_lines_to_rgba(
         return (0, 0, Vec::new());
     }
     // Drop shadow: same formula as the custom loading bar (`boot_draw_text_shadowed`) -- an opaque black
-    // copy offset by (+SHADOW, +SHADOW) rendered UNDER the text. Pad the bitmap by the shadow offset.
+    // copy offset by (+shadow, +shadow) rendered under the text. Pad the bitmap by the shadow offset.
     const SHADOW: i32 = 2;
     let pad = 1.0f32;
     let w = (max_x - min_x + 2.0 * pad).ceil() as u32 + SHADOW as u32;
@@ -191,7 +191,7 @@ pub fn render_lines_to_rgba(
         return (0, 0, Vec::new());
     }
     let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
-    // Alpha-OVER composite one glyph's coverage as `col`, at destination origin `(dx0, dy0)`.
+    // Alpha-over composite one glyph's coverage as `col`, at destination origin `(dx0, dy0)`.
     let blit = |rgba: &mut [u8], p: &Placed, dx0: i32, dy0: i32, col: [u8; 4]| {
         let (ca, cr, cg, cb) = (col[3] as u32, col[0] as u32, col[1] as u32, col[2] as u32);
         for sy in 0..p.bmp.height as i32 {
@@ -246,7 +246,7 @@ pub fn render_lines_to_rgba(
 mod tests {
     use super::*;
 
-    /// The values of a real character (9-Menace slot 0, oracle ground truth) as the LIVE
+    /// The values of a real character (9-Menace slot 0, oracle ground truth) as the live
     /// source would report them.
     fn live_stats() -> LoadingScreenStats {
         LoadingScreenStats {
@@ -261,7 +261,7 @@ mod tests {
         }
     }
 
-    /// The same character as the PRE-MOUNT source reports it (save-slot cache: same
+    /// The same character as the pre-mount source reports it (save-slot cache: same
     /// stored values, `attr_source_live == false`).
     fn save_slot_stats() -> LoadingScreenStats {
         LoadingScreenStats {
@@ -291,7 +291,7 @@ mod tests {
         }
     }
 
-    /// The unified layout: both data sources produce the IDENTICAL five-line structure
+    /// The unified layout: both data sources produce the identical five-line structure
     /// (bd er-effects-rs-qic7 -- the old live=false variant dropped the HP line).
     #[test]
     fn both_sources_produce_identical_line_structure() {
@@ -344,7 +344,7 @@ mod tests {
     }
 
     /// Even when the vitals are genuinely unknown (no `.sl2`, no live PGD), the HP line
-    /// is still PRESENT (placeholders) so the line count -- and the bitmap height --
+    /// is still present (placeholders) so the line count -- and the bitmap height --
     /// never changes when live data arrives mid-screen.
     #[test]
     fn unknown_vitals_keep_the_five_line_layout() {
@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(lines[4], known[4]);
     }
 
-    /// The game's own menu font from the local extraction corpus, or `None` (SKIP) when
+    /// The game's own menu font from the local extraction corpus, or `None` (skip) when
     /// absent. Env-overridable like `ER_GFX_CORPUS_ROOT` (the default embeds this
     /// machine's extraction root; game-derived bytes are never versioned).
     fn corpus_menu_font() -> Option<er_gfx::raster::RasterFont> {
@@ -384,7 +384,7 @@ mod tests {
 
     /// Bitmap-geometry proof (corpus-gated): with the real menu font, the save-sourced
     /// and live-sourced builds of the same character are byte-identical, and the
-    /// unknown-vitals build has the SAME height (the geometry that used to jump 148->184
+    /// unknown-vitals build has the same height (the geometry that used to jump 148->184
     /// when the HP line appeared).
     #[test]
     fn bitmap_geometry_is_identical_for_both_sources() {

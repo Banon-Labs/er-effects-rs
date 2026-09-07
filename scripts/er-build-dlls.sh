@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Build named ME3 shells AND record what they were built from.
+# Build named ME3 shells and record what they were built from.
 #
-# WHY THIS EXISTS RATHER THAN A BARE CARGO CALL
+# Why this exists rather than a bare cargo call
 # ---------------------------------------------
 # `cargo xwin build --release --target x86_64-pc-windows-msvc` honours
 #     default-members = ["crates/er-quickload"]
-# so it builds ONLY the product and exits 0 in a fraction of a second having compiled none of
+# so it builds only the product and exits 0 in a fraction of a second having compiled none of
 # the other fifteen shells. That is indistinguishable from a successful incremental build,
 # and the stale DLL from last week stays exactly where it was. So every package is named with
 # an explicit `-p`, taken from scripts/me3-dll-list.py (the single source of truth for which
-# cdylibs this workspace ships, including the four whose artifact name is NOT the package name
+# cdylibs this workspace ships, including the four whose artifact name is not the package name
 # with dashes swapped for underscores).
 #
-# Provenance is written HERE because it cannot be reconstructed afterwards: proving a DLL came
+# Provenance is written here because it cannot be reconstructed afterwards: proving a DLL came
 # from a given source tree needs a content hash taken while that tree was the one being
 # compiled. scripts/er-run-branch.py refuses to launch an artifact without it.
 #

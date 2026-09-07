@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Offline census of every `EquipParamGoods` row that belongs to a POT GROUP.
+"""Offline census of every `EquipParamGoods` row that belongs to a POT group.
 
 `EquipParamGoods.potGroupId` (壺グループID, s8, -1..15) is the field behind the one inventory
 limit the build importer cannot see. A consumable in a pot group can be held only up to the
 number of *regenerative materials* (Cracked Pot / Ritual Pot / Perfume Bottle) sharing that
-group, and BOTH acquisition paths clamp to it silently: `EquipInventoryData::InsertItem`
+group, and both acquisition paths clamp to it silently: `EquipInventoryData::InsertItem`
 (1.16.2 @0x14024cfd0) and `UpdateQuantity` (@0x14024d760) each do `if (max < amount) amount = max;`.
 So a grant can report success and deliver three of five.
 
-The engine's two predicates, byte-verified on 1.16.2 AND 1.17 (identical bytes, so the row
+The engine's two predicates, byte-verified on 1.16.2 and 1.17 (identical bytes, so the row
 layout survived the patch):
 
     IsPotConsumable        goodsType(+0x3e) == 0x00 (NORMAL_ITEM) && potGroupId(+0x2e) >= 0
@@ -20,7 +20,7 @@ layout survived the patch):
 first kind into `potItemsCount[16]` and the second into `potItemsCapacity[16]`; the headroom
 `GetMaxAmountForItem` (@0x14024e570) hands out is the difference.
 
-THE DISTINCTION MATTERS TO ANY CALLER THAT WANTS TO FREE POT SPACE: depositing a *consumable*
+The distinction matters to any caller that wants to free POT SPACE: depositing a *consumable*
 raises the ceiling, depositing the *material* lowers it. This script reports them separately
 for exactly that reason.
 

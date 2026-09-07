@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""ORACLE VERDICT emitter (user 2026-07-20): the agent must NOT hand-read logs to explain a run.
+"""Oracle verdict emitter (user 2026-07-20): the agent must not hand-read logs to explain a run.
 
-Given a run directory (or its telemetry-timeseries.jsonl), print ONE plain-language verdict that says,
-per load epoch: the PHASE reached, whether the run was CONTAMINATED (the character moved without any
+Given a run directory (or its telemetry-timeseries.jsonl), print one plain-language verdict that says,
+per load epoch: the phase reached, whether the run was contaminated (the character moved without any
 injected input -- ER accepts UNFOCUSED mouse/click input and agent-owned runs do not block it, so
 incidental user movement corrupts the run), and the TEARDOWN reason (timeout window vs
 semaphore-complete vs stall). The target shape is exactly the sentence the user asked for, e.g.:
@@ -79,7 +79,7 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
     play_live = any(r.get("oracle_play_time_live") for r in rows)
 
     label = f"load{epoch + 1}" if epoch == 0 else f"reload #{epoch}"
-    # PHASE
+    # Phase
     if mms_max >= MMS_WORLD_READY_MIN:
         phase = f"COMPLETED to world-ready (MoveMapStep reached {mms_max})"
     elif mms_max == MMS_FINALIZE_STUCK:
@@ -94,9 +94,9 @@ def epoch_verdict(epoch: int, rows: list[dict]) -> str:
         f"{label} (epoch {epoch}): {phase}."
         f" player_present={present} char={char!r} play_time_live={play_live}."
     ]
-    # CONTAMINATION -- RawInput RECEPTION is authoritative: did the GAME receive user mouse/keyboard
+    # Contamination -- RawInput reception is authoritative: did the game receive user mouse/keyboard
     # input? The harness injects via the direct-memory inputmgr (never RawInput), so any RawInput event
-    # is the USER's. This covers mouse-look (camera) input that char-position cannot see.
+    # is the user's. This covers mouse-look (camera) input that char-position cannot see.
     has_rawinput = any("oracle_rawinput_mouse_move_events" in r for r in rows)
     moved = max(did_move, probe_move)
     if has_rawinput:

@@ -1,4 +1,4 @@
-//! Is the game's own loading screen still MAKING PROGRESS, or is it frozen?
+//! Is the game's own loading screen still making progress, or is it frozen?
 //!
 //! This crate already samples the native `CS::LoadingScreen` every frame it ticks
 //! ([`crate::dlstring_lookat_math::sample_loading_screen_bar`], which reads the Gauge_3 movieclip's
@@ -26,16 +26,16 @@
 //! and the cap was not separating them -- it was reading a clock.
 //!
 //! This is the repo's own doctrine applied one level down. AGENTS.md, on runtime teardown:
-//! "Distinguish a real hang (the `oracle_system_step_label` / loading substep FROZEN) from slow
+//! "Distinguish a real hang (the `oracle_system_step_label` / loading substep frozen) from slow
 //! progress (label still advancing); tear down only on a genuinely frozen substep", and "the time
-//! bound is a safety backstop, NOT the primary synchronization mechanism".
+//! bound is a safety backstop, not the primary synchronization mechanism".
 //!
-//! ## What this deliberately does NOT do
+//! ## What this deliberately does not do
 //!
 //! It does not touch `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS` (900 ms), the gate that actually held
 //! the fade. That gate was correct: `CS::LoadingScreen::Update` really was ticking every frame,
 //! because the screen really was still loading, and fading out over it is the vanilla flash-through
-//! (er-effects-rs-wmw defect #1). The same run also PROVES the 900 ms is reachable -- the boot
+//! (er-effects-rs-wmw defect #1). The same run also proves the 900 ms is reachable -- the boot
 //! window cleared it (`update_quiet` 2 ms -> 287 ms, then `native loading fade/quiet hold complete`
 //! at +34384 ms and `release fade complete -> stop cover (... reason=1)`). Lowering it would have
 //! released the cover onto a loading screen reading 39 %.
@@ -43,7 +43,7 @@
 //! And it does not extend a frozen window by one millisecond: with the gauge stuck,
 //! [`CapDecision::bar_stalled`] is true and the cap fires exactly when it always did.
 
-/// The native Gauge_3 frame must be FROZEN this long before an expired composite cap may fire.
+/// The native Gauge_3 frame must be frozen this long before an expired composite cap may fire.
 ///
 /// Measured cadence inside the held window of that run: the boot-view hold lines report
 /// `native_hits` 105 (+225527 ms) -> 232 (+236005 ms), i.e. ~12 native update ticks per second, so
@@ -74,23 +74,23 @@ pub const NATIVE_BAR_TERMINAL_PERMILLE: usize = 998;
 /// with no progress to report cannot be waited on, and refusing here would leave a gauge-less load
 /// path with no way to satisfy the release at all.
 ///
-/// THE SINGLE DEFINITION. Both callers that need it -- the ENTERING WORLD phase predicate and the
+/// The single definition. Both callers that need it -- the entering world phase predicate and the
 /// cover's release predicate -- go through this function, so the two can never drift apart again.
 /// They drifted once already, which is the whole of bd er-effects-rs-t7q2.
 pub fn gauge_done(cur_frame: usize, max_frame: usize) -> bool {
     max_frame == 0 || cur_frame >= max_frame
 }
 
-/// Is the gauge at its terminal frame -- COMPLETED rather than merely absent?
+/// Is the gauge at its terminal frame -- Completed rather than merely absent?
 ///
-/// Stricter than [`gauge_done`] on purpose: this one is asked about a gauge that has STOPPED
-/// MOVING, where "there is no gauge" and "the gauge finished" must not be conflated. A screen with
+/// Stricter than [`gauge_done`] on purpose: this one is asked about a gauge that has stopped
+/// moving, where "there is no gauge" and "the gauge finished" must not be conflated. A screen with
 /// no gauge that stops moving tells us nothing and must stay subject to the composite cap.
 pub fn gauge_terminal(cur_frame: usize, max_frame: usize) -> bool {
     max_frame != 0 && cur_frame >= max_frame
 }
 
-/// COMPLETED native loading-screen plates a switch's cover must see before it may let go.
+/// Completed native loading-screen plates a switch's cover must see before it may let go.
 ///
 /// One: the character load's own plate. See `BOOT_VIEW_SWITCH_COMPLETED_NATIVE_SCREENS` for the
 /// measurement that replaced the old ordinal `2`.
@@ -98,7 +98,7 @@ pub const SWITCH_COMPLETED_PLATES_TO_RELEASE: usize = 1;
 
 /// Fold one native loading-screen finish into this cover window's completed-plate count.
 ///
-/// A finish whose gauge is at its terminal frame is a WORLD HAVING LOADED; a finish at frame 1 of
+/// A finish whose gauge is at its terminal frame is a world having loaded; a finish at frame 1 of
 /// 500 is a screen going away (the switch's return-to-title teardown). `gauge_terminal` rather than
 /// `gauge_done` on purpose: a plate with no gauge at all reports nothing, and counting it would let
 /// the cover release on a screen that never showed the user any progress.
@@ -111,12 +111,12 @@ pub fn switch_cover_may_release(completed_closes: usize) -> bool {
     completed_closes >= SWITCH_COMPLETED_PLATES_TO_RELEASE
 }
 
-/// Has the game's own loading screen FINISHED -- the release predicate's "native done" half.
+/// Has the game's own loading screen finished -- the release predicate's "native done" half.
 ///
 /// # Why the `gauge_done` conjunct is not optional (bd er-effects-rs-t7q2)
 ///
 /// The predicate used to read `close_hits != 0 || permille >= 998`, and the bare `close_hits`
-/// arm is wrong for the same reason it is wrong one phase earlier: a reload's TRANSIENT loading
+/// arm is wrong for the same reason it is wrong one phase earlier: a reload's transient loading
 /// screen sends its own finish/result while its gauge is still at frame 1 of 500 -- a screen
 /// closing, not the world handing off. Measured in run br-20260831-160354-2513: the reload epoch's
 /// close #1 arrived at boot-view 217892 ms reporting `frame=1/500`, and the cover latched its
@@ -129,7 +129,7 @@ pub fn switch_cover_may_release(completed_closes: usize) -> bool {
 ///
 /// The permille arm keeps its own independent path to true and is left alone: it is a reading of
 /// the gauge's own fill, not of an unrelated screen's teardown, and it is what released the healthy
-/// BOOT window of that same run (at 30050 ms, before that window's close at 30592 ms).
+/// boot window of that same run (at 30050 ms, before that window's close at 30592 ms).
 pub fn release_native_done(
     close_hits: usize,
     permille: usize,
@@ -141,7 +141,7 @@ pub fn release_native_done(
 }
 
 /// The cap's answer for one frame, with the numbers that justify it so the caller's log line can
-/// state WHICH arm fired instead of asserting a cause.
+/// state which arm fired instead of asserting a cause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapDecision {
     /// Stop the cover now.
@@ -153,7 +153,7 @@ pub struct CapDecision {
     pub deferred_ms: u64,
     /// How long since the gauge last moved.
     pub bar_stall_ms: u64,
-    /// The gauge is sitting at its LAST frame. A stopped gauge at 500/500 has finished; a stopped
+    /// The gauge is sitting at its last frame. A stopped gauge at 500/500 has finished; a stopped
     /// gauge at 3/500 is the frozen load this cap exists for. Without this the two are the same
     /// observation and the cap cannot tell them apart.
     pub bar_terminal: bool,
@@ -163,7 +163,7 @@ pub struct CapDecision {
 
 /// Decide whether an expired composite cap may fire this frame.
 ///
-/// `last_progress_ms` is the epoch-ms at which the native gauge frame last CHANGED, or 0 if it has
+/// `last_progress_ms` is the epoch-ms at which the native gauge frame last changed, or 0 if it has
 /// not changed once in this window -- which is a stall by any reading and never a reason to defer.
 pub fn composite_cap_decision(
     composite_ms: u64,
@@ -177,17 +177,17 @@ pub fn composite_cap_decision(
     } else {
         now_ms.saturating_sub(last_progress_ms)
     };
-    // A gauge parked on its LAST frame is not stalled, it is DONE, however long it sits there.
-    // Measured, run br-20260831-160354-2513's healthy BOOT window: the gauge made its final frame
+    // A gauge parked on its last frame is not stalled, it is done, however long it sits there.
+    // Measured, run br-20260831-160354-2513's healthy boot window: the gauge made its final frame
     // change at boot-view 30124 ms and the release fade did not complete until 33747 ms -- 3623 ms
     // later, because `CS::LoadingScreen::Update` keeps ticking ~1.6 s past the close and the fade
     // then waits out `BOOT_VIEW_NATIVE_LOADING_QUIET_HOLD_MS` (900 ms) before its own 640 ms ramp.
-    // Judging that tail by `NATIVE_BAR_STALL_MS` alone would call a FINISHED load frozen 1.6 s
+    // Judging that tail by `NATIVE_BAR_STALL_MS` alone would call a finished load frozen 1.6 s
     // before its release could possibly land, which is the bail this module was written to prevent,
     // reappearing two seconds later.
     let bar_stalled = !bar_terminal && bar_stall_ms >= NATIVE_BAR_STALL_MS;
     let deferred_ms = composite_ms.saturating_sub(cap_ms);
-    // Defer ONLY while the game's own gauge is demonstrably still moving OR has demonstrably
+    // Defer only while the game's own gauge is demonstrably still moving or has demonstrably
     // finished, and only for a bounded total. Everything else -- expiry, freeze, the deferral
     // bound -- fires.
     let defer = !bar_stalled && deferred_ms < COMPOSITE_CAP_MAX_DEFER_MS;
@@ -209,11 +209,11 @@ pub fn composite_cap_decision(
 /// uses; the pure [`composite_cap_decision`] beneath it is what the tests drive.
 ///
 /// Reads `LOADING_SCREEN_BAR_CURRENT_FRAME` itself rather than taking it as an argument: this crate
-/// already owns the detour that WRITES that counter
+/// already owns the detour that writes that counter
 /// ([`crate::dlstring_lookat_math::sample_loading_screen_bar`]), so the DLL has no business
 /// restating where the number comes from. Read, never written -- pure RAM observation.
 /// `epoch` is the caller's load epoch; a change resets the per-window gauge state, so one window's
-/// progress can never vouch for the next one's. Returns `Some` ONLY when the cap should fire, so a
+/// progress can never vouch for the next one's. Returns `Some` only when the cap should fire, so a
 /// caller cannot accidentally read a decision it was not given.
 #[cfg(windows)]
 pub fn cap_fired(epoch: usize, now_ms: u64, composite_ms: u64, cap_ms: u64) -> Option<CapDecision> {
@@ -240,7 +240,7 @@ pub fn cap_fired(epoch: usize, now_ms: u64, composite_ms: u64, cap_ms: u64) -> O
 ///
 /// It lives here so the wording can never again outrun the measurement. The old line asserted
 /// "handoff signals never fired (frozen load2)" unconditionally, and run br-20260831-160354-2513
-/// printed exactly that on a window whose handoff HAD fired 15 s earlier
+/// printed exactly that on a window whose handoff had fired 15 s earlier
 /// (`boot-view: COVER RELEASE #2 at 224208ms`). Now the text is a function of the data.
 pub fn bail_detail(d: &CapDecision) -> String {
     format!(
@@ -283,9 +283,9 @@ pub mod tracker {
         PROGRESS_MS.store(0, Ordering::SeqCst);
     }
 
-    /// Feed this frame's native gauge frame. Records the time only when it actually CHANGED.
+    /// Feed this frame's native gauge frame. Records the time only when it actually changed.
     ///
-    /// The FIRST sample after a reset establishes the baseline and is NOT progress. It has to work
+    /// The first sample after a reset establishes the baseline and is not progress. It has to work
     /// this way for the freeze case to stay reachable at all: with the first sample stamping,
     /// `progress_ms()` was non-zero from the very first call, so "the gauge has not moved once in
     /// this window" -- the state [`super::composite_cap_decision`] answers with an immediate fire,
@@ -319,7 +319,7 @@ mod tests {
         assert!(!composite_cap_decision(19_999, CAP, 100_000, 0, true).fire);
     }
 
-    /// THE REGRESSION THIS MODULE EXISTS FOR. At the moment of the real bail the gauge had moved
+    /// The regression this module exists for. At the moment of the real bail the gauge had moved
     /// within the last frame, so the cap must defer and let the native finish 501 ms later win.
     #[test]
     fn defers_while_the_native_gauge_is_still_advancing() {
@@ -331,14 +331,14 @@ mod tests {
         assert!(!d.bar_stalled);
     }
 
-    /// THE SECOND HALF OF THAT REGRESSION, measured after the first fix was written.
+    /// The second half of that regression, measured after the first fix was written.
     ///
-    /// Deferring only while the gauge MOVES is not enough, because the release lands well after the
-    /// gauge stops. Run br-20260831-160354-2513's healthy BOOT window: last gauge frame change at
+    /// Deferring only while the gauge moves is not enough, because the release lands well after the
+    /// gauge stops. Run br-20260831-160354-2513's healthy boot window: last gauge frame change at
     /// boot-view 30124 ms, release fade complete at 33747 ms -- a 3623 ms tail, because
     /// `CS::LoadingScreen::Update` keeps ticking ~1.6 s past the close and the fade then waits out
     /// the 900 ms quiet hold before its 640 ms ramp. Judged by `NATIVE_BAR_STALL_MS` (2000 ms)
-    /// alone, the reload epoch would have bailed at 242124 ms -- ~1.4 s BEFORE its release could
+    /// alone, the reload epoch would have bailed at 242124 ms -- ~1.4 s before its release could
     /// land -- and filed reason=2 all over again.
     #[test]
     fn a_terminal_gauge_is_finished_not_frozen() {
@@ -350,13 +350,13 @@ mod tests {
         );
         assert!(!d.bar_stalled);
         assert!(d.bar_terminal);
-        // Same numbers, gauge short of its last frame: that IS the frozen load2 and it fires.
+        // Same numbers, gauge short of its last frame: that is the frozen load2 and it fires.
         let d = composite_cap_decision(23_000, CAP, 243_100, 240_100, false);
         assert!(d.fire);
         assert!(d.bar_stalled);
     }
 
-    /// The frozen-load2 case the cap was written for: the gauge stops SHORT of its last frame, so
+    /// The frozen-load2 case the cap was written for: the gauge stops short of its last frame, so
     /// the cap fires once the stall window passes, exactly as before this module existed.
     #[test]
     fn fires_once_a_mid_load_gauge_stops_moving() {
@@ -395,7 +395,7 @@ mod tests {
     }
 
     /// ...and neither can a terminal one. The finished-gauge arm must not become a new way to hold
-    /// the cover open forever, so it rides the SAME bound.
+    /// the cover open forever, so it rides the same bound.
     #[test]
     fn a_terminal_gauge_cannot_defer_past_the_bound() {
         let now = 300_000;
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(tracker::progress_ms(), 0);
     }
 
-    /// The first sample after a reset is a BASELINE, not progress. Without this a dead gauge looked
+    /// The first sample after a reset is a baseline, not progress. Without this a dead gauge looked
     /// like it had just moved, `progress_ms()` was never 0 in the DLL, and the frozen-load2 arm was
     /// unreachable in the very code path it exists to protect.
     #[test]
@@ -445,20 +445,20 @@ mod tests {
 
     // ---- er-effects-rs-t7q2: the release predicate's native-done half ----
 
-    /// THE MEASURED DEFECT. Reload epoch of run br-20260831-160354-2513: close #1 arrives with the
+    /// The measured defect. Reload epoch of run br-20260831-160354-2513: close #1 arrives with the
     /// gauge at frame 1 of 500 and permille well under 998. That is a transient screen closing, not
-    /// the world handing off, and it must NOT latch the cover's release.
+    /// the world handing off, and it must not latch the cover's release.
     #[test]
     fn a_close_on_a_frame_1_of_500_gauge_is_not_native_done() {
         assert!(
             !release_native_done(1, 40, 1, 500),
             "close #1 at frame=1/500 latched the release 17 s early (er-effects-rs-t7q2)"
         );
-        // The same close once the gauge has actually finished IS the handoff.
+        // The same close once the gauge has actually finished is the handoff.
         assert!(release_native_done(2, 996, 500, 500));
     }
 
-    /// The permille arm keeps its independent path to true: it released the HEALTHY boot window of
+    /// The permille arm keeps its independent path to true: it released the healthy boot window of
     /// that same run at 30050 ms, before that window's close at 30592 ms, so removing it would
     /// regress a proven-good release.
     #[test]
@@ -478,17 +478,17 @@ mod tests {
     fn a_gauge_less_screen_can_still_finish() {
         assert!(gauge_done(0, 0));
         assert!(release_native_done(1, 0, 0, 0));
-        // But "no gauge" is NOT "gauge finished" when the question is whether it froze.
+        // But "no gauge" is not "gauge finished" when the question is whether it froze.
         assert!(!gauge_terminal(0, 0));
         assert!(gauge_terminal(500, 500));
         assert!(!gauge_terminal(499, 500));
     }
 
-    // ---- the switch cover's release gate: COMPLETED plates, not an ordinal (2026-09-06) ----
+    // ---- the switch cover's release gate: Completed plates, not an ordinal (2026-09-06) ----
 
     /// Replays the two-plate switch the gate was originally written from
     /// (br-20260905-235624-a149): the unload finishes at `frame=1/500`, the character load's plate
-    /// finishes at `frame=500/500`. Counting completed plates must open the gate at the SAME
+    /// finishes at `frame=500/500`. Counting completed plates must open the gate at the same
     /// moment the old `close_hits >= 2` did -- on the second finish, not the first.
     #[test]
     fn a_two_plate_switch_releases_on_the_load_plate_not_the_teardown() {
@@ -502,7 +502,7 @@ mod tests {
         assert!(switch_cover_may_release(completed));
     }
 
-    /// THE MEASURED DEFECT this replaced the ordinal for. The user's ProfileSelect switch shows ONE
+    /// The measured defect this replaced the ordinal for. The user's ProfileSelect switch shows one
     /// plate, already the character load's -- `loadscreen_builds` advanced by exactly one per cover
     /// window across both switches of the 2026-09-06 run, and each window's single
     /// `finish/result sent` reported `frame=500/500`. Under `close_hits >= 2` that window could

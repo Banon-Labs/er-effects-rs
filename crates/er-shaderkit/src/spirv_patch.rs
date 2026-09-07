@@ -218,7 +218,7 @@ pub fn force_readonly_ssbo_loads_zero(spv: &mut [u8]) -> usize {
 
 /// Remap descriptor `Binding` numbers within each set to a contiguous `0..N` range,
 /// preserving relative order. lavapipe + wgpu + passthrough NULLS descriptors when the
-/// binding indices are SPARSE (e.g. `{4,5,8,10,11,12,25}` → segfault), but binds a
+/// binding indices are sparse (e.g. `{4,5,8,10,11,12,25}` → segfault), but binds a
 /// contiguous `{0..6}` set correctly (verified). Returns `(old (set,binding), new
 /// (set,binding))` pairs so the caller can remap its bind-group entries and buffer writes
 /// to match the rewritten shader.
@@ -275,9 +275,9 @@ pub fn compact_descriptor_bindings(spv: &mut [u8]) -> Vec<((u32, u32), (u32, u32
     mapping
 }
 
-/// Compact descriptor `Binding` numbers across MULTIPLE SPIR-V modules using a single
+/// Compact descriptor `Binding` numbers across multiple SPIR-V modules using a single
 /// shared map, so a resource used by more than one stage (e.g. `cbSceneParam`, shared by
-/// the vertex and pixel shader) keeps the SAME compacted binding in every module. Same
+/// the vertex and pixel shader) keeps the same compacted binding in every module. Same
 /// motivation as [`compact_descriptor_bindings`] (lavapipe nulls sparse bindings), but
 /// consistent across a vertex+pixel pipeline. Returns the shared old→new mapping.
 pub fn compact_descriptor_bindings_unified(
@@ -342,7 +342,7 @@ pub fn compact_descriptor_bindings_unified(
     mapping
 }
 
-/// Assign EVERY resource across the given modules a globally-unique, contiguous binding in
+/// Assign every resource across the given modules a globally-unique, contiguous binding in
 /// set 0. dxil-spirv emits the D3D register model where different descriptor *types* reuse
 /// the same binding (`t1`/`s1`/`b1` all → binding 1) and different cbuffers across stages
 /// reuse registers — both legal for vkd3d-proton's descriptor management but a hard

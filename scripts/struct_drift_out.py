@@ -1,8 +1,8 @@
 """Where the struct-field-drift tools keep their derived caches.
 
-WHY THIS IS NOT A LITERAL IN FOUR SCRIPTS
+Why this is not a literal in four scripts
 -----------------------------------------
-It was, and the literal contained a SESSION UUID:
+It was, and the literal contained a session UUID:
 
     /tmp/claude-1000/-home-banon-projects-er-mods-rs/f1b1f237-.../scratchpad/struct-drift
 
@@ -13,9 +13,9 @@ first" and `clear-fields-by-object.py` reports "missing rtti-joined.tsv" -- both
 describing a missing cache rather than the real cause, which is that the tool is looking in
 somebody else's directory.
 
-RESOLUTION ORDER
+Resolution order
   1. `$ER_STRUCT_DRIFT_OUT`, so a caller can still point the tools anywhere.
-  2. The legacy session scratchpad, but ONLY if it actually exists -- an agent that is mid-way
+  2. The legacy session scratchpad, but only if it actually exists -- an agent that is mid-way
      through a scan keeps its cache instead of silently starting a new one somewhere else.
   3. `<repo>/target/struct-drift`, which is gitignored, current-user-owned and survives a reboot.
 

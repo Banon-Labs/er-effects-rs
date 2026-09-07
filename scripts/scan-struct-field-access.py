@@ -77,7 +77,7 @@ def main() -> int:
 
     md = Cs(CS_ARCH_X86, CS_MODE_64)
     md.detail = True
-    # A range that starts mid-instruction desynchronises a linear sweep, and capstone STOPS at
+    # A range that starts mid-instruction desynchronises a linear sweep, and capstone stops at
     # the first undecodable byte rather than resynchronising -- which silently returns "no
     # accesses" for a field that is accessed. `skipdata` emits a filler for the bad byte and
     # carries on, so the sweep covers the whole range.

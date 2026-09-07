@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
-"""Launch each cdylib ALONE on ELDEN RING 1.17 and record what it does, one DLL per run.
+"""Launch each cdylib alone on ELDEN RING 1.17 and record what it does, one DLL per run.
 
-WHY ONE DLL AT A TIME
+Why one DLL at a time
 ---------------------
 On 2026-08-29 the whole mod set was failing and it was being discussed as "the mods break 1.17".
-It is not one failure. Nine single-DLL launches found THREE different ones, and the crates that
+It is not one failure. Nine single-DLL launches found three different ones, and the crates that
 boot cleanly outnumber the ones that do not:
 
-    er_quickload          0xc0000005 EXECUTE at a CS::CSFadeImp object, +1.7s
-    er_loading_portrait   vanishes ~4s after its first Present, leaving NO crash record
+    er_quickload          0xc0000005 execute at a CS::CSFadeImp object, +1.7s
+    er_loading_portrait   vanishes ~4s after its first Present, leaving no crash record
     er_armament_icons     0xc000001d ILLEGAL_INSTRUCTION at game+0x32ee2b5
 
-READ THE SIGNATURE, NOT THE LIVENESS. Scoring rows live/dead would have convicted er-gfx (shared
+Read the signature, not the LIVENESS. Scoring rows live/dead would have convicted er-gfx (shared
 by two dying shells -- but they die differently) and the Present hook (both Present-hooking shells
 died -- until er_loading_bar, which hooks Present and boots, killed that theory). A bisect on
 liveness alone gets the wrong crate; the crash-log signature is what discriminates.
 
-WHAT IT RECORDS
+What it records
     boots        the thread-group leader is still alive at the end of the watch window
     dies:<sig>   the leader went `Z` or the process vanished; `<sig>` is the first
                  access-violation / exception line its own crash log carried, if any
     no-launch    the game never came up at all (a launcher or environment problem, not a DLL one)
 
 Results merge into `docs/recon/dll-1170-runtime-results.json`, which
-`scripts/audit-1170-readiness.py` prints as its `runtime` column. That file is the ONLY source of
+`scripts/audit-1170-readiness.py` prints as its `runtime` column. That file is the only source of
 runtime truth: a DLL with zero ungated addresses is not thereby working, and nothing infers one
 from the other.
 
-DO NOT REBUILD WHILE THIS RUNS
+Do not rebuild while this runs
 ------------------------------
 Measured 2026-08-29, by doing it: a sweep was started, DLLs were rebuilt 10 minutes into it, and
 the run silently became a mix -- the first eight DLLs tested one build and the rest another. A
@@ -35,7 +35,7 @@ sweep that cannot say which build it measured is not evidence, and 18 verdicts h
 away. So the sweep now fingerprints every DLL at the start and ABORTS the moment one changes
 underneath it, rather than producing a result that looks fine and is not.
 
-EVERY RUN GETS ITS OWN ARTIFACT DIRECTORY
+Every run gets its own artifact directory
 -----------------------------------------
 er-artifact-redirect: this launches the game once per cdylib through `~/Elden/launch.sh`, and the
 audit's shell-name detector cannot see that -- the DLL under test is resolved from cargo metadata
@@ -43,19 +43,19 @@ at runtime, so no `er_quickload.dll` literal appears anywhere in this file. This
 sweep in explicitly rather than leaving it invisible, which reads exactly like a clean tree.
 
 It matters more here than anywhere else in the repo: `--all` is twenty-plus launches back to back.
-A game-directory artifact is SINGLE-SLOT (`er_game_base::log::begin_fresh_run` keeps one `.prev`),
-so an unredirected sweep destroys not only every other session's evidence but its OWN -- by the
+A game-directory artifact is single-slot (`er_game_base::log::begin_fresh_run` keeps one `.prev`),
+so an unredirected sweep destroys not only every other session's evidence but its own -- by the
 time it finishes, the only crash log left describes the last DLL it tested. Each run therefore gets
-`target/runtime-probe/sweep-1170/<crate>-<stamp>/`, and `crash_signature` reads THAT rather than
+`target/runtime-probe/sweep-1170/<crate>-<stamp>/`, and `crash_signature` reads that rather than
 the game directory.
 
-SAFETY / HOUSE RULES
+SAFETY / house rules
   * launches only the approved `~/Elden/launch.sh` path -- never Steam, never the EAC launcher;
   * one game at a time, torn down between runs via `scripts/er-teardown.py`;
   * profiles are written to `~/Elden/sweep-<dll>.me3` and name only the one DLL under test;
   * nothing in the game directory is ever deleted -- it is somebody else's run.
 
-USAGE
+Usage
     python3 scripts/sweep-dll-1170-runtime.py --list
     python3 scripts/sweep-dll-1170-runtime.py --dll er-net-effects
     python3 scripts/sweep-dll-1170-runtime.py --all --watch-seconds 40
@@ -73,7 +73,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE TABLE, NOT A COPY PER LAUNCHER. `scripts/er_artifact_env.py` is the single place a launcher
+# One table, not a copy per launcher. `scripts/er_artifact_env.py` is the single place a launcher
 # learns where this run's artifacts go; the audit requires it to cover every knob the DLLs honour,
 # so a new artifact cannot quietly stay unredirected in here.
 from er_artifact_env import (  # noqa: E402 - path set above
@@ -112,7 +112,7 @@ path = '{dll}'
 """
 
 
-# Crate name is NOT the DLL name for every shell: `er-ags-stub` builds `amd_ags_x64.dll`, because
+# Crate name is not the DLL name for every shell: `er-ags-stub` builds `amd_ags_x64.dll`, because
 # it has to be named what the game looks for. Assuming `crate.replace("-", "_")` reported it as
 # `not-built` and silently skipped it. The `[lib] name` in cargo metadata is the authority.
 _LIB_NAMES: dict[str, str] = {}
@@ -178,7 +178,7 @@ def run_dir(crate: str, started: float) -> str:
 def crash_signature(crate: str, since: float, artifact_dir: str) -> str:
     """The first fault line from any crash log this DLL touched during the run.
 
-    BOTH DIRECTORIES, redirect first. The redirects are put in the launcher's real environment
+    Both directories, redirect first. The redirects are put in the launcher's real environment
     below, so they normally take -- but they still have to survive `launch.sh` -> me3 -> Proton,
     and when they do not the DLL falls back to writing beside `eldenring.exe`. A reader that knows
     only one of the two reports `no crash record` for a DLL that left a perfectly good one, which
@@ -224,9 +224,9 @@ def run_one(crate: str, watch_seconds: float) -> str:
     started = time.time()
     artifact_dir = run_dir(crate, started)
     os.makedirs(artifact_dir, exist_ok=True)
-    # Redirected at LAUNCH, not copied at teardown: by teardown this run has already clobbered the
+    # Redirected at launch, not copied at teardown: by teardown this run has already clobbered the
     # previous one's file, and a DLL that dies -- which is the whole point of this sweep -- never
-    # reaches a copy step at all. These go into the launcher's REAL environment (not an
+    # reaches a copy step at all. These go into the launcher's real environment (not an
     # `env VAR=... cmd` prefix), so `crash_signature` above inherits them too.
     environment = dict(os.environ, ME3_PROFILE=profile, **artifact_env(artifact_dir))
     subprocess.Popen(
@@ -240,7 +240,7 @@ def run_one(crate: str, watch_seconds: float) -> str:
 
     pid = None
     while time.time() - started < LAUNCH_TIMEOUT_SECONDS and pid is None:
-        time.sleep(POLL_SECONDS)  # the POLL INTERVAL of a wait, not a synchronisation
+        time.sleep(POLL_SECONDS)  # the poll interval of a wait, not a synchronisation
         pid = game_pid()
     if pid is None:
         teardown()
@@ -321,7 +321,7 @@ def selftest() -> int:
     if stamps and fingerprint(cdylibs()) != stamps:
         failures.append("fingerprint is not stable across two calls on an unchanged tree")
 
-    # THE REDIRECT, AND THE READER THAT HAS TO FOLLOW IT. A sweep whose runs all wrote to the game
+    # The redirect, and the reader that has to follow it. A sweep whose runs all wrote to the game
     # directory would end holding one crash log -- the last DLL's -- and would have destroyed
     # everyone else's along the way. These two checks are what keep that from coming back.
     import tempfile

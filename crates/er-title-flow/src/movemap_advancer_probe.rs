@@ -1,4 +1,4 @@
-// Sample the ending-request evaluator's inputs AT ITS OWN ENTRY, not after it has decided.
+// Sample the ending-request evaluator's inputs at its own entry, not after it has decided.
 //
 // `CS::MoveMapStep`'s per-frame advancer computes one boolean `cVar10` from nine terms, writes it
 // to `menuData+0x5e`, and `case 0: if (cVar10 == 0) return;` -- so `cVar10` alone decides whether
@@ -6,11 +6,11 @@
 // reaching its terminal is what lets `InGameStep` drain `+0xd8` through its session-end arm, and
 // `STEP_GameStepWait` then does `SetMapId(0xff,0xff,0xff,0xff)`. That is the black screen.
 //
-// WHY A THIRD SAMPLER. Both previous ones read the inputs from OUTSIDE this function and both
+// Why a third sampler. Both previous ones read the inputs from outside this function and both
 // reported every term zero at a teardown that unquestionably happened:
 //
 // * `MMS-CLEANUP` samples on the child's Cleanup entry -- measured ~2 s downstream of the decision;
-// * `CVAR10 RISE` samples on the game-task tick that NOTICES the `menuData+0x5e` 0->1 edge. Closer,
+// * `CVAR10 RISE` samples on the game-task tick that notices the `menuData+0x5e` 0->1 edge. Closer,
 //   and still downstream: it polls a value this function has already written. Run 2026-09-06
 //   10:04:07, on a world that had loaded and was playable, it reported
 //   `rt5d=0 warp=0 b7c=0 b7d=0 force=0 session_proto=6 dead_reset=-1` -- which is consistent with
@@ -19,16 +19,16 @@
 // A term that is set for one frame is invisible to any sampler that runs on a later frame. Entry
 // to the evaluator is the only place the inputs are the ones the decision is made from.
 //
-// HOW THE ADDRESS WAS ESTABLISHED, because the usual route refuses it.
+// How the address was established, because the usual route refuses it.
 // `scripts/map-rvas-1162-to-1170.py 0x140afa6d0` returns UNMAPPED (111 shape matches, none at the
-// nearest anchor's delta). It was identified by CALL GRAPH: `L"EnableBot"` occurs twice in the 1.17
+// nearest anchor's delta). It was identified by call GRAPH: `L"EnableBot"` occurs twice in the 1.17
 // image and only `0x142bfdfd0` has xrefs; of its two referents the 137-byte `0x140e7e580` is an
 // exact size match for 1.16.2 `CS::CSEzSelectBot::IsBotEnabled` (137 B), and the single caller of
 // that in the MoveMap region decompiles carrying `L"CSEzSelectBot.MoveMapStep"`.
 // `scripts/verify-rva-map-1170.py` then confirmed the pair on bytes, independently of how it was
-// found: IDENTICAL-WHOLE, ratio 1.000 over 972 instructions, BOTH-ENTRIES, `PDATA:0x11b0/0x11b0`.
+// found: Identical-whole, ratio 1.000 over 972 instructions, both-entries, `PDATA:0x11b0/0x11b0`.
 //
-// READ-ONLY. The detour samples, calls the original unchanged, and writes nothing. It cannot
+// Read-only. The detour samples, calls the original unchanged, and writes nothing. It cannot
 // change which branch the game takes; a guard that corrects `cVar10` would be a different thing
 // and would need its own evidence, which is what this exists to produce.
 
@@ -38,7 +38,7 @@
 #[allow(unused_imports)]
 use crate::compat::*;
 
-// Only what the flat include! namespace does NOT already carry. `c_void`, `AtomicUsize`,
+// Only what the flat include! namespace does not already carry. `c_void`, `AtomicUsize`,
 // `Ordering` and the four `er_hook` items are imported by `product_autoload_gates.rs`, and a
 // second `use` of the same name in the same module is E0252.
 use core::sync::atomic::AtomicI32;
@@ -171,8 +171,8 @@ unsafe extern "system" fn movemap_advancer_hook(this: usize) {
         unsafe { orig(this) };
     }
 
-    // The edge is read AFTER the original, so the pair (entry sample, resulting cVar10) belongs to
-    // ONE call. That is the whole point: a sampler on any other schedule can only report the state
+    // The edge is read after the original, so the pair (entry sample, resulting cVar10) belongs to
+    // one call. That is the whole point: a sampler on any other schedule can only report the state
     // some number of frames after the decision.
     let Some(entry) = entry else { return };
     let after = menu_data(base)
@@ -180,7 +180,7 @@ unsafe extern "system" fn movemap_advancer_hook(this: usize) {
         .map_or(-1, i32::from);
     let prev = PREV_5E.swap(after, Ordering::SeqCst);
     // LIVENESS, because run 2026-09-06 10:36 produced `CVAR10 RISE` from the game-task sampler and
-    // NOT ONE line from this detour -- which has three possible causes and no way to tell them
+    // not one line from this detour -- which has three possible causes and no way to tell them
     // apart from silence: the detour never fires, `menuData` is unreadable from here so `after` is
     // always -1, or the 0->1 transition never lands on a call this hook sees. A handful of early
     // calls printing their own (prev, after) answers all three at once.
@@ -191,9 +191,9 @@ unsafe extern "system" fn movemap_advancer_hook(this: usize) {
             entry.md_5e
         ));
     }
-    // `prev == -1` IS an edge here, and treating it as "not an edge" cost a run. Measured
+    // `prev == -1` is an edge here, and treating it as "not an edge" cost a run. Measured
     // 2026-09-06 10:37:50: call #1 entered with `menuData+0x5e == 0` and left with it 1 -- the
-    // evaluator's FIRST invocation is the one that raises the ending request, so the only 0->1
+    // evaluator's first invocation is the one that raises the ending request, so the only 0->1
     // transition this detour will ever see has the unread sentinel as its predecessor.
     if !(after == 1 && (prev == 0 || prev == -1)) {
         return;
@@ -260,7 +260,7 @@ pub fn install_movemap_advancer_probe() -> bool {
                     let _installed_and_owned_by_minhook = hook;
                     HOOK_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        // `addr` is the PRE-translation 1.16.2 address: `game_rva_for_hook` returns
+                        // `addr` is the pre-translation 1.16.2 address: `game_rva_for_hook` returns
                         // base+rva by design and `MhHook::new` owns the single 1.16.2 -> 1.17
                         // resolve. Printing `addr` alone reads as "hooked the stale address" and
                         // cost a teardown on 2026-09-06 before the `HOOK TRANSLATED` line was

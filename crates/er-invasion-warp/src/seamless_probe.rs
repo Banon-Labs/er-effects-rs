@@ -2,11 +2,11 @@
 //!
 //! Seamless Co-op runs its own invasion system: none of `ersc.dll`'s 286 resolved signature
 //! slots reach `CSBreakInPointManager` or `CS::QuickmatchManager`, so the world-map pins this
-//! crate injects -- built from the `.aip` table and MSB `InvasionPoint` regions -- are a VANILLA
+//! crate injects -- built from the `.aip` table and MSB `InvasionPoint` regions -- are a vanilla
 //! invasion surface and say nothing about where a Seamless invader lands. The code that picks
 //! the target is inside the Themida-encrypted part of `ersc.dll` and cannot be read statically.
 //!
-//! It does not have to be read. The decision's OUTPUT is written to `CSGameMan` in the clear:
+//! It does not have to be read. The decision's output is written to `CSGameMan` in the clear:
 //! an MSB entry-point entity id at `+0xaf0` and a destination map at `+0xac8`, both consumed by
 //! `FUN_140afcf60`, the spawn resolver `ersc.dll` hooks. One invasion therefore yields the fact
 //! that the static analysis could not.

@@ -2,7 +2,7 @@
 //!
 //! # Two independent checks, and why both exist
 //!
-//! Every address here was byte-checked OFFLINE against `eldenring-deobf.bin` at shift 0
+//! Every address here was byte-checked offline against `eldenring-deobf.bin` at shift 0
 //! (`python3 scripts/check-dump-deobf-identity.py --count 32 0x<va>`). That proves the address
 //! is right *for the image we reverse-engineered*. It says nothing about the image actually
 //! running, which is why each seam also carries the first bytes of its prologue and
@@ -12,7 +12,7 @@
 //!
 //! # What a prologue signature does and does not catch
 //!
-//! It catches DRIFT -- a different game build where the function moved or changed. It does NOT
+//! It catches drift -- a different game build where the function moved or changed. It does not
 //! identify which function this is: the three `BonfireWarp*` param lookups share a byte-identical
 //! 12-byte prologue (`40 57 48 83 ec 40 48 c7 44 24 20 fe`) because they are the same
 //! binary-search shape over different param tables. Only the RVA distinguishes them, and the RVA
@@ -21,7 +21,7 @@
 //!
 //! # Argument-count trap
 //!
-//! `er_hook`'s union dispatcher is a FOUR-argument `extern "system"` shape. A target taking five
+//! `er_hook`'s union dispatcher is a four-argument `extern "system"` shape. A target taking five
 //! or more register/stack arguments silently loses the extras -- including out-parameters the
 //! callee writes through, which corrupts memory rather than failing loudly. Any seam added here
 //! with more than four arguments must get its own typed `MhHook` instead of riding the union;
@@ -36,7 +36,7 @@ pub struct MapSeam {
     pub rva: usize,
     /// First bytes of the function's prologue in the image the addresses were verified against.
     pub prologue: &'static [u8],
-    /// Register/stack argument count. `> 4` means this seam MUST NOT ride the four-argument
+    /// Register/stack argument count. `> 4` means this seam must not ride the four-argument
     /// union dispatcher.
     pub arg_count: usize,
 }
@@ -64,21 +64,21 @@ pub const RE_IMAGE_BASE: usize = 0x1_4000_0000;
 pub const UNION_DISPATCHER_ARG_COUNT: usize = 4;
 
 /// `CS::WorldMapViewModel::WorldMapViewModel` -- `0x1408855b0`. The row list at `+0x2d8` is
-/// populated here and NOWHERE else, so an epilogue hook here is the injection seam for synthetic
+/// populated here and nowhere else, so an epilogue hook here is the injection seam for synthetic
 /// rows.
 ///
-/// LIFETIME, corrected twice and now pinned by the static call graph: the ViewModel is built ONCE
-/// PER WORLD ENTRY -- not once per session, and not once per map view. This ctor's only code xref
+/// Lifetime, corrected twice and now pinned by the static call graph: the ViewModel is built once
+/// per world entry -- not once per session, and not once per map view. This ctor's only code xref
 /// is `FUN_1407ed840 @0x1407ed8d3`, whose body is `if (popupMenu->worldMapViewModel == NULL) {
 /// alloc(0x450, MenuHeap); ctor(...) }`; its only caller is `FUN_140766010 @0x14076607b`, whose
 /// only caller is `MoveMapStep`'s constructor `@0x140af2e47`, reached from `STEP_MoveMap_Init`.
 /// Teardown mirrors it: `~MoveMapStep -> FUN_140765fa0 @0x140af3eb5 -> FUN_1407ed790`, which runs
-/// the dtor, frees the block and nulls the slot. So the object's lifetime IS `MoveMapStep`'s.
+/// the dtor, frees the block and nulls the slot. So the object's lifetime is `MoveMapStep`'s.
 ///
 /// Two consequences that have each cost a wrong diagnosis:
-/// - A map-LAYER switch (`FUN_1409c1fc0`) does not come near this function -- it mutates
-///   `dialog+0xa88` and re-sizes the clip pool. `VIEWMODEL_CTOR_HITS > 1` means the player MOVED
-///   MAPS, never that they toggled a layer.
+/// - A map-layer switch (`FUN_1409c1fc0`) does not come near this function -- it mutates
+///   `dialog+0xa88` and re-sizes the clip pool. `VIEWMODEL_CTOR_HITS > 1` means the player moved
+///   maps, never that they toggled a layer.
 /// - Opening the map does not rebuild the list either. There is no refresh, rebuild or dirty-flag
 ///   path anywhere in the image: the grow helper, the row ctor and the row copy-ctor each have
 ///   exactly one calling function, and it is this one. Anything the list must gain later, we have
@@ -101,8 +101,8 @@ pub const WORLDMAP_VIEWMODEL_CTOR: MapSeam = MapSeam {
 /// `SetNPCInvadeTargetEntryPoint(0)` -> `+0xAF0` (hard zero, which is why that field always read
 /// 0 in the RAM sampling).
 ///
-/// This is the seam the location filter judges at: the destination is DECIDED and the player has
-/// NOT moved. Measured live 2026-08-05 -- `ServerPushJoinData+0x00` was the only offset in all 128
+/// This is the seam the location filter judges at: the destination is decided and the player has
+/// not moved. Measured live 2026-08-05 -- `ServerPushJoinData+0x00` was the only offset in all 128
 /// bytes whose u32 equalled the destination that landed in `GameMan+0xAC8`, so the field is
 /// identified by correlation rather than by its reversed name (`matchPlayerCount`, which would
 /// have pointed at the wrong dword).
@@ -168,9 +168,9 @@ pub const GET_BONFIRE_ENTITY_ID: MapSeam = MapSeam {
     arg_count: 2,
 };
 
-/// `FUN_140885ed0` -- the `CS::WorldMapWarpPinData` COPY-constructor. The row owns two heap
+/// `FUN_140885ed0` -- the `CS::WorldMapWarpPinData` copy-constructor. The row owns two heap
 /// regions, so this is the only safe way to duplicate one; a `memcpy` double-frees at teardown.
-/// It carries NO symbol in the 1.16.2 dump -- an earlier agent-supplied name for it was
+/// It carries no symbol in the 1.16.2 dump -- an earlier agent-supplied name for it was
 /// fabricated and refuted.
 pub const WORLDMAP_PIN_ROW_COPY_CTOR: MapSeam = MapSeam {
     name: "WorldMapWarpPinData copy-ctor (FUN_140885ed0)",
@@ -193,8 +193,8 @@ pub const WORLDMAP_PIN_ROW_CTOR: MapSeam = MapSeam {
 };
 
 /// `FUN_14088bac0` -- the `CS::WorldMapWarpPinData` non-deleting destructor. Destroys
-/// `label[0..*(u64*)(row+0x230))` then the `+0x18` MenuString. Does NOT free the row storage.
-/// The temp row used to build a pin MUST be destroyed with this; `free`/`operator delete`
+/// `label[0..*(u64*)(row+0x230))` then the `+0x18` MenuString. Does not free the row storage.
+/// The temp row used to build a pin must be destroyed with this; `free`/`operator delete`
 /// instead corrupts the game heap.
 pub const WORLDMAP_PIN_ROW_DTOR: MapSeam = MapSeam {
     name: "WorldMapWarpPinData dtor (FUN_14088bac0)",
@@ -215,11 +215,11 @@ pub const WORLDMAP_PIN_LIST_GROW: MapSeam = MapSeam {
     arg_count: 2,
 };
 
-/// `FUN_14088be50` -- the FAST-TRAVEL LIST filter.
+/// `FUN_14088be50` -- the fast-travel list filter.
 /// `(row /*RCX*/, categoryMask /*EDX*/, allowUnvisited /*R8B*/)` returns non-zero when the row
 /// should be listed.
 ///
-/// It is **NOT** the map-marker visibility gate, whatever this comment used to claim. All four
+/// It is **not** the map-marker visibility gate, whatever this comment used to claim. All four
 /// of its callers (`0x1409cef10`, `0x1408803b0`, `0x14088a6c0`, `0x14088aba0`) build the
 /// fast-travel list or the bookmark dialog. A live run that saw the pins on the map while this
 /// reported `ours 0/0` was reporting the truth; the earlier reading of that as a bug sent an
@@ -240,20 +240,20 @@ pub const WORLDMAP_ROW_FILTER: MapSeam = MapSeam {
 /// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` -- `0x140876140`. Produces the
 /// `WorldMapCoordinates{x, z}` a pin renders at.
 ///
-/// THE SIGNATURE STOPS AT 10 BYTES ON PURPOSE. The eleventh byte begins the `disp32` of
+/// The signature stops at 10 bytes on purpose. The eleventh byte begins the `disp32` of
 /// `mov rax,[rip+disp32]`, and a RIP-relative displacement is the distance between the
-/// instruction and the global it names -- so it re-encodes whenever EITHER end moves, even when
+/// instruction and the global it names -- so it re-encodes whenever either end moves, even when
 /// the function is untouched. 1.17 moved both: this function translates cleanly to `0x140877130`
 /// and its body is byte-identical there except that `disp32` (`62 4c 3e 03` -> `d2 7c 3e 03`).
-/// The old 12-byte signature captured the low half of that field, so it matched NOWHERE in 1.17
+/// The old 12-byte signature captured the low half of that field, so it matched nowhere in 1.17
 /// and `verify_seam` -- which compares exactly, having no mask -- would have refused a correctly
 /// translated address. That is the same failure the generated pins hit, where it was solved with
 /// a `_MASK` that ignores exactly these bytes; a hand-written seam has no mask, so it stops short
 /// of the field instead. This is the `take` idea from `build-support/prologue_build.rs`: name the
 /// instructions in full, keep only the bytes that are stable.
 ///
-/// Truncating costs NOTHING here, which is why this is the fix rather than a wider one: the
-/// 10-byte prefix still occurs exactly ONCE in each image (1.16.2 and 1.17 both n=1), measured by
+/// Truncating costs nothing here, which is why this is the fix rather than a wider one: the
+/// 10-byte prefix still occurs exactly once in each image (1.16.2 and 1.17 both n=1), measured by
 /// `scripts/verify-prologue-coverage-1170.py --section uniqueness`. A shorter signature is only a
 /// weaker signature when it actually matches more; this one does not.
 pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
@@ -288,12 +288,12 @@ pub enum SeamError {
     Unreadable { name: &'static str, address: usize },
     /// The running build moved this function and no verified mapping says where to.
     ///
-    /// SEPARATE FROM [`Self::PrologueMismatch`] ON PURPOSE, because the two need opposite fixes
+    /// Separate from [`Self::PrologueMismatch`] on purpose, because the two need opposite fixes
     /// and this file reported the wrong one for the whole of the 1.17 migration. Every RVA here
     /// is 1.16.2; the installed game has been 1.17 since 2026-08-27. Byte-comparing at
     /// `base + rva` on that build reads unrelated code and answers "prologue mismatch", which
-    /// blames the SIGNATURE -- sending a reader to re-derive bytes that were never wrong -- when
-    /// the ADDRESS is what moved and the fix is to map the function.
+    /// blames the signature -- sending a reader to re-derive bytes that were never wrong -- when
+    /// the address is what moved and the fix is to map the function.
     NoMappingForBuild {
         name: &'static str,
         /// The 1.16.2 address that was asked for.
@@ -307,7 +307,7 @@ pub enum SeamError {
         address: usize,
         expected: Vec<u8>,
         actual: Vec<u8>,
-        /// `Some(stale)` when `address` is a TRANSLATION of the 1.16.2 address `stale`, i.e. the
+        /// `Some(stale)` when `address` is a translation of the 1.16.2 address `stale`, i.e. the
         /// build gate did find this function on the running build and its prologue still differs.
         /// That is a recompiled function, not a wrong address, and saying so keeps this message
         /// from being read as the refusal above.
@@ -361,10 +361,10 @@ impl std::error::Error for SeamError {}
 
 /// How many times [`call_target`] may write its refusal line, per process.
 ///
-/// # The refusal line is COUNTED, and that is not fussiness
+/// # The refusal line is counted, and that is not fussiness
 ///
 /// The only caller is `inject_pins`, which runs once per `CS::WorldMapViewModel` construction --
-/// and that object's lifetime is `MoveMapStep`'s, so it is rebuilt on EVERY WORLD ENTRY. An
+/// and that object's lifetime is `MoveMapStep`'s, so it is rebuilt on every world entry. An
 /// unlatched refusal is therefore five identical lines every time the player loads in, for as
 /// long as the session lasts, with no upper bound but playtime. That is precisely the shape
 /// `scripts/check-no-rva-zero.py` exists to stop: one session wrote **339,764** copies of a
@@ -373,19 +373,19 @@ impl std::error::Error for SeamError {}
 /// would -- and turns the log into a bounded artifact. [`ALL_SEAMS`] sizes it so that every seam
 /// gets to speak once even if all of them move at the same time.
 ///
-/// NOT `#[cfg(windows)]`, unlike the counter and [`call_target`] themselves, so that the host
+/// Not `#[cfg(windows)]`, unlike the counter and [`call_target`] themselves, so that the host
 /// test run can assert the bound exists and is small. A cap that only compiles on the target it
 /// protects is a cap nothing can regression-test.
 pub const CALL_REFUSAL_LOG_LIMIT: usize = ALL_SEAMS.len();
 #[cfg(windows)]
 static CALL_REFUSAL_LOGS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// The address to CALL for `seam` on the RUNNING build, or `None` after saying why not.
+/// The address to call for `seam` on the running build, or `None` after saying why not.
 ///
-/// # The CALL resolver, deliberately beside the detour one
+/// # The call resolver, deliberately beside the detour one
 ///
 /// [`verify_seam`] is for a seam about to carry a MinHook detour and uses `resolve_detour_address`.
-/// This is for a seam about to be `transmute`d into a function pointer and CALLED, and uses
+/// This is for a seam about to be `transmute`d into a function pointer and called, and uses
 /// `resolve_game_address`, which additionally accepts the whole-image `.pdata` pairing -- good
 /// enough to say where a function is, not good enough to say MinHook may write five bytes there.
 /// The two live together so the choice is a visible fork rather than a habit.
@@ -393,7 +393,7 @@ static CALL_REFUSAL_LOGS: core::sync::atomic::AtomicUsize = core::sync::atomic::
 /// # Why it logs here
 ///
 /// `er-game-base`'s own refusal goes to the sink `er_hook::set_hook_logger` installs, which is a
-/// PER-DLL static. This line is what makes a dead map surface readable in THIS DLL's log, beside
+/// per-DLL static. This line is what makes a dead map surface readable in this DLL's log, beside
 /// the injection tallies that will now read zero. It is capped by
 /// [`CALL_REFUSAL_LOG_LIMIT`]; see that constant for why.
 ///
@@ -425,43 +425,43 @@ pub fn call_target(base: usize, seam: &MapSeam) -> Option<usize> {
 /// Resolve a seam to a live address, refusing when the running build moved the function or when
 /// the bytes there are not what we reversed.
 ///
-/// # RESOLVE FIRST, BYTE-CHECK SECOND
+/// # resolve first, byte-check second
 ///
 /// The order is the fix. This used to byte-compare at `base + seam.rva` with no translation at
 /// all, which on 1.17 reads whatever the patch put at a 1.16.2 address -- so every seam reported
 /// [`SeamError::PrologueMismatch`], a message that blames the signature when the address is what
 /// moved. The build gate is asked first now, and its refusal has its own variant.
 ///
-/// # Why the DETOUR resolver and not the CALL one
+/// # Why the detour resolver and not the call one
 ///
 /// All four callers hand the result straight to `er_hook::register_union_hook`; every one of them
 /// is installing a detour. `resolve_game_address` answers "where is this function now", which is
-/// what a CALL needs, and it will happily return a pair carried by the whole-image `.pdata` map.
-/// A detour needs the further claim that the destination is a real function ENTRY with a
+/// what a call needs, and it will happily return a pair carried by the whole-image `.pdata` map.
+/// A detour needs the further claim that the destination is a real function entry with a
 /// relocatable five-byte prologue, and only `resolve_detour_address` speaks to it -- letting the
 /// weaker rows carry detours is what killed a boot on 2026-08-29. If a future caller wants one of
-/// these seams as a plain CALL target, it must resolve with `resolve_game_address` itself rather
+/// these seams as a plain call target, it must resolve with `resolve_game_address` itself rather
 /// than loosening this.
 ///
-/// # WHAT IT RETURNS IS THE UNRESOLVED ADDRESS, AND THAT IS THE POINT (corrected 2026-08-30)
+/// # what it returns is the unresolved address, and that is the point (corrected 2026-08-30)
 ///
-/// The byte check runs at the RESOLVED address -- it has to, that is where the bytes are -- but
+/// The byte check runs at the resolved address -- it has to, that is where the bytes are -- but
 /// what comes back is `base + seam.rva`, untranslated, because `register_union_hook` resolves
-/// again and must be the ONE resolve that decides where the detour lands.
+/// again and must be the one resolve that decides where the detour lands.
 ///
 /// This doc used to say the opposite: that resolving twice is idempotent for an address which is
 /// already a 1.17 destination, so handing over the translated one is safe. That is true of most
-/// addresses and false of exactly the ones that matter. An address can be BOTH a 1.17 destination
-/// of one row and the 1.16.2 SOURCE of a different row -- which happens whenever a region's shift
+/// addresses and false of exactly the ones that matter. An address can be both a 1.17 destination
+/// of one row and the 1.16.2 source of a different row -- which happens whenever a region's shift
 /// equals the local spacing between two functions, so `B - A == C - B`. On such an address
-/// translation WINS over the already-translated shortcut (it must; see `already_translated_in`),
+/// translation wins over the already-translated shortcut (it must; see `already_translated_in`),
 /// and the second resolve silently returns a third, unrelated function. Three rows in the current
 /// detour table have that shape (`0x6156c0`, `0x7ad710`, `0xbbbd90`), and on 2026-08-30 three live
 /// detours in this workspace were measured landing on the wrong function because of it.
 ///
-/// Resolving the same 1.16.2 INPUT twice is harmless and is what happens now: this function
+/// Resolving the same 1.16.2 input twice is harmless and is what happens now: this function
 /// resolves it to read the prologue, `register_union_hook` resolves it to place the detour, and
-/// both get the same answer. Resolving the OUTPUT is the bug.
+/// both get the same answer. Resolving the output is the bug.
 /// `scripts/check-double-resolved-hook-targets.py` is the gate that keeps it out.
 ///
 /// On 1.16.2 `resolve_detour_address` returns its argument unchanged (`is_supported_build()`
@@ -503,7 +503,7 @@ pub unsafe fn verify_seam(seam: &MapSeam) -> Result<usize, SeamError> {
     // `stale`, not `address`: see "WHAT IT RETURNS IS THE UNRESOLVED ADDRESS" above. The prologue
     // was verified at `address`; the caller hands `stale` to `register_union_hook`, which resolves
     // this same 1.16.2 input to that same `address` and owns the single resolve that places the
-    // detour. Callers log what comes back, so their line now names the address the feature MEANT
+    // detour. Callers log what comes back, so their line now names the address the feature meant
     // and er-hook's own `HOOK TRANSLATED` line names where it went -- which is the pair a reader
     // needs, rather than one address twice.
     Ok(stale)
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn the_three_param_lookups_share_a_prologue_so_only_the_rva_tells_them_apart() {
         // Pinned deliberately: this is why a prologue signature must never be treated as
-        // identifying WHICH function was found. It detects drift, nothing more.
+        // identifying which function was found. It detects drift, nothing more.
         assert_eq!(
             BONFIRE_WARP_TAB_LOOKUP.prologue,
             BONFIRE_WARP_SUBCATEGORY_LOOKUP.prologue
@@ -591,7 +591,7 @@ mod tests {
         // looks like in practice. Asserting an upper bound here is what stops a later edit from
         // deleting the latch and re-creating it.
         // `const {}` rather than a runtime assert: both operands are compile-time constants, so
-        // this becomes a BUILD error rather than a test failure -- strictly stronger, and it is
+        // this becomes a build error rather than a test failure -- strictly stronger, and it is
         // what `clippy::assertions_on_constants` asks for. The lint only fires on the Windows
         // target (`cargo xwin clippy -p er-invasion-warp --all-targets`), because the module it
         // guards is `#[cfg(windows)]` and a host clippy run never compiles it.
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_moved_address_is_not_reported_as_a_byte_mismatch() {
-        // THE DEFECT THIS PAIR EXISTS TO STOP COMING BACK. `verify_seam` used to byte-compare at
+        // The defect this pair exists to stop coming back. `verify_seam` used to byte-compare at
         // the untranslated `base + rva`, so on 1.17 every seam came back "prologue mismatch" --
         // which reads as "our recorded bytes are wrong" and sends the next agent to re-derive a
         // signature that was never the problem. The two failures must not share wording.
@@ -646,10 +646,10 @@ mod tests {
         assert!(moved.contains("no verified detour mapping"), "{moved}");
         assert!(moved.contains("THE ADDRESS MOVED"), "{moved}");
         assert!(moved.contains("2.7.0.0"), "{moved}");
-        // The word a reader greps for when they think the signature is stale must NOT appear.
+        // The word a reader greps for when they think the signature is stale must not appear.
         assert!(!moved.contains("prologue mismatch"), "{moved}");
 
-        // And the converse: a mismatch at an address that DID resolve says so, so it is not read
+        // And the converse: a mismatch at an address that did resolve says so, so it is not read
         // as the refusal above.
         let recompiled = SeamError::PrologueMismatch {
             name: "example",

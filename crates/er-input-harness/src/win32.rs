@@ -2,9 +2,9 @@
 //!
 //! Mirrors the raw-`extern`/`#[link]` style of `er-reload-trace` (no `windows`-crate
 //! dependency, so nothing extra crosses the cargo-xwin cross-compile boundary). Only the calls the
-//! DIRECT-input-memory self-drive uses are declared: module resolution (find the game image),
+//! direct-input-memory self-drive uses are declared: module resolution (find the game image),
 //! timing/log helpers, and `ReadProcessMemory` for fault-safe
-//! game-memory reads. There is deliberately NO `SendInput`/`XInput`/window-focus surface: those were
+//! game-memory reads. There is deliberately no `SendInput`/`XInput`/window-focus surface: those were
 //! the dead path (user, 2026-07-19) -- ER menu/gameplay input is driven by writing the game's own
 //! input memory (CSMenuMan keystate bitmap + DLUID input-active flag), never synthesized OS input.
 
@@ -44,8 +44,8 @@ unsafe extern "system" {
     pub fn GetCurrentProcessId() -> u32;
 }
 
-/// True when the FOREGROUND window belongs to THIS process (i.e. the ER game window is focused). The
-/// focus gate for OS-synthesized input (bd SYNTHESIS-pause-menu-is-scaleform): keyboard events are
+/// True when the foreground window belongs to this process (i.e. the ER game window is focused). The
+/// focus gate for OS-synthesized input (bd synthesis-pause-menu-is-scaleform): keyboard events are
 /// system-wide and route to the focused window, so we only ever send when ER is foreground -- never into
 /// the user's other windows.
 pub fn er_window_is_foreground() -> bool {
@@ -62,7 +62,7 @@ pub fn er_window_is_foreground() -> bool {
 #[allow(dead_code)]
 const KEYEVENTF_KEYUP: u32 = 0x0002;
 
-/// Focus-gated OS key DOWN (hold) -- for a sustained press (movement test: hold W). Returns true if sent.
+/// Focus-gated OS key down (hold) -- for a sustained press (movement test: hold W). Returns true if sent.
 pub fn send_key_down(vk: u8) -> bool {
     if !er_window_is_foreground() {
         return false;
@@ -71,10 +71,10 @@ pub fn send_key_down(vk: u8) -> bool {
     true
 }
 
-/// Focus-gated OS key UP (release) -- pairs with `send_key_down`. Always sent (release is safe even if the
+/// Focus-gated OS key up (release) -- pairs with `send_key_down`. Always sent (release is safe even if the
 /// window lost focus mid-hold, to avoid a stuck key).
 ///
-/// RETAINED THOUGH CURRENTLY UNCALLED: this is the release half of `send_key_down`, which IS live (the
+/// Retained though currently UNCALLED: this is the release half of `send_key_down`, which is live (the
 /// OSMOVE probe in `crate::drive` holds VK_W with it). Nothing calls this today, which means that probe
 /// currently holds W without ever releasing it -- deleting the release path would remove the only way to
 /// fix that, so the item stays and the gap stays visible.
@@ -103,7 +103,7 @@ pub unsafe fn read_usize(addr: usize) -> Option<usize> {
 
 /// Read a 32-bit value from this process's own address space (fault-safe, same `ReadProcessMemory`
 /// idiom as [`read_usize`]). Needed wherever a struct field is genuinely a dword: reading one with
-/// `read_usize` pulls in the NEXT field's bytes as the high half, which is harmless when the caller
+/// `read_usize` pulls in the next field's bytes as the high half, which is harmless when the caller
 /// truncates and wrong when the field is the last one in the entry.
 pub unsafe fn read_u32(addr: usize) -> Option<u32> {
     let mut value = 0u32;
@@ -155,7 +155,7 @@ pub unsafe fn write_i32(addr: usize, value: i32) -> bool {
 }
 
 /// Read a single byte from this process's own address space (fault-safe). Used to confirm a keystate
-/// bitmap / DLUID flag byte is READABLE before writing it, so a not-yet-initialized singleton pointer
+/// bitmap / DLUID flag byte is readable before writing it, so a not-yet-initialized singleton pointer
 /// can never fault the game thread.
 pub unsafe fn read_u8(addr: usize) -> Option<u8> {
     let mut value = 0u8;

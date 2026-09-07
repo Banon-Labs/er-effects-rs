@@ -5,7 +5,7 @@ static TEXT_INPUT_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 static TEXT_INPUT_02_990_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
 static TEXT_INPUT_02_990_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static TEXT_INPUT_02_990_CANONICAL_URL: &[u8] = b"data0:/menu/win/02_990_textinput.gfx\0";
-// SECOND derivation of the SAME canonical payload, for the System>Quit link field. Separate cache
+// Second derivation of the same canonical payload, for the System>Quit link field. Separate cache
 // because the two derivations differ: the picker's hides the movie's chrome, this one keeps and
 // widens it.
 static BUILD_URL_02_990_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
@@ -118,8 +118,8 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
 
 /// Build (once, cached for the process lifetime) the neutral-background TPF003 blob for a stats-panel
 /// slot: a solid `STATS_PANEL_BG_RGBA` `STATS_PANEL_TEX_DIM` square, uncompressed legacy-RGBA8 DDS,
-/// wrapped in a one-entry TPF whose ENTRY NAME == the slot's `STATS_PANEL_SYSTEX_KEYS` (which becomes
-/// the GLOBAL_TexRepository GPU key). Held alive forever so the engine's DEFERRED GPU upload can never
+/// wrapped in a one-entry TPF whose entry name == the slot's `STATS_PANEL_SYSTEX_KEYS` (which becomes
+/// the GLOBAL_TexRepository GPU key). Held alive forever so the engine's deferred GPU upload can never
 /// read freed bytes (same lifetime discipline the er-tpf cover used). Pure CPU; no native call, no disk.
 pub(crate) fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
     static BLOBS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
@@ -146,7 +146,7 @@ pub(crate) fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
 
 /// Stats-panel product mode: register the neutral-background texture for each ProfileSelect save slot
 /// under its unique `STATS_PANEL_SYSTEX_KEYS` via the engine's own in-memory `CS::CreateTpfResCap`
-/// factory -- the SAME proven raw-(ptr,len) TPF->GPU path the er-tpf cover and the now-loading forge
+/// factory -- the same proven raw-(ptr,len) TPF->GPU path the er-tpf cover and the now-loading forge
 /// use. Self-gating + fail-closed: runs on the CSTaskImp game task (post-gfx-init), validates every
 /// precondition before the first native call, wraps each call in `catch_unwind`, and only latches a
 /// slot's registered bit on a non-null TpfResCap -- so a not-yet-initialized repo (null during boot)
@@ -168,11 +168,11 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         return; // every slot already registered
     }
     // Both repos non-null == graphics/repos initialized. Bail (retry next tick) if not ready yet; do
-    // NOT consume any register attempt, so boot-time nulls never burn a slot.
-    // Resolved, not added. These are 1.16.2 DATA addresses and every `.data` global moved on
+    // not consume any register attempt, so boot-time nulls never burn a slot.
+    // Resolved, not added. These are 1.16.2 data addresses and every `.data` global moved on
     // 1.17; read raw, the pointer that comes back is whatever now occupies the old slot, and it
     // went into `CreateTpfResCap` and divided by zero 894ms into boot. `safe_read_usize` cannot
-    // catch that -- the read SUCCEEDS, it is the answer that is wrong.
+    // catch that -- the read succeeds, it is the answer that is wrong.
     let Some(tpf_repo_slot) = er_game_base::game_build::resolve_game_address(
         base + GLOBAL_TPF_REPOSITORY_RVA,
         "GLOBAL_TPF_REPOSITORY_RVA",
@@ -197,7 +197,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
         STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
         return;
     }
-    // MEASURED, 2026-08-29: called raw, this took the game down ~925ms after load. 0xb83680 is
+    // Measured, 2026-08-29: called raw, this took the game down ~925ms after load. 0xb83680 is
     // `CreateTpfResCap` on 1.16.2 and a different function on 1.17, which faulted reading
     // [null+0x25] -- and the crash's own caller frames were 0xb83680 / 0xb836a0, naming the stale
     // address outright. The translation exists (0xb83680 -> 0xb84d30), so resolving here does not
@@ -243,7 +243,7 @@ pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
             Ok(c) if c != 0 && c != null => {
                 STATS_PANEL_TEX_REGISTERED_MASK.fetch_or(1 << slot, Ordering::SeqCst);
                 // Clear the stale boot-time retry marker (repos were null before gfx came up, which set
-                // TPF_REPO_NULL); a real register succeeded, so the oracle should read NONE.
+                // TPF_REPO_NULL); a real register succeeded, so the oracle should read none.
                 STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_NONE, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
                     "stats-panel: registered neutral bg for slot {slot} key='{}' rescap=0x{c:x} (mask=0x{:x})",
@@ -348,7 +348,7 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     ret
 }
 
-/// Product-default 05_000_title strip WITHOUT embedded bytes (er-effects-rs-h7x). `file` is what
+/// Product-default 05_000_title strip without embedded bytes (er-effects-rs-h7x). `file` is what
 /// the native FileOpener just returned for `data0:/menu/05_000_title.gfx`; per the rescap static
 /// RE (`FUN_140ce8320`, bd `native-memoryfile-wrapper-expects-gfx-rescap-2026-06-28`) that is a
 /// Scaleform MemoryFile whose data/len fields point at the vanilla movie payload owned by
@@ -356,7 +356,7 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
 /// construct path already relied on that). Derive the stripped movie from that payload with
 /// `er_gfx::title_05_000::strip` (all-or-nothing content-addressed edits, output verified against
 /// the validated-asset fingerprint for the known vanilla input), cache it for the process
-/// lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
+/// lifetime, and swap the native file's data/len/cursor onto the cached buffer. Any failure
 /// leaves the native file untouched and returns it as-is: fail-closed to the vanilla title UI,
 /// never a crash, never a half-stripped movie.
 pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
@@ -510,7 +510,7 @@ fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String
 /// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. In editor
 /// mode (`ER_PROFILE_05_010_EDITOR_DIR`), prefer the rebuilt `target/pi-local/profile-05-010-manual-layout.gfx`
 /// file and cache each version for the process lifetime, so rebuild-only controls hot-reload on the
-/// next ProfileSelect movie open without rebuilding/reloading the DLL. ANY failure leaves the native
+/// next ProfileSelect movie open without rebuilding/reloading the DLL. Any failure leaves the native
 /// file untouched and returns it as-is: fail-closed to the vanilla/ProfileSelect rows, never a crash,
 /// never a half-edited movie.
 pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
@@ -633,9 +633,9 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
 
 /// Where one 02_990 derivation's cache, counters, log tag and transform live together.
 ///
-/// TWO cache keys now reach this file (`02_990_TextInput_PathEditor` and
+/// Two cache keys now reach this file (`02_990_TextInput_PathEditor` and
 /// `02_990_TextInput_BuildUrl`), each redirected to the same canonical vanilla payload and each
-/// deriving a DIFFERENT movie from it. Sharing one derivation is what put an unstyled link field in
+/// deriving a different movie from it. Sharing one derivation is what put an unstyled link field in
 /// the corner of the screen, so the two are kept apart by construction rather than by a flag.
 struct TextInput02990Derivation {
     cache: &'static OnceLock<Vec<u8>>,
@@ -842,10 +842,10 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
     true
 }
 
-/// UNION-SHAPED, not game-shaped (2026-08-23). This prologue is detoured by `er-armament-icons`
+/// Union-shaped, not game-shaped (2026-08-23). This prologue is detoured by `er-armament-icons`
 /// too, and two MinHook instances on one prologue overwrite each other's trampolines -- measured:
-/// the product reported `installed = true` with ZERO hits for a whole session while every GFx swap
-/// it owns went silently vanilla. Both DLLs now chain through THIS DLL's single instance via the
+/// the product reported `installed = true` with zero hits for a whole session while every GFx swap
+/// it owns went silently vanilla. Both DLLs now chain through this DLL's single instance via the
 /// `er_effects_union_register` export, whose handler ABI is four `usize` args. The game passes
 /// three, so the fourth register is ignored; `flags` is narrowed straight back to the `u32` the
 /// game really passed, so neither the log nor the forwarded call sees a register whose high half
@@ -880,7 +880,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
     // Label only. Every synthetic/embedded MemoryFile substitution is gone: the title, ProfileSelect
-    // and OptionSetting movies are all derived IN PLACE from the game's own vanilla payload below, so
+    // and OptionSetting movies are all derived in place from the game's own vanilla payload below, so
     // the DLL never constructs a Scaleform MemoryFile of its own.
     let memory_label = if is_title_logo {
         "05_001_title_logo"
@@ -900,8 +900,8 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
     let ret = if base != null {
         if orig != null && orig != HOOK_ORIGINAL_UNSET {
-            // Called through the UNION signature on purpose: under the chain this slot holds
-            // either the game trampoline (3 args, extra register harmlessly ignored) or the NEXT
+            // Called through the union signature on purpose: under the chain this slot holds
+            // either the game trampoline (3 args, extra register harmlessly ignored) or the next
             // handler, which is 4-arg. Calling a chained handler with the game's narrower
             // signature would leave its 4th register undefined.
             let f: crate::mh::UnionFn = unsafe { std::mem::transmute(orig) };

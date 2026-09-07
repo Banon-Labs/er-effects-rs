@@ -27,7 +27,7 @@ import time
 import threading
 
 # Default caps on how much of a command result / reasoning block to show. These are
-# DISPLAY-only: the sub-agent always read the full result from its transcript; this only
+# display-only: the sub-agent always read the full result from its transcript; this only
 # shortens the terminal view. Override with --result-lines N (0 = uncapped).
 DEFAULT_RESULT_LINES = 24
 MAX_TEXT_LINES = 10
@@ -70,7 +70,7 @@ def clip(s, n):
 def wrap_block(text, width, max_lines, pad, bar_color, body_color):
     """Wrap a multiline blob into readable lines behind a thin colored gutter bar.
 
-    The BODY is drawn in `body_color` (empty string = terminal default fg, i.e. full
+    The body is drawn in `body_color` (empty string = terminal default fg, i.e. full
     contrast on any theme); only the `│` gutter is colored, so a multi-line block is
     visually grouped without dimming the text the user is trying to read. max_lines<=0
     = uncapped.

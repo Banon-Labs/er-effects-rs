@@ -492,7 +492,7 @@ fn discover_dxc_root() -> Option<PathBuf> {
             return Some(root);
         }
     }
-    // A dxc on PATH implies <prefix>/bin/dxc, so its root is two levels up.
+    // A dxc on path implies <prefix>/bin/dxc, so its root is two levels up.
     which("dxc")
         .and_then(|p| p.parent().and_then(Path::parent).map(Path::to_path_buf))
         .filter(|root| valid(root))

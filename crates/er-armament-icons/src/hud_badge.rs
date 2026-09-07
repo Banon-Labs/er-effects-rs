@@ -3,7 +3,7 @@
 //! # Why this needs its own hooks
 //!
 //! The menu badge rides `TilePopulate` (`FUN_1408ff470`), which never reaches HUD tiles: across
-//! 9216 populates in run 20260727-233703, ZERO bound `Dish`/`MpShortage`/`ReloadedIcon` -- the
+//! 9216 populates in run 20260727-233703, zero bound `Dish`/`MpShortage`/`ReloadedIcon` -- the
 //! HUD quick-slot child signature -- and the child probe already tests `Dish/Root`, so that is a
 //! tested negative rather than an assumption.
 //!
@@ -24,7 +24,7 @@
 //! ```
 //!
 //! This table is the correction to an earlier wrong reading. `FUN_1408d19b0` was taken for "the
-//! armament slot ctor called exactly twice", and it IS called exactly twice -- for **Magic** and
+//! armament slot ctor called exactly twice", and it is called exactly twice -- for **Magic** and
 //! **Item**. So every earlier HUD run drove the spell and quick-item slots, which is precisely
 //! what the user saw: green placeholder squares on the quick-item strip and never anything on
 //! the weapons. `scripts/disas-annotate-strings.py 0x1408cf3c0` prints the table above straight
@@ -32,22 +32,22 @@
 //!
 //! # The three hooks
 //!
-//! * `FUN_1408d0900(scene, alpha, viewModel)` -- the per-frame slot driver. Hooked ONLY to learn
+//! * `FUN_1408d0900(scene, alpha, viewModel)` -- the per-frame slot driver. Hooked only to learn
 //!   the scene pointer, which is what turns a component into a slot identity. Without it the two
 //!   weapon components are indistinguishable except by address ordering, and ordering is a guess.
 //!
 //! * `FUN_1408d1d00(component, panelClip)` -- the weapon slot ctor (LeftWep, RightWep, Arts and
 //!   the four `ItemPanel2` items). It resolves `Fade/Item` from the panel clip -- falling back to
 //!   `Fade` when absent, which is how the icon-less `Arts` slot goes through the same ctor -- and
-//!   hands that clip to the generic child binder. The ctor knows the COMPONENT, the binder knows
-//!   the CLIP, and neither knows both, so the two are paired by a same-thread handshake.
+//!   hands that clip to the generic child binder. The ctor knows the component, the binder knows
+//!   the clip, and neither knows both, so the two are paired by a same-thread handshake.
 //!
 //! * `FUN_1408d1e30(component+0x68, tileClip, textClip)` -- the generic child binder, hooked for
 //!   its `rdx` only. It binds `ItemIcon/IconImage`, `AttributeIcon/IconImage`, `Dish/Root`,
 //!   `Grayout`, `Flash`, `MpShortage`, `inadequacy`, `ReloadedIcon/IconImage`, `Text/Name`,
 //!   `Text/Stock` -- and finally resolves a child literally named `ArtsIcon` and hides it.
 //!
-//!   That last hide CANNOT reach this badge: the resolver (`FUN_140d7f9d0`) splits the requested
+//!   That last hide cannot reach this badge: the resolver (`FUN_140d7f9d0`) splits the requested
 //!   name on `/` and walks one member per segment (`strchr(name, '/')` at `0x140d7fa19`), so it
 //!   has no recursive search and a request for `ArtsIcon` never matches `ItemIcon/ArtsIcon`. The
 //!   nested mount is therefore safe by construction, not by luck.
@@ -65,7 +65,7 @@
 //!
 //! # Where the ash comes from
 //!
-//! NOT from the HUD slot struct: `FUN_1408d0900` takes its data from a HUD view-model, which is
+//! Not from the HUD slot struct: `FUN_1408d0900` takes its data from a HUD view-model, which is
 //! filled elsewhere. The equipped weapon is read directly instead, through the same named chain
 //! the game uses:
 //!
@@ -77,25 +77,25 @@
 //! resolve_gem_icon_id(paramId)   -> EquipParamGem.iconId, or no badge
 //! ```
 //!
-//! `SwordArtsParam.iconId` (row + 0x1A) is NOT part of this chain: it is a different icon
+//! `SwordArtsParam.iconId` (row + 0x1A) is not part of this chain: it is a different icon
 //! family (21xxx bare skill glyphs) from the item atlas the badge draws into, and is never
 //! substituted for a missing gem icon. See the resolver below.
 //!
 //! `GetSwordArtsParamIdForWeapon` resolves through `GetGemGaitemHandleFromWeapon` ->
-//! `GetGaitemInsGem`, i.e. the ACTUAL equipped gem, so unlike the menu path's `arts_id * 100`
+//! `GetGaitemInsGem`, i.e. the actual equipped gem, so unlike the menu path's `arts_id * 100`
 //! heuristic it does not miss weapons whose gem id is not derived from the arts id (Igon's Drake
 //! Hunt: arts 4210 -> gem 548000).
 //!
 //! Every RVA below was verified with `scripts/verify-hook-address.py`, which compares MNEMONIC
-//! and instruction LENGTH between the 1.16.2 dump and `eldenring-deobf.bin` -- the dump is
-//! authoritative for MEANING, the deobf binary for ADDRESSES, and they are not the same file.
+//! and instruction length between the 1.16.2 dump and `eldenring-deobf.bin` -- the dump is
+//! authoritative for meaning, the deobf binary for addresses, and they are not the same file.
 
 #![cfg(windows)]
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::safe_read_usize;
-// The gem chain and the player singleton are declared ONCE in `er-game-base::rva` and derived
+// The gem chain and the player singleton are declared once in `er-game-base::rva` and derived
 // here. `er-build-import-runtime` walks the same three hops to read the ash of war off an equipped
 // armament for the Generate Build Link row, and one address written out in two crates is one
 // address that a 1.16.x correction can be applied to in only one of them.
@@ -119,8 +119,8 @@ const HUD_SCENE_UPDATE_RVA: usize = 0x8d0900;
 const HUD_WEAPON_SLOT_CTOR_RVA: usize = 0x8d1d00;
 /// `FUN_1408d1e30(subComponent /*rcx*/, tileClip /*rdx*/, textClip /*r8*/)` -- child binder.
 ///
-/// Hooked for its `rdx` ONLY. The ctor does not forward its own `rdx`: it resolves `Fade/Item`
-/// (or `Fade`) from the panel clip and passes THAT, so the ctor's argument is the panel, not the
+/// Hooked for its `rdx` only. The ctor does not forward its own `rdx`: it resolves `Fade/Item`
+/// (or `Fade`) from the panel clip and passes that, so the ctor's argument is the panel, not the
 /// tile. Its `rcx` is `component + 0x68`, which is why it cannot key the registry itself.
 const HUD_CHILD_BINDER_RVA: usize = 0x8d1e30;
 /// `FUN_1408d2110(component /*rcx*/, alpha /*xmm1*/, slotData /*r8*/)` -- weapon slot update.
@@ -157,11 +157,11 @@ const BADGE_PATH: &std::ffi::CStr = c"ItemIcon/ArtsIcon";
 /// ```
 ///
 /// ChrAsm's weapon block interleaves the hands -- 0 = Left 1, 1 = Right 1, 2 = Left 2, 3 = Right
-/// 2, 4 = Left 3, 5 = Right 3 -- so EVEN is the LEFT hand and ODD is the right. The ammo rows
+/// 2, 4 = Left 3, 5 = Right 3 -- so even is the left hand and ODD is the right. The ammo rows
 /// confirm the index arithmetic independently: `sel*2 + 6` lands on 6/8 (Arrow 1/2) and
 /// `sel*2 + 7` on 7/9 (Bolt 1/2), exactly the known layout.
 ///
-/// So **-2 is LEFT and -1 is RIGHT**, proven rather than assumed. `CS::ChrIns::
+/// So **-2 is left and -1 is right**, proven rather than assumed. `CS::ChrIns::
 /// GetEquipmentEntryByTwoHandState` (1.16.2 dump 0x1403eeec0) is a single line:
 ///
 /// ```text
@@ -208,7 +208,7 @@ struct SwordArtsLookupResult {
     row: usize,
 }
 
-/// The gaitem lookup record. It is BOTH input and output, which is the whole trick:
+/// The gaitem lookup record. It is both input and output, which is the whole trick:
 ///
 /// ```text
 ///   +0x00  u32   gaitem handle          INPUT  -- caller fills this
@@ -217,9 +217,9 @@ struct SwordArtsLookupResult {
 /// ```
 ///
 /// `GetGaitemInsByHandle` opens with `cmp dword ptr [rcx], 0; je <bare ret>` -- it reads the
-/// handle out of the struct it is asked to fill, and returns having written NOTHING when that
+/// handle out of the struct it is asked to fill, and returns having written nothing when that
 /// field is zero. The game's own one-line thunk `FUN_1406743a0` is `mov rdx, rcx; jmp
-/// GetGaitemInsByHandle`, i.e. it passes the SAME pointer as both arguments.
+/// GetGaitemInsByHandle`, i.e. it passes the same pointer as both arguments.
 ///
 /// Getting this wrong is silent, not loud: passing a zeroed struct plus a separate handle
 /// pointer takes the early return, leaves `ins`/`kind` at zero, and every icon lookup then
@@ -228,7 +228,7 @@ struct SwordArtsLookupResult {
 /// `+0x10` is not incidental: `GetSwordArtsParamIdForWeapon` reads exactly that field
 /// (`mov edx, dword ptr [rdi + 0x10]` at `0x140673fb6`).
 ///
-/// THE FIELD AT `+0x10` IS THE ITEM ID, AND ITS EMPTY VALUE IS `-1`, NOT `0` (1.16.2 `getStructure`
+/// The field at `+0x10` is the item ID, and its empty value is `-1`, not `0` (1.16.2 `getStructure`
 /// puts `itemId` last in a 20-byte record; the engine's own constructor `GaitemLookupResult(out,
 /// handle)` @0x1406726c0 writes `gaItemIns = nullptr; itemId = -1`). Zero is not "nothing" here:
 /// `GetSwordArtsParamIdForWeapon` rejects an id only when `(itemId & 0xF0000000) != 0` or it equals
@@ -285,7 +285,7 @@ const SAMPLE_LOGS: u64 = 24;
 
 /// Per-component badge proxy registry.
 ///
-/// The update hook only receives the COMPONENT; the parent clip is in scope solely inside the
+/// The update hook only receives the component; the parent clip is in scope solely inside the
 /// binder. So the badge proxy is bound once at bind time and remembered here, keyed by the
 /// component pointer.
 ///
@@ -336,7 +336,7 @@ fn registry_claim(component: usize) -> Option<&'static BadgeSlot> {
 ///
 /// Exact, not heuristic: the scene pointer comes from the driver and the two offsets are the
 /// literals `PlayerHUDScene` and the driver both use. `Arts` and the four `ItemPanel2` items go
-/// through the SAME ctor and the SAME updater, so this test is the only thing separating them --
+/// through the same ctor and the same updater, so this test is the only thing separating them --
 /// and it fails closed, because an unrecognised component hides its badge rather than guessing a
 /// hand. (The previous scheme picked the lower of two remembered addresses, which silently
 /// mapped the Magic and Item slots onto the right and left hands.)
@@ -422,7 +422,7 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return None; // no skill on this weapon
     }
 
-    // The ICON lives on the GEM, not on `SwordArtsParam`.
+    // The icon lives on the gem, not on `SwordArtsParam`.
     //
     // Measured live on both equipped weapons (`scripts/frida/hud-arts-chain.py`, run
     // 20260728-094220): the chain resolves perfectly -- arts 801 and 802, valid rows -- and
@@ -430,7 +430,7 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
     // and 8482. That is why the first live run bound 6 badges and drew none.
     //
     // The menu badge has always read the gem, which is also why the menu shows icons the HUD
-    // did not; going through the same resolver keeps the two surfaces showing the SAME icon for
+    // did not; going through the same resolver keeps the two surfaces showing the same icon for
     // the same weapon instead of two independently-derived answers. It verifies the gem row's
     // own `swordArtsParamId` matches, so a heuristic miss degrades to "no gem" rather than to
     // someone else's icon.
@@ -439,7 +439,7 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return Some(gem_icon);
     }
 
-    // No fallback. `SwordArtsParam.iconId` is a DIFFERENT icon family (21xxx bare skill
+    // No fallback. `SwordArtsParam.iconId` is a different icon family (21xxx bare skill
     // glyphs) from the item atlas `ICON_INFO_BUILDER_RVA`/`ICON_SETTER_RVA` draw into -- same
     // rule the menu badge already follows (`lib.rs:736-740`). 95 of 277 `SwordArtsParam` rows
     // have no icon-bearing gem, and none of the 95 has a recoverable item icon, so "no badge"
@@ -536,7 +536,7 @@ unsafe fn bind_badge(_base: usize, component: usize, parent_clip: usize) {
     }
 }
 
-/// The per-frame slot driver. Hooked ONLY to publish the scene pointer.
+/// The per-frame slot driver. Hooked only to publish the scene pointer.
 unsafe extern "system" fn hud_scene_update_hook(
     scene: usize,
     alpha: f32,
@@ -557,7 +557,7 @@ unsafe extern "system" fn hud_scene_update_hook(
     unsafe { f(scene, alpha, view_model) }
 }
 
-/// The generic child binder. Hooked ONLY to capture its `rdx` -- the real tile clip -- and only
+/// The generic child binder. Hooked only to capture its `rdx` -- the real tile clip -- and only
 /// while a weapon slot ctor is on the stack above it.
 unsafe extern "system" fn hud_child_binder_hook(
     sub_component: usize,
@@ -571,7 +571,7 @@ unsafe extern "system" fn hud_child_binder_hook(
     } else {
         0
     };
-    // Bind AFTER the original: it populates the component's own children and force-hides the
+    // Bind after the original: it populates the component's own children and force-hides the
     // tile-level `ArtsIcon`, so binding first would race its setup.
     let component = PENDING_COMPONENT.load(Ordering::SeqCst);
     if component != 0
@@ -625,7 +625,7 @@ unsafe extern "system" fn hud_weapon_update_hook(
         0
     };
     let n = UPDATE_FIRES.fetch_add(1, Ordering::SeqCst) + 1;
-    // Log the first fires UNCONDITIONALLY. A run with zero draws is otherwise indistinguishable
+    // Log the first fires unconditionally. A run with zero draws is otherwise indistinguishable
     // between "this hook never fired" and "it fired but the component was not recognised".
     if n <= SAMPLE_LOGS {
         let scene = SCENE_BASE.load(Ordering::SeqCst);
@@ -709,7 +709,7 @@ unsafe extern "system" fn hud_weapon_update_hook(
             Some(icon_id)
         }
         None => {
-            // Hide on EVERY non-draw path. The badge clip is part of the movie and the HUD slot
+            // Hide on every non-draw path. The badge clip is part of the movie and the HUD slot
             // persists across weapon swaps, so "do not draw" is not enough -- that is exactly how
             // empty rows kept a stale plate in the menus (run 20260727-233703).
             unsafe { set_visible(storage.as_mut_ptr(), false) };
@@ -780,7 +780,7 @@ pub fn install(base: usize) {
         ),
     ];
 
-    // Create and enable ALL of them before applying: a half-installed set would bind badges that
+    // Create and enable all of them before applying: a half-installed set would bind badges that
     // nothing ever shows (or worse, show badges nothing ever hides).
     let mut hooks = Vec::with_capacity(plan.len());
     for (rva, detour, slot, label) in plan {

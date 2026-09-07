@@ -72,7 +72,7 @@ pub enum Tag {
         /// Whether the source encoded this tag's `RecordHeader` in long form.
         force_long: bool,
     },
-    /// `FrameLabel` (code 43): a NUL-terminated label and an OPTIONAL trailing
+    /// `FrameLabel` (code 43): a NUL-terminated label and an optional trailing
     /// named-anchor byte. `named_anchor` preserves the byte's presence/absence
     /// and value exactly (none present in the Tier-1 corpus, but modelled).
     FrameLabel {
@@ -113,7 +113,7 @@ pub enum Tag {
     /// is stored verbatim and governs which optional fields are present; each
     /// optional field below is `Some` iff its flag bit is set in `flags`.
     ///
-    /// `clipActions` (flag `0x80`) is NOT modelled; a PlaceObject2 carrying it is
+    /// `clipActions` (flag `0x80`) is not modelled; a PlaceObject2 carrying it is
     /// kept as [`Tag::Unknown`] (none occur in the corpus -- 0 of 171,728).
     PlaceObject2 {
         /// Raw flags byte (`Move`/`HasCharacter`/`HasMatrix`/`HasColorTransform`/
@@ -231,7 +231,7 @@ pub enum Tag {
     /// Field order (corpus-proven byte-identical over all instances): `bounds`
     /// `RECT` (byte-aligns), `flags1`+`flags2`, `font_id` (`flags1` `HasFont`),
     /// `font_class` (`flags2` `HasFontClass`), `font_height` (present iff
-    /// `HasFont` OR `HasFontClass`), `text_color` (`flags1` `HasTextColor`,
+    /// `HasFont` or `HasFontClass`), `text_color` (`flags1` `HasTextColor`,
     /// `RGBA`), `max_length` (`flags1` `HasMaxLength`), `layout` (`flags2`
     /// `HasLayout`), `variable_name` (always), `initial_text` (`flags1`
     /// `HasText`).
@@ -253,7 +253,7 @@ pub enum Tag {
         font_id: Option<u16>,
         /// `FontClass` name (flag `flags2` `HasFontClass` `0x80`); NUL implicit.
         font_class: Option<String>,
-        /// `FontHeight` in twips, present iff `HasFont` OR `HasFontClass`.
+        /// `FontHeight` in twips, present iff `HasFont` or `HasFontClass`.
         font_height: Option<u16>,
         /// `[red, green, blue, alpha]` text color (flag `flags1` `HasTextColor`
         /// `0x04`).

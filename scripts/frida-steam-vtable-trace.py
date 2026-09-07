@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""Trace Seamless's Steam calls at the INTERFACE VTABLE, where they actually happen.
+"""Trace Seamless's Steam calls at the interface VTABLE, where they actually happen.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 Hooking `steam_api64.dll`'s flat C exports found nothing. Measured 2026-08-04: 33 exports hooked
-at BOOT -- 18 `ISteamMatchmaking` (every lobby filter/search/join/data call), 10
+at boot -- 18 `ISteamMatchmaking` (every lobby filter/search/join/data call), 10
 `ISteamNetworking*` (P2P and `SteamNetworkingMessages`), 5 `ISteamFriends` rich presence -- and a
-complete user-driven invasion produced ZERO calls across all of them.
+complete user-driven invasion produced zero calls across all of them.
 
 Simultaneous total silence on three unrelated surfaces has one clean explanation: the
-`SteamAPI_ISteam*_*` exports are a C WRAPPER. A C++ mod obtains the interface pointer ONCE --
+`SteamAPI_ISteam*_*` exports are a C wrapper. A C++ mod obtains the interface pointer once --
 `SteamAPI_ISteamClient_GetISteamMatchmaking` is present in the export table -- and thereafter
-calls VTABLE SLOTS on that object directly, never re-entering the flat exports.
+calls VTABLE slots on that object directly, never re-entering the flat exports.
 
-So this hooks one level down: intercept the accessors to capture the returned interface POINTER,
+So this hooks one level down: intercept the accessors to capture the returned interface pointer,
 then hook that object's vtable slots. Slot indices are reported rather than names, because the
-slot ORDER is what the interface version pins -- and the version string is right there in the
+slot order is what the interface version pins -- and the version string is right there in the
 accessor's argument, so a slot can be named later from the SDK header for that exact version
 instead of guessed at now.
 
-This does NOT assume Seamless uses matchmaking. It records whatever it calls. If the answer is
+This does not assume Seamless uses matchmaking. It records whatever it calls. If the answer is
 that no interface is used either, that is a real result and the next layer down is ERSC's own
 socket code.
 
-READ-ONLY: arguments are logged, never altered.
+Read-ONLY: arguments are logged, never altered.
 
-REACHING THE PROCESS
+Reaching the process
 --------------------
 Wine/Proton, so `frida.attach()` sees nothing. `frida-gadget.dll` loads into the game as an me3
-`[[natives]]` entry and listens on 127.0.0.1:27042; connect to that as a REMOTE DEVICE. Use a
+`[[natives]]` entry and listens on 127.0.0.1:27042; connect to that as a remote device. Use a
 gadget-bearing profile, e.g. /home/banon/Elden/pr190-invasion-warp-seamless-frida.me3
 
-ATTACH AT BOOT. An interface fetched during startup is invisible to a tracer that attaches after
+Attach at boot. An interface fetched during startup is invisible to a tracer that attaches after
 it, and the accessors are typically called exactly once. That mistake already cost one run.
 
     uv run --with frida python3 /home/banon/projects/er-mods-rs/scripts/frida-steam-vtable-trace.py

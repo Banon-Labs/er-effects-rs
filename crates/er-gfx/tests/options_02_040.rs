@@ -73,7 +73,7 @@ fn quit6_of_already_edited_movie_fails_closed() {
 }
 
 /// The whole navigation and hover model of the patched Quit tab: the three added cells must extend
-/// the native pair into a SECOND and THIRD ROW, because `GridControl` measures its geometry from
+/// the native pair into a second and third row, because `GridControl` measures its geometry from
 /// these names and enables the vertical axis only at `rows >= 2` while hit-testing exactly
 /// `cols * rows` cells.
 #[test]
@@ -119,11 +119,11 @@ fn the_derived_movie_measures_a_two_by_three_grid() {
         grid_horizontal_axis_enabled(cols, rows),
         "left/right must walk columns"
     );
-    // SIX items in a 2x3 grid: the grid is FULL. This assertion was the exact inverse until the
+    // Six items in a 2x3 grid: the grid is full. This assertion was the exact inverse until the
     // Generate Build Link row arrived -- it used to demand that `Item_2_1` be absent, because there
     // was no sixth row to put in it, and a whole paragraph of native reasoning existed to prove the
     // ragged bottom row was harmless. Filling the corner retired that reasoning instead of adding
-    // to it: `cols * rows` and `GridControl::SetItemCount` are now the SAME number, so there is no
+    // to it: `cols * rows` and `GridControl::SetItemCount` are now the same number, so there is no
     // cell the engine probes for that does not exist, and no index the hit test and the cursor
     // setter can disagree about.
     assert_eq!(cols * rows, 6);
@@ -139,7 +139,7 @@ fn the_derived_movie_measures_a_two_by_three_grid() {
     // Item index order must match the order the DLL appends the property rows:
     // 0 Save Game, 1 Return to Desktop, 2 Load Character, 3 Load Character from File,
     // 4 Load Build from URL, 5 Generate Build Link.
-    // (Rows 2 and 3 were "Load Profile" / "Load Save Profiles" before 2026-07-31; the ORDER is
+    // (Rows 2 and 3 were "Load Profile" / "Load Save Profiles" before 2026-07-31; the order is
     // what this test pins, and the relabel did not move anything.)
     for (index, cell) in QUIT6_GRID_CELL_NAMES.iter().enumerate() {
         let (row, col) = (index as u32 / cols, index as u32 % cols);

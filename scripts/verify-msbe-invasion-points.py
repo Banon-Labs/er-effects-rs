@@ -5,7 +5,7 @@ Written independently from the layout documented by
   * Ghidra 1.16.2 `/msb/MsbHeader`, `/msb/MsbSetHeader<MODEL_PARAM_ST>`,
     `/msb/MODEL_PARAM_ST`, `/CS/CSMsbPointShapeData`, and
   * `fstools_formats::msb::{SetHeader, point::Header}` (git rev 4b0db28),
-NOT from the reference implementation under test.
+not from the reference implementation under test.
 
 Compares every field it can against the WitchyBND-derived oracle jsonl.
 

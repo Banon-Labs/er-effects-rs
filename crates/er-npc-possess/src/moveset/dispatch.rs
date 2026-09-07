@@ -5,7 +5,7 @@
 //! Creatures have between 8 and 60 fireable attacks with no shared structure -- a rat, Malenia and
 //! a Flying Dragon share exactly three things: they have attacks, they have locomotion, and they
 //! can turn. So a static slot map would have to be authored 268 times and would still leave most
-//! of every moveset unreachable. Instead the button says what KIND of thing to do (`r1` light, `r2`
+//! of every moveset unreachable. Instead the button says what kind of thing to do (`r1` light, `r2`
 //! heavy, `l1` ranged, `l2` movement, identical on every creature), and three things pick WHICH:
 //!
 //! * the **distance band**, so a press at range means something different from a press in melee;
@@ -26,7 +26,7 @@
 //!
 //! # What is a heuristic here, and named as one
 //!
-//! Locomotion shifts the effective distance band one step CLOSER while the creature is moving, on
+//! Locomotion shifts the effective distance band one step closer while the creature is moving, on
 //! the reasoning that an attack chosen mid-run lands after the run has closed some of the gap.
 //! That is a guess about intent, not a measurement of root-motion travel -- the generator has no
 //! travel distance, because getting one means deserialising the animation itself.
@@ -93,14 +93,14 @@ impl Input {
 /// # Why a page exists at all
 ///
 /// A creature has 8 to 60 attacks and four buttons. Repeated presses already walk a bucket in rank
-/// order, but that is a COMBO -- it advances while you are attacking and falls back to the first
+/// order, but that is a combo -- it advances while you are attacking and falls back to the first
 /// move the moment you stop, which is what a combo should do and is useless for "I want this button
-/// to be the OTHER attack from now on". The page is that second thing: a standing offset into the
+/// to be the other attack from now on". The page is that second thing: a standing offset into the
 /// bucket that only the player moves.
 ///
 /// # Why the arrow keys
 ///
-/// Vanilla binds left and right arrow to the LEFT-HAND and RIGHT-HAND armament swap. A possessed
+/// Vanilla binds left and right arrow to the left-hand and right-hand armament swap. A possessed
 /// creature has no armaments and no `PlayerGameData` to swap them in, so both keys do nothing for
 /// the length of a possession -- they are free, and they are already the gesture for "change what
 /// this button does". Right pages `r1`/`r2`, left pages `l1`/`l2`, so each key keeps the hand it
@@ -140,7 +140,7 @@ impl Hand {
 
 /// What a page key press did.
 ///
-/// [`Self::OnePage`] is a refusal WITH a reason, and it is the whole difference between a key that
+/// [`Self::OnePage`] is a refusal with a reason, and it is the whole difference between a key that
 /// is broken and a key that has nothing to do here: a creature whose biggest bucket on this hand
 /// holds one move has exactly one page, and cycling a single page would flash a log line and change
 /// nothing.
@@ -205,7 +205,7 @@ pub(crate) struct Context {
     /// nothing is in range at all, which reads as [`Band::Far`].
     ///
     /// It is also the reading a creature-victim grab is checked against; see
-    /// [`crate::moveset::table::Throws::reachable`], which deliberately does NOT apply it to a
+    /// [`crate::moveset::table::Throws::reachable`], which deliberately does not apply it to a
     /// player-victim grab.
     pub(crate) distance_m: Option<f32>,
     pub(crate) locomotion: Locomotion,
@@ -244,7 +244,7 @@ pub(crate) enum NoMove {
     /// Worth its own reason rather than folding into [`Self::NothingInBand`]: the fix is one line
     /// of config, and a player who set the flag months ago will not connect a dead button to it.
     GrabsWithheld,
-    /// Everything this button could have fired is a grab whose `ThrowParam` row demands a CREATURE
+    /// Everything this button could have fired is a grab whose `ThrowParam` row demands a creature
     /// victim, and no creature is inside that row's `Dist`. See
     /// [`crate::moveset::table::Throws::reachable`].
     NoThrowVictim,
@@ -302,7 +302,7 @@ pub(crate) struct Dispatcher {
     cursor: [u16; 4],
     /// Per-hand attack-set page. Indexed by [`Hand::index`]. Zero-based here, printed 1-based.
     ///
-    /// Separate from [`Self::cursor`] and deliberately NOT reset by [`Self::on_neutral`]: the
+    /// Separate from [`Self::cursor`] and deliberately not reset by [`Self::on_neutral`]: the
     /// cursor is a combo, which should fall back to the first move when the player stops, and the
     /// page is a choice, which should not.
     page: [u16; 2],
@@ -330,10 +330,10 @@ impl Dispatcher {
 
     /// How many attack sets this hand has to offer: the length of its longest bucket, at least one.
     ///
-    /// Measured against the WHOLE bucket rather than against what the current distance band leaves,
+    /// Measured against the whole bucket rather than against what the current distance band leaves,
     /// so the number the player is shown does not change as they walk toward something. The page is
     /// applied to the filtered list, so a page past the end of a short bucket wraps rather than
-    /// going dead -- which is also why the count is the MAX of the hand's two buckets and not the
+    /// going dead -- which is also why the count is the max of the hand's two buckets and not the
     /// min: taking the min would hide the longer bucket's later moves behind a shorter one.
     pub(crate) fn pages(&self, hand: Hand) -> u16 {
         hand.inputs()
@@ -364,7 +364,7 @@ impl Dispatcher {
         }
     }
 
-    /// The move this button LEADS WITH on the current page, ignoring range and the combo cursor.
+    /// The move this button leads with on the current page, ignoring range and the combo cursor.
     ///
     /// The thing to print when the page turns and in the derived report: it is what the next press
     /// gives from a neutral stance, which is the question the player is actually asking. A press
@@ -382,7 +382,7 @@ impl Dispatcher {
     /// How many attacks -- anything that is not [`Bucket::Movement`] -- this creature has.
     ///
     /// Zero is a real and legitimate answer for a target dummy, and a bug for a knight, and the
-    /// caller cannot tell which. What it CAN do is say the number out loud instead of leaving the
+    /// caller cannot tell which. What it can do is say the number out loud instead of leaving the
     /// player pressing four buttons into a walk cycle, which is why this exists at all.
     pub(crate) fn attack_count(&self) -> usize {
         self.moveset
@@ -420,7 +420,7 @@ impl Dispatcher {
     ///
     /// A waiting press suspends it, and without that the whole feature reads as broken. The
     /// animation ending is the moment a buffered press is released, and the watchdog announces
-    /// that same moment as a return to neutral -- one frame EARLIER, because it runs first by
+    /// that same moment as a return to neutral -- one frame earlier, because it runs first by
     /// design. Resetting there would hand the release a cursor of 0, so a press made during the
     /// first swing would replay the first swing instead of continuing to the second, and the
     /// player would see a combo that never advances. The creature has not stopped attacking; it
@@ -440,7 +440,7 @@ impl Dispatcher {
     ///
     /// * `allow_grabs = false` withholds every grab. Since the `ThrowParam` join this withholds
     ///   153 real, fireable attacks across 78 creatures -- before it, the flag matched nothing.
-    /// * a grab whose `ThrowParam` row demands a CREATURE victim is withheld unless something is
+    /// * a grab whose `ThrowParam` row demands a creature victim is withheld unless something is
     ///   within that row's `Dist`. `ValidateAttemptAndReturnParamId` would refuse the throw
     ///   anyway; the difference is that the press is spent on a swing that could still land
     ///   instead of on one that provably cannot become a grab.
@@ -489,7 +489,7 @@ impl Dispatcher {
 
     /// The order promotion tries buckets in when the asked-for one is empty.
     ///
-    /// It ends by trying EVERY bucket, and it has to. The obvious design -- walk toward `Light`
+    /// It ends by trying every bucket, and it has to. The obvious design -- walk toward `Light`
     /// and stop, on the reasoning that anything with attacks has a light one -- is false against
     /// the shipped table: c120 is entirely `Ranged`, so `r1` had nothing to promote to and the
     /// button was dead. `every_creature_in_the_shipped_table_answers_every_button_in_every_band`
@@ -531,8 +531,8 @@ impl Dispatcher {
             .collect();
         let asked = input.bucket(self.buttons);
         if chosen.is_empty() && self.mapping.unbound_inputs == UnboundInputs::Promote {
-            // Widen in two steps, cheapest first: the SAME bucket ignoring the band, then another
-            // bucket. Dropping the band before dropping the bucket keeps the button's MEANING
+            // Widen in two steps, cheapest first: the same bucket ignoring the band, then another
+            // bucket. Dropping the band before dropping the bucket keeps the button's meaning
             // intact, which is the whole property the fixed layout exists for -- a promoted `r1`
             // should be a light attack out of range before it is a heavy one in range.
             let whole_bucket = |bucket| -> Vec<Move> {
@@ -562,7 +562,7 @@ impl Dispatcher {
         });
         let slot = self.cursor[input.index()];
         let cursor = if expired { 0 } else { usize::from(slot) };
-        // THE PAGE IS AN OFFSET, THE CURSOR IS A COMBO, and they add. A fresh press on page 3
+        // The page is an offset, the cursor is a combo, and they add. A fresh press on page 3
         // starts at the third move of the bucket; a second press within the combo window walks on
         // from there, which is what a combo does. Wrapping is `%` on the sum rather than on each
         // half, so a page past the end of a short candidate list lands somewhere real instead of
@@ -594,7 +594,7 @@ impl Dispatcher {
     ///
     /// * the creature is idle or the playing attack has already landed -- fire, and that is either
     ///   a fresh attack or a chain;
-    /// * the playing attack is still committed -- HOLD the press. It fires from
+    /// * the playing attack is still committed -- Hold the press. It fires from
     ///   [`Self::release`] the moment the animation lets go, and the attack that was already
     ///   running is not disturbed;
     /// * the button has nothing to give on this creature -- say which of the [`NoMove`] reasons.
@@ -639,7 +639,7 @@ impl Dispatcher {
 
     /// Which of the reasons in [`NoMove`] applies, once a press has come up empty.
     ///
-    /// The grab reasons are checked FIRST and only when they explain the WHOLE bucket. A bucket
+    /// The grab reasons are checked first and only when they explain the whole bucket. A bucket
     /// that also holds ordinary attacks came up empty for a range or promotion reason, and blaming
     /// the grabs would point the player at the wrong setting.
     fn why_nothing(&self, input: Input, distance_m: Option<f32>) -> NoMove {
@@ -732,7 +732,7 @@ mod tests {
         assert_eq!(Input::L2.bucket(buttons), Bucket::Movement);
     }
 
-    /// The whole point of the page: it changes WHICH attack the button leads with, and it does so
+    /// The whole point of the page: it changes which attack the button leads with, and it does so
     /// on the player's schedule rather than the combo's.
     #[test]
     fn a_page_turn_moves_which_attack_the_button_leads_with() {
@@ -749,14 +749,14 @@ mod tests {
             3001,
             "a fresh press on page 2 must give the second attack, not the first"
         );
-        // And the combo still walks ON from the page rather than restarting at rank 0.
+        // And the combo still walks on from the page rather than restarting at rank 0.
         assert_eq!(
             engine.choose(Input::R1, context(1.0, 100)).unwrap().fire,
             3002
         );
     }
 
-    /// The page is a CHOICE and the cursor is a COMBO, so standing still must clear one and not the
+    /// The page is a choice and the cursor is a combo, so standing still must clear one and not the
     /// other. If `on_neutral` reset the page, the key would appear to work and then silently undo
     /// itself the moment the player stopped attacking -- the worst of the three possible bugs here,
     /// because it looks like the feature is only sometimes bound.
@@ -780,7 +780,7 @@ mod tests {
         );
     }
 
-    /// Wrapping, and wrapping to the number of pages the HAND has rather than to the number this
+    /// Wrapping, and wrapping to the number of pages the hand has rather than to the number this
     /// button's own bucket has.
     #[test]
     fn the_page_wraps_at_the_longest_bucket_on_that_hand() {
@@ -801,7 +801,7 @@ mod tests {
     }
 
     /// A key that cycles one page is a key that flashes a message and changes nothing. It must
-    /// refuse WITH a reason instead, so the caller can say "this creature has one set" once rather
+    /// refuse with a reason instead, so the caller can say "this creature has one set" once rather
     /// than printing a page turn that did not happen.
     #[test]
     fn a_hand_with_a_single_set_refuses_the_page_key_rather_than_cycling_it() {
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn moving_shifts_the_band_one_step_closer() {
-        // Rank 0 is a MID-reach attack, rank 1 a far-reach one.
+        // Rank 0 is a mid-reach attack, rank 1 a far-reach one.
         let mut engine = dispatcher("4500 3000:0:0:2 3001:0:1:3");
         // 30 m standing still is Far, and a mid-reach attack would whiff there, so only the
         // far-reach one is a candidate.
@@ -942,7 +942,7 @@ mod tests {
         assert_eq!(engine.choose(Input::R1, moving).unwrap().fire, 3000);
     }
 
-    /// A close-reach attack must NOT be offered at mid range even when the creature is running:
+    /// A close-reach attack must not be offered at mid range even when the creature is running:
     /// the heuristic shifts the band by one step, it does not abolish reach.
     #[test]
     fn the_locomotion_shift_is_one_step_and_not_a_free_pass() {
@@ -1011,7 +1011,7 @@ mod tests {
         );
     }
 
-    /// A grab whose `ThrowParam` row demands a CREATURE victim is not offered when there is no
+    /// A grab whose `ThrowParam` row demands a creature victim is not offered when there is no
     /// creature inside that row's `Dist` -- the throw system would refuse it anyway, and the press
     /// is better spent on something that can land.
     #[test]
@@ -1044,7 +1044,7 @@ mod tests {
     }
 
     /// ...and the converse, which is the case that covers 189 of the game's 190 creature throw
-    /// rows: the victim is the PLAYER, whose body the possession keeps co-located with the
+    /// rows: the victim is the player, whose body the possession keeps co-located with the
     /// creature. A hostile-distance reading is about somebody else and must not veto it.
     #[test]
     fn a_player_victim_grab_is_offered_however_far_away_the_nearest_hostile_is() {
@@ -1065,7 +1065,7 @@ mod tests {
         );
     }
 
-    /// A bucket that ALSO holds ordinary attacks came up empty for a range reason, so blaming the
+    /// A bucket that also holds ordinary attacks came up empty for a range reason, so blaming the
     /// grabs would point the player at a setting that is not the problem.
     #[test]
     fn a_mixed_bucket_is_never_blamed_on_the_grab_settings() {
@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     fn promotion_prefers_dropping_the_band_over_changing_the_bucket() {
         // A light attack that suits nothing at 40 m, and a heavy one that does. Promotion should
-        // still hand back the LIGHT attack, because `r1` means light.
+        // still hand back the light attack, because `r1` means light.
         let mut engine = dispatcher("4500 3000:0:0:1 3001:1:0:3");
         assert_eq!(
             engine.choose(Input::R1, context(40.0, 0)).unwrap().bucket,
@@ -1292,7 +1292,7 @@ mod tests {
             Press::Waiting(Held::Queued)
         );
         assert!(engine.is_holding());
-        // ...and NOTHING was fired, which is the whole point. The cursor must not have moved
+        // ...and nothing was fired, which is the whole point. The cursor must not have moved
         // either: a press that did not happen cannot have advanced the chain.
         assert_eq!(engine.release(context(1.0, 10), shut), Released::Nothing);
     }
@@ -1312,7 +1312,7 @@ mod tests {
         );
     }
 
-    /// A press made during the FIRST attack must give the SECOND one. Getting this wrong is not
+    /// A press made during the first attack must give the second one. Getting this wrong is not
     /// subtle from the player's chair: the combo visibly refuses to advance, replaying the same
     /// swing forever.
     #[test]
@@ -1329,7 +1329,7 @@ mod tests {
             engine.release(context(1.0, 900), Availability::Idle),
             Released::Fire(Input::R1, *engine.moveset().find(3001).unwrap()),
         );
-        // Now that nothing is waiting, a return to neutral DOES reset the chain.
+        // Now that nothing is waiting, a return to neutral does reset the chain.
         engine.on_neutral();
         assert_eq!(
             engine.press(Input::R1, context(1.0, 3000), Availability::Idle),

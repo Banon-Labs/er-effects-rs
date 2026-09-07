@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Scan the dearxan-DEOBFUSCATED ER mapped image for references to a target VA.
 Mapped image: file offset == RVA, image base 0x140000000 (VA = offset + base).
-Finds E8/E9 rel32 call/jmp sites AND 8-byte LE pointer occurrences to the target.
-The image DEFAULTS to the 1.16.2 deobf, but `--img` is required for any 1.17 question:
+Finds E8/E9 rel32 call/jmp sites and 8-byte le pointer occurrences to the target.
+The image defaults to the 1.16.2 deobf, but `--img` is required for any 1.17 question:
 the two builds are separate files (`eldenring-deobf-1.17.bin`), and a scan that silently
 answers from 1.16.2 while the caller is asking about 1.17 is the exact stale-address
 failure this migration exists to close.
@@ -39,7 +39,7 @@ def main():
     for va, k in e8[: args.max]:
         print(f"  0x{va:x}  {k}")
 
-    # 8-byte LE pointer occurrences (vtable slots etc.)
+    # 8-byte le pointer occurrences (vtable slots etc.)
     tb = struct.pack("<Q", target)
     ptr = []
     start = 0

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Phase-1 render-residency diff for the switch-reload fps investigation.
 
-The AC-2 answer (bd AC-2-ANSWERED-native-reload-no-dip-mod-ownload-dips) is: the vanilla NATIVE reload
-LIGHTENS (releases render resources) while the mod own_load_switch_reload_fire reload STAYS heavy. This
-tool reads a run's per-frame telemetry-timeseries.jsonl, segments SETTLED (player_present) rows by load
+The AC-2 answer (bd AC-2-answered-native-reload-no-dip-mod-ownload-dips) is: the vanilla native reload
+LIGHTENS (releases render resources) while the mod own_load_switch_reload_fire reload stays heavy. This
+tool reads a run's per-frame telemetry-timeseries.jsonl, segments settled (player_present) rows by load
 epoch (fresh_deser_count / current_load_epoch), and reports the median of the read-side render-residency
-oracles per epoch so you can see WHETHER the reload releases (residency drops load1 -> reload) or retains
+oracles per epoch so you can see whether the reload releases (residency drops load1 -> reload) or retains
 (stays flat/higher).
 
 Render-residency fields (added to the per-frame writer for Phase 1; passive reads of the game's own
 structures):
   oracle_gxdc_output_count / _span_bytes / _capacity  -- GxDrawContext render-output vector size (the
-      count of live render outputs; a reload that does NOT release leaves extra outputs resident)
+      count of live render outputs; a reload that does not release leaves extra outputs resident)
   oracle_render_distview_mgr_ptr / oracle_render_mapitem_mgr_ptr -- the exact render managers the native
       _Common_Finalize teardown frees (nonzero = resident)
 It also shows the existing GX cmdqueue fill/reserves for cross-reference.
@@ -19,9 +19,9 @@ It also shows the existing GX cmdqueue fill/reserves for cross-reference.
 Usage:
     python3 scripts/analyze-render-residency.py <artifact-dir-or-timeseries.jsonl>
 
-Compare TWO runs (mod vs vanilla), or within one run compare epoch 0 (first load) vs epoch 1 (reload):
-if the reload residency does NOT fall relative to the first load, that is the retained render state that
-own_load skips releasing (the dip). See bd GOAL-REFRAME / STEP4.
+Compare two runs (mod vs vanilla), or within one run compare epoch 0 (first load) vs epoch 1 (reload):
+if the reload residency does not fall relative to the first load, that is the retained render state that
+own_load skips releasing (the dip). See bd goal-REFRAME / STEP4.
 """
 from __future__ import annotations
 

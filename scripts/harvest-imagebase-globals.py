@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Harvest a 1.16.2 -> 1.17 GLOBAL (.data/.rdata RVA) map from IMAGE-BASE-IN-REGISTER reads.
+"""Harvest a 1.16.2 -> 1.17 global (.data/.rdata RVA) map from image-base-in-register reads.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
-`scripts/map-data-rvas-1162-to-1170.py` carries a global by the CODE that references it
+`scripts/map-data-rvas-1162-to-1170.py` carries a global by the code that references it
 rip-relatively.  A global that nothing reaches rip-relatively therefore cannot be carried at
-all, and several sit in that ledger's UNUSED list for exactly that reason.
+all, and several sit in that ledger's unused list for exactly that reason.
 
 But rip-relative is not the only way this image reaches a global.  The de-Arxan'd binary keeps
-Arxan's IMAGE-BASE-IN-REGISTER form in places:
+Arxan's image-base-in-register form in places:
 
     lea  r14, [rip - 0x1b2e983]        ; r14 = 0x140000000, the image base
     ...
     mov  ecx, [r14 + rax*4 + 0x3030aa0] ; <- 0x3030aa0 is an RVA, not a struct field
 
-That composite displacement IS a data RVA, and it is a reference the rip-relative scan never
+That composite displacement is a data RVA, and it is a reference the rip-relative scan never
 sees.  `scripts/detect-struct-field-drift.py` had to split these out (they were 895 of its
 1,129 apparent "field moves") and noted they amount to a free global map.  This is that map,
-re-derived with the two things the by-product lacked: PROOF the base register actually holds
-the image base, and a WITNESS list behind every pair so the vote can be audited.
+re-derived with the two things the by-product lacked: Proof the base register actually holds
+the image base, and a witness list behind every pair so the vote can be audited.
 
-HOW A PAIR IS PRODUCED
+How a pair is produced
 ----------------------
 For every already-established function pair (`docs/recon/rva-map-1162-to-1170.functions.tsv`):
 
@@ -29,13 +29,13 @@ For every already-established function pair (`docs/recon/rva-map-1162-to-1170.fu
   2. in each body track which registers hold the image base -- set by `lea REG,[rip+d]` whose
      target is exactly 0x140000000, cleared when the register is written or (for a volatile
      register) when a `call` crosses it;
-  3. collect, in order, every memory operand whose BASE is such a register;
-  4. require the two bodies to expose the same NUMBER of such references and the same
+  3. collect, in order, every memory operand whose base is such a register;
+  4. require the two bodies to expose the same number of such references and the same
      instruction shape at each, then pair them positionally.
 
-Each pairing is one VOTE from one witness function.  Nothing is promoted on a single vote.
+Each pairing is one vote from one witness function.  Nothing is promoted on a single vote.
 
-WHAT THIS DELIBERATELY DOES NOT DO
+What this deliberately does not do
 ----------------------------------
 It does not apply a delta.  The `.data` delta is neither constant nor monotonic -- +0x4060,
 +0x4070, +0x4078 and +0x4080 all occur inside one region -- so "correcting" an address to agree

@@ -2,11 +2,11 @@
 # Import an ELDEN RING runtime-dump .gzf into a reusable, persistent Ghidra project.
 #
 # Replaces the hardcoded one-shot at ~/ghidra_maporch/scripts/import_persistent.sh, which pinned
-# 1.16.1 paths, a /home/banon literal, and the 12.1 install that CANNOT read a 1.16.2-or-newer gzf.
+# 1.16.1 paths, a /home/banon literal, and the 12.1 install that cannot read a 1.16.2-or-newer gzf.
 #
-# CRITICAL, and the reason this wrapper exists at all: the gzf unpacks several GB into
+# Critical, and the reason this wrapper exists at all: the gzf unpacks several GB into
 # `java.io.tmpdir`. That defaults to /tmp -- a 32G tmpfs which is already about half full here.
-# Plain TMPDIR is NOT enough: the JVM reads `java.io.tmpdir`, so it must be set through
+# Plain TMPDIR is not enough: the JVM reads `java.io.tmpdir`, so it must be set through
 # GHIDRA_JAVA_OPTIONS or the import dies partway with a misleading error. (An earlier agent
 # mis-diagnosed that out-of-space as a `BadDataType` JPMS save failure; the log line is cosmetic.)
 #
@@ -33,7 +33,7 @@ done
 [[ -f "$GZF" ]] || { echo "gzf not found: $GZF" >&2; exit 2; }
 
 # Resolve the install: env first, then bounded known locations, newest-capable first. 12.1 cannot
-# read a 1.16.2+ gzf (x86 language V4.7+), so it is deliberately NOT a fallback -- failing loudly
+# read a 1.16.2+ gzf (x86 language V4.7+), so it is deliberately not a fallback -- failing loudly
 # beats importing nothing and reporting success.
 if [[ -z "${GHIDRA_INSTALL_DIR:-}" ]]; then
 	for c in "$HOME/tools/ghidra_12.1.2_PUBLIC" /mnt/d/ghidra/ghidra_12.1.2_PUBLIC /opt/ghidra_12.1.2_PUBLIC; do
@@ -64,7 +64,7 @@ echo "== importing $(basename "$GZF") -> $PROJ_DIR/$PROJ_NAME =="
 echo "== ghidra: $GHIDRA_INSTALL_DIR   tmpdir: $GHIDRA_TMPDIR =="
 echo "== free before: $(( free_kb / 1024 / 1024 ))G   gzf: $(( gzf_bytes / 1024 / 1024 ))M =="
 
-# -noanalysis is correct and NOT a shortcut: a .gzf is an EXPORTED ANALYZED PROGRAM, so its
+# -noanalysis is correct and not a shortcut: a .gzf is an exported analyzed program, so its
 # functions, symbols, types and RTTI travel with it. Re-analysing would burn hours to rediscover
 # what the file already carries, and would overwrite the source project's curated names.
 "$GHIDRA_INSTALL_DIR/support/analyzeHeadless" "$PROJ_DIR" "$PROJ_NAME" \

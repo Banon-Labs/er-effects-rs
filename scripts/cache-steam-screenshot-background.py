@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Developer-only helper for writing an explicit boot-background override cache.
 
-This script is NOT part of the production pipeline. The shipped product path is
+This script is not part of the production pipeline. The shipped product path is
 DLL-only: the DLL can read `er-quickload.toml` for a local image override, or scan
 local Steam screenshot cache directories itself. This helper exists only for
 manual/dev generation of the optional ERBGRA01 override file.
@@ -134,7 +134,7 @@ def latest_remote_screenshot_url(appid: str, steamid64: int, timeout: float, max
 
 
 def download_remote_image(url: str, timeout: float, max_bytes: int) -> bytes:
-    # The Steam media URL accepts range requests; HEAD commonly returns Content-Length for a cheap cap.
+    # The Steam media URL accepts range requests; Head commonly returns Content-Length for a cheap cap.
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -144,7 +144,7 @@ def download_remote_image(url: str, timeout: float, max_bytes: int) -> bytes:
     except urllib.error.HTTPError:
         raise
     except Exception:
-        # Some CDNs dislike HEAD; the bounded GET below remains authoritative.
+        # Some CDNs dislike head; the bounded get below remains authoritative.
         pass
     return request(url, timeout, max_bytes=max_bytes)
 

@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
 """Forbid env-var feature gates in the DLL source; permit only justified diagnostic reads.
 
-POLICY (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
+Policy (deprecate-env-marker-gate-allowlists-no-gated-features-2026-07-19)
 =========================================================================
 User directive: "we don't want any env gated features." An "env gate" is any read of
 `std::env::var("ER_QUICKLOAD_...")` in `crates/er-quickload/src/**/*.rs`. The former
 grandfathering allowlists (`sanctioned_env_vars`, `sanctioned_env_gate_locations`,
 `baseline`) are DEPRECATED: they are kept in the baseline JSON only so their emptiness
-is explicit, and this checker FAILS if any of them is non-empty. With the behavioral
-allowlist empty, EVERY env gate hard-fails UNLESS its exact stable key
+is explicit, and this checker fails if any of them is non-empty. With the behavioral
+allowlist empty, every env gate hard-fails unless its exact stable key
 (`ENV_VAR@repo/path.rs`) appears in `diagnostic_gates` (in
 `.auto/env_gate_comment_baseline.json`) with a non-empty rationale.
 
-`diagnostic_gates` is the ONLY permitted exception and is reserved for genuinely
-diagnostic reads that change NO game behavior -- passive logging/telemetry/trace,
-read-only sampling, or a pure diagnostic OUTPUT-PATH / tuning override (e.g.
+`diagnostic_gates` is the only permitted exception and is reserved for genuinely
+diagnostic reads that change no game behavior -- passive logging/telemetry/trace,
+read-only sampling, or a pure diagnostic output-path / tuning override (e.g.
 `ER_QUICKLOAD_INPUT_TRACE`, `ER_QUICKLOAD_PROFILE`, `ER_QUICKLOAD_*_PATH`). A behavioral
-feature must be DEFAULT behavior (gated only on a real runtime condition) or removed;
+feature must be default behavior (gated only on a real runtime condition) or removed;
 it may never be re-added as an env gate. Adding a `diagnostic_gates` entry is a
 deliberate reviewed act that shows in the diff and must carry a justification.
 
 The declarative policy lives at `.auto/env_gate_comment_policy.rego`; this checker
 asserts that file exists and contains its required snippets so it cannot silently drift.
 
-READS ONLY REAL CODE (2026-08-30)
+Reads only real code (2026-08-30)
 =================================
 Every fact below is derived from source text with comments and string bodies blanked by
 the shared `code_only` reader, never from raw text. Before this the gate matched prose:
 a `//` line quoting `std::env::var("ER_QUICKLOAD_X")` was a finding, and a `fn` inside a
 block comment could be reported as the enclosing function. The required-`.rego`-snippet
-facts were the same defect pointing the other way -- a REQUIRE satisfied by a comment,
-which is silent forever -- so they are now split into STRUCTURAL snippets that must be
-real Rego logic and DOCUMENTARY snippets that are prose by design. See `selftest`.
+facts were the same defect pointing the other way -- a require satisfied by a comment,
+which is silent forever -- so they are now split into structural snippets that must be
+real Rego logic and documentary snippets that are prose by design. See `selftest`.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ BASELINE_PATH = AUTO_DIR / "env_gate_comment_baseline.json"
 POLICY_PATH = AUTO_DIR / "env_gate_comment_policy.rego"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# ONE DIALECT, NOT ANOTHER AD-HOC STRIPPER. `code_only` lives in `scripts/rva_symbols.py` and is
+# One dialect, not another ad-HOC stripper. `code_only` lives in `scripts/rva_symbols.py` and is
 # shared with `check-reload-trace-policy.py`, `check-stale-rva-calls.py` and `gate-stale-rva-calls.py`.
 # A private blanker is exactly what went wrong in `audit-1170-gate-bypass.py`, whose own stripper did
 # not know a Rust char literal from a lifetime and erased live code in 42 files. Do not grow a fourth.
@@ -70,7 +70,7 @@ except ImportError as missing:  # a shared reader that cannot load must stop the
         "rather than restoring a local copy."
     ) from missing
 
-# Deprecated behavioral-allowlist keys that MUST stay empty.
+# Deprecated behavioral-allowlist keys that must stay empty.
 DEPRECATED_ALLOWLIST_KEYS = (
     "sanctioned_env_vars",
     "sanctioned_env_gate_locations",
@@ -85,7 +85,7 @@ FN_DEF_RE = re.compile(
 # STRUCTURAL: must be real Rego logic. Checked against the policy text with `#` comments and
 # string bodies blanked, because a requirement a comment can satisfy is not a requirement. This
 # is the `has_minhook` shape from `check-reload-trace-policy.py`, where a required fact was true
-# only because a comment TITLED "NO RAW MinHook FFI HERE" named the very API it forbade.
+# only because a comment titled "NO RAW MinHook FFI HERE" named the very API it forbade.
 POLICY_REQUIRED_STRUCTURAL_SNIPPETS = (
     "package auto.env_gate_comment",
     "default allow := false",
@@ -95,7 +95,7 @@ POLICY_REQUIRED_STRUCTURAL_SNIPPETS = (
     "deny contains message if",
 )
 # DOCUMENTARY: prose is the point. Rego cannot read `diagnostic_gates` -- the baseline JSON is
-# consumed by THIS checker, and the policy only sees the derived booleans -- so the word can only
+# consumed by this checker, and the policy only sees the derived booleans -- so the word can only
 # ever appear in a comment or a deny message. Requiring it in logic would be requiring a lie.
 # Kept as a named separate class so nobody later mistakes its presence for structural proof.
 POLICY_REQUIRED_DOCUMENTARY_SNIPPETS = ("diagnostic_gates",)
@@ -110,7 +110,7 @@ class Gate:
 
     @property
     def key(self) -> str:
-        """Stable key: env var + file path (NOT line number, which drifts)."""
+        """Stable key: env var + file path (not line number, which drifts)."""
         return f"{self.env_var}@{self.path.as_posix()}"
 
 
@@ -140,9 +140,9 @@ def relative(path: Path) -> Path:
 
 
 def match_is_code(source_text: str, code_text: str, match: re.Match) -> bool:
-    """True when the match's call PREFIX survived blanking -- i.e. it is code, not prose.
+    """True when the match's call prefix survived blanking -- i.e. it is code, not prose.
 
-    `code_only` blanks string BODIES as well as comments, and this gate's payload lives INSIDE a
+    `code_only` blanks string bodies as well as comments, and this gate's payload lives inside a
     string literal (`std::env::var("ER_QUICKLOAD_X")`), so the regex cannot simply be run over the
     blanked text -- it would match nothing at all, anywhere, and the gate would go permanently and
     silently green. Offsets are preserved by `code_only` and the quote characters themselves are
@@ -160,11 +160,11 @@ def match_is_code(source_text: str, code_text: str, match: re.Match) -> bool:
 
 
 def rego_code_only(text: str) -> str:
-    """`text` as Rego CODE ONLY: string bodies and `#` comments blanked, offsets preserved.
+    """`text` as Rego code ONLY: string bodies and `#` comments blanked, offsets preserved.
 
-    NOT a second stripper -- the hard half (which quotes open a string, which do not) is delegated
+    Not a second stripper -- the hard half (which quotes open a string, which do not) is delegated
     to the shared `code_only`, and this adds exactly one Rego-dialect rule on top: `#` runs to end
-    of line. Order matters and is the whole safety argument: `code_only` runs FIRST, so a `#` that
+    of line. Order matters and is the whole safety argument: `code_only` runs first, so a `#` that
     lives inside a string body has already become a space and cannot amputate the rest of a real
     rule line. Applied per line because a Rego string literal cannot span a newline; a backtick raw
     string can, and is the one shape this does not model (neither policy file uses one).
@@ -178,7 +178,7 @@ def rego_code_only(text: str) -> str:
 
 
 def find_enclosing_fn(code_lines: list[str], read_index: int) -> str:
-    """Nearest preceding `fn` def. `code_lines` MUST already be blanked -- a `fn` line inside a
+    """Nearest preceding `fn` def. `code_lines` must already be blanked -- a `fn` line inside a
     block comment matches `FN_DEF_RE` just as happily as a real one."""
     for i in range(read_index, -1, -1):
         if i < len(code_lines):
@@ -189,11 +189,11 @@ def find_enclosing_fn(code_lines: list[str], read_index: int) -> str:
 
 
 def facts_from_text(source_text: str, blank=code_only) -> dict[str, object]:
-    """Every env-read fact derivable from ONE file's text, independent of where it came from.
+    """Every env-read fact derivable from one file's text, independent of where it came from.
 
     `blank` defaults to the real `code_only` and exists as a parameter only so `selftest` can pass
     a deliberately-broken stand-in and prove the frozen controls are capable of failing (see the
-    NON-VACUITY block there). Product code must never call this with anything but the default.
+    non-VACUITY block there). Product code must never call this with anything but the default.
     """
     code_text = blank(source_text)
     code_lines = code_text.splitlines()
@@ -357,17 +357,17 @@ def scan_findings(gates: list[Gate], diagnostic_gates: dict[str, str]) -> list[F
 
 
 def _blank_nothing(text: str) -> str:
-    """The gate's behaviour BEFORE this fix -- comments and strings are not stripped at all.
+    """The gate's behaviour before this fix -- comments and strings are not stripped at all.
 
     Frozen and named for what it is, not composed from `code_only`: `selftest`'s stand-in for
-    "the blanker never ran", used to show that a prose control WOULD have been misread as code by
+    "the blanker never ran", used to show that a prose control would have been misread as code by
     the old gate. Never used outside `selftest`.
     """
     return text
 
 
 def _blank_everything(text: str) -> str:
-    """A `blank` that sees NOTHING -- every character replaced with a space, offsets preserved.
+    """A `blank` that sees nothing -- every character replaced with a space, offsets preserved.
 
     `selftest`'s stand-in for a blanker broken in the other direction: over-blanking, the failure
     `scripts/audit-1170-gate-bypass.py` shipped with (its private char-literal-blind stripper
@@ -386,8 +386,8 @@ def selftest() -> int:
         if not condition:
             failures.append(name)
 
-    # ------------------------------------------------------------ WORLD 1: THE PROSE FALSE POSITIVE
-    # A FROZEN literal covering all three prose shapes `code_only` distinguishes: a `//` line, a
+    # ------------------------------------------------------------ World 1: The prose false positive
+    # a frozen literal covering all three prose shapes `code_only` distinguishes: a `//` line, a
     # `/* */` block, and a raw string. The env vars named here are real ones that were removed with
     # `experiments/profiler.rs`; their `diagnostic_gates` rows are still in the baseline, so a
     # comment resurrecting the words must not resurrect the gate.
@@ -410,13 +410,13 @@ def selftest() -> int:
         broken["env_read_count"] == 3,
     )
 
-    # ------------------------------------------------------------ WORLD 2: A GENUINE VIOLATION
-    # A FROZEN LITERAL, not composed from ENV_READ_RE: widening the matcher must not silently widen
+    # ------------------------------------------------------------ World 2: A genuine violation
+    # a frozen literal, not composed from ENV_READ_RE: widening the matcher must not silently widen
     # this control too, or "the gate still catches the real thing" stops being provable. `fn f<'a>`
     # is here on purpose -- `'a` is a lifetime, not a char literal, and a naive blanker that does
     # not know the difference (the exact bug `audit-1170-gate-bypass.py` shipped with) treats the
     # opening `'` as an unterminated char literal and blanks everything after it, including the
-    # read below. One fixture, both halves: a real violation AND proof of no over-blanking.
+    # read below. One fixture, both halves: a real violation and proof of no over-blanking.
     real_violation = (
         "fn f<'a>(tag: &'a str) -> bool {\n"
         '    std::env::var("ER_QUICKLOAD_REAL_FEATURE_GATE").is_ok() && !tag.is_empty()\n'
@@ -434,7 +434,7 @@ def selftest() -> int:
         caught["env_reads"] and caught["env_reads"][0]["fn_name"] == "f",
     )
 
-    # NON-VACUITY: regress the blanker, confirm the control FAILS, then restore. A control that
+    # Non-VACUITY: regress the blanker, confirm the control fails, then restore. A control that
     # passes no matter what `blank` does is not exercising the blanking at all and proves nothing.
     regressed = facts_from_text(real_violation, blank=_blank_everything)
     check(
@@ -458,9 +458,9 @@ def selftest() -> int:
         )
     )
 
-    # ------------------------------------------------------------ fn ATTRIBUTION FROM CODE ONLY
+    # ------------------------------------------------------------ fn attribution from code only
     # The enclosing-fn walk used to run over raw lines, so a `fn` inside a block comment could be
-    # named in the finding. FROZEN; the decoy sits BELOW the real signature so the backward walk
+    # named in the finding. Frozen; the decoy sits below the real signature so the backward walk
     # reaches it first.
     decoy_fn_control = (
         "fn real_reader() -> bool {\n"
@@ -485,9 +485,9 @@ def selftest() -> int:
         and decoyed["env_reads"][0]["fn_name"] == "decoy_fn_from_a_block_comment",
     )
 
-    # ------------------------------------------------------------ REQUIRED POLICY SNIPPETS
-    # The silent direction: a REQUIRE satisfied by prose never surfaces. FROZEN policy text whose
-    # comment and deny-message NAME three structural requirements the file does not actually
+    # ------------------------------------------------------------ Required policy snippets
+    # The silent direction: a require satisfied by prose never surfaces. Frozen policy text whose
+    # comment and deny-message name three structural requirements the file does not actually
     # declare -- exactly the `has_minhook` shape from check-reload-trace-policy.py.
     prose_only_policy = (
         "package auto.env_gate_comment\n"
@@ -521,7 +521,7 @@ def selftest() -> int:
         % (len(strict["missing_structural"]), len(lax["missing_structural"]))
     )
 
-    # `rego_code_only` must not amputate a rule line at a `#` that lives inside a STRING. FROZEN.
+    # `rego_code_only` must not amputate a rule line at a `#` that lives inside a string. Frozen.
     hash_inside_string_policy = (
         "package auto.env_gate_comment\n"
         "default allow := false\n"
@@ -540,7 +540,7 @@ def selftest() -> int:
         survives["missing_structural"] == [],
     )
 
-    # ------------------------------------------------------------ AGAINST THE ACTUAL TREE
+    # ------------------------------------------------------------ Against the actual tree
     live_gates = scan_gates()
     check(
         f"scan_gates() found nothing under {relative(SRC_DIR)}; the walk is broken",

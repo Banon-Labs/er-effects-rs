@@ -284,7 +284,7 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
     })
 }
 
-/// Decode a SPIR-V literal string (NUL-terminated, packed 4 chars/word, LE).
+/// Decode a SPIR-V literal string (NUL-terminated, packed 4 chars/word, le).
 fn decode_string(words: &[u32]) -> String {
     let mut bytes = Vec::new();
     'outer: for &w in words {
@@ -367,8 +367,8 @@ impl TypeCtx {
 
 /// Compute each descriptor-bound uniform/storage block's byte size, sorted by `(set,
 /// binding)`. dxil-spirv lays a cbuffer as `struct { vec4 data[N] }`, so the size is the
-/// member's `ArrayStride × N`. Used to match a captured cbuffer to OUR shader's cbuffer by
-/// SIZE — vkd3d-proton's descriptor buffers erase the D3D register, but byte sizes survive.
+/// member's `ArrayStride × N`. Used to match a captured cbuffer to our shader's cbuffer by
+/// size — vkd3d-proton's descriptor buffers erase the D3D register, but byte sizes survive.
 pub fn block_byte_sizes(spirv: &[u8]) -> Vec<(u32, u32, u64)> {
     if spirv.len() < 20 {
         return Vec::new();
@@ -587,7 +587,7 @@ mod tests {
             samplers,
             bufs
         );
-        // dxil-spirv does NOT preserve HLSL resource names (measured: 0 named), so
+        // dxil-spirv does not preserve HLSL resource names (measured: 0 named), so
         // mapping the ~23 textures to roles needs the DX container's RDEF chunk or a
         // RenderDoc capture — not the translated SPIR-V.
         let named = pr.bindings.iter().filter(|b| b.name.is_some()).count();

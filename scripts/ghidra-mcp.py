@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Call a Ghidra MCP tool through the running mcp_bridge (stdio -> Ghidra daemon on :8765).
 
-Fallback access to the Ghidra dump when the ghidra MCP is NOT registered as a session tool but the
+Fallback access to the Ghidra dump when the ghidra MCP is not registered as a session tool but the
 daemon is up (bd Ghidra Access: MCP-First). Drives the bridge with a minimal MCP JSON-RPC handshake and
 one tools/call, printing the tool's text result. Reusable so RE queries don't re-plumb the protocol.
 

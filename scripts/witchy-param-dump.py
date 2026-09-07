@@ -2,7 +2,7 @@
 """Parse WitchyBND PARAM XML -> field table with computed byte offsets + row dump.
 
 WitchyBND emits `<param>` XML containing the paramdef `<fields>` it applied and a
-`<rows>` list.  The paramdef gives field order/type/bitsize but NOT byte offsets;
+`<rows>` list.  The paramdef gives field order/type/bitsize but not byte offsets;
 this recomputes them (including bitfield packing) so an RE agent can line the
 param up against in-memory row layouts.
 
@@ -45,7 +45,7 @@ def field_table(root):
             sz = base * alen
         if bsize > 0 and ftype in SIZES and alen == 1:
             unit = SIZES[ftype]
-            # SoulsFormats packs bitfields by STORAGE SIZE, and `dummy8` shares a
+            # SoulsFormats packs bitfields by storage size, and `dummy8` shares a
             # storage unit with `u8`/`s8` neighbours -- so normalise before the
             # "same bitfield type?" test or every dummy8 reserve opens a new byte.
             key = unit

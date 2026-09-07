@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Autonomous multi-save-load PROOF monitor + report generator.
+"""Autonomous multi-save-load proof monitor + report generator.
 
 For docs/goals/repeatable-multi-save-load-acceptance.md. Given a live (or finished) runtime
 artifact dir (er-quickload-telemetry.json + er-quickload-autoload-debug.log) and an ordered list of
 expected load targets, this:
-  - watches the RAM telemetry for each distinct STABLE, finished-loading world (mechanism-agnostic:
+  - watches the RAM telemetry for each distinct stable, finished-loading world (mechanism-agnostic:
     it keys on the observed character identity becoming stable, not on any particular reload path);
-  - verifies each load's IDENTITY (name+name_len+saved_map_c30+runes) against the expected
-    (file, slot) decoded offline, plus a STATS spot-check (level + attribute array) and a GEAR
+  - verifies each load's identity (name+name_len+saved_map_c30+runes) against the expected
+    (file, slot) decoded offline, plus a stats spot-check (level + attribute array) and a GEAR
     spot-check (talisman slots / flask counts / spirit-ash level), and CONTROLLABLE-in-world
     (player present + chr controller/onscreen);
-  - detects CRASHES (process gone with the run incomplete, or an access-violation/assert marker in
-    the debug log) and STALLS (no new verified load within the per-load deadline);
+  - detects crashes (process gone with the run incomplete, or an access-violation/assert marker in
+    the debug log) and stalls (no new verified load within the per-load deadline);
   - logs per-load timings; and
   - emits a short human-readable pass/fail report. Exit 0 == every expected load verified with zero
-    crashes/stalls == PROVEN.
+    crashes/stalls == proven.
 
-The RAM telemetry is the ONLY load-success oracle (never a screenshot). Reuses the evidence-bound
+The RAM telemetry is the only load-success oracle (never a screenshot). Reuses the evidence-bound
 identity logic from switch-character-oracle.py and the slot decoder from save-slot-oracle.py.
 
 Usage (live):
@@ -65,7 +65,7 @@ ORACLE = _load("switch_character_oracle", "switch-character-oracle.py")
 DECODER = _load("save_slot_oracle", "save-slot-oracle.py")
 
 # Genuine hard-crash / deliberate-abort signatures. NOTE: the DLL's own boot-time safe_input hook
-# INSTALL lines ("safe_input hook NtTerminateProcess: target..." / "...applied") are NOT crashes --
+# install lines ("safe_input hook NtTerminateProcess: target..." / "...applied") are not crashes --
 # they are excluded below. An actual crash surfaces the AV rva / assert / deliberate-abort markers,
 # and process-liveness (process_alive) catches a real terminate independently.
 AV_MARKERS = ("access-violation rva", "0x1eb9999", "deliberate-abort",
@@ -124,27 +124,27 @@ def controllable(tel: dict) -> bool:
     return bool(player and ctrl)
 
 
-# ---- HARD RENDER GATE (docs/goals/repeatable-multi-save-load-acceptance.md §4.4, revised 2026-07-18) ----
-# The 2026-07-18 render-freeze false-pass proved "present + controllable-by-model" is NOT enough: the
+# ---- Hard render gate (docs/goals/repeatable-multi-save-load-acceptance.md §4.4, revised 2026-07-18) ----
+# The 2026-07-18 render-freeze false-pass proved "present + controllable-by-model" is not enough: the
 # character can be present yet invisible (draw group off) in a frozen world. These gate on the DLL's
-# render-readiness oracles + a WORLD-LIVE liveness clock, held continuously for a dwell window.
-DWELL_SECONDS = 5.0            # §4.4: render-ready must hold CONTINUOUSLY this long (no one-frame blips)
+# render-readiness oracles + a world-live liveness clock, held continuously for a dwell window.
+DWELL_SECONDS = 5.0            # §4.4: render-ready must hold continuously this long (no one-frame blips)
 LIVENESS_MIN_PLAY_MS = 250     # over a >=5s dwell a live world advances play_time ~5000ms; 250 is a safe floor
 HAVOK_EPS = 1e-3               # fallback liveness (no play_time): world-position movement threshold
 
 
 def render_ready(tel: dict) -> bool:
-    """The HARD render gate: the character is actually rendering and the loading cover is dismissed.
+    """The hard render gate: the character is actually rendering and the loading cover is dismissed.
     - oracle_player_render_ready == true (DLL ANDs: chr-model+ctrl present, draw_group_enabled,
-      is_render_group_enabled, enable_render) -- the exact combination that was FALSE in the freeze.
-    - oracle_chr_draw_group_enabled == true -- kept explicit; it was THE failing field.
+      is_render_group_enabled, enable_render) -- the exact combination that was false in the freeze.
+    - oracle_chr_draw_group_enabled == true -- kept explicit; it was the failing field.
     - oracle_fake_loading_any_visible == false -- the loading cover is actually gone.
     NOTE (evidence-based deviation from §4.4's literal 'oracle_now_loading cleared'): oracle_now_loading
-    is CSNowLoadingHelperImp::load_done, a load-COMPLETE latch that reads TRUE and LINGERS into normal
+    is CSNowLoadingHelperImp::load_done, a load-complete latch that reads true and LINGERS into normal
     gameplay (per the DLL RE comment in write_game_module_oracles.rs), and across captured frozen
-    snapshots it was observed as BOTH 0 and 1 -- so it does NOT discriminate frozen vs live and
+    snapshots it was observed as both 0 and 1 -- so it does not discriminate frozen vs live and
     requiring ==0 would false-fail good loads (or false-pass a now_loading==0 freeze). The real
-    cover-dismissed signal is oracle_fake_loading_any_visible==false, which was TRUE in every frozen
+    cover-dismissed signal is oracle_fake_loading_any_visible==false, which was true in every frozen
     snapshot. now_loading is reported for diagnostics only, never gated on."""
     return (
         tel.get("oracle_player_render_ready") is True
@@ -155,7 +155,7 @@ def render_ready(tel: dict) -> bool:
 
 def liveness_of(tel: dict) -> dict:
     """A snapshot of world-liveness signals for dwell comparison. Primary = play_time_ms (the game's
-    own in-game play clock, which advances ONLY while the world sim steps and is paused during
+    own in-game play clock, which advances only while the world sim steps and is paused during
     loads/menus/frozen states). Secondary (fallback if play_time is unavailable) = world position."""
     pt = tel.get("oracle_play_time_ms")
     pos = tel.get("oracle_havok_pos")
@@ -167,8 +167,8 @@ def liveness_of(tel: dict) -> dict:
 
 def liveness_advanced(a: dict, b: dict) -> bool:
     """True iff the world genuinely advanced between two liveness samples. If play_time is available at
-    both ends it is AUTHORITATIVE (a frozen world's play clock does not tick, so havok jitter cannot
-    rescue it -- matching §4.4's 'nothing moving must FAIL'). Only when play_time is absent do we fall
+    both ends it is authoritative (a frozen world's play clock does not tick, so havok jitter cannot
+    rescue it -- matching §4.4's 'nothing moving must fail'). Only when play_time is absent do we fall
     back to world-position movement."""
     pa, pb = a.get("play_ms"), b.get("play_ms")
     if pa is not None and pb is not None:
@@ -183,7 +183,7 @@ def liveness_advanced(a: dict, b: dict) -> bool:
 def log_has_crash(log_path: Path, start_offset: int = 0) -> str | None:
     if not log_path.exists():
         return None
-    # Scan only content written AFTER start_offset (the shared append-log holds prior runs; scanning
+    # Scan only content written after start_offset (the shared append-log holds prior runs; scanning
     # their tail would false-positive on old AV markers). Cap the scanned window for cost.
     try:
         with open(log_path, "rb") as f:
@@ -207,9 +207,9 @@ def log_has_crash(log_path: Path, start_offset: int = 0) -> str | None:
 
 
 def stall_diagnosis(log_path: Path, start_offset: int = 0) -> str:
-    """On a STALL, name WHERE the reload got stuck from the DLL debug log: the last MoveMapStep
-    state (mms_step=N(NAME)) and the last 'waiting for ...' reason. Makes the report self-diagnosing
-    (e.g. 'mms_step=18 MOVE MAP' = teardown lock vs 'waiting for native a40/menu-open' = title stall)."""
+    """On a stall, name where the reload got stuck from the DLL debug log: the last MoveMapStep
+    state (mms_step=N(name)) and the last 'waiting for ...' reason. Makes the report self-diagnosing
+    (e.g. 'mms_step=18 move map' = teardown lock vs 'waiting for native a40/menu-open' = title stall)."""
     if not log_path.exists():
         return "no debug log"
     try:
@@ -240,7 +240,7 @@ def stall_diagnosis(log_path: Path, start_offset: int = 0) -> str:
 
 def process_alive() -> bool:
     # eldenring.exe present == the run is still live. WSL-AWARE: on a WSL2 + Windows-Steam box the
-    # game is a WINDOWS process (tasklist.exe), so a Linux `pgrep -x eldenring.exe` false-negatives
+    # game is a Windows process (tasklist.exe), so a Linux `pgrep -x eldenring.exe` false-negatives
     # and would report an instant fake crash (bd steam-detection-wsl-false-negative-2026-07-18).
     # Check the Linux side first, then the Windows process list.
     if os.system("pgrep -x eldenring.exe >/dev/null 2>&1") == 0:
@@ -252,11 +252,11 @@ def process_alive() -> bool:
 
 
 def world_present(tel: dict) -> bool:
-    """A real character is resident in a loaded world -- WITHOUT the now_loading==0 requirement that
+    """A real character is resident in a loaded world -- Without the now_loading==0 requirement that
     ORACLE.stable_world_loaded imposes. Deliberately excludes oracle_now_loading: it is an unreliable
-    load-DONE latch (lingers true in gameplay; observed both 0 and 1 in frozen snapshots), so keying
+    load-done latch (lingers true in gameplay; observed both 0 and 1 in frozen snapshots), so keying
     presence on it both false-fails good loads and false-passes now_loading==0 freezes (the actual
-    2026-07-18 blind spot). The HARD RENDER GATE (render_ready + cover-dismissed), held for the dwell,
+    2026-07-18 blind spot). The hard render gate (render_ready + cover-dismissed), held for the dwell,
     is what proves the world is finished, rendered, and live -- not now_loading."""
     player = tel.get("oracle_player_present") is True or tel.get("player_available") is True
     loaded = (
@@ -285,13 +285,13 @@ def evaluate_load(exp: dict, tel: dict) -> dict:
 
 def identity_ok_full(res: dict) -> bool:
     """The right character is loaded (identity+stats+gear+a real loaded world). Uses world_present
-    (NOT the now_loading-gated `stable`) so the render gate/dwell -- not the unreliable now_loading
+    (not the now_loading-gated `stable`) so the render gate/dwell -- not the unreliable now_loading
     latch -- decides finished-and-rendered."""
     return all(res[k] for k in ("identity_ok", "stats_ok", "gear_ok", "world_present"))
 
 
 def load_ok(res: dict) -> bool:
-    """A single-frame snapshot passes ALL gates (used by --replay; the live path additionally
+    """A single-frame snapshot passes all gates (used by --replay; the live path additionally
     enforces the >=5s render-ready dwell + world-live liveness in the monitor loop)."""
     return identity_ok_full(res) and res.get("render_ready_ok") is True
 
@@ -338,7 +338,7 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
         return r
 
     def drive_next(next_idx: int):
-        # PROGRAMMATIC DRIVE (§6): trigger the next reload by writing its (file,)slot to the DLL
+        # PROGRAMMATIC drive (§6): trigger the next reload by writing its (file,)slot to the DLL
         # control files. targets[0] is the boot autoload (TOML), so we only drive reloads (idx>=1).
         if drive_slot_file is None or next_idx >= len(expected):
             return
@@ -361,8 +361,8 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
             res = evaluate_load(expected[idx]["expected"], tel)
             obs_name = res["observed"].get("name")
             id_match = identity_ok_full(res) and obs_name and obs_name != last_verified_identity
-            # ---- §4.6 SEQUENCING GATE: the right character must be render-ready AND hold that,
-            # world-live, for a >=5s dwell BEFORE we count the load and trigger the next one. ----
+            # ---- §4.6 sequencing GATE: the right character must be render-ready and hold that,
+            # world-live, for a >=5s dwell before we count the load and trigger the next one. ----
             if id_match and res["render_ready_ok"]:
                 if present_since is None:
                     present_since = now
@@ -389,14 +389,14 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
                         drive_next(idx)
                         continue
             else:
-                # Render gate NOT satisfied for the target this frame.
+                # Render gate not satisfied for the target this frame.
                 if id_match and present_since is None:
                     present_since = now  # right char is present (logically) but not yet render-ready
                 # A blip during dwell (render-ready dropped, or identity changed) breaks continuity:
                 # restart the dwell; the per-load deadline keeps ticking (a never-stabilizing load stalls).
                 dwell_start_t = None
                 dwell_start_liveness = None
-                # a real loaded world with the WRONG identity for this step -> mismatch
+                # a real loaded world with the wrong identity for this step -> mismatch
                 if res["world_present"] and obs_name and res["identity_ok"] is False \
                         and obs_name != (results[-1]["observed"]["name"] if results else None):
                     results.append(snapshot_result(idx, "FAIL-MISMATCH", res, now - last_progress))
@@ -404,9 +404,9 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
                     idx += 1
                     present_since = None
                     continue
-        # stall check -- INCLUDES the logically-loaded-but-render-frozen state (§4.5): if the right
+        # stall check -- Includes the logically-loaded-but-render-frozen state (§4.5): if the right
         # character became present but never passed the render-ready dwell within the deadline, that is
-        # a STALL/FAIL and the run stops (does NOT advance to the next load, §4.6).
+        # a STALL/FAIL and the run stops (does not advance to the next load, §4.6).
         if not replay and now - last_progress > per_load_deadline:
             frozen = present_since is not None
             r = snapshot_result(idx, "STALL-RENDER-FROZEN" if frozen else "STALL", None, now - last_progress)

@@ -1,4 +1,4 @@
-//! WHY THE LOCK-ON RETICLE SAT AT THE CREATURE'S FEET, and the one number that moves it.
+//! Why the lock-on RETICLE sat at the creature'S feet, and the one number that moves it.
 //!
 //! # What the reticle is actually on
 //!
@@ -8,7 +8,7 @@
 //! `LockTgtMan`'s per-frame update (1.16.2 `FUN_140716260`, 1.17 `0x1407170b0`) opens by calling
 //! `WorldChrManImp::GetMainPlayerIns` (1.16.2 `0x140507ff0`), which returns the override when one
 //! is set and only falls back to the raw `+0x1e508 mainPlayerIns`. So every candidate the search
-//! considers is measured against the CREATURE -- and the one self-test in the whole scan is
+//! considers is measured against the creature -- and the one self-test in the whole scan is
 //! `CMP R14,R15` at 1.16.2 `0x1407166e3`, raw pointer identity against that same overridden
 //! pointer. The real `PlayerIns` is a different pointer, so it is not excluded. It is standing
 //! exactly where the creature is (this engine puts it there every frame), it is still
@@ -17,27 +17,27 @@
 //! That is what the player is locking onto, which is why the reticle appeared at their feet: it
 //! was drawn on a 1.5 m body at the bottom of a 12 m dragon.
 //!
-//! # THIS MODULE IS NOW THE FALLBACK, NOT THE ANSWER (2026-09-02)
+//! # this module is now the FALLBACK, not the answer (2026-09-02)
 //!
 //! The paragraph above is still true of the pointer identity check, but it stopped being the whole
-//! story: the scan's OTHER filter is `CS::ChrIns::CanTargetTeamType(subject, candidate)`, and with
-//! the creature as subject that made every real enemy a FRIEND and the player's own body the only
+//! story: the scan's other filter is `CS::ChrIns::CanTargetTeamType(subject, candidate)`, and with
+//! the creature as subject that made every real enemy a friend and the player's own body the only
 //! opposing character in the world. A player reported exactly that -- "I've never been able to
 //! lock on to anyone but myself". [`crate::possess::layout::chr_ins::TEAM_TYPE_CHARMED`] is the
 //! one-byte fix, and while it holds the body is not a candidate at all and nothing is drawn on it.
 //!
-//! The scale below is KEPT because that write can fail to take: the byte may not read, or a
+//! The scale below is kept because that write can fail to take: the byte may not read, or a
 //! network `TemporaryTeamType` slot may outrank it in `GetTeamType`. In either case the old world
 //! comes back exactly as described above, and the reticle needs to be somewhere sensible.
 //!
-//! # Why the reticle CANNOT be moved directly
+//! # Why the reticle cannot be moved directly
 //!
 //! Its world position is a **dummy polygon on the target's model**. `CS::ChrSlotSys::AddActPntSlot`
 //! (`0x140499980`) registers each character's lock points over the dummy-id range `0xdc..0xe4`
 //! (220..228), selected per character by `NpcParam.lockGazePoint0..7`; `FUN_14049ce50` resolves
 //! each one through `ChrIns::GetDmypolyPosition` and caches the result at `ActPntNode+0x00`; and
 //! `FUN_140716260` copies that vector into the subject's `ChrIns+0xd0 lockOnTargetPos`. There is
-//! no per-character "lock point offset" field anywhere in that chain -- the ONE offset field in
+//! no per-character "lock point offset" field anywhere in that chain -- the one offset field in
 //! the neighbourhood, `ChrCtrl+0x1a0 lockOnTagOffset`, is added by
 //! `CS::CSFeManImp::UpdateChrEnemyTagEntries` (`0x140776a30`) to the **name/HP tag**, which uses
 //! dummy 210 (`MOV dword ptr [RSP+0x20],0xd2` at `0x140776c58`) and is a different surface.
@@ -63,13 +63,13 @@
 //! release.
 //!
 //! And it is free of side effects on anything that matters here, which is settled RE rather than
-//! hope: body scale is RENDER-ONLY. `SetScaleSize` writes `ChrCtrl+0x2d4..0x2dc` and mirrors to
+//! hope: body scale is render-only. `SetScaleSize` writes `ChrCtrl+0x2d4..0x2dc` and mirrors to
 //! `CSChrDataModule+0x54..0x5c` and touches `CSChrPhysicsModule` nowhere, so the hknp capsule --
 //! the body's collision, its hurtbox and its `hitHeight` -- does not move. See `bd`
 //! `possession-camera-size-adaptation-levers-2026-09-01`, which reached the same conclusion from
 //! the other direction and warned the camera layer off scaling for exactly this reason.
 //!
-//! # What the scale IS, and why this module contains no notion of "centre"
+//! # What the scale is, and why this module contains no notion of "centre"
 //!
 //! [`scale_for`] is one division: `creature hitHeight / player hitHeight`. That is deliberate, and
 //! it is the answer to "is `hitHeight` the right notion of the centre of the model" -- **the
@@ -78,13 +78,13 @@
 //! put it; scaling by `s` multiplies that fraction's height by `s` and nothing else. The anchor
 //! lands where the game's own artists would have put it on a body of that size.
 //!
-//! All `hitHeight` has to be, then, is PROPORTIONAL to model size -- and it is the only scalar in
+//! All `hitHeight` has to be, then, is proportional to model size -- and it is the only scalar in
 //! the game that is. ELDEN RING ships no chr-scale param in any of its 179 paramdefs, and the
 //! FLVER bounding box is build-time-only and degenerate (`FLT_MAX`) on eleven chrs including
 //! `c0000`, so the two obvious alternatives do not exist. [`crate::camera::geometry`] reached the
 //! same dead end and rests on the same field.
 //!
-//! **The honest limitation**: `hitHeight` is the PHYSICS capsule, and on a long-necked or
+//! **The honest limitation**: `hitHeight` is the physics capsule, and on a long-necked or
 //! long-tailed creature the visual model is taller than its capsule. The ratio then understates
 //! the size and the reticle sits lower than the *visual* centre -- lower, never at the feet. There
 //! is no better source; this is the same ceiling the camera layer works under.
@@ -134,7 +134,7 @@ pub(crate) fn worth_applying(scale: f32) -> bool {
     (scale - 1.0).abs() > 0.001
 }
 
-/// The scale to WRITE, given what the body is already carrying.
+/// The scale to write, given what the body is already carrying.
 ///
 /// # Y only, and that is the deliberate half of this module
 ///
@@ -175,7 +175,7 @@ mod tests {
         assert!(worth_applying(scale));
     }
 
-    /// POSSESSING SOMETHING PLAYER-SIZED CHANGES NOTHING, and that is an invariant rather than a
+    /// Possessing something player-sized changes nothing, and that is an invariant rather than a
     /// coincidence: the reticle is already in the right place, so the body must not be touched and
     /// the release must have nothing to undo.
     #[test]
@@ -185,7 +185,7 @@ mod tests {
         assert!(!worth_applying(scale));
     }
 
-    /// A creature SMALLER than the player shrinks the body, rather than being clamped to 1.0.
+    /// A creature smaller than the player shrinks the body, rather than being clamped to 1.0.
     ///
     /// Wearing a rat (`hitHeight` 1.0) and locking on should put the reticle on the rat, not a
     /// head-height above it.
@@ -196,7 +196,7 @@ mod tests {
         assert!(worth_applying(scale));
     }
 
-    /// A FAILED READ IS NOT A SCALE OF ZERO. `hitHeight` reads zero until `InitForEnemy` has
+    /// A failed read is not a scale of zero. `hitHeight` reads zero until `InitForEnemy` has
     /// applied the `NpcParam` row, and a zero-scaled body is a body collapsed onto a point.
     #[test]
     fn an_unreadable_height_refuses_rather_than_collapsing_the_body() {
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(scale_for(-3.0, PLAYER_HIT_HEIGHT), None);
     }
 
-    /// THE WRITE IS VERTICAL AND NOTHING ELSE. `X` and `Z` come back exactly as they went in,
+    /// The write is vertical and nothing else. `X` and `Z` come back exactly as they went in,
     /// whatever they were -- the anchor is on the centreline, so widening the body would be pure
     /// cost to the shadow pass and the exported AABB.
     #[test]
@@ -239,7 +239,7 @@ mod tests {
             scale_for(MAX_PLAUSIBLE_HEIGHT + 1.0, PLAYER_HIT_HEIGHT),
             None
         );
-        // Plausible heights whose RATIO is extreme: a 200 m subject worn by a 0.05 m body.
+        // Plausible heights whose ratio is extreme: a 200 m subject worn by a 0.05 m body.
         let scale = scale_for(MAX_PLAUSIBLE_HEIGHT, MIN_PLAUSIBLE_HEIGHT).expect("plausible");
         assert!((scale - MAX_SCALE).abs() < f32::EPSILON, "{scale}");
     }

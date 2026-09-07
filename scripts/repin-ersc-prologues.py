@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-pin `crates/er-invasion-warp/build.rs` prologue bytes against a new Seamless build.
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 Every Seamless Co-op update forces the same chore, and doing it by hand is how a wrong byte
 gets typed into a pin that then silently accepts the wrong function. The build script already
@@ -11,7 +11,7 @@ real DLL, and panics naming all three. So the correct new pin is already in the 
 This tool just closes the loop -- read the assembled bytes out of the failure, write them into
 the array, build again, repeat until the build is green.
 
-It is NOT a way to make a red build go green. It only ever copies the bytes the ASSEMBLER
+It is not a way to make a red build go green. It only ever copies the bytes the ASSEMBLER
 produced, and the assembler is driven by the `va:` constants and the instruction closures in
 `build.rs`. If an address in there is wrong, the assembled bytes are wrong too, the build
 script's own comparison against the DLL image rejects them, and this loop stops with that
@@ -19,13 +19,13 @@ error rather than papering over it. Fix the addresses first (see
 `scripts/locate-ersc-entry-points.py`, and identify every candidate independently -- a
 signature match is a candidate, never an identification), then run this.
 
-WHAT IT WILL NOT DO
+What it will not do
 -------------------
 Touch `ERSC_SUPPORTED_VERSION`, add an `Image` variant, or change a `va:` constant. Those are
-judgements about WHICH function is which; this only transcribes bytes for functions whose
+judgements about which function is which; this only transcribes bytes for functions whose
 identity you have already established.
 
-USAGE
+Usage
     # Point the build at the archived copy of the build you are pinning to.
     python3 scripts/repin-ersc-prologues.py \
         --ersc vendor-archive/seamless/ersc-2.0.1.dll \
@@ -51,7 +51,7 @@ TARGET = "x86_64-pc-windows-msvc"
 
 # Every individual wait is capped at 30s, the repo-wide ceiling for a non-game agent op
 # (scripts/check-no-timeouts.py enforces it). A cold cross-compile takes minutes, so the wait is
-# REPEATED rather than lengthened: the readiness signal is the build process actually exiting, and
+# repeated rather than lengthened: the readiness signal is the build process actually exiting, and
 # the cap is only the safety net around each poll. BUILD_WAIT_ROUNDS bounds the total.
 BUILD_POLL_SECONDS = 30
 BUILD_WAIT_ROUNDS = 20
@@ -59,7 +59,7 @@ BUILD_WAIT_ROUNDS = 20
 # exists so a spec that somehow never converges cannot loop forever.
 MAX_ROUNDS = 12
 
-# The build script's own wording, from `prologue_build.rs`. Both halves matter: the spec NAME
+# The build script's own wording, from `prologue_build.rs`. Both halves matter: the spec name
 # says which array to rewrite, and the assembled bytes are what to write into it.
 FAILURE = re.compile(
     r"(?P<spec>\w+): the named instructions encode to (?P<bytes>[0-9a-f]{2}(?: [0-9a-f]{2})*)"
@@ -104,7 +104,7 @@ def build_env(ersc: str | None, reference: str | None) -> dict[str, str]:
 
 
 def run_build(env: dict[str, str]) -> subprocess.CompletedProcess:
-    """Run the cross-compile, waiting on process EXIT in 30-second slices."""
+    """Run the cross-compile, waiting on process exit in 30-second slices."""
     proc = subprocess.Popen(
         ["cargo", "xwin", "build", "--release", "--target", TARGET, "-p", PACKAGE],
         cwd=REPO_ROOT,

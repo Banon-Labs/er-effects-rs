@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fingerprint every candidate store where Elden Ring might persist "privacy policy accepted" /
-# profile state, so a before/after diff (across a vanilla accept-the-policy boot) reveals WHERE the
+# profile state, so a before/after diff (across a vanilla accept-the-policy boot) reveals where the
 # acceptance lands. Read-only. Usage: snapshot-er-state.sh <out-manifest-path>
 set -uo pipefail
 OUT="${1:?usage: snapshot-er-state.sh <out-manifest-path>}"

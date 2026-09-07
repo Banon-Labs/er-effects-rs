@@ -1,48 +1,48 @@
 #!/usr/bin/env bash
 # Cupcake signal: last_assistant_idle_hold
 #
-# Scans the most recently COMPLETED assistant turn of the current session transcript and returns a
-# TAGGED idle-hold marker, or empty if the turn is clean. Consumed by TWO policies:
+# Scans the most recently completed assistant turn of the current session transcript and returns a
+# tagged idle-hold marker, or empty if the turn is clean. Consumed by two policies:
 #   * idle_hold (Stop): halts turn-end so the agent does non-overlapping work or justifies the wait.
 #   * idle_hold_reminder (UserPromptSubmit): standing reminder + interlock backstop (catches an
 #     interrupted turn the Stop halt could not see).
 #
-# BANNED CLASS (persistent user directive 2026-07-17, recurring anti-pattern):
-#   The agent announces it is IDLING / HOLDING / STANDING BY while a background task runs, WITHOUT
+# Banned class (persistent user directive 2026-07-17, recurring anti-pattern):
+#   The agent announces it is IDLING / holding / standing by while a background task runs, without
 #   justification. Phrases like "I'm holding", "holding for", "holding off", "standing by",
 #   "I'll wait for", "waiting for X before", "waiting on X rather than", "nothing to do but wait",
 #   "I'll pause here", "let it run and wait". Emitted as  IDLEHOLD:<phrase>.
 #
-# TWO EXEMPTIONS suppress the flag (the turn is NOT idle -- it is either productive or justified):
-#   (a) JUSTIFICATION PROSE -- the same turn contains "I would normally have <...> but <...>" /
+# Two exemptions suppress the flag (the turn is not idle -- it is either productive or justified):
+#   (a) justification prose -- the same turn contains "I would normally have <...> but <...>" /
 #       "normally I'd <...> however <...>": the agent acknowledges non-overlapping work exists and
 #       states a reason it could not be done. The user can validate that, so it is allowed.
-#   (b) SUBSTANTIVE WORK -- the same turn contains a substantive tool_use: an Edit/Write/Agent
-#       tool_use, or a Bash command that is NOT a pure status/log peek. A turn whose only Bash calls
-#       are tail/cat/head/wc/grep/echo/ls of a log/output file is a "status peek" and does NOT count
+#   (b) substantive work -- the same turn contains a substantive tool_use: an Edit/Write/Agent
+#       tool_use, or a Bash command that is not a pure status/log peek. A turn whose only Bash calls
+#       are tail/cat/head/wc/grep/echo/ls of a log/output file is a "status peek" and does not count
 #       as substantive (so "holding" + only peeking still flags).
 #
-# One further carve-out inside the phrase match: a wait that is legitimately BLOCKED ON THE USER
-# ("waiting for user confirmation", "holding for the user to drive", "I'll wait for you") is NOT
+# One further carve-out inside the phrase match: a wait that is legitimately blocked on the user
+# ("waiting for user confirmation", "holding for the user to drive", "I'll wait for you") is not
 # idling -- the agent genuinely cannot proceed -- so those are excluded from the phrase hit.
 #
-# TIGHTENED RULE (persistent user directive 2026-07-17): a blocked-pause message must be TERSE. When a
-# turn ends as a PURE PAUSE (no substantive tool_use) that is NOT blocked on the user, and its message
-# is LONG / multi-topic (>450 chars, OR >3 sentences, OR any heading/bullet/numbered line, OR more than
+# Tightened rule (persistent user directive 2026-07-17): a blocked-pause message must be TERSE. When a
+# turn ends as a pure pause (no substantive tool_use) that is not blocked on the user, and its message
+# is long / multi-topic (>450 chars, or >3 sentences, or any heading/bullet/numbered line, or more than
 # one paragraph), the signal emits  VERBOSEPAUSE:<n-chars>  instead of IDLEHOLD. This closes the gap
-# where the idle-hold rule accepted a long "justified" hold: a genuinely blocked pause must be ONLY a
+# where the idle-hold rule accepted a long "justified" hold: a genuinely blocked pause must be only a
 # short, precise statement of what it is blocked on -- no status summaries, findings recaps, plans, or
 # next-step narration. VERBOSEPAUSE takes precedence over IDLEHOLD and fires even when justification
 # prose is present (that verbose justified hold is exactly what the new rule bans). A turn that did
-# substantive work, or one genuinely blocked on the USER, is exempt.
+# substantive work, or one genuinely blocked on the user, is exempt.
 #
-# WHY A WHOLE-TURN SCAN + BOTH EVENTS: mirrors last_assistant_authority_agreement -- an early-message
-# slip must not be masked by a later clean block (whole-turn scan), and an INTERRUPTED turn fires no
+# Why a whole-turn scan + both EVENTS: mirrors last_assistant_authority_agreement -- an early-message
+# slip must not be masked by a later clean block (whole-turn scan), and an interrupted turn fires no
 # Stop event, so the same signal is routed into the UserPromptSubmit interlock which always runs.
 # "Last completed turn" = the last non-empty run of assistant text bounded by real user prompts;
-# tool-result carrier "user" events do NOT split a turn.
+# tool-result carrier "user" events do not split a turn.
 #
-# THE SHARED HALF LIVES IN scripts/cupcake_turn_scan.py (2026-08-22): transcript discovery, turn
+# The shared half lives in scripts/cupcake_turn_scan.py (2026-08-22): transcript discovery, turn
 # bucketing, the status-peek command list, and the blocked-on-user phrasing are imported, not copied,
 # so this guard and last_assistant_unexecuted_promise.sh can never drift into disagreeing about
 # whether the same turn did real work. Only the idle-specific prose classification is local.
@@ -74,7 +74,7 @@ if turn is None:
 last_turn = turn.text
 turn_has_work = turn.work
 
-# Strip DOUBLE-quoted spans so quoting the ban does not count as using it (single quotes are left
+# Strip double-quoted spans so quoting the ban does not count as using it (single quotes are left
 # alone because the phrases themselves contain apostrophes, e.g. I'm / I'll).
 scrubbed = re.sub(r'"[^"]*"', " ", last_turn)
 
@@ -90,7 +90,7 @@ IDLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# A wait BLOCKED ON THE USER is legitimate, not idling. If the phrase's immediate context names the
+# A wait blocked on the user is legitimate, not idling. If the phrase's immediate context names the
 # user as the blocker, do not count it as an idle hit.
 USER_BLOCK_RE = re.compile(r"\b(?:the\s+)?(?:user|users|you|your)\b", re.IGNORECASE)
 
@@ -113,11 +113,11 @@ def find_idle_phrase(text):
 
 
 # --- VERBOSEPAUSE (tightened rule, user directive 2026-07-17) -------------------------------------
-# When a turn ends as a PURE PAUSE (no substantive tool_use) whose final message is LONG / multi-topic,
-# the blocked-pause message is too verbose: a genuinely blocked pause must be ONLY a short, precise
+# When a turn ends as a pure pause (no substantive tool_use) whose final message is long / multi-topic,
+# the blocked-pause message is too verbose: a genuinely blocked pause must be only a short, precise
 # statement of what it is blocked on -- no status summaries, findings recaps, plans, or next-step
 # narration. This TIGHTENS the idle-hold rule, which previously accepted a long "justified" hold as
-# fine; a verbose justified hold is now a violation. A wait genuinely blocked on the USER (awaiting
+# fine; a verbose justified hold is now a violation. A wait genuinely blocked on the user (awaiting
 # their answer/drive) is exempt, as is any turn that did substantive work. Emitted as VERBOSEPAUSE:<n>
 # (n = char count of the message). VERBOSEPAUSE takes precedence over IDLEHOLD (its "be terse"
 # guidance is the more specific correction, and it must fire even when a justification paragraph is
@@ -126,7 +126,7 @@ def find_idle_phrase(text):
 # The blocked-on-user phrasing (USER_WAIT_RE) is shared: scan.blocked_on_user.
 
 # Long / multi-topic heuristic: a blocked-pause note should be one or two short sentences. Flag when the
-# message is >450 chars, OR has >3 sentences, OR contains any heading/bullet/numbered line, OR spans
+# message is >450 chars, or has >3 sentences, or contains any heading/bullet/numbered line, or spans
 # more than one paragraph (blank-line separated). Returns the char count when long, else None.
 HEADING_BULLET_RE = re.compile(r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)")
 PARAGRAPH_BREAK_RE = re.compile(r"\n\s*\n")
@@ -151,24 +151,24 @@ def verbose_char_count(text):
 
 phrase = find_idle_phrase(scrubbed)
 
-# A pure-pause turn (no substantive tool_use) that is NOT blocked on the user and whose message is long
+# A pure-pause turn (no substantive tool_use) that is not blocked on the user and whose message is long
 # -> VERBOSEPAUSE. Measured on the raw last-turn text (not the quote-scrubbed copy) so length is not
 # undercounted; user-block is checked on the scrubbed copy so a merely-quoted "wait for you" does not
 # exempt.
-# A PROSE-ONLY ANSWER IS NOT A PAUSE. VERBOSEPAUSE is about a turn that stops WITH SOMETHING
+# A prose-only answer is not a pause. VERBOSEPAUSE is about a turn that stops with something
 # PENDING: either live background work still running at turn-end, or a message that announces an
 # idle/hold itself. A turn that simply answers the user's question in prose waits on nothing, and
 # neither did the corrective rewrite the wall_of_text guard used to force -- that one has no tool_use
-# BY CONSTRUCTION, since its whole job is to restate an answer. Without this gate the rule degenerates
+# by construction, since its whole job is to restate an answer. Without this gate the rule degenerates
 # into "no prose answer may exceed 450 chars", which is the wall_of_text guard's job and not this
 # one's. Measured 2026-08-22: it halted three consecutive prose answers with no background task
 # running at all, twice on rewrites the wall_of_text halt had just demanded. (That halt was removed
 # later the same day -- it fired after the text was already on screen and its verdict was printed to
 # the user, so it cost a third reading; the rule now injects an invisible one-paragraph correction on
 # UserPromptSubmit instead. The gate below still matters: prose answers remain out of scope here.)
-# Three ways a turn can BE a pause. Events alone are not enough: a turn can narrate work in flight
+# Three ways a turn can be a pause. Events alone are not enough: a turn can narrate work in flight
 # that the transcript cannot see (a subagent compiling, a gate running elsewhere), and that turn does
-# owe a terse blocked-note. What none of these match is a plain ANSWER.
+# owe a terse blocked-note. What none of these match is a plain answer.
 PENDING_WORK_RE = re.compile(
     r"\b(?:still (?:running|compiling|building|going|underway|in flight)"
     r"|while (?:it|that|they|those) (?:run|runs|compile|compiles|build|builds)"

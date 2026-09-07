@@ -4,14 +4,14 @@
 //! # Why names and not numbers
 //!
 //! The mark keys were hard-coded to `VK_INSERT`/`VK_DELETE` and the warp keys to `VK_F7`/`F8`/`F9`.
-//! A 60% keyboard -- the common compact EN-US layout -- has neither the editing cluster nor the
-//! function row, which locks whole features out for anyone using one. Worse, F7 was ALSO another
+//! A 60% keyboard -- the common compact en-us layout -- has neither the editing cluster nor the
+//! function row, which locks whole features out for anyone using one. Worse, F7 was also another
 //! mod's default in the same me3 profile, and a live session warped on a keypress meant for the
 //! other one, with no config key on either side to move. Asking players to write `0x2d` in a config
 //! file swaps one barrier for another: nobody knows the virtual-key code for the key they are
 //! looking at.
 //!
-//! So the config takes a NAME (`"Insert"`, `"F7"`, `"KP_Plus"`, `"]"`), and a raw `0x2d`-style code
+//! So the config takes a name (`"Insert"`, `"F7"`, `"KP_Plus"`, `"]"`), and a raw `0x2d`-style code
 //! is accepted too for anyone who does know.
 //!
 //! # Where the table lives now
@@ -20,9 +20,9 @@
 //! config vocabulary covers all of them. This module is the `i32` face of it: `GetAsyncKeyState`
 //! takes a signed virtual key, and the config type has always stored one.
 //!
-//! An unrecognised name is an ERROR that names the key it could not parse -- silently falling back
+//! An unrecognised name is an error that names the key it could not parse -- silently falling back
 //! to the default would leave the player pressing a key that does nothing, with no way to tell that
-//! from a broken feature. The CALLER then keeps whatever key was already working; see
+//! from a broken feature. The caller then keeps whatever key was already working; see
 //! `local_invasion_config`.
 
 pub use er_hotkey_config::keys::KeyParseError;
@@ -112,14 +112,14 @@ mod tests {
         assert_ne!(parse_key("F7"), Ok(0xf7));
     }
 
-    /// THE FAILURE THAT MATTERS. A typo must say so, not silently keep the old key -- otherwise the
+    /// The failure that matters. A typo must say so, not silently keep the old key -- otherwise the
     /// player presses their chosen key, nothing happens, and nothing tells them why.
     #[test]
     fn an_unknown_name_is_an_error_that_names_the_offending_key() {
         let error = parse_key("Winkey").expect_err("not a key this crate knows");
         assert_eq!(error, KeyParseError::Unknown("Winkey".to_string()));
         assert!(error.to_string().contains("Winkey"), "{error}");
-        // And it suggests what WOULD work.
+        // And it suggests what would work.
         assert!(error.to_string().contains("Insert"), "{error}");
     }
 

@@ -4,7 +4,7 @@
 # state file after each chunk -- so it runs at a modest heap (default 4G) and a kill/crash simply
 # resumes. Designed for RAM-constrained boxes where the one-shot finder OOMs.
 #
-#   scripts/ghidra/find-functions-rf-chunked.sh [--proj-dir DIR] [--proj-name NAME]
+#   scripts/ghidra/find-functions-rf-chunked.sh [--proj-dir DIR] [--proj-name name]
 #       [--threshold 0.80] [--max-starts 500] [--min-range 16] [--chunk-size 20000]
 #       [--max-mem 4G] [--out FILE.jsonl] [--reset]
 #

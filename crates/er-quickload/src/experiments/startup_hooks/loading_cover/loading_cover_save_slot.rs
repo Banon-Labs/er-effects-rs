@@ -1,15 +1,15 @@
 use super::*;
 
-/// Reads `CSNowLoadingHelperImp::load_done` off the NowLoading singleton. WARNING (RE-corrected
-/// 2026-07-02): despite the name this is a load-COMPLETE latch, not "loading screen visible" -- `Update`
-/// copies it from `request_load_done` (raised by the map-load system), so it reads true AFTER the load
-/// finishes and lingers into gameplay. Do NOT use it to decide the portrait overlay lifetime; kept for
+/// Reads `CSNowLoadingHelperImp::load_done` off the NowLoading singleton. Warning (RE-corrected
+/// 2026-07-02): despite the name this is a load-complete latch, not "loading screen visible" -- `Update`
+/// copies it from `request_load_done` (raised by the map-load system), so it reads true after the load
+/// finishes and lingers into gameplay. Do not use it to decide the portrait overlay lifetime; kept for
 /// telemetry/parity. Fault-guarded.
 pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // `read_global_ptr` resolves the global for the running build and then reads it
     // fault-tolerantly. The raw `base + RVA` form read the 1.16.2 slot, and this singleton moved
-    // (0x3d60ec8 -> 0x3d64f28) -- so the read SUCCEEDED and returned a neighbouring global.
+    // (0x3d60ec8 -> 0x3d64f28) -- so the read succeeded and returned a neighbouring global.
     let helper = er_game_base::mem::read_global_ptr(
         base,
         RuntimeGlobalRva::NowLoadingSingleton as usize,
@@ -43,7 +43,7 @@ pub(crate) unsafe fn fake_loading_screen_ptr(base: usize) -> usize {
 }
 
 /// True while the `CSFakeLoadingScreenImp` cover plate is VISIBLE: `visible` (+0x8) & 0xff. This is the
-/// render-pipeline cover the game draws to HIDE the world teardown/rebuild during a map load. Fault-guarded.
+/// render-pipeline cover the game draws to hide the world teardown/rebuild during a map load. Fault-guarded.
 pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
     let helper = unsafe { fake_loading_screen_ptr(base) };
     if helper == 0 {
@@ -54,32 +54,32 @@ pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
         .unwrap_or(false)
 }
 
-/// The portrait build + draw pipeline must PAUSE only during ACTIVE GAMEPLAY -- the player has reached the
-/// world AND the current load has COMPLETED (`load_done`, via now_loading_active) AND no loading cover is
-/// up. It MUST re-engage for every subsequent loading screen (notably a System Quit -> Load Profile
+/// The portrait build + draw pipeline must pause only during active gameplay -- the player has reached the
+/// world and the current load has completed (`load_done`, via now_loading_active) and no loading cover is
+/// up. It must re-engage for every subsequent loading screen (notably a System Quit -> Load Profile
 /// character switch). The old gate was the bare `IN_WORLD_REACHED == YES` latch, which is set the first
-/// time the player reaches the world and NEVER resets -> after the first load the build/draw ticks froze
-/// forever, so the head only ever rendered on the FIRST character load (the subsequent-load bug, run
+/// time the player reaches the world and never resets -> after the first load the build/draw ticks froze
+/// forever, so the head only ever rendered on the first character load (the subsequent-load bug, run
 /// head-popfix-loaddone 2026-07-02: after the 2nd deserialize the whole pipeline was silent). Fault-guarded.
 pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
     // Also idle while the game's ProfileSelect (Load) menu is open: it renders its own portraits,
     // and our drive/readback stacking on top overflows the GX command queue (see the build gate in
-    // maybe_build_profile_table_for_loading). Our pipeline is for the loading SCREEN, after the menu.
+    // maybe_build_profile_table_for_loading). Our pipeline is for the loading screen, after the menu.
     if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
         return true;
     }
-    // NEVER IDLE WHILE OUR OWN COVER IS STILL ON SCREEN (2026-09-05, user goal: the portrait lives
+    // Never idle while our own cover is still on screen (2026-09-05, user goal: the portrait lives
     // as long as the rest of the loading screen and animates for as long as it lives).
     //
-    // Every other clause below describes the GAME's loading screen -- its `now_loading` state, its
+    // Every other clause below describes the game's loading screen -- its `now_loading` state, its
     // `CSFakeLoadingScreenImp` plate. Ours outlives all of them by the release fade, and the head is
-    // on OUR surface, so idling on the game's timeline freezes a portrait the user is still looking
+    // on our surface, so idling on the game's timeline freezes a portrait the user is still looking
     // at. Measured on br-20260906-001201-c84f with the timestamps added for this goal:
     // `last_draw_tick_ms=39022 last_publish_ms=39051 cover_stop_ms=42201
     // frozen_before_cover_stop_ms=3150` -- the pipeline stopped being driven 3.18 s before the cover
     // came down and the head sat still for that whole stretch.
     //
-    // `BOOT_VIEW_DRAW_HITS != 0` is what makes this a NARROWING rather than a new way to run
+    // `BOOT_VIEW_DRAW_HITS != 0` is what makes this a narrowing rather than a new way to run
     // forever: it asks whether the cover ever actually composited anything. A window that never
     // armed has no stop latch to wait for, so it falls straight through to the gameplay clauses and
     // this clause cannot pin the pipeline on in gameplay.
@@ -93,10 +93,10 @@ pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
         && !unsafe { fake_loading_screen_visible(base) }
 }
 
-/// True while the game's native NOW-LOADING screen is actively rendering -- CS::LoadingScreen::Update
+/// True while the game's native now-loading screen is actively rendering -- CS::LoadingScreen::Update
 /// ticked within the last ~250ms (LOADING_SCREEN_UPDATE_HITS increments each of its frames and stops the
 /// instant the screen is destroyed). The portrait build/drive pipeline keys off this to stay engaged
-/// THROUGH the native loading screen: on a fast load PlayerIns resolves (IN_WORLD_REACHED) ~1.7s before the
+/// through the native loading screen: on a fast load PlayerIns resolves (IN_WORLD_REACHED) ~1.7s before the
 /// loading screen clears, so portrait_pipeline_idle_in_gameplay flips true mid-load and the build/drive
 /// pipeline returned before the model could build+render (run32: force_profile_render_tick never reached
 /// maybe_build). Wall-clock recency (not a per-call decrement) makes it safe to poll multiple times a frame.
@@ -116,7 +116,7 @@ pub(crate) fn native_loading_screen_active() -> bool {
     last != 0 && now_ms.saturating_sub(last) < 250
 }
 
-/// Count profile-table renderers that currently hold a LIVE character model (+0x778 valid). The game's
+/// Count profile-table renderers that currently hold a live character model (+0x778 valid). The game's
 /// Load Profile menu builds all 10 (one per save), so this reads ~10 during the menu; our post-Continue
 /// rebuild leaves only the loaded character's model live, so it reads 1 on the loading screen. The display
 /// publish gates on `<= 1` to avoid reading back the wrong character while multiple models are live (the
@@ -144,9 +144,9 @@ pub(crate) unsafe fn count_live_profile_models(base: usize) -> usize {
     n
 }
 
-/// POST-CONTINUE PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
+/// Post-continue PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
 /// torn down (native-continue is menu-free, so the menu never built it, or Continue tore it down), call
-/// the engine's own builder ONCE to repopulate the 10-slot table. The existing mark+refresh feed +
+/// the engine's own builder once to repopulate the 10-slot table. The existing mark+refresh feed +
 /// per-frame look-at hook + draw + pixel oracle then re-engage on the loading screen automatically (they
 /// all key off this table). Latched per load (reset when now-loading drops) so there's no per-frame churn.
 pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
@@ -166,7 +166,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     {
         return;
     }
-    // ROOT FIX (2026-07-03, run gxguard2): do NOT build our portrait table while the game's own
+    // Root fix (2026-07-03, run gxguard2): do not build our portrait table while the game's own
     // ProfileSelect (Load Character) menu still owns a populated portrait table. Once Continue teardown
     // has emptied that table, the lingering window-owner flag is stale for our purpose; build immediately
     // instead of waiting for that flag to clear, so the loading-owned renderer is ready when the loading
@@ -182,7 +182,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         && LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
         && LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0;
     // If the table is already populated (menu built it, or our own build already ran), leave it -- the
-    // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-ARMS the latch:
+    // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-arms the latch:
     // a subsequent Continue teardown empties it again and we rebuild our own for that load window. Exception:
     // native LoadingScreen is already ticking while the table is still populated. That table is stale for the
     // loadscreen portrait; force the normal builder now so the model build overlaps the earliest loading bar.
@@ -218,10 +218,10 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
             "loading-portrait: ProfileSelect owner flag still set, but renderer table is empty -- treating as Continue teardown and building loading-owned renderer now"
         ));
     }
-    // Table is EMPTY this tick -- count the streak. The menu's own teardown+rebuild is synchronous, so a
+    // Table is empty this tick -- count the streak. The menu's own teardown+rebuild is synchronous, so a
     // sustained-empty table across ticks means the Continue teardown ran with no menu rebuild (we've left
     // the menu into the load), which happens ~17s -- well before the now-loading flag flips (~21s on the
-    // fast gold-save load). Build as soon as EITHER signal fires so ResMan has time to build the model.
+    // fast gold-save load). Build as soon as either signal fires so ResMan has time to build the model.
     let streak = if force_loading_screen_rebuild {
         0
     } else {
@@ -230,14 +230,14 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
         return; // already built our table for this load window
     }
-    // HARD SAFETY: never call the builder until the engine/ResMan is provably up, or it access-violates at
+    // Hard SAFETY: never call the builder until the engine/ResMan is provably up, or it access-violates at
     // the title (empty table, ResMan not up). Normally we require the game's own ProfileSelect menu to have
-    // built its portrait table once (PROFILE_TABLE_WAS_POPULATED). But a MENU-FREE autoload (native product /
-    // staged / native-continue) NEVER shows ProfileSelect, so that latch stays 0 and the builder was blocked
+    // built its portrait table once (PROFILE_TABLE_WAS_POPULATED). But a menu-free autoload (native product /
+    // staged / native-continue) never shows ProfileSelect, so that latch stays 0 and the builder was blocked
     // forever -- the loading-portrait pipeline never engaged on native (run30 2026-07-15:
-    // loadscreen_table_builds=0, model drive never fired). During an ACTIVE native loading screen
+    // loadscreen_table_builds=0, model drive never fired). During an active native loading screen
     // (loading_screen_started: CS::LoadingScreen::Update ticking + Gauge_3 enabled + max-frame set) ResMan is
-    // definitively up (the world is streaming), so the builder is safe THERE even without the menu having
+    // definitively up (the world is streaming), so the builder is safe there even without the menu having
     // built its table. Accept that context as the ResMan-up proof for the menu-free autoload path.
     if PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) == 0 && !loading_screen_started {
         return;
@@ -251,10 +251,10 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     {
         return;
     }
-    // ORPHAN RECLAIM BACKSTOP (second-load foreign-head fix; primary reclaim is at the switch confirm in
+    // Orphan reclaim BACKSTOP (second-load foreign-head fix; primary reclaim is at the switch confirm in
     // system_quit_arm_quickload_autoload). If a prior window's spared renderer is still parked in
-    // PROFILE_SPARE_ORPHAN when a NEW loading window takes ownership, it is a live foreign producer: its
-    // model + offscreen scene are still registered and keep rendering the PREVIOUS character's head,
+    // PROFILE_SPARE_ORPHAN when a new loading window takes ownership, it is a live foreign producer: its
+    // model + offscreen scene are still registered and keep rendering the previous character's head,
     // which the new window's readback then publishes. Delete-enqueue it before constructing this
     // window's renderers. Game thread (force_profile_render_tick task), same delay-delete path as the
     // teardown-spare hook; swap(0) keeps the two reclaim sites mutually exclusive.
@@ -267,7 +267,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         ));
     }
     // Build it via the engine's own 10-slot builder (teardown is a no-op on a null table). Each fresh
-    // CSMenuProfModelRend self-registers its ResMan model build/draw tasks, so it builds + OWNS its own
+    // CSMenuProfModelRend self-registers its ResMan model build/draw tasks, so it builds + owns its own
     // model with our lifetime -- not borrowed from the torn-down menu. Self-contained off process-lifetime
     // singletons (RE-confirmed).
     let builder: unsafe extern "system" fn() = unsafe {
@@ -282,12 +282,12 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         )
     };
     unsafe { builder() };
-    // The loading-cover observer (CSNowLoadingHelperImp ctor/update) is the overlay's PRIMARY end-of-cover
+    // The loading-cover observer (CSNowLoadingHelperImp ctor/update) is the overlay's primary end-of-cover
     // signal (update pulses stop == the game dismissed the tips+bar screen). Install it here, at the start
     // of every loading window, instead of relying on the accept-byte-gated product path (which never fired
     // on the strip-default run -> hooks_installed=0 and the overlay had to lean on the in-world latch).
     install_now_loading_helper_observer_hooks();
-    // Kick the model build THIS tick: the mark+refresh feed that requests the async character-model build
+    // Kick the model build this tick: the mark+refresh feed that requests the async character-model build
     // only runs every 240 ticks (counter % 240 == 0). The post-Continue now-loading window is shorter than
     // 240 ticks, so without this the freshly-built renderers are never fed -> they stay model-less (m=0).
     // Resetting the counter to 0 makes the feed fire on the very next pass through force_profile_render_tick.
@@ -298,7 +298,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-    // BOOT-EPOCH publish-latency anchor (bd er-effects-rs-io53): the switch path stamps
+    // Boot-epoch publish-latency anchor (bd er-effects-rs-io53): the switch path stamps
     // PORTRAIT_CONFIRM_MS at the switch confirm, so PORTRAIT_CONFIRM_TO_PUBLISH_MS_LAST never measured
     // the boot window. Stamp the boot anchor here -- the loading-owned table build, observed ~90ms
     // after the boot loading screen opens -- so the boot window's first publish computes the same
@@ -332,12 +332,12 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     ));
 }
 
-/// Kick the ASYNC character-model build for ONE profile slot -- a faithful per-slot replica of the body
+/// Kick the ASYNC character-model build for one profile slot -- a faithful per-slot replica of the body
 /// of the engine's global refresh (dump `FUN_1409aa7d0`), which we no longer call from the post-Continue
-/// feed: the global form iterates all 10 slots and kicks every real+marked one, building EVERY save
+/// feed: the global form iterates all 10 slots and kicks every real+marked one, building every save
 /// character mid-load (the cross-slot portrait swap). Writing the +0x754/+0x755 latches on the other
-/// renderers to mute the global refresh CRASHED (GX command-queue overflow; the latches only mean
-/// "requested" on a CONFIGURED renderer). This replica performs the engine's exact per-slot sequence --
+/// renderers to mute the global refresh crashed (GX command-queue overflow; the latches only mean
+/// "requested" on a configured renderer). This replica performs the engine's exact per-slot sequence --
 /// record lookup, ChrAsm/model-source config, FaceData copy, stream index, then the two request latches --
 /// so the target slot builds exactly as the engine would build it, and the non-target renderers stay in
 /// the natural never-configured state (flags 0, stepper idle -- the same state empty slots hold forever).
@@ -354,23 +354,23 @@ pub(crate) unsafe fn kick_target_profile_slot(
     {
         return false;
     }
-    // ONE KICK PER SLOT VALUE PER LOAD WINDOW (engine "refresh on profile-data change" semantics;
+    // One kick per slot value per load window (engine "refresh on profile-data change" semantics;
     // see PORTRAIT_KICK_SLOT_KEY). Re-kicking on a cadence poisoned the state machine (mid-pipeline
     // the model is dead + latches consumed, so the re-kick re-raised +0x754/+0x755 and Wait_Play
     // re-entered the rebuild state forever = the ~1/s rebuild storm, static portrait, shadow
-    // flicker). But a blanket one-shot freezes the WRONG character: `portrait_loaded_slot()` (ac0)
-    // can still hold the PREVIOUS session's slot when the first kick fires, and the storm's
+    // flicker). But a blanket one-shot freezes the wrong character: `portrait_loaded_slot()` (ac0)
+    // can still hold the previous session's slot when the first kick fires, and the storm's
     // accidental self-correction was the "swap to the actual character" the user always saw. Keying
     // the latch to the slot gives exactly one corrective kick when ac0 flips to the real slot --
     // a deterministic swap -- and no storm (the same slot never re-kicks). No live-model guard:
-    // the corrective kick MUST fire on a live (wrong-record) model, exactly like the engine's
+    // the corrective kick must fire on a live (wrong-record) model, exactly like the engine's
     // data-change refresh.
     if PORTRAIT_KICK_SLOT_KEY.load(Ordering::SeqCst) == (slot + 1) as usize
         && PORTRAIT_KICK_RENDERER.load(Ordering::SeqCst) == renderer
     {
         return false;
     }
-    // Engine parity: kick only when BOTH request latches read 0 (a kick is not already in flight).
+    // Engine parity: kick only when both request latches read 0 (a kick is not already in flight).
     if unsafe { safe_read_u8(renderer + 0x754) }.unwrap_or(1) != 0
         || unsafe { safe_read_u8(renderer + 0x755) }.unwrap_or(1) != 0
     {
@@ -492,21 +492,21 @@ pub(crate) unsafe fn kick_target_profile_slot(
     };
     let b290 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_GENDER_OFFSET) }.unwrap_or(0);
     let b294 = unsafe { safe_read_u8(record + PROFILE_SUMMARY_FIELD_294_OFFSET) }.unwrap_or(0);
-    // LATCH SEMANTICS (static RE 2026-07-03): the state machine is Wait_Request --754--> build
+    // Latch semantics (static RE 2026-07-03): the state machine is Wait_Request --754--> build
     // pipeline --> Wait_Play (live), and Wait_Play routes 755/756 to STEP_Finish_Play = a 6-tick
     // TEARDOWN (unregisters the offscreen scene, destroys the model, clears 755+756). So 754+755
     // together mean "tear down the CURRENT model, then rebuild" -- the engine's data-change
-    // sequence for a LIVE renderer. On a renderer with NO model (our post-Continue case, machine
-    // in Wait_Request) the 754 is consumed immediately and the still-armed 755 then DESTROYS the
+    // sequence for a live renderer. On a renderer with no model (our post-Continue case, machine
+    // in Wait_Request) the 754 is consumed immediately and the still-armed 755 then destroys the
     // freshly built model six ticks after it reaches Wait_Play, latches clear, dead forever (runs
     // #7/#8: 754 gone 96ms post-kick, ~9 live frames, rgba_version=1). Arm 755 only when there is
     // actually a model to tear down.
     let model_live =
         unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
     unsafe {
-        // Runs the WHOLE native model-source sequence synchronously: ChrAsm::Copy from the record,
-        // EIGHT `EquipItemBySpecialIndex` clears (edx = {0,1,2,3,6,7,8,9} -- slots 4 and 5 are
-        // skipped, so it is NOT a 0..9 sweep), then equip a freshly-resolved DEFAULT (bare-body)
+        // Runs the whole native model-source sequence synchronously: ChrAsm::Copy from the record,
+        // eight `EquipItemBySpecialIndex` clears (edx = {0,1,2,3,6,7,8,9} -- slots 4 and 5 are
+        // skipped, so it is not a 0..9 sweep), then equip a freshly-resolved default (bare-body)
         // protector into slots 2 (hands) and 3 (legs). Nothing is re-equipped on top: the record's
         // ChrAsm already carries the character's own protector param ids, and the render path resolves
         // armor from those ids alone (see `runtime_chr_asm_image`). What the resulting live ChrAsm
@@ -529,9 +529,9 @@ pub(crate) unsafe fn kick_target_profile_slot(
             set_req_755(renderer);
         }
     }
-    // FACE-IDENTITY SEMAPHORE (user directive 2026-07-06): re-hash the record's inner FaceDataBuffer
+    // Face-identity SEMAPHORE (user directive 2026-07-06): re-hash the record's inner FaceDataBuffer
     // at kick time and compare against the fingerprint stored when the foreign-save preview wrote this
-    // slot. Drift means the portrait model is about to be built from a DIFFERENT character's face than
+    // slot. Drift means the portrait model is about to be built from a different character's face than
     // the one the user picked -- the wrong-head class that previously only human eyes caught (Banon
     // rendered under HopeAfterRainTTV's name across three QA runs). Telemetry-only per the default
     // non-fatal research posture: counters + log line; probe watchers fail-fast on the oracle.
@@ -548,7 +548,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
                 "loading-portrait: FACE-IDENTITY MISMATCH #{n} at build kick slot={slot}: record face hash 0x{got:x} != preview 0x{expected_face:x} -- the portrait would render the WRONG character"
             ));
         }
-        // AND ACT ON IT, not just count it. This comparison is the pipeline's ONLY identity signal
+        // And act on it, not just count it. This comparison is the pipeline's only identity signal
         // whose two sides come from different places (the live record vs a fingerprint taken from
         // the picked save's own bytes at preview time), so it is the only one that can falsify the
         // same-identity bridge hold -- whose own predicate compares slot N's record with slot N's
@@ -559,7 +559,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(renderer, Ordering::SeqCst);
-    // KICK IDENTITY (bd er-effects-rs-dpf6 Phase 1): stamp the target's name hash on the game thread
+    // Kick identity (bd er-effects-rs-dpf6 Phase 1): stamp the target's name hash on the game thread
     // (from the same summary record the kick configures) so the consume worker -- which may not read
     // game memory -- can copy it next to the bridge at publish. `record` == summary record base
     // (name UTF-16 units at +0; verified: kick log record=0x92041c98 == summary 0x92041c80 + 0x18).
@@ -576,46 +576,46 @@ pub(crate) unsafe fn kick_target_profile_slot(
     true
 }
 
-/// [`portrait_loaded_slot_confirmed`] COLLAPSED to a bare slot index, with `0` standing in for
+/// [`portrait_loaded_slot_confirmed`] collapsed to a bare slot index, with `0` standing in for
 /// "nothing named a slot". Routing every portrait site through one loaded-character source is the
-/// er-effects-rs-j3r correlation fix; this form exists only for DISPLAY-side readers where a wrong
+/// er-effects-rs-j3r correlation fix; this form exists only for display-side readers where a wrong
 /// slot reads inert (no model is built for it, so it draws nothing).
 ///
-/// PREFER [`portrait_loaded_slot_confirmed`] AND HANDLE `None`. The `unwrap_or(0)` here is a lie by
-/// omission -- it reports slot 0 with the same confidence as a real answer. Anything that BUILDS,
-/// CAPTURES or PUBLISHES must not use it: the publish gate did, and with no confirmed slot it
+/// Prefer [`portrait_loaded_slot_confirmed`] and handle `None`. The `unwrap_or(0)` here is a lie by
+/// omission -- it reports slot 0 with the same confidence as a real answer. Anything that builds,
+/// captures or publishes must not use it: the publish gate did, and with no confirmed slot it
 /// published slot 0's head as though that were the loaded character (bd er-effects-rs-91zb).
 pub(crate) fn portrait_loaded_slot() -> i32 {
     portrait_loaded_slot_confirmed().unwrap_or(0)
 }
 
-/// The loaded slot ONLY when a real source names it -- `None` while none is valid yet. The BUILD
-/// KICK must use this form: the old fallback-to-0 kicked a
-/// SLOT-0 build ~340ms before ac0 flipped to the real slot (run anim-bind5, kicks #1 slot0 /
-/// #2 slot5), and with the rebuild storm fixed that foreign model now PERSISTS -- the
+/// The loaded slot only when a real source names it -- `None` while none is valid yet. The build
+/// kick must use this form: the old fallback-to-0 kicked a
+/// slot-0 build ~340ms before ac0 flipped to the real slot (run anim-bind5, kicks #1 slot0 /
+/// #2 slot5), and with the rebuild storm fixed that foreign model now persists -- the
 /// `count_live_profile_models == 1` stability gate then blocks the whole live-drive/publish/anim
 /// pipeline for the rest of the load (1 motion sample all window). Display-side readers may still
 /// use the collapsed `portrait_loaded_slot()` form (with no model built, a wrong slot reads inert).
 ///
-/// IMPLEMENTED BUT UNPROVEN (bd er-effects-rs-91zb; needs one live run -- build success and kick
-/// counters prove nothing about which face reached the screen). `GameMan.save_slot` (ac0) is NOT
+/// Implemented but UNPROVEN (bd er-effects-rs-91zb; needs one live run -- build success and kick
+/// counters prove nothing about which face reached the screen). `GameMan.save_slot` (ac0) is not
 /// authoritative for "which character is loading": both the game's own selector and our own
 /// `set_save_slot(picked)` (own_load/loaders.rs, ~5s before the deserialize) write it for reasons
 /// unrelated to that question. Measured 2026-08-02 18:07: the user picked slot 5, ac0 was
-/// correctly set to 5, the native selector then dragged ac0 to 9 while the REQUEST register held
+/// correctly set to 5, the native selector then dragged ac0 to 9 while the request register held
 /// the correct 5 the whole time -- and slot 9's face sat on the loading screen for 29.7 seconds.
 ///
 /// So the sources are consulted strongest-first (see
 /// `er_loading_portrait_core::portrait_target_slot_attributed`, which is host-tested):
 ///   1. the user's explicit on-screen save-picker pick, until that slot's load completes;
-///   2. `GameMan+0xb78`, the native load-REQUEST register -- a load for it is in flight, so ac0
+///   2. `GameMan+0xb78`, the native load-request register -- a load for it is in flight, so ac0
 ///      is stale by definition. `-1` is its no-request sentinel and falls through;
 ///   3. ac0.
 ///
-/// THE `OWN_STEPPER_SLOT` AUTOLOAD HINT IS NO LONGER A SOURCE, AND REMOVING IT IS THE FIX FOR
+/// The `OWN_STEPPER_SLOT` AUTOLOAD hint is no longer a source, and removing it is the fix for
 /// run br-20260831-014208-b1d6. It used to sit at the end of that list as an `.or_else`, i.e. at
 /// the same rank as a measured read -- so when every register was still invalid the window
-/// committed to a CONFIG FILE's opinion and then defended it as though it had observed something:
+/// committed to a CONFIG file's opinion and then defended it as though it had observed something:
 ///
 /// ```text
 /// [+1184ms]   window LATCHED portrait target slot 0 (picker=None b78=None ac0=-1 from_pick=false)
@@ -626,14 +626,14 @@ pub(crate) fn portrait_loaded_slot() -> i32 {
 /// builder used the container's persisted last-used slot -- while slot 0 (`Bonky Bean`) was on
 /// screen, and the latch refused the real ac0 3371 times. A configured hint and an observed fact
 /// are not the same rank of evidence, and when only the hint is available the honest answer is
-/// `None`: no portrait is better than a confidently wrong one. The hint still steers the LOAD
+/// `None`: no portrait is better than a confidently wrong one. The hint still steers the load
 /// (`OWN_STEPPER_SLOT`, `configured_autoload_slot`); it just no longer claims to have seen it.
 pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
         .map(er_save_loader::GameManSaveAccess::save_slot)
         .unwrap_or(OWN_STEPPER_SLOT_NONE);
-    // The user's boot pick outranks everything the game infers -- but ONLY for its own load. The
-    // missing-save picker is a BOOT surface, so its pick is spent the moment the world it asked for
+    // The user's boot pick outranks everything the game infers -- but only for its own load. The
+    // missing-save picker is a boot surface, so its pick is spent the moment the world it asked for
     // exists; `IN_WORLD_REACHED` is the monotonic latch for that and never un-suppresses. Without
     // this bound the stale boot pick would outrank ac0 forever and pin the portrait to the boot
     // character across every later System->Quit->Load switch -- the same wrong-face class in the
@@ -651,8 +651,8 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         Some(ac0),
         TITLE_PROFILE_SLOT_COUNT as i32,
     );
-    // PER-WINDOW LATCH. Everything above is a precedence ordering re-evaluated on every kick, so
-    // its answer can change WHILE a loading screen is on screen -- and when it does, the user
+    // Per-window latch. Everything above is a precedence ordering re-evaluated on every kick, so
+    // its answer can change while a loading screen is on screen -- and when it does, the user
     // watches the face of the character they clicked be replaced by someone else's. Measured
     // 2026-08-02 21:05: picked slot 0, published slot 0 at +17775ms, the picker term expired
     // (spent on IN_WORLD_REACHED = *a* world exists, not *that slot's* world), precedence fell
@@ -660,16 +660,16 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     //
     // The window keeps whatever it first committed to; the reset in
     // `loading_portrait_window_reset_inner` releases it so the next load can differ. Deliberately
-    // NOT an attempt to decide which slot is correct -- that belongs to the load path, and a
+    // not an attempt to decide which slot is correct -- that belongs to the load path, and a
     // portrait that stays wrong for one window beats one that changes identity mid-load.
     let latched = match PORTRAIT_WINDOW_TARGET_SLOT.load(Ordering::SeqCst) {
         0 => None,
         packed => Some((packed - 1) as i32),
     };
-    // WHICH SOURCE the latch rests on, on each side of the decision. A latch yields exactly once
+    // Which source the latch rests on, on each side of the decision. A latch yields exactly once
     // per rank increase, to strictly better evidence: an ac0 read (weakest) yields to the load
-    // REQUEST register and to a pick, a pick yields to nothing. The old boolean form could only
-    // say "pick or not pick", which filed a STALE ac0 read and the user's own click under one
+    // request register and to a pick, a pick yields to nothing. The old boolean form could only
+    // say "pick or not pick", which filed a stale ac0 read and the user's own click under one
     // word -- so the across-save-files switch latched slot 0 off an obsolete ac0 and then refused
     // the b78 that named the real slot 1 (bd er-effects-rs-fmy6).
     let latched_source = er_loading_portrait_core::PortraitSlotSource::from_rank(
@@ -681,7 +681,7 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
         resolved,
     );
     let target = decision.slot;
-    // Stored on EVERY call, not only when latching: a resolution that agrees with the held slot
+    // Stored on every call, not only when latching: a resolution that agrees with the held slot
     // but carries stronger evidence tightens the latch without changing the face, and dropping
     // that upgrade would leave an already-confirmed target movable.
     PORTRAIT_WINDOW_TARGET_SOURCE.store(
@@ -727,7 +727,7 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     target
 }
 
-/// TORN-READBACK score: average absolute VERTICAL luma step across the masked (alpha != 0, i.e. head)
+/// Torn-READBACK score: average absolute vertical luma step across the masked (alpha != 0, i.e. head)
 /// region of a readback RGBA frame. A clean face render varies smoothly row-to-row (small steps); a
 /// torn readback (rows captured mid-GPU-write, no cross-queue sync) has random per-row discontinuities
 /// (large steps -> the scanline garbage the user saw). Returns 0..255. Columns are subsampled by 2 for
@@ -761,13 +761,13 @@ pub(crate) fn portrait_tear_score(cpx: &[u8], w: usize, h: usize) -> usize {
     sum.checked_div(n).unwrap_or(0) as usize
 }
 
-/// The slot whose portrait the loading-screen pipeline should TARGET (spare + render + display): the
-/// character the user just SELECTED for a System->Quit->Load switch
-/// (`SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT`, set at the confirm press -- known BEFORE the deserialize
+/// The slot whose portrait the loading-screen pipeline should target (spare + render + display): the
+/// character the user just selected for a System->Quit->Load switch
+/// (`SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT`, set at the confirm press -- known before the deserialize
 /// flips ac0), falling back to `portrait_loaded_slot()` (ac0 / the boot autoload hint) when no switch
-/// selection is pending. This is what lets the loading portrait show the NEWLY-selected character
+/// selection is pending. This is what lets the loading portrait show the newly-selected character
 /// during the pre-continue window instead of the still-resident old one: at the confirm the new slot's
-/// renderer is already built + live in the ProfileSelect table, so we can spare/render IT, while ac0
+/// renderer is already built + live in the ProfileSelect table, so we can spare/render it, while ac0
 /// still names the old character until the reload deserializes.
 pub(crate) fn portrait_target_slot() -> i32 {
     let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
@@ -780,20 +780,20 @@ pub(crate) fn portrait_target_slot() -> i32 {
     portrait_loaded_slot()
 }
 
-/// Fail-fast CHARACTER-IDENTITY semaphore for the loading-screen portrait (er-effects-rs-j3r; user
-/// directive 2026-07-02: verify IN-GAME, from RAM identity -- NOT rendered pixels -- that the
-/// character our portrait code renders is the one the game actually loaded). Two INDEPENDENT sources:
-///   OUR side  = the ProfileSummary save RECORD of the slot our portrait targets (`render_target_slot`
-///               = `portrait_loaded_slot()`): its stored character NAME + saved MAP (record+0x30).
-///   GAME side = the LIVE loaded character: PlayerGameData NAME (`char_fingerprint`) + GameMan c30 map.
+/// Fail-fast character-identity semaphore for the loading-screen portrait (er-effects-rs-j3r; user
+/// directive 2026-07-02: verify in-game, from RAM identity -- Not rendered pixels -- that the
+/// character our portrait code renders is the one the game actually loaded). Two independent sources:
+///   Our side  = the ProfileSummary save record of the slot our portrait targets (`render_target_slot`
+///               = `portrait_loaded_slot()`): its stored character name + saved map (record+0x30).
+///   Game side = the live loaded character: PlayerGameData name (`char_fingerprint`) + GameMan c30 map.
 /// The save-record table and the in-world character live in distinct memory, so a wrong-slot render (or
-/// a wrong-character load) makes them disagree -- NON-tautological even though our target derives from
-/// ac0 (a slot index): this compares the CHARACTER stored in that slot against who is actually resident.
+/// a wrong-character load) makes them disagree -- Non-tautological even though our target derives from
+/// ac0 (a slot index): this compares the character stored in that slot against who is actually resident.
 /// Determines "is it the expected slot" without any pixel readback (the user's constraint: pixels are
 /// too slow / the wrong tool). On a mismatch (a real character is loaded but its NAME/MAP != our target
 /// slot's record), record the oracle + a crash-log line. Deliberate faulting is release/fail-fast-only;
 /// normal runtime research must leave the game alive so the underlying game/DLL behavior can continue
-/// producing evidence. Gated on a real loaded character AND a real record, so pre-load transients and
+/// producing evidence. Gated on a real loaded character and a real record, so pre-load transients and
 /// empty slots never fire.
 pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     // The new-game / not-yet-resolved saved-map sentinel and the "is this a real packed BlockId"
@@ -801,7 +801,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     use er_loading_portrait_core::portrait_identity::packed_maps_disagree;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
 
-    // GAME side: require a REAL loaded character before asserting anything.
+    // Game side: require a real loaded character before asserting anything.
     if !unsafe { char_fingerprint(base).0 } {
         return; // no real character loaded yet -- pre-load transient.
     }
@@ -822,7 +822,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
         -1
     };
 
-    // OUR side: the save-RECORD identity of the slot our portrait code targets.
+    // Our side: the save-record identity of the slot our portrait code targets.
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&render_target_slot) {
         return;
     }
@@ -838,25 +838,25 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     }
     let our_map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(-1);
 
-    // Compare RAM identities. NAME is the character identity and carries the check on its own.
+    // Compare RAM identities. Name is the character identity and carries the check on its own.
     let name_match = our_len == live_len && our_name[..our_len] == live_name[..live_len];
 
-    // MAP is only a second discriminator, and only when the record is OURS. Both sides are the
-    // same TYPE but not always the same QUANTITY: our foreign-save preview writes record+0x30 from
+    // Map is only a second discriminator, and only when the record is ours. Both sides are the
+    // same type but not always the same QUANTITY: our foreign-save preview writes record+0x30 from
     // the slot body's saved `BlockId` (= exactly what deserializes into c30), whereas a
-    // GAME-written record is filled from `GetCurrentMapId` (`FUN_140262270`). Measured on the
+    // game-written record is filled from `GetCurrentMapId` (`FUN_140262270`). Measured on the
     // corpus: 65 of 726 active slots have body+0x04 = 0x0e000000 while the game's own record says
     // 0x1c000000 -- a systematic, entirely legitimate difference that would fire this semaphore on
     // every one of those characters. `PROFILE_PREVIEW_FACE_HASH[slot] != 0` marks a record our
     // preview wrote with foreign visual data (set in the same call as the +0x30 write, cleared when
     // the preview is dropped), so the map term applies only where the two sides are comparable.
     // It errs toward silence: a preview that wrote +0x30 but could not locate the face leaves the
-    // hash at 0 and the map term off. That is a MISSED detection, never a false alarm, and the NAME
+    // hash at 0 and the map term off. That is a missed detection, never a false alarm, and the name
     // axis still carries the check -- `record_is_ours` is logged so the distinction is visible.
     //
-    // The plausibility test is an areaId RANGE, not the old `> 0` sign gate: a packed BlockId's
+    // The plausibility test is an areaId range, not the old `> 0` sign gate: a packed BlockId's
     // sign bit is just bit 7 of its areaId and means nothing, so garbage with bit31 set silently
-    // switched the map term OFF instead of failing it (2 of the 6 logged FAILs).
+    // switched the map term off instead of failing it (2 of the 6 logged FAILs).
     let record_is_ours =
         PROFILE_PREVIEW_FACE_HASH[render_target_slot as usize].load(Ordering::SeqCst) != 0;
     let map_mismatch = record_is_ours && packed_maps_disagree(our_map, live_map);
@@ -866,7 +866,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
 
     // Self-classifying failure line: everything needed to tell a real wrong-character render from a
     // pre-load transient, without re-deriving it from a second log. Previously our_name/live_name
-    // were in scope and thrown away, so every FAIL had to be re-litigated by hand.
+    // were in scope and thrown away, so every fail had to be re-litigated by hand.
     let gm_ptr = game_man_ptr_or_null();
     let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
         .map(er_save_loader::GameManSaveAccess::save_slot)
@@ -878,9 +878,9 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
     };
     let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
     let fresh_deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst);
-    // WHERE THE TARGET CAME FROM, in the same line as the mismatch it caused. `ac0`/`b78` above
-    // are what the registers read NOW; the window latched its target once, possibly minutes
-    // earlier, from whatever they read THEN -- and the two answers being different is the entire
+    // Where the target came from, in the same line as the mismatch it caused. `ac0`/`b78` above
+    // are what the registers read now; the window latched its target once, possibly minutes
+    // earlier, from whatever they read then -- and the two answers being different is the entire
     // failure mode this semaphore keeps catching. Diagnosing br-20260831-014208-b1d6 meant
     // finding the `window LATCHED` line 12,000 lines away in a 1.9 GB log to learn that the latch
     // had been taken with every source invalid. That provenance belongs here.
@@ -900,7 +900,7 @@ pub(crate) unsafe fn portrait_render_slot_semaphore(base: usize, render_target_s
         "window_latch={window_latch} window_src={window_src} from_pick={window_from_pick} promotions={window_promotions} retargets_suppressed={window_suppressed}"
     );
     let cond = ((!name_match) as usize) | ((map_mismatch as usize) << 1);
-    // areaId (the high byte), NOT `& 0xff` -- the low byte of a packed BlockId is the indexId and
+    // areaId (the high byte), not `& 0xff` -- the low byte of a packed BlockId is the indexId and
     // is 0 on nearly every real map, so the old packing threw away the only discriminating byte.
     PORTRAIT_RENDER_SEMAPHORE_STATE.store(
         ((render_target_slot as u32 as usize) << 16)
@@ -946,33 +946,33 @@ pub(crate) struct SystemQuitSaveSwapState {
     pub(crate) candidate_stats_utf16: Vec<Vec<u16>>,
     pub(crate) preview_applied: bool,
     pub(crate) committed: bool,
-    /// The candidate bytes were written a SECOND time, after the game's return-title save finished
+    /// The candidate bytes were written a second time, after the game's return-title save finished
     /// (same-slot clobber fix; see `system_quit_save_swap_recommit_after_return_title_save`).
     pub(crate) recommitted: bool,
     pub(crate) summary_ptr: usize,
     pub(crate) summary_snapshot: Vec<u8>,
-    // --- SAVE-PICKER ROW STAGING. A SEPARATE CONCERN FROM THE PREVIEW ABOVE ---------------------
+    // --- Save-PICKER row staging. A separate concern from the preview above ---------------------
     //
-    // The in-game file picker renders its browse rows by writing them INTO the live
+    // The in-game file picker renders its browse rows by writing them into the live
     // `CS::ProfileSummary`: `save_picker_write_row_records` memsets each 0x2a0-byte record to zero
     // and copies the row label into the name field. That destroys the game's own records -- face
     // data (+0x38), ChrAsm (+0x1a8), level (+0x24), map (+0x30) -- and they must be put back when
-    // the picker is done, on EVERY exit: close, commit, and abort.
+    // the picker is done, on every exit: close, commit, and abort.
     //
-    // THIS USED TO RIDE ON `preview_applied`/`committed` AND THAT CONFLATION WAS THE BUG. Row
+    // This used to ride on `preview_applied`/`committed` and that CONFLATION was the bug. Row
     // staging and the foreign-save preview are different things that happen to write the same
-    // allocation, but only the PREVIEW may be suppressed by `committed` (a committed preview must
+    // allocation, but only the preview may be suppressed by `committed` (a committed preview must
     // survive to be loaded). Sharing one bit meant an earlier cross-file load commit set
     // `committed` -- which nothing resets except the tail of the restore it was blocking -- and
     // every later picker's rows were then left in the records for the rest of the process. The
     // user's loading screens rendered `[..] EldenRing` and `[ new ]` as character names.
     //
-    // So the staging keeps its OWN latch and its OWN snapshot, restored unconditionally.
+    // So the staging keeps its own latch and its own snapshot, restored unconditionally.
     /// The live ProfileSummary currently holds picker browse-row labels, not the game's records.
     pub(crate) rows_staged: bool,
     /// The allocation `rows_snapshot` was taken from; a restore refuses to write anywhere else.
     pub(crate) rows_summary_ptr: usize,
-    /// The `PROFILE_SUMMARY_TOTAL_BYTES` image of that allocation as it looked BEFORE the first
+    /// The `PROFILE_SUMMARY_TOTAL_BYTES` image of that allocation as it looked before the first
     /// staging of the current picker session. Re-taken per session (the latch is cleared by every
     /// restore), never a process-lifetime latch -- a stale one would resurrect a previous save
     /// container's records, which is the other half of `er-effects-rs-fmy6`.
@@ -1023,7 +1023,7 @@ pub(crate) fn system_quit_save_swap_arm_original(path: &str) -> bool {
     };
     let hash = system_quit_hash_bytes(&bytes);
     let mut st = system_quit_save_swap_lock();
-    // CARRY THE ROW-STAGING SNAPSHOT ACROSS THIS RESET. Arming is a SAVE-FILE concern and this
+    // Carry the row-staging snapshot across this reset. Arming is a save-file concern and this
     // wholesale reset is how the preview's bookkeeping is cleared, but the picker's staged rows are
     // live UI state that can already be on screen when a re-arm happens. Dropping their snapshot
     // here would leave labels in the records with nothing left to restore them from.

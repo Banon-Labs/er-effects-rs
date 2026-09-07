@@ -1,6 +1,6 @@
 //! Serialise to JSON that is pure ASCII, with every other character as a `\uXXXX` escape.
 //!
-//! WHY, because it is not a style choice. The planner serialises with
+//! Why, because it is not a style choice. The planner serialises with
 //! `btoa(JSON.stringify(character))`, and `btoa` throws `InvalidCharacterError` on any code
 //! unit above 255 -- so a build named with an acute accent, let alone katakana, cannot be
 //! shared from the site at all. This crate has no such excuse to fail: it can escape those

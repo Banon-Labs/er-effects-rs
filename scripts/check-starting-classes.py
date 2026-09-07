@@ -2,7 +2,7 @@
 """Re-derive the starting-class table from the installed game and fail if the source disagrees.
 
 `er-build-import-core`'s `STARTING_CLASSES` is a hand-written list indexed by
-`PlayerGameData::archetype`. Nothing in Rust can notice when the GAME grows a class:
+`PlayerGameData::archetype`. Nothing in Rust can notice when the game grows a class:
 1.17 added `CharaInitParam` 3010/3011 ("Idus Knight", "Heavy Knight"), the list was a
 `[&str; 10]`, and `class_for_archetype` answered `None` -- so build export dropped the
 class and import never set one, with no panic and no log line either way.
@@ -14,13 +14,13 @@ no dotnet, no Smithbox, no paramdef) so it can sit in `scripts/check.sh`.
 What it proves, from the game's own data:
 
   * `BaseChrSelectMenuParam`'s class rows (field 0 == 1) carry the `CharaInitParam` row
-    id in field 2 and the `GR_MenuText` message id in field 4. Their COUNT is the number
+    id in field 2 and the `GR_MenuText` message id in field 4. Their count is the number
     of starting classes -- compared against the Rust list's length.
   * Every archetype 0..N maps to `CharaInitParam` row 3000+archetype, and that row exists.
-  * Row 3000+N does NOT exist -- the assertion the old doctest made as the literal
+  * Row 3000+N does not exist -- the assertion the old doctest made as the literal
     `class_for_archetype(10) == None`, restated so a patch moves it instead of falsifying it.
   * The message id is `288100 + archetype` for every class row.
-  * With an extracted `GR_MenuText.fmg.xml` reachable, the STRING at each of those ids
+  * With an extracted `GR_MenuText.fmg.xml` reachable, the string at each of those ids
     equals the Rust list's name at that archetype -- the spelling, not just the count.
 
 Usage:
@@ -89,7 +89,7 @@ def load_regulation_reader():
 
 
 #: Explicit opt-out for an environment that genuinely cannot have the game installed (CI).
-#: Set to 1 to downgrade a missing regulation from a failure to a PRINTED skip. Absent this,
+#: Set to 1 to downgrade a missing regulation from a failure to a printed skip. Absent this,
 #: a missing regulation is exit 2 -- "could not look" must never read as "agreed".
 ALLOW_MISSING_REGULATION_ENV = "ER_ALLOW_MISSING_REGULATION"
 
@@ -175,7 +175,7 @@ def rust_starting_stats(path: str) -> list[tuple[int, list[int]]] | None:
 
     Parsed rather than imported, for the same reason `rust_class_list` is. Returns None
     when the const is not there, which the caller reports as a failure: this table stopped
-    being test-only on 2026-09-06 and is now the per-attribute FLOOR the build importer
+    being test-only on 2026-09-06 and is now the per-attribute floor the build importer
     holds a character to, so "could not look" must not read as "agreed".
     """
     with open(path, encoding="utf-8") as handle:
@@ -261,7 +261,7 @@ def check_starting_stats(chara_rows, listed, class_rs, failures, quiet):
                 f"{got_attributes}"
             )
         # The arithmetic invariant the importer derives every level from. Checked against the
-        # GAME's numbers rather than the table's, so it is evidence and not a tautology.
+        # game's numbers rather than the table's, so it is evidence and not a tautology.
         total = sum(got_attributes)
         if total - CLASS_INVARIANT != got_level:
             failures.append(
@@ -300,7 +300,7 @@ def menu_fmg_candidates(explicit: str | None) -> list[str]:
 
     Extracted game assets never live in this repo (they are game-derived binaries), so
     this walks an env-overridable root instead of hard-coding one person's extraction.
-    A root routinely holds SEVERAL versions side by side -- the drift audit's own corpus
+    A root routinely holds several versions side by side -- the drift audit's own corpus
     has a `v1162` and a `v1170` tree with identical mtimes -- so this returns every
     candidate and the caller picks the one that can actually answer, rather than betting
     on a timestamp.
@@ -390,7 +390,7 @@ def main() -> int:
             failures.append(f"archetype {index} ({listed[index]!r}) wants BaseChrSelectMenuParam to reference CharaInitParam {row_id}, which it does not")
 
     # The old doctest's `class_for_archetype(10) == None`, restated against live data so a
-    # patch that adds a class breaks THIS instead of quietly making the literal wrong.
+    # patch that adds a class breaks this instead of quietly making the literal wrong.
     past_the_end = FIRST_CHARA_INIT_PARAM_ROW + len(listed)
     if past_the_end in chara_rows:
         failures.append(

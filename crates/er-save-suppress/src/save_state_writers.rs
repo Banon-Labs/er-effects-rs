@@ -1,29 +1,29 @@
-// THE REST OF THE `saveState` WRITER SET -- the three writes `save_state_witness.rs` could not see,
+// The rest of the `saveState` writer set -- the three writes `save_state_witness.rs` could not see,
 // and the counter that says when the answer is "none of them".
 //
 // `include!`d into `lib.rs` like the blocks around it. `save_state_witness.rs` chains observers onto
 // the two wrappers that were reachable when it was written; this file completes the set, using the
-// SAME mechanism (a union-chained observer that samples `saveState` and the SL device either side of
+// same mechanism (a union-chained observer that samples `saveState` and the SL device either side of
 // the call, forwards every argument and changes no return value). It adds no new kind of instrument.
 //
-// WHY IT EXISTS. The 2026-08-31 wedge is not a stranded save: at the instant `saveState` went 1 -> 0
-// the game's own poll `FUN_140e6e430` answered STATUS 1 on the latched request, and 250 ms later the
-// same poll answered 0 and released the device. So the write landed WHILE the SL worker was still
+// Why it exists. The 2026-08-31 wedge is not a stranded save: at the instant `saveState` went 1 -> 0
+// the game's own poll `FUN_140e6e430` answered status 1 on the latched request, and 250 ms later the
+// same poll answered 0 and released the device. So the write landed while the SL worker was still
 // writing, and the two witnessed wrappers reported `abandoning_writes = 0` in the very run that
 // wedged. The remaining writes had to be enumerated from the image rather than guessed at.
 //
-// THE COMPLETE WRITER SET, byte-scanned on BOTH images and paired (`mov [reg+0xb80], imm/reg`, every
+// The complete writer set, byte-scanned on both images and paired (`mov [reg+0xb80], imm/reg`, every
 // store form including the register one an immediate-only scan misses). 22 stores in each image,
-// pairing EXACTLY at +0xE50 with no 1.17-only writer and none missing -- so the 1.17 game this branch
+// pairing exactly at +0xE50 with no 1.17-only writer and none missing -- so the 1.17 game this branch
 // targets has the same writers as the 1.16.2 decompiles below describe:
 //
 //   1.16.2      1.17        function                who can reach it                       witnessed
 //   0x677f5d    0x678dad    FUN_140677f40           DoSaveStuff under `IsSaveState7`        no (*)
-//   0x678e28    0x679c78    FUN_140678e00           MenuJob step FUN_14082a450              THIS FILE
+//   0x678e28    0x679c78    FUN_140678e00           MenuJob step FUN_14082a450              this file
 //   0x6791a2..  0x679ff2..  FUN_140679180           load poll (3 and 0)                     witness
-//   0x6794ee    0x67a33e    FUN_1406794b0           MenuJob step FUN_14082a0f0              THIS FILE
+//   0x6794ee    0x67a33e    FUN_1406794b0           MenuJob step FUN_14082a0f0              this file
 //   0x67954b    0x67a39b    FUN_140679510           DoSaveStuff / FUN_14082a0f0             witness
-//   0x67ac97    0x67bae7    FUN_14067ac90           `SetSaveState(int)` -- see below        THIS FILE
+//   0x67ac97    0x67bae7    FUN_14067ac90           `SetSaveState(int)` -- see below        this file
 //   0x67b08f..  0x67bedf..  submit builders         each guarded on `saveState == 0`        n/a
 //   0x67b125/61 0x67bf75/b1 FUN_14067b100           guarded on `saveState == 3`             n/a
 //
@@ -32,21 +32,21 @@
 //       `DoSaveStuff` takes the `IsSaveState1` arm instead. The three arms are mutually exclusive
 //       in one `if/else if/else`, so this is exclusion by the caller's own structure.
 //
-// THE ONE THAT IS NOT A POLL WRAPPER, and the reason this file is worth the hooks:
+// The one that is not a poll wrapper, and the reason this file is worth the hooks:
 // `FUN_14067ac90` is `GameMan::SetSaveState(int)` -- 14 bytes, `MOV RAX,[0x143d69918];
-// MOV [RAX+0xb80],ECX; RET`. It is the only store to the field that writes a REGISTER rather than an
-// immediate, and its ONE caller in the whole image is `FUN_140aff640`, the per-frame in-map
+// MOV [RAX+0xb80],ECX; RET`. It is the only store to the field that writes a register rather than an
+// immediate, and its one caller in the whole image is `FUN_140aff640`, the per-frame in-map
 // `MoveMapStep` tick, three statements after `DoSaveStuff` and `FUN_140afb880`:
 //
 //     MOVSS  XMM6,[RDI+0x8]            ; the frame delta
-//     CALL   0x14067a080               ; IsSaveStateIdle()
-//     TEST   AL,AL / JNZ  ...          ; idle -> skip
-//     ADDSS  XMM6,[RBX+0x130]          ; accumulate, ONLY while a transaction owns the device
+//     call   0x14067a080               ; IsSaveStateIdle()
+//     test   AL,AL / JNZ  ...          ; idle -> skip
+//     ADDSS  XMM6,[RBX+0x130]          ; accumulate, only while a transaction owns the device
 //     COMISS XMM6,[0x142b60870]        ; == 210.0f
 //     MOVSS  [RBX+0x130],XMM6
 //     JBE    ...
 //     MOV    [RBX+0x130],ESI           ; acc = 0
-//     CALL   0x14067ac90               ; SetSaveState(0)   <-- releases NOTHING
+//     call   0x14067ac90               ; SetSaveState(0)   <-- releases nothing
 //
 // That is a WATCHDOG: 210 seconds of continuously non-idle `saveState` and the field is forced to 0
 // with the SL device untouched, which is the wedge signature exactly. The accumulator at
@@ -54,26 +54,26 @@
 // `IsSaveStateIdle` gate -- so nothing can reset it while a transaction is in flight and the deadline
 // is unconditional once the clock starts.
 //
-// IT IS NOT THE 2026-08-31 WRITER, and saying so is the point of measuring rather than assuming: that
+// It is not the 2026-08-31 writer, and saying so is the point of measuring rather than assuming: that
 // run reached the world at +59230 ms and the wedge was first visible at +84123 ms, so at most ~25 s
 // could have accumulated against a 210 s threshold. The hook is here because a writer nobody had
-// named is worth an oracle whatever this run says, and because a run that DOES exceed 210 s (a long
+// named is worth an oracle whatever this run says, and because a run that does exceed 210 s (a long
 // session, a stalled worker) has no other way to tell this apart from every other cause.
 //
-// AND THE COUNTER THAT MAKES A NEGATIVE WORTH SOMETHING. With these three the witnessed set covers
-// every store in the image that can take `saveState` off 1. `writer_state_exits` counts, across ALL
+// And the counter that makes a negative worth something. With these three the witnessed set covers
+// every store in the image that can take `saveState` off 1. `writer_state_exits` counts, across all
 // witnessed sites, the calls that observed `saveState` leave `SAVE_OWNS` -- device irrelevant, so it
 // cannot be argued away by the device sample. If a wedge is born with that count at zero and the
 // sites installed, the write did not come through any of them, and the next thing to doubt is the
 // model (the field, the singleton, our own writers) rather than another arm of another poll.
 
-/// `FUN_140678e00` (1.16.2) -- the MenuJob load-save-data WAIT step's poll wrapper. Calls
+/// `FUN_140678e00` (1.16.2) -- the MenuJob load-save-data wait step's poll wrapper. Calls
 /// `FUN_140e6de10` on the SL device and writes `saveState = 0` for any answer that is not 1. Its one
 /// caller is `FUN_14082a450`, a `MenuJobResult` step, which is exactly the pipeline the 2026-08-31
-/// wedge window contains. 1.17 `0x140679c50`, IDENTICAL-WHOLE over 14 instructions, BOTH-ENTRIES.
+/// wedge window contains. 1.17 `0x140679c50`, identical-whole over 14 instructions, both-entries.
 const SAVE_STATE_MENUJOB_LOADWAIT_RVA: usize = 0x678e00;
 
-/// `FUN_1406794b0` (1.16.2) -- the ALTERNATE save-wait wrapper, and the reason the original witness
+/// `FUN_1406794b0` (1.16.2) -- the alternate save-wait wrapper, and the reason the original witness
 /// could miss a save-side write entirely. Its one caller `FUN_14082a0f0` picks between it and
 /// `FUN_140679510` on a float at `MenuJob+0x8`:
 ///
@@ -84,13 +84,13 @@ const SAVE_STATE_MENUJOB_LOADWAIT_RVA: usize = 0x678e00;
 /// Both poll `FUN_140e6e430` and both write `saveState = 0` on a non-1 answer; only the second also
 /// clears `GameMan+0xbb8` and increments `GameMan+0xbc0`. The witness hooks the first, so on any
 /// frame the float is positive the save-side write happened where nothing was looking.
-/// 1.17 `0x14067a300`, IDENTICAL-WHOLE over 18 instructions, BOTH-ENTRIES.
+/// 1.17 `0x14067a300`, identical-whole over 18 instructions, both-entries.
 const SAVE_STATE_SAVE_LANE_ALT_RVA: usize = 0x6794b0;
 
 /// `FUN_14067ac90` (1.16.2) -- `GameMan::SetSaveState(int)`, the watchdog's setter. See the header:
 /// the only register store to the field, one caller, and the caller is a 210-second deadline.
-/// 1.17 `0x14067bae0`, IDENTICAL-LEAF over 3 instructions (neither image declares it in `.pdata`;
-/// both decoded to the same 0xe bytes), NEITHER-ENTRY.
+/// 1.17 `0x14067bae0`, identical-leaf over 3 instructions (neither image declares it in `.pdata`;
+/// both decoded to the same 0xe bytes), neither-entry.
 const SAVE_STATE_SETTER_RVA: usize = 0x67ac90;
 
 /// The MenuJob load-save-data wait step `FUN_140678e00` was the writer.
@@ -107,7 +107,7 @@ static SAVE_STATE_MENUJOB_LOADWAIT_CALLS: AtomicU64 = AtomicU64::new(0);
 static SAVE_STATE_SAVE_LANE_ALT_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Calls forwarded through `GameMan::SetSaveState`.
 static SAVE_STATE_SETTER_CALLS: AtomicU64 = AtomicU64::new(0);
-/// The value the FIRST `SetSaveState` call was asked to write ([`SAVE_STATE_ARG_UNOBSERVED`] until
+/// The value the first `SetSaveState` call was asked to write ([`SAVE_STATE_ARG_UNOBSERVED`] until
 /// one happens). The watchdog always passes 0, so anything else says the setter has a caller the
 /// image scan did not find.
 static SAVE_STATE_SETTER_FIRST_ARG: AtomicU32 = AtomicU32::new(SAVE_STATE_ARG_UNOBSERVED);
@@ -118,15 +118,15 @@ static SAVE_STATE_SETTER_FIRST_MS: AtomicU64 = AtomicU64::new(ELAPSED_MS_UNAVAIL
 /// it cannot be mistaken for a measured 0 -- the distinction the whole instrument turns on.
 pub const SAVE_STATE_ARG_UNOBSERVED: u32 = u32::MAX;
 
-/// Witnessed writer sites that actually installed. Zero means NONE of them did, which is a different
+/// Witnessed writer sites that actually installed. Zero means none of them did, which is a different
 /// verdict from every counter reading zero because nothing happened.
 static SAVE_STATE_WRITER_SITES_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Calls forwarded through ANY witnessed writer site, all five wrappers and the setter.
+/// Calls forwarded through any witnessed writer site, all five wrappers and the setter.
 static SAVE_STATE_WRITER_CALLS: AtomicU64 = AtomicU64::new(0);
-/// Witnessed calls that observed `saveState` LEAVE `SAVE_OWNS` across themselves.
+/// Witnessed calls that observed `saveState` leave `SAVE_OWNS` across themselves.
 ///
 /// Deliberately blind to the device, unlike [`poll_abandoned_a_save`]. A healthy completion also
-/// leaves `SAVE_OWNS` and is counted here, which is what makes a ZERO meaningful: it says no
+/// leaves `SAVE_OWNS` and is counted here, which is what makes a zero meaningful: it says no
 /// witnessed writer moved the field off 1 at all, so a wedge that exists anyway was not written by
 /// one of them.
 static SAVE_STATE_WRITER_STATE_EXITS: AtomicU64 = AtomicU64::new(0);
@@ -165,7 +165,7 @@ fn snapshot_writers_at_wedge() {
     );
 }
 
-/// Did the wedge's `saveState` write come from OUTSIDE every witnessed site?
+/// Did the wedge's `saveState` write come from outside every witnessed site?
 ///
 /// `None` when the question cannot be asked: no site installed (so silence proves nothing), or no
 /// wedge was seen (so there is nothing to attribute). `Some(true)` is the decisive negative -- the
@@ -184,7 +184,7 @@ pub fn wedge_writer_is_outside_the_witnessed_set(
     Some(exits_at_wedge == 0)
 }
 
-/// Calls forwarded through `FUN_140678e00`. Zero WITH sites installed means the MenuJob load-save-data
+/// Calls forwarded through `FUN_140678e00`. Zero with sites installed means the MenuJob load-save-data
 /// wait step never ran; zero with none installed means nothing was watching.
 pub fn save_state_menujob_loadwait_calls() -> u64 {
     SAVE_STATE_MENUJOB_LOADWAIT_CALLS.load(Ordering::SeqCst)
@@ -309,7 +309,7 @@ unsafe extern "system" fn save_state_save_lane_alt_witness(
 
 /// Forward `GameMan::SetSaveState(int)`, recording the value it was asked to write.
 ///
-/// NOT `witness_call`: that one exists for a poll WRAPPER, whose answer is its return value and
+/// Not `witness_call`: that one exists for a poll wrapper, whose answer is its return value and
 /// whose write is a consequence. This is the write itself, so the argument in `ECX` is the finding
 /// and there is no answer to report. Everything else is the same shape -- forward unchanged, sample
 /// either side, never write the field.
@@ -351,7 +351,7 @@ unsafe extern "system" fn save_state_setter_witness(
         .is_ok()
     {
         SAVE_STATE_SETTER_FIRST_MS.store(stamp, Ordering::SeqCst);
-        // ALWAYS on the first call. The only caller in the image is a 210-second deadline that
+        // Always on the first call. The only caller in the image is a 210-second deadline that
         // releases nothing, so its first firing is the most consequential line this crate can emit.
         log_message(format_args!(
             "suppress: GameMan::SetSaveState({requested}) CALLED (#{calls}) -- the only caller in \
@@ -412,7 +412,7 @@ pub fn install_save_state_writers() {
             "GameMan::SetSaveState 0x67ac90",
         ),
     ] {
-        // NON-RESOLVING on purpose (`game_rva_for_hook`), like `install_save_state_witness`:
+        // Non-resolving on purpose (`game_rva_for_hook`), like `install_save_state_witness`:
         // `register_union_hook` owns the single resolve, and resolving twice can land the detour on
         // a third function in silence.
         let Ok(address) = er_game_base::mem::game_rva_for_hook(rva as u32) else {
@@ -438,7 +438,7 @@ pub fn install_save_state_writers() {
     }
 }
 
-// The rules this file adds are decisions about what a pair of counters MEANS, not readings of a
+// The rules this file adds are decisions about what a pair of counters means, not readings of a
 // runtime value, so they are exercised with no game attached -- the same reason
 // `poll_abandoned_a_save` and `dispatch_sample_is_wedged` are.
 #[cfg(test)]
@@ -448,13 +448,13 @@ mod save_state_writers_tests {
     /// The decisive negative, and the two ways of refusing to draw it.
     #[test]
     fn a_wedge_with_no_witnessed_state_exit_indicts_the_model_not_a_site() {
-        // THE FINDING: sites installed, a wedge recorded, and not one witnessed call moved
+        // The FINDING: sites installed, a wedge recorded, and not one witnessed call moved
         // `saveState` off 1 before it.
         assert_eq!(
             wedge_writer_is_outside_the_witnessed_set(6, 0),
             Some(true)
         );
-        // A witnessed writer DID move it: the attribution fields say which, and this verdict must
+        // A witnessed writer did move it: the attribution fields say which, and this verdict must
         // not claim otherwise.
         assert_eq!(
             wedge_writer_is_outside_the_witnessed_set(6, 3),
@@ -476,7 +476,7 @@ mod save_state_writers_tests {
         );
     }
 
-    /// Every one of the counters this file adds must read as ABSENT before anything runs, never as a
+    /// Every one of the counters this file adds must read as absent before anything runs, never as a
     /// measured zero -- the property `_load_poll_calls`/`_save_lane_calls` carry for the original
     /// witness, restated for the fields that have no counter of their own.
     #[test]
@@ -492,11 +492,11 @@ mod save_state_writers_tests {
         assert_ne!(SAVE_STATE_ARG_UNOBSERVED, GAME_MAN_SAVE_STATE_SAVE_OWNS);
         assert_ne!(SAVE_STATE_ARG_UNOBSERVED, GAME_MAN_SAVE_STATE_LOAD_OWNS);
         assert_ne!(SAVE_STATE_ARG_UNOBSERVED, GAME_MAN_SAVE_STATE_LOAD_RESIDENT);
-        // The verdict must SAY it is silent for lack of an instrument, not report a clean run.
+        // The verdict must say it is silent for lack of an instrument, not report a clean run.
         assert!(wedge_writer_verdict().contains("no writer site installed"));
     }
 
-    /// `note_writer_call` counts an EXIT from `SAVE_OWNS` and nothing else, because a count that
+    /// `note_writer_call` counts an exit from `SAVE_OWNS` and nothing else, because a count that
     /// also fired on healthy polling could never make a zero mean anything.
     #[test]
     fn only_leaving_save_owns_counts_as_a_writer_state_exit() {
@@ -515,7 +515,7 @@ mod save_state_writers_tests {
         note_writer_call(None, Some(GAME_MAN_SAVE_STATE_IDLE));
         note_writer_call(Some(GAME_MAN_SAVE_STATE_SAVE_OWNS), None);
         assert_eq!(save_state_writer_state_exits(), before + 1);
-        // ...and that last one WAS an exit: 1 -> unreadable is still a departure from SAVE_OWNS,
+        // ...and that last one was an exit: 1 -> unreadable is still a departure from SAVE_OWNS,
         // and pretending otherwise would let an unreadable sample hide the write.
         note_writer_call(
             Some(GAME_MAN_SAVE_STATE_SAVE_OWNS),
@@ -541,7 +541,7 @@ mod save_state_writers_tests {
         .map(save_state_site_label)
         .collect();
         for (i, label) in labels.iter().enumerate() {
-            // Index 0 IS the unknown site and is named "none" on purpose; every other index must
+            // Index 0 is the unknown site and is named "none" on purpose; every other index must
             // have earned a name of its own rather than falling through to it.
             if i > 0 {
                 assert_ne!(*label, "none", "site {i} fell through to the unknown label");
@@ -550,7 +550,7 @@ mod save_state_writers_tests {
         }
     }
 
-    /// None of the three new sites may write the field. Only the LOAD poll repairs, and that
+    /// None of the three new sites may write the field. Only the load poll repairs, and that
     /// decision is about which native branch is being undone -- adding sites must not widen it.
     #[test]
     fn no_new_writer_site_touches_game_memory() {

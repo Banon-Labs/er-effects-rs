@@ -2,17 +2,17 @@
 """Derive semaphore gates from a passive controller-input trace.
 
 Reads er-quickload-input-trace.jsonl (written by the DLL's input-trace mode: pad-edge rows with
-embedded semaphore snapshots + change-detected sem rows) and, for every button PRESS, answers:
+embedded semaphore snapshots + change-detected sem rows) and, for every button press, answers:
 "what semaphore state was the user waiting for before this press?"
 
 For each press it reports:
   - the full semaphore snapshot at the press
-  - the delta vs the semaphore snapshot at the PREVIOUS press (what changed while the user waited)
-  - the LAST semaphore transition before the press and how long after it the press came
-    (a short gap => that transition IS the gate the user was waiting on)
+  - the delta vs the semaphore snapshot at the previous press (what changed while the user waited)
+  - the last semaphore transition before the press and how long after it the press came
+    (a short gap => that transition is the gate the user was waiting on)
   - the wait time since the previous press
 
-Output: human-readable report on stdout and, with --json OUT, a machine-usable gate list for
+Output: human-readable report on stdout and, with --json out, a machine-usable gate list for
 mapping the flow onto the zero-input self-drive stepper.
 
 Usage:

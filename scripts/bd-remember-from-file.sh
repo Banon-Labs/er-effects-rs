@@ -5,7 +5,7 @@
 # reverse-engineering note is exactly the kind of text that does not survive
 # being typed on a command line: backticks, `*(this+0x8b0)`, quotes and newlines
 # all get mangled or eaten by the shell before bd sees them. Writing the note to
-# a file and passing the PATH keeps the bytes intact.
+# a file and passing the path keeps the bytes intact.
 #
 #   scripts/bd-remember-from-file.sh <key> <path-to-note>
 #

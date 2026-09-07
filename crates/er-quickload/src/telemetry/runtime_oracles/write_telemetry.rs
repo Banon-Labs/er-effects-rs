@@ -1,4 +1,4 @@
-/// The shared `EffectsState`, published so a thread that is NOT the game task can attempt a
+/// The shared `EffectsState`, published so a thread that is not the game task can attempt a
 /// telemetry flush.
 ///
 /// Publishing shared mutable state as a global is a real cost and it is paid for one reason: the
@@ -7,9 +7,9 @@
 /// theoretical limit -- run pr109-boot-oscancel-20260730-110704 shipped a telemetry file that was
 /// 12 seconds stale at the moment it became the only surviving record.
 ///
-/// THE ONLY SANCTIONED ACCESS IS [`try_write_telemetry_off_game_task`], and it uses `try_lock`.
+/// The only sanctioned access is [`try_write_telemetry_off_game_task`], and it uses `try_lock`.
 /// Never add a blocking `lock()` on this handle: the thread that reaches for it is typically doing
-/// so BECAUSE the game task may be wedged, and a wedged task holding this mutex would convert a
+/// so because the game task may be wedged, and a wedged task holding this mutex would convert a
 /// stale-file problem into a hung process.
 static PUBLISHED_EFFECTS_STATE: std::sync::OnceLock<Arc<Mutex<EffectsState>>> =
     std::sync::OnceLock::new();
@@ -95,11 +95,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
     body.push_str(&format!("  \"runtime_mode\": \"{runtime_mode}\",\n"));
     body.push_str(&format!("  \"seamless_coop_loaded\": {seamless_loaded},\n"));
-    // THE VEH stack-overflow semaphore. Non-zero means describing one fault faulted again on the
+    // The VEH stack-overflow semaphore. Non-zero means describing one fault faulted again on the
     // same thread and the re-entrancy latch caught it. Before the latch that descent cost 4704
-    // bytes of stack per level and killed the process with NO crash record at all -- Wine cannot
+    // bytes of stack per level and killed the process with no crash record at all -- Wine cannot
     // raise an exception it has no stack to build a frame for, so it calls `abort_thread` instead.
-    // A run reporting a fault AND a non-zero refusal count is saying the FIRST `access-violation`
+    // A run reporting a fault and a non-zero refusal count is saying the first `access-violation`
     // line in the crash log is the real one and the rest were the handler tripping over itself.
     body.push_str(&format!(
         "  \"oracle_veh_reentrant_refusals\": {},\n",
@@ -170,16 +170,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_cold_char_mount_phase\": {},\n",
         crate::experiments::COLD_CHAR_MOUNT_PHASE_PUB.load(Ordering::SeqCst)
     ));
-    // OWN-LOAD verify-only probe progress as phase+1 (0 = never ran, 2 = PHASE_DONE = terminal,
+    // Own-load verify-only probe progress as phase+1 (0 = never ran, 2 = PHASE_DONE = terminal,
     // evidence collected). The readiness watcher tears down on the terminal value, not the cap.
     body.push_str(&format!(
         "  \"oracle_own_load_phase\": {},\n",
         crate::experiments::OWN_LOAD_PHASE_PUB.load(Ordering::SeqCst)
     ));
-    // OWN-LOAD per-frame world-stream stall telemetry (own-load-reaches-loading-screen-2026-06-22 /
+    // Own-load per-frame world-stream stall telemetry (own-load-reaches-loading-screen-2026-06-22 /
     // full-pipeline-traced-to-worldreswait-map-block-streaming). After own_load_continue fires
-    // continue_confirm/SetState5 the engine reaches the real-char LOADING SCREEN but STALLS; these
-    // mirror the deepest world-load pump values so the readiness watcher / agent can see whether ANY
+    // continue_confirm/SetState5 the engine reaches the real-char loading screen but stalls; these
+    // mirror the deepest world-load pump values so the readiness watcher / agent can see whether any
     // advances (progress) or all are frozen (genuine stall). UNREAD sentinel -> JSON null (the chain
     // pointer was null / RPM faulted, distinct from a real 0). All hex except the count fields.
     let fmt_stream = |v: i64, hex: bool| -> String {
@@ -368,23 +368,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             (title_owner_state_bits as u32 as i32).to_string()
         }
     ));
-    // ENDING-LATCH RESIDUAL, AS A RAM ORACLE (2026-09-04, re-grounded on 1.17 the same day).
+    // Ending-latch residual, as a RAM oracle (2026-09-04, re-grounded on 1.17 the same day).
     //
-    // `menuData+0x5e` is the MoveMapStep ending flag. Confirmed on the INSTALLED build (1.17 dump on
+    // `menuData+0x5e` is the MoveMapStep ending flag. Confirmed on the installed build (1.17 dump on
     // :8767, identity-checked against `eldenring-deobf-1.17.bin`, shift 0): the evaluator
     // `FUN_140afb9f0` writes it unconditionally on every call as `MOV byte ptr [RAX + 0x5e], BL`
-    // @ `0x140afbd0c`, where `RAX = *(CSMenuMan + 8)`; `+0x5d` (return-title REQUEST) is one of the
+    // @ `0x140afbd0c`, where `RAX = *(CSMenuMan + 8)`; `+0x5d` (return-title request) is one of the
     // inputs to the value written. Once `case 8` of its `0x12a` walk consumes the warp
     // (`FUN_14067bcf0(0)` = `*(GameMan + 0x10) = 0`), nothing re-evaluates the flag, so a `+0x5e` of
-    // 1 with `+0x5d` of 0 is a RESIDUAL rather than a live request. See the long RE note in
+    // 1 with `+0x5d` of 0 is a residual rather than a live request. See the long RE note in
     // `task_registration.rs` for the pairing evidence and the single-writer scan.
     //
-    // Until now that condition was visible ONLY as a line in the debug log, so a run could revert
+    // Until now that condition was visible only as a line in the debug log, so a run could revert
     // with nothing in telemetry to say why -- and the two clears meant to prevent it could report
     // zero fires without any oracle noticing. `_residual_live` is the residual shape itself;
     // `_clears` is whether the guard that removes it ever ran.
     //
-    // WHAT THIS ORACLE DOES **NOT** MEAN (settled 2026-09-04). It is not a pending-teardown signal.
+    // What this oracle does **not** mean (settled 2026-09-04). It is not a pending-teardown signal.
     // The revert `SetState(6 -> 2=BeginLogo)` is decided by `STEP_GameStepWait`
     // (1.16.2 `0x140b0cde0` / 1.17 `FUN_140b0e480`) from exactly `InGameStep+0xd8 == 0`,
     // `GameMan+0xb7c == 0` and `GameMan+0xb7d == 0` -- `menuData+0x5e` is not read on that path.
@@ -402,12 +402,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_menu_data_ending_flag_5e\": {},\n  \"oracle_menu_data_ending_residual_live\": {},\n  \"oracle_menu_data_ending_residual_clears\": {},\n",
         format_optional_u8(menu_data_ending_flag_5e),
         // The residual shape: ending flag set with no return-title request behind it. This is the
-        // state the scrub removes. It CORRELATED with the observed revert but does not cause it
+        // state the scrub removes. It correlated with the observed revert but does not cause it
         // (see the note above), so this stays a staleness indicator, not a teardown predictor.
         menu_data_ending_flag_5e == Some(1) && csmenuman_menu_data_flag_5d == Some(0),
         ENDING_REQUEST_SET_COUNT.load(Ordering::SeqCst)
     ));
-    // STALE-SWITCH-LATCH RECOVERY, AS AN ORACLE (2026-09-04). `_resets` is the one that matters: it
+    // Stale-switch-latch recovery, as an oracle (2026-09-04). `_resets` is the one that matters: it
     // stays 0 for the whole life of a healthy session, and a 1 means a switch-load was torn down and
     // left `SYSTEM_QUIT_QUICKLOAD_PHASE` stuck at TITLE_OWNER_SEEN -- the latch that silently killed
     // `Load Character from File` for the rest of the process. `_ticks` is the live debounce counter,
@@ -420,10 +420,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS
             .load(Ordering::SeqCst)
     ));
-    // DID A NETWORK DISCONNECT FORCE THE RETURN TO TITLE? (2026-09-04)
+    // Did a network disconnect force the return to title? (2026-09-04)
     //
     // `CS::CSLuaEventScriptImitation::RegistReturnTitle` (1.17 `0x14059e700`) sets `CSMenuMan+0x494`
-    // to 1, and ALL SIX of its callers are disconnect handlers -- `OnDisconnectEOSServer`,
+    // to 1, and all six of its callers are disconnect handlers -- `OnDisconnectEOSServer`,
     // `OnDisconnectGameServer`, `OnFailedGetBlockNum`, `OnLanCutError`, `OnNpServerSignOut`,
     // `OnSuspendResumeLanDisconnect`. So this one byte discriminates between the two live theories
     // for the black screen: a 1 means the engine was told to go back to the title because the
@@ -521,7 +521,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_LOAD_BUILD_URL_REJECTED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_CANCELLED_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_LOAD_BUILD_URL_LAST_REJECTION.load(Ordering::SeqCst),
-        // Generate Build Link. `encoded` counts URLs BUILT, `clipboard`/`opened` count the two
+        // Generate Build Link. `encoded` counts URLs built, `clipboard`/`opened` count the two
         // things that can independently fail afterwards, and `stale_latch` counts presses that
         // recovered a latch nothing owned -- so "the row did nothing" always has a number
         // distinguishing which of those it was.
@@ -539,21 +539,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.load(Ordering::SeqCst)
     ));
-    // System->Quit ROW IDENTITY oracles. `oracle_system_quit_quit_refused_ambiguous_row_count` is the
+    // System->Quit row identity oracles. `oracle_system_quit_quit_refused_ambiguous_row_count` is the
     // P0 gate firing (an instant ExitProcess refused because the activated row could not be
     // positively identified as Return to Desktop);
-    // `oracle_system_quit_row_last_discriminator` records WHICH evidence resolved the row. There is
-    // exactly ONE source -- the dialog's list cursor -- so it reads 1 for every resolution regardless
+    // `oracle_system_quit_row_last_discriminator` records which evidence resolved the row. There is
+    // exactly one source -- the dialog's list cursor -- so it reads 1 for every resolution regardless
     // of input kind (`..._last_input_kind`: 1 pad/keyboard, 2 mouse), and
     // `oracle_system_quit_row_resolved_by_cursor_row_count` must equal
     // `resolve_count - ambiguous_count`. `oracle_system_quit_row_last_ambiguity` says why a row could
     // not be named; `..._refused_disagreement_count` counts the subset where the captured row table
     // and the label read live at the cursor CONTRADICTED each other, so the row ran nothing.
     // `oracle_system_quit_grid_*` is the navigability evidence read live off the dialog's
-    // `CS::GridControl`. The tab now has SIX rows in a 2x3 grid, and the three numbers must agree:
+    // `CS::GridControl`. The tab now has six rows in a 2x3 grid, and the three numbers must agree:
     // `navigable_cells == 6` (the bound of the native mouse hit-test loop, i.e. `cols * rows`),
     // `item_count == 6` (the cursor bound, set through `GridControl::SetItemCount`) and `rows >= 2`
-    // (what enables the up/down axis at all). `navigable_cells > item_count` used to be the NORMAL
+    // (what enables the up/down axis at all). `navigable_cells > item_count` used to be the normal
     // state -- five rows in a six-cell grid left a ragged corner -- so a run where they now differ
     // means a row failed to build, not that the geometry is merely uneven.
     body.push_str(&format!(
@@ -600,10 +600,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // `oracle_save_picker_surface` states which picker this session runs (0 in-game, 1 OS dialog)
     // regardless of whether one ever opened, so a report never has to guess the mode.
     //
-    // READ `_row_records_restored` AGAINST `_open_count`. The picker renders by writing its
-    // browse-row labels INTO the live `CS::ProfileSummary`, so every session that opens must also
+    // Read `_row_records_restored` against `_open_count`. The picker renders by writing its
+    // browse-row labels into the live `CS::ProfileSummary`, so every session that opens must also
     // restore. Fewer restores than opens means the game's records are still holding UI strings --
-    // the 2026-08-29 defect, which was diagnosed by the ABSENCE of restore lines in the log and is
+    // the 2026-08-29 defect, which was diagnosed by the absence of restore lines in the log and is
     // a number here precisely so absence never has to be inferred again. `_restore_unwritable`
     // counts restores that had to skip the write because the summary allocation moved.
     body.push_str(&format!(
@@ -624,20 +624,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             .load(Ordering::SeqCst)
     ));
     // OS file-dialog surface. Only meaningful while `oracle_save_picker_surface` is 1, and that is
-    // the point: with the default key they are all 0, which IS the non-regression proof for the
+    // the point: with the default key they are all 0, which is the non-regression proof for the
     // in-game path. `_ticks_frozen` is the load-bearing one -- it is the only thing that answers
     // whether the game task kept ticking while the menu pump was blocked, which nothing static can.
     // A `> 0` says the freeze saved the flow; a `0` with a dialog demonstrably open says the whole
     // frame stalled instead. `_savelike_opens` attributes shell browsing traffic that would
     // otherwise pollute the save CreateFileW diagnostics.
     //
-    // `_owner_hwnd` must be non-zero, and READ IT WITH `_owner_is_cover` -- what it is REQUIRED to
+    // `_owner_hwnd` must be non-zero, and read it with `_owner_is_cover` -- what it is required to
     // be changed on 2026-07-31. It used to have to be the game window; a System>Quit open should
     // now show `_owner_is_cover = 1` and an `_owner_hwnd` equal to `_dim_hwnd`, because owning the
     // dialog to the cover is what makes "the picker is in front of the blur" a z-order invariant
     // instead of a race (an owned window is always above its owner). `_owner_is_cover = 0` on a
     // System>Quit open means the cover did not come up inside the arm handshake and the stacking
-    // for that open was unguaranteed; at the missing-save BOOT it is simply correct, since that arm
+    // for that open was unguaranteed; at the missing-save boot it is simply correct, since that arm
     // raises no cover at all. It must still never be `ErEffectsLoadingOverlay`, which is a
     // different window entirely.
     body.push_str(&format!(
@@ -658,24 +658,24 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SAVE_PICKER_OS_SAVELIKE_OPENS.load(Ordering::SeqCst),
         SAVE_DEST_CONFIRM_PENDING.load(Ordering::SeqCst)
     ));
-    // The OS dialog at the MISSING-SAVE BOOT. Separate from the fields above because that intent's
-    // outcomes are not the System>Quit ones: a cancel there QUITS THE GAME, and a terminal step has
+    // The OS dialog at the missing-save boot. Separate from the fields above because that intent's
+    // outcomes are not the System>Quit ones: a cancel there quits the game, and a terminal step has
     // to be readable from a file rather than from watching the screen.
     //
-    // READ `_boot_telemetry_flushed` FIRST. It is the field that tells you whether the rest of this
+    // Read `_boot_telemetry_flushed` first. It is the field that tells you whether the rest of this
     // file is about the run's end or about some earlier moment. `0` means the picker thread could
     // not take the state mutex before quitting, so every field here predates the cancel and
     // `er-quickload-bootstrap.jsonl` (`boot_picker_cancel_exit`) is the authoritative record instead.
     //
     // That distinction is not hypothetical. Run pr109-boot-oscancel-20260730-110704 ended with
-    // `boot_state = OPEN`, `boot_cancel_exit_count = 0` on a run where the cancel WORKED -- byte for
+    // `boot_state = OPEN`, `boot_cancel_exit_count = 0` on a run where the cancel worked -- byte for
     // byte what a dialog that never returned would have left behind, because the game task had
     // stopped writing this file 12s before the user answered. The old published signature ("open
-    // count advances while state stays OPEN") could not tell those apart, and reported a working
+    // count advances while state stays open") could not tell those apart, and reported a working
     // feature as broken.
     //
     // `_boot_game_ticks_at_open` / `_at_answer` are sampled by the picker thread on both sides of
-    // the blocking dialog, so their DIFFERENCE is the game task's liveness across it: equal values
+    // the blocking dialog, so their difference is the game task's liveness across it: equal values
     // mean the game did not tick once while the dialog was up. `_boot_open_count > 1` means the
     // one-shot open latch leaked and the reopen loop came back. `_boot_fallback_count > 0` says
     // comdlg32 could not be used and the in-game browser took over -- a degraded surface, not a
@@ -696,13 +696,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // The screen dim raised over the game while an OS dialog is blocking the menu thread.
     //
-    // `_frames` IS THE PRODUCT PROOF and nothing else in this file can stand in for it. The game
-    // renders nothing for the dialog's whole life, so a frame count that ADVANCED across the
+    // `_frames` is the product proof and nothing else in this file can stand in for it. The game
+    // renders nothing for the dialog's whole life, so a frame count that advanced across the
     // interval bracketed by the dialog's own OPENED/CLOSED log lines is the only evidence that the
     // animation actually ran -- on a thread we own, which is the entire reason this feature has its
     // own window. `_arm_count == _disarm_count` with `_armed == 0` is the teardown proof; the
     // opposite means a fullscreen dim is stranded over a game the user can still play. `_z_self`
-    // must land BETWEEN `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
+    // must land between `_z_foreign` (comdlg32) and `_z_game`, which is how the stacking is checked
     // without anyone looking at a screenshot.
     body.push_str(&format!(
         "  \"oracle_save_picker_dim_armed\": {},\n  \"oracle_save_picker_dim_arm_count\": {},\n  \"oracle_save_picker_dim_disarm_count\": {},\n  \"oracle_save_picker_dim_frames\": {},\n  \"oracle_save_picker_dim_alive_ms\": {},\n  \"oracle_save_picker_dim_teardown_reason\": {},\n  \"oracle_save_picker_dim_stage\": {},\n  \"oracle_save_picker_dim_selftest\": {},\n  \"oracle_save_picker_dim_hwnd\": {},\n  \"oracle_save_picker_dim_game_hwnd\": {},\n  \"oracle_save_picker_dim_update_fails\": {},\n  \"oracle_save_picker_dim_z_self\": {},\n  \"oracle_save_picker_dim_z_game\": {},\n  \"oracle_save_picker_dim_z_foreign\": {},\n  \"oracle_save_picker_dim_full_pushes\": {},\n  \"oracle_save_picker_dim_foreign_fg_hwnd\": {},\n  \"oracle_save_picker_dim_owner_set\": {},\n  \"oracle_save_picker_dim_owner_readback\": {},\n  \"oracle_save_picker_dim_arm_wait_ms\": {},\n  \"oracle_save_picker_dim_arm_wait_timeouts\": {},\n  \"oracle_save_picker_dim_reanchor_count\": {},\n",
@@ -728,19 +728,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS.load(Ordering::SeqCst),
         er_telemetry_core::counters::SAVE_PICKER_DIM_REANCHOR_COUNT.load(Ordering::SeqCst)
     ));
-    // THE Z-ORDER VERDICT, AND IT IS TWO VERDICTS, NOT ONE (er-effects-rs-mc1d). These replace the
+    // The Z-order verdict, and it is two VERDICTS, not one (er-effects-rs-mc1d). These replace the
     // single fused `oracle_save_picker_dim_z_violations`, which scored "the cover is behind the
     // game" and "the cover is over the dialog" into the same atomic even though they are opposite
     // failures. A run came back with 130 of them across 424 dim frames and could therefore neither
-    // confirm nor refute the ownership fix it existed to test. READ THEM AS:
+    // confirm nor refute the ownership fix it existed to test. Read them AS:
     //
-    //   `_z_covering_dialog` > 0  -- REAL FAILURE of the z-order fix. Our cover was nearer the front
+    //   `_z_covering_dialog` > 0  -- Real failure of the z-order fix. Our cover was nearer the front
     //       than comdlg32 for that many frames, i.e. laid over the controls the user has to click.
-    //   `_z_behind_game` > 0      -- a separate, LOWER-SEVERITY COSMETIC bug: the cover was invisible
+    //   `_z_behind_game` > 0      -- a separate, lower-severity cosmetic bug: the cover was invisible
     //       for that many frames. The dialog still worked; file it on its own, do not block on it.
     //
     // Both exclude unknown ordinals, so a frame from before comdlg32 existed is never counted. The
-    // `_first_*` quartets carry the FIRST offending sample of each kind and how many milliseconds
+    // `_first_*` quartets carry the first offending sample of each kind and how many milliseconds
     // into that arm's cover it happened -- `-1` means that kind never fired, and the `_ms` is what
     // separates a bring-up transient the compositor settles from a stacking that never took.
     body.push_str(&format!(
@@ -775,7 +775,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_SLOT_INFO_NON_DISPLAY.load(Ordering::SeqCst),
         PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.load(Ordering::SeqCst) as isize
     ));
-    // WHOSE MENU EACH SUMMARY POPULATE BELONGED TO. `CS::MenuSaveDataSummary`'s populate is shared by
+    // Whose menu each summary POPULATE belonged to. `CS::MenuSaveDataSummary`'s populate is shared by
     // every character-summary surface, the game's own System>Quit `GameEnd` panel included, so
     // `_foreign` > 0 with `_missing_field` > 0 is this mod correctly declining to draw on a movie it
     // never edited. `_own` is the ProfileSelect rows it does own. `_own` at zero while the profile
@@ -786,7 +786,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_FOREIGN_SUMMARY_ROWS.load(Ordering::SeqCst),
         PROFILE_STATS_PUSH_MISSING_FIELD.load(Ordering::SeqCst)
     ));
-    // LIVE-EDITOR SAFETY GATE. `_window_run_ticks` rises once per rendered frame of the
+    // Live-editor SAFETY gate. `_window_run_ticks` rises once per rendered frame of the
     // ProfileSelect view; `_deferred_applies` counts web-UI edits the frame thread refused to write
     // while that view was on screen, leaving them for the in-band row populate. Deferrals are the
     // guard working: each one is a crash that did not happen.
@@ -795,7 +795,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS.load(Ordering::SeqCst),
         er_telemetry_core::counters::PROFILE_EDITOR_DEFERRED_APPLIES.load(Ordering::SeqCst)
     ));
-    // DO THE ROWS DESCRIBE THE SAVE ON SCREEN? The per-slot name/attribute caches were a
+    // Do the rows describe the save on screen? The per-slot name/attribute caches were a
     // process-lifetime latch, so a session's first save described every row forever. `_reloads`
     // counts refills from the picker's own bytes when a save is previewed; `_invalidations` counts
     // drops when that preview is withdrawn. Both at zero after a save swap means the rows are
@@ -813,12 +813,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         PROFILE_ROW_LAST_SAVED_ROWS.load(Ordering::SeqCst),
         PROFILE_ROW_LAST_SAVED_STAGE_FAILURES.load(Ordering::SeqCst)
     ));
-    // AUTOLOAD SLOT REJECTION -- the semaphore the post-boot picker fallback is ordered against.
+    // AUTOLOAD slot rejection -- the semaphore the post-boot picker fallback is ordered against.
     // Counts ticks on which the product autoload fingerprinted its Continue slot as empty-like and
-    // refused to submit it. It is the SAME counter the escalation reads to decide when to give up
+    // refused to submit it. It is the same counter the escalation reads to decide when to give up
     // and hand the choice to the user, not a parallel one, so a run can never show an arm that its
     // own rejection count does not justify. NOTE the reset: a single tick on which the slot reads
-    // REAL puts it back to 0, because "consecutive" is what makes it a correct arming input -- a
+    // real puts it back to 0, because "consecutive" is what makes it a correct arming input -- a
     // boot whose ProfileSummary is merely still filling must not accumulate toward the hand-back.
     // Rising above 0 is therefore "the dead end was reached", and its first non-zero poll is
     // strictly earlier than oracle_save_picker_overlay_armed on a working fallback.
@@ -848,14 +848,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_WORLD_UP_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_UNPROVEN_FORWARD_COUNT.load(Ordering::SeqCst)
     ));
-    // LOAD COUNT, STATED RATHER THAN IMPLIED. Six existing counters describe "loads" with four
+    // Load count, stated rather than implied. Six existing counters describe "loads" with four
     // different values because each counts a different event class; a reader who picks one and
     // divides gets a wrong total (a captured 3-load session reads activate=4, allow=3, epoch=2,
     // pick=2). `oracle_total_world_loads` is the answer; `oracle_load_count_witness_signature` shows
     // every witness side by side so the composition never has to be reconstructed by hand again; and
     // `oracle_load_count_mismatches` is nonzero the moment those witnesses contradict each other, so
     // a future run reports the contradiction itself instead of waiting to be noticed.
-    // See er_telemetry_core::load_count for the decomposition and why the epoch is an INDEX, not a count.
+    // See er_telemetry_core::load_count for the decomposition and why the epoch is an index, not a count.
     {
         let witnesses = er_telemetry_core::load_count::LoadCountWitnesses {
             continue_confirm_forwards: SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT
@@ -903,7 +903,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // LoadGame builder slot override. `overrides` > 0 means the save container's stored last-used
     // slot disagreed with the user's pick and we redirected the job to the pick -- i.e. the wrong
-    // character WOULD have loaded. `last_native_slot` is the slot we replaced (u32-packed i32).
+    // character would have loaded. `last_native_slot` is the slot we replaced (u32-packed i32).
     // Read with `game_save_slot` / `oracle_char_name`: a correct run has the picked character in
     // world, and `overrides` tells you whether the container tried to send you elsewhere.
     body.push_str(&format!(
@@ -913,19 +913,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // Per-window portrait target latch. `retargets_suppressed` > 0 means the precedence ordering
     // tried to change the on-screen character mid-loading-screen and was refused -- each one is a
-    // face change the user did NOT see. It was exactly 1 in the 2026-08-02 21:05 repro (0 -> 9).
+    // face change the user did not see. It was exactly 1 in the 2026-08-02 21:05 repro (0 -> 9).
     // `window_target_slot` is the committed slot +1, or 0 between windows.
-    // `pick_promotions` > 0 means a window latch adopted from a GUESS was replaced by the user's
+    // `pick_promotions` > 0 means a window latch adopted from a guess was replaced by the user's
     // explicit pick. That promotion is what stops the boot window -- which commits at ~+1s, before
     // the picker has been answered -- from pinning the loading screen to the autoload's guessed
     // slot. Measured 2026-08-26: latched 0 at +1061ms with every source invalid, user picked 1 at
     // +1084597ms, retarget refused, slot 0's character rendered. `target_from_pick` says which kind
-    // of source the CURRENT latch came from (1 = the user's pick, and then nothing may replace it).
+    // of source the current latch came from (1 = the user's pick, and then nothing may replace it).
     //
     // `target_source` is that same question at full resolution -- 0 = uncommitted, 1 = ac0, 2 = the
-    // b78 load-REQUEST register, 3 = the user's pick -- and it is the value the yield rule actually
-    // compares. The boolean cannot distinguish a latch taken off a STALE ac0 from one the user
-    // clicked, which is how bd er-effects-rs-fmy6 stayed open: across save FILES the window latched
+    // b78 load-request register, 3 = the user's pick -- and it is the value the yield rule actually
+    // compares. The boolean cannot distinguish a latch taken off a stale ac0 from one the user
+    // clicked, which is how bd er-effects-rs-fmy6 stayed open: across save files the window latched
     // slot 0 off an obsolete ac0 and then refused the b78 that named the real slot 1. A window that
     // ends a load at 1 has never seen anything better than ac0 about the face it showed.
     body.push_str(&format!(
@@ -940,15 +940,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
     // with the save present. On a fast/early pick this stays 0 (nothing to suppress).
     //
-    // The PASS-THROUGH side is what makes the suppressed count readable. A suppressed call is
-    // DROPPED, not queued, so "the menu will build post-pick" rests entirely on the native title
+    // The pass-through side is what makes the suppressed count readable. A suppressed call is
+    // dropped, not queued, so "the menu will build post-pick" rests entirely on the native title
     // re-issuing `open_menu` afterwards. `passthrough_after_suppress_count` is that claim as a
     // number: 0 after a late pick means the title never asked again and the rows can never be
     // rebuilt with the save present -- the pick would then have to TRIGGER the open itself.
     //
     // `boot_save_container_matches_runtime`: 0 = undecided, 1 = the boot default-save check
     // accepted the container this runtime opens (or accepted nothing and armed the picker),
-    // 2 = MISMATCH. 2 is the 2026-08-26 failure -- the check took `ER0000.sl2` while ersc.dll went
+    // 2 = mismatch. 2 is the 2026-08-26 failure -- the check took `ER0000.sl2` while ersc.dll went
     // on to open a blank `ER0000.co2`, so the boot answer was about a file nothing would read.
     body.push_str(&format!(
         "  \"oracle_title_open_menu_suppressed_count\": {},\n  \"oracle_title_open_menu_passthrough_count\": {},\n  \"oracle_title_open_menu_passthrough_after_suppress_count\": {},\n  \"oracle_boot_save_container_matches_runtime\": {},\n",
@@ -975,9 +975,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // SAVE-FLOW / SAVE-SUPPRESS oracles (save-game-flow WP1): suppression state and the
     // one-shot bypass counters come straight from the er-save-suppress crate accessors
-    // (the product wires that crate's publish sink to a no-op because THIS writer is the
+    // (the product wires that crate's publish sink to a no-op because this writer is the
     // export path); the flow stage/counters are the product-side state machine. Probes
-    // must key on oracle_save_flow_stage, NOT on msgbox/modal oracles, for save-flow
+    // must key on oracle_save_flow_stage, not on msgbox/modal oracles, for save-flow
     // progress. oracle_save_bypass_final_status is null until the first bypassed save
     // reports a terminal status, then latched (0 = success).
     let bypass_final_status = er_save_suppress::bypass_final_status_raw();
@@ -1008,7 +1008,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         // The game said the save succeeded and the file check disagreed. Hard product failure.
         SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT.load(Ordering::SeqCst),
     ));
-    // WRITE-COMPLETION oracles (2026-07-28). `oracle_save_job_*` come from the observer on
+    // Write-completion oracles (2026-07-28). `oracle_save_job_*` come from the observer on
     // `SaveLoad2::SLSaveSession`'s job body: the SL worker picking a save up (`starts`),
     // putting it down (`completions`) and the result the game recorded for it
     // (`last_result`, 0 = success, 4294967295 = the result object was unreadable). They are
@@ -1017,10 +1017,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     //
     //   * `observer_installed == false` -> completion detection is back to the watchdog for
     //     the whole session; treat every commit in that run as degraded.
-    //   * `final_status_source` names WHICH observation ended the last commit
+    //   * `final_status_source` names which observation ended the last commit
     //     ("worker-job-completion", "native-poll", "native-enqueue-failed", or "none").
     //   * `commit_watchdog_count > 0` -> that many commits ended without ever being
-    //     observed. That is a FAILURE of this instrumentation even when the file is fine,
+    //     observed. That is a failure of this instrumentation even when the file is fine,
     //     and `commit_job_start_tick` (the tick the writer began, 0 = never seen to start)
     //     is the first thing to look at.
     body.push_str(&format!(
@@ -1038,22 +1038,22 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_COMMIT_WATCHDOG_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_COMMIT_JOB_START_TICK.load(Ordering::SeqCst),
     ));
-    // WHICH WRITE BRANCH RAN (2026-07-29). `SaveLoad2::SLSaveSession`'s job body
+    // Which write branch ran (2026-07-29). `SaveLoad2::SLSaveSession`'s job body
     // `FUN_14240fd70` has two mutually exclusive write paths and picks between them on the
     // result of a probe (`FUN_142413230`) that mounts the container already on disk and asks
     // whether every supplied block still fits its existing entry:
     //
     //   * `oracle_save_write_in_place_calls` -- `FUN_1424142e0`, the per-block patcher, the
-    //     branch taken when everything fits. Counts ONCE PER SUPPLIED BLOCK, so it normally
+    //     branch taken when everything fits. Counts once per supplied block, so it normally
     //     climbs by more than one per save and its magnitude is not a save count.
     //   * `oracle_save_write_full_rebuild_calls` -- `FUN_142413860`, one whole-buffer write
     //     from offset 0, taken when a block outgrew its entry or no usable container existed.
     //     The decompile says this should be rare in the steady state; nothing had ever
     //     measured it, and a non-zero value on an ordinary repeat save falsifies that.
     //
-    // Read `oracle_save_write_branch_observers_installed` FIRST. At 0 (or 1) the missing
-    // observer's counter can only read 0, and that is the absence of an observation, NOT the
-    // absence of a write. At 2, both counters reading 0 means NO SAVE WAS WRITTEN during the
+    // Read `oracle_save_write_branch_observers_installed` first. At 0 (or 1) the missing
+    // observer's counter can only read 0, and that is the absence of an observation, not the
+    // absence of a write. At 2, both counters reading 0 means no save was written during the
     // run -- a third outcome, distinct from either branch having fired.
     //
     // `oracle_save_write_branch_no_trampoline` must stay 0. Non-zero means an observer ran
@@ -1067,7 +1067,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::write_in_place_calls(),
         er_save_suppress::write_branch_no_trampoline(),
     ));
-    // SAVE-DISPATCH ATTRIBUTION. These read the native chain BETWEEN "the request flags are
+    // Save-dispatch attribution. These read the native chain between "the request flags are
     // set" and "an SL enqueue arrives", which the enqueue-side counters above cannot see: a
     // save lane that returns 0 touches nothing, so the request stays latched, the dispatcher
     // re-enters it every frame, and `oracle_save_bypass_expired_total` is the only trace --
@@ -1078,16 +1078,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     //
     // serialize_calls is the alloc/serializer discriminator. A lane only calls
     // FUN_14067dc00 after its MainHeap buffer allocations have been null-checked, so
-    // serialize_calls climbing PROVES the 0x280000 (and, on the combined lane, 0x60000)
+    // serialize_calls climbing proves the 0x280000 (and, on the combined lane, 0x60000)
     // allocations succeeded; declines climbing while serialize_calls stands still means the
     // lane bailed before the serializer.
     //
     // serialize_failures > 0 -> the character serializer is what refused, and
-    // serialize_last_fail_step NAMES the step it refused at (decoded from
+    // serialize_last_fail_step names the step it refused at (decoded from
     // serialize_last_fail_bytes = _DAT_143d69920, the stream position where the cascade
     // stopped). The raw byte count is kept beside it. The step name is "byte-counter-
-    // unreadable" only when the counter could not be read -- it is NOT a game outcome, and
-    // in particular it does NOT mean the serializer's first gate rejected the call: that
+    // unreadable" only when the counter could not be read -- it is not a game outcome, and
+    // in particular it does not mean the serializer's first gate rejected the call: that
     // gate is unreachable here (see SAVE_SERIALIZE_BYTES_RVA in er-save-suppress).
     body.push_str(&format!(
         "  \"oracle_save_dispatch_observers_installed\": {},\n  \"oracle_save_dispatch_calls\": {},\n  \"oracle_save_dispatch_declines\": {},\n  \"oracle_save_dispatch_declines_with_bypass\": {},\n  \"oracle_save_dispatch_last_lane\": {},\n  \"oracle_save_serialize_calls\": {},\n  \"oracle_save_serialize_failures\": {},\n  \"oracle_save_serialize_last_fail_bytes\": {},\n  \"oracle_save_serialize_last_fail_step\": \"{}\",\n",
@@ -1101,21 +1101,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::serialize_last_fail_bytes(),
         er_save_suppress::serialize_last_fail_step(),
     ));
-    // THE SL REQUEST SLOT -- the operands of the submit builders' own precondition,
+    // The SL request slot -- the operands of the submit builders' own precondition,
     // `iodev+0x10 == 0 && iodev+0x20 == 0` (`FUN_140e6ef60` / `FUN_140e6ec70`, 1.16.2).
     //
-    // Read them ONLY when `oracle_save_dispatch_declines_with_bypass` is non-zero: that is
+    // Read them only when `oracle_save_dispatch_declines_with_bypass` is non-zero: that is
     // the case they were built for, a lane that allocated, serialized successfully, and
     // still returned 0 -- where the builder's other four operands are statically guaranteed
-    // by the call site, so the guard can ONLY have failed on these two fields.
+    // by the call site, so the guard can only have failed on these two fields.
     //
-    //   save-content-latched-0x10               a previous SAVE request was never released
-    //   load-job-latched-0x18+0x20              a completed LOAD still owns the shared job slot
+    //   save-content-latched-0x10               a previous save request was never released
+    //   load-job-latched-0x18+0x20              a completed load still owns the shared job slot
     //   orphan-job-latched-0x20                 a job whose poll never reached a terminal case
-    //   precondition-clear-builder-alloc-refused the guard PASSED; the NetworkHeap alloc refused
+    //   precondition-clear-builder-alloc-refused the guard passed; the NetworkHeap alloc refused
     //
     // `oracle_save_swallow_release_left_dirty` is the self-incrimination oracle and is
-    // decisive on its own: non-zero means THIS DLL's swallow left the precondition failing,
+    // decisive on its own: non-zero means this DLL's swallow left the precondition failing,
     // and `oracle_save_swallow_slot_after_*` names the field it left populated. Zero, with
     // swallows recorded, clears the swallow and points the finger at the load side.
     let slot_hex = |field: Option<usize>| -> String {
@@ -1131,23 +1131,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::swallow_iodev_mismatch(),
         er_save_suppress::slot_read_failures(),
         er_save_suppress::decline_bail_reason_label(),
-        // A POSITIVE CONTROL WHOSE EXPECTED VALUE IS 0, NOT A DISAMBIGUATOR. Do not read a 0 here
-        // as a finding: the call graph already forces it. `FUN_14067b940` has exactly ONE caller,
-        // `FUN_140afb880`, and that caller gates the WHOLE dispatch on
+        // A positive control whose expected value is 0, not a DISAMBIGUATOR. Do not read a 0 here
+        // as a finding: the call graph already forces it. `FUN_14067b940` has exactly one caller,
+        // `FUN_140afb880`, and that caller gates the whole dispatch on
         // `cVar6 = FUN_14067a080(); if (cVar6 == 0) return;` -- and `FUN_14067a080` is literally
         // `MOV RAX,[0x143d69918]; CMP dword [RAX+0xb80],0; SETZ AL; RET`, i.e. `saveState == 0`.
         // So every game-originated decline is PROVEN idle one call earlier, and this field can only
         // ever report 0 for one. What it therefore measures is the INSTRUMENT: 0 says the sampler
         // ran and agrees with the call graph, `u32::MAX` says it never sampled at all.
         //
-        // The one value that would be a finding is a NON-ZERO one, and it would not implicate the
+        // The one value that would be a finding is a non-zero one, and it would not implicate the
         // game -- it would isolate a dispatch this DLL made itself, outside the native gate.
         // (`er-save-loader`'s three direct calls are the only such call sites in the workspace, and
         // each is already behind its own `save_state() != 0` early return; a non-zero reading here
         // would mean one of them raced the native tick between that check and the call.)
         //
         // It is kept because a control that can only read one value still fails loudly when the
-        // instrument breaks, and because the reason string above IS trustworthy only while it holds.
+        // instrument breaks, and because the reason string above is trustworthy only while it holds.
         er_save_suppress::decline_save_state(),
         slot_hex(decline_slot.map(|slot| slot.save_content)),
         slot_hex(decline_slot.map(|slot| slot.load_content)),
@@ -1162,16 +1162,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_REQUEST_RETRACTIONS.load(Ordering::SeqCst),
         SAVE_FLOW_RETRACT_DECLINED.load(Ordering::SeqCst),
     ));
-    // THE BIRTH OF THE WEDGE, as opposed to its plateau. Everything above is last-writer-wins: on
+    // The birth of the wedge, as opposed to its plateau. Everything above is last-writer-wins: on
     // 2026-08-31 the published decline sample was taken on entry 8,638 of 8,638, four minutes after
     // the state it describes formed, and byte-identical to the 8,637 before it because nothing in
-    // that loop can change the device. These four are FIRST-writer-wins over
+    // that loop can change the device. These four are first-writer-wins over
     // `iodev+0x10 != 0 && saveState == 0`, so they timestamp the moment instead.
     //
     //   oracle_save_dispatch_first_latched_save_content  the `SLSaveContent` still on the device.
     //                                                    Compare it against the accept records in
     //                                                    er-quickload-continue-trace.log: an exact
-    //                                                    match NAMES the submit that wedged.
+    //                                                    match names the submit that wedged.
     //   oracle_save_dispatch_first_latched_job           `iodev+0x20`. Non-zero = the submit
     //                                                    reached `FUN_140e6fb50` and has a real
     //                                                    job; zero = it never enqueued, which is
@@ -1179,7 +1179,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     //                                                    shape (a save that owns the device and was
     //                                                    never accepted, so `saveState` was never
     //                                                    written at all).
-    //   oracle_save_dispatch_first_latched_ms            host log epoch, the SAME `[+<n>ms]` the
+    //   oracle_save_dispatch_first_latched_ms            host log epoch, the same `[+<n>ms]` the
     //                                                    debug log prefixes every line with, so the
     //                                                    event lands between two named lines.
     //                                                    `18446744073709551615` = never seen, or no
@@ -1190,7 +1190,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     //
     // `oracle_save_dispatch_latched_declines` is the plateau: read against
     // `oracle_save_dispatch_declines`, near-equality means the wedge stood for the whole run, and
-    // ZERO with declines recorded RULES THE WEDGE OUT as their cause instead of leaving it open.
+    // zero with declines recorded rules the wedge out as their cause instead of leaving it open.
     //
     // Read `oracle_save_dispatch_observers_installed` first, as always: at 0 every field here can
     // only read "never seen", and that is the absence of an observer, not the absence of a wedge.
@@ -1204,23 +1204,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::dispatch_first_latched_call(),
         er_save_suppress::dispatch_first_latched_lane(),
     ));
-    // THE LOAD CONSUMER -- the other owner of the shared `iodev+0x20` job, and the reason a
+    // The load consumer -- the other owner of the shared `iodev+0x20` job, and the reason a
     // save can be refused by something that is not a save.
     //
-    // A completed load is released only by its CONSUMER (`FUN_14067b100` ->
+    // A completed load is released only by its consumer (`FUN_14067b100` ->
     // `FUN_140e6e380` -> `FUN_140e6f200`); `FUN_140e6e080` case 0x14 deliberately returns
     // success without releasing, and that same return is what drives `GameMan+0xb80` to
-    // RESIDENT(3). The switch reload substitutes that consumer to feed the engine its own
+    // resident(3). The switch reload substitutes that consumer to feed the engine its own
     // sliced `.sl2` body, so it must run the native consumer for the device side effect --
     // these oracles say whether it did.
     //
-    //   oracle_save_load_consumer_stranded > 0  DECISIVE FAILURE. A completed load kept the
+    //   oracle_save_load_consumer_stranded > 0  decisive failure. A completed load kept the
     //                                           shared job and the payload was substituted
     //                                           anyway: from that moment no save in the
     //                                           process can be built, and
     //                                           oracle_save_dispatch_last_decline_reason
     //                                           latches at "load-job-latched-0x18+0x20".
-    //   oracle_save_load_consumer_releases > 0  the slot was FREED, by the native consumer,
+    //   oracle_save_load_consumer_releases > 0  the slot was freed, by the native consumer,
     //                                           at the substitution site.
     //   oracle_save_load_consumer_still_held    times the native guard kept a load that had
     //                                           not finished. This is the race oracle: the
@@ -1239,8 +1239,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         slot_hex(consumer_after.map(|slot| slot.load_content)),
         slot_hex(consumer_after.map(|slot| slot.job)),
     ));
-    // THE FORGOTTEN SAVE REQUEST -- the state in which the game has lost track of a save it
-    // submitted, and therefore the state in which SAVING IS DEAD for the rest of the process.
+    // The forgotten save request -- the state in which the game has lost track of a save it
+    // submitted, and therefore the state in which saving is dead for the rest of the process.
     //
     // `iodev+0x10`/`+0x20` are freed by `FUN_140e6f200` alone, and on the save side only the
     // poll `FUN_140e6e430` reaches it -- from `DoSaveStuff`, gated on `GameMan::IsSaveState1()`,
@@ -1250,9 +1250,9 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     // 2026-08-31 after one System->Quit->Load Character reload: 6,177 refusals in 6,186
     // dispatches, four minutes, byte-identical operands.
     //
-    //   oracle_save_orphan_detections > 0       the process ENTERED that state at least once.
+    //   oracle_save_orphan_detections > 0       the process entered that state at least once.
     //   oracle_save_orphan_released             times the game's own poll brought it back.
-    //                                           THIS is the "saving survived the reload"
+    //                                           This is the "saving survived the reload"
     //                                           oracle -- detections > 0 with released == 0
     //                                           is a run that lost the user's save system.
     //   oracle_save_orphan_still_latched        the native guard kept a job it does not
@@ -1277,15 +1277,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         slot_hex(orphan_after.map(|slot| slot.save_content)),
         slot_hex(orphan_after.map(|slot| slot.job)),
     ));
-    // THE LOAD LANE'S HALF OF THE SAME DEVICE. The orphan above kills SAVING through the save
-    // builders' `iodev+0x10 == 0 && iodev+0x20 == 0`; `+0x20` is SHARED, so it kills LOADING
+    // The load lane'S half of the same device. The orphan above kills saving through the save
+    // builders' `iodev+0x10 == 0 && iodev+0x20 == 0`; `+0x20` is shared, so it kills loading
     // through the load builders' `iodev+0x18 == 0 && iodev+0x20 == 0` at the same instant. The
-    // switch reload's SUBMIT gate is the load lane's point of use and now reads that
+    // switch reload's submit gate is the load lane's point of use and now reads that
     // precondition instead of `GameMan+0xb80` alone.
     //
     //   oracle_load_gate_refusals > 0   a load submit was about to be offered a device that
     //                                   would have refused it -- the state that armed an
-    //                                   unsatisfiable DRAIN on 2026-08-31.
+    //                                   unsatisfiable drain on 2026-08-31.
     //   oracle_load_gate_repairs        times the game's own poll opened it again. refusals > 0
     //                                   with repairs == 0 is a load nothing could unblock.
     body.push_str(&format!(
@@ -1293,23 +1293,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::load_gate_refusals(),
         er_save_suppress::load_gate_repairs(),
     ));
-    // SAVE-STATE WITNESS oracles -- the CAUSE side of the orphan above. The drain repairs the state;
+    // Save-state witness oracles -- the cause side of the orphan above. The drain repairs the state;
     // these say who created it, which the field values alone cannot, because three different native
     // writes produce the identical signature.
     //
-    //   oracle_save_state_abandoning_writes > 0   a save was stranded in this run. THE finding.
+    //   oracle_save_state_abandoning_writes > 0   a save was stranded in this run. The finding.
     //   oracle_save_state_first_site              which wrapper did it first (the two send a reader
     //                                             to different functions, so they are named apart).
     //   oracle_save_state_first_caller_rva        the game RVA that called it. 0 = unattributed.
     //   oracle_save_state_first_after             saveState right after: 0 completes the orphan on
     //                                             the spot, 3 needs a second writer to finish it.
-    //   oracle_save_state_*_calls                 forwarding counts. BOTH zero means the witness
+    //   oracle_save_state_*_calls                 forwarding counts. Both zero means the witness
     //                                             never installed, which is not "nothing happened".
-    //   oracle_save_state_owner_restores          repairs performed: the LOAD poll's `saveState = 0`
+    //   oracle_save_state_owner_restores          repairs performed: the load poll's `saveState = 0`
     //                                             put back to 1 so the game's own pump finishes the
     //                                             save. Equal to `abandoning_writes` at that site
     //                                             means every wedge was intercepted.
-    //   oracle_save_state_owner_restore_failures  wedges the repair could NOT write (GameMan
+    //   oracle_save_state_owner_restore_failures  wedges the repair could not write (GameMan
     //                                             unaddressable). Non-zero means saving died anyway.
     let witness_slot = er_save_suppress::save_state_first_slot();
     body.push_str(&format!(
@@ -1325,15 +1325,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::save_state_owner_restores(),
         er_save_suppress::save_state_owner_restore_failures(),
     ));
-    // THE REST OF THE WRITER SET (`save_state_writers.rs`), and the counter that makes a NEGATIVE
+    // The rest of the writer set (`save_state_writers.rs`), and the counter that makes a negative
     // mean something. The two oracles above watch two wrappers; these watch the other three stores
-    // that can take `saveState` off 1, which completes the set the image byte-scan found on BOTH
+    // that can take `saveState` off 1, which completes the set the image byte-scan found on both
     // builds (22 stores each, pairing exactly at +0xE50).
     //
-    //   oracle_save_state_writer_sites_installed  how many of the three chained. ZERO means nothing
+    //   oracle_save_state_writer_sites_installed  how many of the three chained. Zero means nothing
     //                                             below was watching, and every other field here
     //                                             reads zero for that reason rather than a measured
-    //                                             one. Read it FIRST.
+    //                                             one. Read it first.
     //   oracle_save_state_menujob_loadwait_calls  FUN_140678e00, the MenuJob load-save-data wait
     //                                             step -- the writer whose caller is exactly the
     //                                             pipeline the 2026-08-31 wedge window contains.
@@ -1341,20 +1341,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     //                                             between it and FUN_140679510 on a float, so a
     //                                             save-side write could always land where the
     //                                             original witness was not looking.
-    //   oracle_save_state_setter_calls            GameMan::SetSaveState. NON-ZERO MEANS THE
-    //                                             MoveMapStep 210-SECOND WATCHDOG FIRED: it is the
+    //   oracle_save_state_setter_calls            GameMan::SetSaveState. Non-zero means the
+    //                                             MoveMapStep 210-second watchdog FIRED: it is the
     //                                             only caller in the image, and it forces the field
     //                                             without touching the SL device.
     //   oracle_save_state_setter_first_arg        what it was asked to write (4294967295 = never
     //                                             called). The watchdog always passes 0.
     //   oracle_save_state_setter_first_ms         host log epoch, or 18446744073709551615 for never
     //                                             called / no clock sink.
-    //   oracle_save_state_writer_state_exits      witnessed calls across which saveState LEFT 1,
+    //   oracle_save_state_writer_state_exits      witnessed calls across which saveState left 1,
     //                                             device irrelevant. Healthy completions count too,
     //                                             which is what makes a zero say something.
     //   oracle_save_state_writer_exits_at_wedge   that count frozen at the wedge's birth
     //                                             (18446744073709551615 = no wedge this run).
-    //                                             ZERO, WITH SITES INSTALLED, IS THE DECISIVE
+    //                                             Zero, with sites installed, is the decisive
     //                                             NEGATIVE: the write came through none of the six
     //                                             stores this crate watches.
     //   oracle_save_state_wedge_writer_verdict    that reading in one sentence, so a probe and the
@@ -1373,34 +1373,34 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_save_suppress::save_state_writer_exits_at_wedge(),
         er_save_suppress::wedge_writer_verdict(),
     ));
-    // WHICH SUBMIT LATCHED THE DEVICE, AND DID ITS LANE ACCEPT (`save_submit_latch.rs`). The block
+    // Which submit LATCHED the device, and did its lane accept (`save_submit_latch.rs`). The block
     // above watches every store to `saveState`; this one watches the SL device's `+0x10`/`+0x20`
     // and the submit builders that write them, because the 2026-08-31 wedge formed with the writer
-    // set complete and SILENT. The shape that produces exactly that is a submit that latched the
+    // set complete and silent. The shape that produces exactly that is a submit that latched the
     // device and whose lane never accepted -- `saveState` was never written to 1, so no writer was
     // ever needed to bring it back down.
     //
     //   oracle_save_submit_sites_installed        how many of FUN_140e6ef60 / FUN_140e6ec70 /
-    //                                             FUN_140e6fb50 chained. ZERO means nothing here
+    //                                             FUN_140e6fb50 chained. Zero means nothing here
     //                                             was watching and every field below reads zero for
-    //                                             that reason. Read it FIRST. The enqueue refuses
-    //                                             to chain while suppression is ARMED (it binds its
+    //                                             that reason. Read it first. The enqueue refuses
+    //                                             to chain while suppression is armed (it binds its
     //                                             own bare detour there), so 2 is expected then.
     //   oracle_save_submit_*_calls                forwarding counts per site.
     //   oracle_save_submit_latches                observed iodev+0x10 transitions 0 -> pointer.
-    //   oracle_save_submit_latches_without_accept THE COUNT THAT MATTERS: latches whose builder
+    //   oracle_save_submit_latches_without_accept the count that MATTERS: latches whose builder
     //                                             then returned 0 with the content still resident.
     //   oracle_save_submit_latches_self_released  builders that latched and undid it via
     //                                             FUN_140e6f200 before returning, so a zero above
     //                                             means "none stranded", not "none ever failed".
-    //   oracle_save_submit_wedge_latch_match      whether the content wedged on the device IS the
+    //   oracle_save_submit_wedge_latch_match      whether the content wedged on the device is the
     //                                             one an observed latch installed. Only
     //                                             `same-content-attributed` licenses reading the
     //                                             site/return fields as its attribution.
     //   oracle_save_submit_wedge_latch_site       which submit put it there.
     //   oracle_save_submit_wedge_builder_return   what that builder returned (RAX; the game reads
     //                                             AL). 18446744073709551615 = never observed.
-    //   oracle_save_submit_wedge_lane_return      what the LANE that called it returned.
+    //   oracle_save_submit_wedge_lane_return      what the lane that called it returned.
     //   oracle_save_submit_wedge_lane_state       GameMan.saveState after that lane returned. 1 is
     //                                             the accept; 0 with a latched device is the wedge.
     //                                             4294967295 = unsampled.
@@ -1436,12 +1436,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // SAVE-FLOW CONFIRM oracles. There is ONE confirm box in the flow -- "Are you sure you want to
     // overwrite this file?" -- so there is one set of counters. The three-box spelling
-    // (`oracle_save_flow_box1/2/3_*`) is GONE with the two up-front confirms it described; a probe
+    // (`oracle_save_flow_box1/2/3_*`) is gone with the two up-front confirms it described; a probe
     // written against those names will not silently read zeros from a renamed field, it will fail
     // to find them, which is the intended way to learn the flow changed.
     //
-    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, NOT on the msgbox
-    // oracles: the confirm box is captured into the flow's OWN dialog slot and deliberately does
+    // A save-flow probe must key on `oracle_save_flow_stage` + these counters, not on the msgbox
+    // oracles: the confirm box is captured into the flow's own dialog slot and deliberately does
     // not feed `MSGBOX_LAST_DIALOG` / `oracle_blocking_modal_present`, so the startup auto-accept
     // can never reach a user-facing save confirm and an expected, wanted confirm never reads as a
     // blocking-modal failure.
@@ -1454,13 +1454,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT.load(Ordering::SeqCst),
         SAVE_FLOW_RECIPE_UNAVAILABLE.load(Ordering::SeqCst),
         // Non-zero = a user chose an existing destination on a build whose confirm recipe failed
-        // verification, and the overwrite was REFUSED rather than performed unconfirmed.
+        // verification, and the overwrite was refused rather than performed unconfirmed.
         SAVE_DEST_OVERWRITE_UNCONFIRMABLE_COUNT.load(Ordering::SeqCst),
     ));
-    // CONFIRM-BOX FAILURE oracles (2026-07-28). `..._undecidable_count` is the box the DLL
-    // could not read an answer out of; it is deliberately NOT folded into the No counts, so a
+    // Confirm-box failure oracles (2026-07-28). `..._undecidable_count` is the box the DLL
+    // could not read an answer out of; it is deliberately not folded into the No counts, so a
     // run can always tell "the user declined" from "we failed to read the user's answer".
-    // Non-zero is a FAILURE even though nothing was written. `..._emit_count` is how many times
+    // Non-zero is a failure even though nothing was written. `..._emit_count` is how many times
     // the `CS::MenuJob::EmitResult` observer attributed a native verdict to a live confirm box
     // (>= 1 per answered box once the hook is installed), and `..._emit_installed` says whether
     // that observer is live at all.
@@ -1476,23 +1476,23 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     // SAVE-DESTINATION oracles (save-game-flow WP3): the Box2-"No" browser and the scoped
     // write-open redirect that makes the chosen destination -- not the loaded save -- receive the
-    // container the native writer emits. `redirect_hits` is one PER DIRTY BLOCK (the native
+    // container the native writer emits. `redirect_hits` is one per dirty block (the native
     // in-place writer opens the container once per block), so any positive count is normal and
     // zero is the failure. `seeded_count` is the fix that makes those block writes land in a real
     // container; `target_structure_ok` is the proof the result is a complete BND4, not merely a
     // file of the right length. `live_file_mutated` is the hard failure oracle that says the
     // redirect leaked and the loaded save was overwritten anyway, and `live_overwrite_count` names
-    // the OPPOSITE case: a commit that was SUPPOSED to rewrite the loaded save.
+    // the opposite case: a commit that was supposed to rewrite the loaded save.
     //
-    // `picker_open_retry_count` is the reopen-loop oracle (bd `er-effects-rs-rsxi`): opens where NO
+    // `picker_open_retry_count` is the reopen-loop oracle (bd `er-effects-rs-rsxi`): opens where no
     // picker ran and the menu pump kept the request armed. A deferred in-game MenuJob submit is the
     // only legitimate source, so with the OS surface active this must read 0 -- a positive value
     // there means a terminal outcome (a Cancel) was retried, which reopens comdlg32 forever.
     //
-    // PER-COMMIT vs CUMULATIVE, because reading one as the other is how a failed save reads as a
+    // Per-commit vs cumulative, because reading one as the other is how a failed save reads as a
     // successful one. `redirect_hits`, `target_written_ok`, `target_structure_ok`,
-    // `live_file_mutated`, `live_bak_mutated` and `live_stat_unreadable` describe THE COMMIT THAT
-    // ARMED LAST and nothing before it -- `er_telemetry_core::counters::save_dest_reset_commit_verdicts`
+    // `live_file_mutated`, `live_bak_mutated` and `live_stat_unreadable` describe the commit that
+    // armed last and nothing before it -- `er_telemetry_core::counters::save_dest_reset_commit_verdicts`
     // clears all six at every arm. The process-wide history is in the `*_count` /`commit_fail` /
     // `restore_*` counters and in `live_file_mutated_total`, none of which are ever cleared.
     body.push_str(&format!(
@@ -1515,11 +1515,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_DEST_LIVE_BAK_MUTATED.load(Ordering::SeqCst),
         SAVE_DEST_LIVE_OVERWRITE_COUNT.load(Ordering::SeqCst),
     ));
-    // DESTINATION-COMMIT SAFETY ORACLES (2026-07-29). Every one names a decision the commit
+    // Destination-commit SAFETY ORACLES (2026-07-29). Every one names a decision the commit
     // refused to guess at, or a fact it could not establish, so a run can report it instead of
     // leaving it to be inferred from a file that changed when it should not have:
     //   * `identity_unknown_abort` / `no_writer_observer_abort` -- commits that did NOT fire;
-    //   * `self_redirect_blocked` -- a destination proven to BE the loaded save under a different
+    //   * `self_redirect_blocked` -- a destination proven to be the loaded save under a different
     //     spelling, which the old string compare would have redirected onto itself;
     //   * `foreign_open_passed` -- write-opens of a same-named save container elsewhere on the
     //     machine that were left alone instead of rerouted into the user's destination;

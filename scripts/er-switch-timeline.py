@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Print a run's character-switch timeline, and whether each switch actually tore the old world down.
 
-WHY THIS EXISTS. A session that switches characters twice produces a 2 MB debug log, and the
+Why this exists. A session that switches characters twice produces a 2 MB debug log, and the
 difference between a switch that worked and one that did nothing is a handful of lines scattered
-through it. Worse, the failure is an ABSENCE -- switch #2 arms, and then the return-title REQUEST,
+through it. Worse, the failure is an absence -- switch #2 arms, and then the return-title request,
 the bc4 force, the final functor and `WORLD LOST` simply never appear -- so reading forwards for
 "the error" finds nothing and the run reads as fine. This prints the events in order and then the
-three gates that decide whether a NEXT switch can tear down at all, so the absence is visible
+three gates that decide whether a next switch can tear down at all, so the absence is visible
 beside the counters that explain it.
 
-THE GATES. `system_quit_quickload_return_title_request_count`,
+The gates. `system_quit_quickload_return_title_request_count`,
 `system_quit_direct_return_title_chain_submit_count` and
 `system_quit_return_title_final_functor_call_count` are run-global one-shots the teardown runs
 behind (`== 0` gates and a `compare_exchange(0, 1)`). They are handed back at the end of every
-committed switch. Finding all three at 1 with a second switch armed IS the no-teardown failure --
+committed switch. Finding all three at 1 with a second switch armed is the no-teardown failure --
 the old character stays standing, no loading screen appears, and the quit menu reopens over a
 destroyed ProfileSelect.
 

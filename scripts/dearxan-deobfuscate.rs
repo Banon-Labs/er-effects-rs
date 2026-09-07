@@ -1,9 +1,9 @@
-// Produce a DEOBFUSCATED (Arxan-decrypted) copy of a FromSoftware executable as a flat MAPPED
+// Produce a DEOBFUSCATED (Arxan-decrypted) copy of a FromSoftware executable as a flat mapped
 // image (file offset == RVA), for static analysis with objdump. Decrypts all Arxan-encrypted
 // regions and writes them back over the mapped image. Usage:
 //   cargo run --release --example deobfuscate --no-default-features --features rayon -- <exe> <out>
 // The output is a memory image: VA = file_offset + image_base (0x140000000 for ER).
-// NOTE: the output is the copyrighted game binary -- do NOT commit it.
+// NOTE: the output is the copyrighted game binary -- do not commit it.
 use std::path::PathBuf;
 
 use dearxan::analysis::{StubAnalyzer, analyze_all_stubs_with, encryption};

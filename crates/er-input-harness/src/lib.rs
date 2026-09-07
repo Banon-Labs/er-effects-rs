@@ -1,27 +1,27 @@
 //! er-input-harness -- standalone Elden Ring INPUT SELF-DRIVE HARNESS.
 //!
 //! A separate cdylib (`er_input_harness.dll`), loaded as its own `[[natives]]` entry in the ME3
-//! profile ALONGSIDE the product (or with the telemetry-only DLL for a vanilla capture). Its mere
-//! PRESENCE enables it (DEFAULT-ON, no env/marker gate); omit it from the profile for production.
+//! profile alongside the product (or with the telemetry-only DLL for a vanilla capture). Its mere
+//! presence enables it (default-on, no env/marker gate); omit it from the profile for production.
 //!
-//! MECHANISM: ER input is driven by writing the game's OWN input memory -- the CSMenuMan keystate
+//! MECHANISM: ER input is driven by writing the game's own input memory -- the CSMenuMan keystate
 //! bitmap (`inputmgr+0x90+eventId`), the DLUID input-active flag (`+0x88d`), and the title global
-//! accept byte (`base+0x4589bdc`) -- on the GAME THREAD each frame. SendInput/XInput/window-focus was a
-//! DEAD path and is not carried over.
+//! accept byte (`base+0x4589bdc`) -- on the game thread each frame. SendInput/XInput/window-focus was a
+//! dead path and is not carried over.
 //!
-//! TITLE-ACTIVE HOOK (2026-07-22): the per-frame callback is a `CSTaskImp` `FrameBegin` recurring task
-//! (same registration as er-telemetry), which fires at the TITLE and boot screens AND in-world --
+//! Title-active hook (2026-07-22): the per-frame callback is a `CSTaskImp` `FrameBegin` recurring task
+//! (same registration as er-telemetry), which fires at the title and boot screens and in-world --
 //! unlike the previous in-world-only union MinHook anchor, which never ran at the title and so could not
-//! drive PRESS ANY BUTTON / Continue. This lets the harness drive the FULL native boot+reload standalone
-//! (bd USER-chose-build-harness-title-drive-cstaskimp-hook-accept-byte-2026-07-22).
+//! drive press any button / Continue. This lets the harness drive the full native boot+reload standalone
+//! (bd user-chose-build-harness-title-drive-cstaskimp-hook-accept-byte-2026-07-22).
 //!
-//! CROSS-DLL STATE: separate DLLs do not share Rust statics, so this DLL re-derives menu/game state by
-//! reading GAME memory directly (game_mem) instead of reading product statics.
+//! Cross-DLL STATE: separate DLLs do not share Rust statics, so this DLL re-derives menu/game state by
+//! reading game memory directly (game_mem) instead of reading product statics.
 
 // A cdylib whose every consumer is `DllMain` and the per-frame game task it registers, all of
 // them `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out,
 // so `dead_code`/`unused_imports` there report the cfg, not real debt (measured 2026-08-21: 108
-// on the host, 0 on the shipping target). The SHIPPING target carries the full deny.
+// on the host, 0 on the shipping target). The shipping target carries the full deny.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 #[cfg(windows)]
@@ -84,7 +84,7 @@ fn install() {
         "er-input-harness attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
     );
     // Wait for the game's task manager (no sleep: yield + re-poll, the product's wait pattern).
-    // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved
+    // Bounded (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved
     // the wineserver and hung a boot.
     let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
     else {
@@ -93,7 +93,7 @@ fn install() {
     let base = resolve_base();
     input_inject::log_resolution(base);
     // Install the FD4PadDevice::poll MinHook so the in-world menu can be driven by the raw pad snapshot
-    // (inputmgr+0x90 is OUTPUT in-world; the menu reads the pad device). Title/boot still use the accept
+    // (inputmgr+0x90 is output in-world; the menu reads the pad device). Title/boot still use the accept
     // byte from the CSTaskImp task below.
     pad_inject::install_pad_poll_hook(base);
     harness_log!("er-input-harness install complete {}", game_mem::snapshot());
@@ -119,9 +119,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-input-harness", crate::log::log_line);
         er_hook::set_hook_logger(crate::log::log_line);

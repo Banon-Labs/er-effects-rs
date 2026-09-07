@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Which SYMBOL declares this address? Every spelling this tree uses, or an honest "I cannot tell".
+"""Which symbol declares this address? Every spelling this tree uses, or an honest "I cannot tell".
 
-WHY THIS EXISTS
+Why this exists
 ---------------
 Two gates were caught on 2026-08-30 giving a confidently wrong answer to the same question, for
 the same reason.
@@ -14,50 +14,50 @@ the same reason.
 
   `check-1170-translation-collisions.py` searched for the literal `const NAME: usize = 0x<addr>;`
   and, finding none, printed "row B is claimed by no feature: deleting it removes this collision at
-  zero cost." For 0xb0d400 that advice was WRONG AND DESTRUCTIVE. The declaration is
+  zero cost." For 0xb0d400 that advice was wrong and destructive. The declaration is
   `MenuJobWait = 0x00b0d400` inside `#[repr(u32)] pub enum MenuTraceRva`, reached through
   `pub const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;`. The hex literal
-  is in the tree; the SHAPE `const NAME: usize = 0x..;` is not. Its three live use sites are on the
+  is in the tree; the shape `const NAME: usize = 0x..;` is not. Its three live use sites are on the
   autoload path (`native_title_job.rs`, and twice in `title_load_step_hooks.rs`; a fourth mention is
   the string label passed beside one of them). Following the gate's own advice would have deleted a
   working feature's address.
 
-Both failures are one failure: SEARCHING FOR A SPELLING FINDS SPELLINGS, NOT ADDRESSES. So this
-module resolves VALUES. It reads every declaration form in `crates/`, evaluates each to a number,
+Both failures are one failure: Searching for a spelling finds SPELLINGS, not addresses. So this
+module resolves values. It reads every declaration form in `crates/`, evaluates each to a number,
 and answers "which symbols equal this address" from the resolved values rather than from a regex
 over the source text.
 
-THE PART THAT MATTERS MORE THAN THE MATCHING
+The part that matters more than the matching
 --------------------------------------------
-"I found no reference" and "there is no reference" are different facts and MUST NOT print the same
+"I found no reference" and "there is no reference" are different facts and must not print the same
 sentence. A resolver has a residue -- declarations whose right-hand side it could not evaluate --
 and while that residue is non-empty, any one of them could be the address. So `claims()` returns
 `proven_unclaimed` as a separate field from `found_nothing`, and it is True only when
 
   * the walk read files (a scan that read nothing must never look like a clean scan);
-  * NO declaration in the integer-valued universe resolved to the address;
-  * NO bare hex literal of the address occurs in code (a `rva: 0xaec480` table field claims an
+  * No declaration in the integer-valued universe resolved to the address;
+  * No bare hex literal of the address occurs in code (a `rva: 0xaec480` table field claims an
     address with no constant name at all -- er-reload-trace shipped exactly that); and
-  * the residue that could hold THIS address is EMPTY.
+  * the residue that could hold this address is empty.
 
 A caller may only advise deletion when `proven_unclaimed` is True. Anything else is
 "not proven", and the difference is a deleted feature.
 
-THE UNIVERSE, stated so the proof means something
+The universe, stated so the proof means something
 -------------------------------------------------
 An address constant in Rust is an integer-typed `const`/`static`, an integer-repr enum's
 discriminant, an element of an integer array/slice/tuple, or an integer `Range` band. Three classes
-are then subtracted, each for a reason about what the thing IS rather than what it is called --
+are then subtracted, each for a reason about what the thing is rather than what it is called --
 which is the discipline the failures above violated:
 
-  * a NON-INTEGER type. A `&str` cannot hold an address, so an unevaluated one does not weaken the
+  * a non-integer type. A `&str` cannot hold an address, so an unevaluated one does not weaken the
     proof;
-  * a type TOO NARROW for the address being asked about. A `u8` cannot be 0x7ad710, so an
+  * a type too narrow for the address being asked about. A `u8` cannot be 0x7ad710, so an
     unevaluated `&[u8; 64]` byte string is not a declaration that might be it. This is
     query-relative: the residue is smaller for a large address than for a small one;
-  * a value composed only of RUST TYPE LAYOUT -- `offset_of!`, `size_of`, `align_of` and integer
+  * a value composed only of Rust type layout -- `offset_of!`, `size_of`, `align_of` and integer
     literals, recursively. Those are lengths and intra-struct offsets, not addresses in
-    eldenring.exe's image. A constant that ADDS a layout quantity to something else is NOT in this
+    eldenring.exe's image. A constant that adds a layout quantity to something else is not in this
     class and stays in the residue.
 
 Measured on this tree, 2026-08-30: 5124 address-capable declarations, 285 unevaluated, 219 of them
@@ -83,7 +83,7 @@ IMAGE_BASE = 0x140000000
 # The sibling `fromsoftware-rs` checkout this repo's Cargo.toml path-deps actually point at
 # (`../../../fromsoftware-rs/crates/eldenring`, `.../shared`, verified against
 # `crates/er-death-persist/Cargo.toml` and `crates/er-loading-portrait-core/Cargo.toml`). Read
-# ONLY for struct/enum/bitfield LAYOUT and macro-sourced associated-const VALUES -- never as a
+# only for struct/enum/bitfield layout and macro-sourced associated-const values -- never as a
 # source of address declarations. Files here are never added to `files_read`, `decls`, `text` or
 # the address universe: this repo's own `crates/` tree is the only thing "who claims this
 # address" is ever asked about, and widening that scope would make the universe/residue counts
@@ -103,9 +103,9 @@ FROMSOFT_TYPE_ROOTS = [
 
 
 def code_only(text):
-    """`text` with every Rust comment AND string body blanked to spaces, offsets preserved.
+    """`text` with every Rust comment and string body blanked to spaces, offsets preserved.
 
-    MOVED HERE FROM `check-stale-rva-calls.py` ON 2026-08-30 so both gates share one dialect
+    Moved here from `check-stale-rva-calls.py` on 2026-08-30 so both gates share one dialect
     instead of growing a third. That gate's baseline was contaminated by not doing this at all:
     two of its three rows were prose -- a `//` paragraph in `er-game-base/src/game_build.rs`
     explaining that "a stale address is equally reachable as a CALL (`transmute(base + RVA)`)",
@@ -115,11 +115,11 @@ def code_only(text):
     added beside them, and the next agent to shrink the baseline "fixes" a sentence.
 
     It matters in the other direction here. All three collision addresses this module was written
-    for appear in `crates/` ONLY inside doc comments that describe the collision. Counting those
+    for appear in `crates/` only inside doc comments that describe the collision. Counting those
     as claims would make every address look live and the gate's advice useless; failing to blank
     them would be the mirror image of the bug it exists to fix.
 
-    String BODIES are blanked for the same reason comments are, and it is the same failure one
+    String bodies are blanked for the same reason comments are, and it is the same failure one
     step along: `"// transmute(base + QUOTED_RVA)"` is a quoted example, not a call. Nothing
     either gate looks for can legitimately live inside a string literal, so blanking the body
     cannot hide a finding, while leaving it readable manufactures one.
@@ -218,7 +218,7 @@ def rust_sources(root=None):
 # --------------------------------------------------------------------------------------------
 
 # An integer-valued type. The residue that blocks a deletion recommendation is counted over
-# declarations of THESE types only, so what counts is written down rather than assumed: a `&str`
+# declarations of these types only, so what counts is written down rather than assumed: a `&str`
 # or a struct literal cannot be an address, and letting one sit in the residue would suppress the
 # advice forever for no reason. `Range` is in because a band constant
 # (`const LEGACY_CONFIRM_CALLER_BAND: Range<usize> = 0x7a3000..0x7a4000;`) claims every address
@@ -233,8 +233,8 @@ INT_TYPE = re.compile(
     + r"\b"
 )
 
-# A declaration is found by its HEAD and then SCANNED, not matched whole. A single regex cannot do
-# it: `const TABLE: [usize; 2] = [..];` puts a `;` inside the TYPE, and `const _: () = assert!(A ==
+# A declaration is found by its head and then scanned, not matched whole. A single regex cannot do
+# it: `const TABLE: [usize; 2] = [..];` puts a `;` inside the type, and `const _: () = assert!(A ==
 # B);` puts an `=` inside the expression, so any `[^=;]` fence either drops array-typed address
 # tables or stops at the wrong character. Both forms carry addresses in this tree, so both are
 # scanned with bracket depth instead.
@@ -280,10 +280,10 @@ ENUM_HEAD = re.compile(
     r"(?:pub(?:\s*\([^)]*\))?\s+)?enum\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>{]*>\s*)?\{"
 )
 # `use a::b::OLD as NEW;` and `use a::{B as C, D as E};`. An alias does not declare a value, but it
-# is another NAME for one, and a gate that reports "no symbol claims this" while an alias points at
+# is another name for one, and a gate that reports "no symbol claims this" while an alias points at
 # a claiming symbol is repeating the miss in a different key.
 USE_LINE = re.compile(r"(?:^|[\s;{}])(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([^;]+);", re.S)
-# An identifier, and NOT the tail of a numeric literal. Without the lookbehind, `0x007a7b60`
+# An identifier, and not the tail of a numeric literal. Without the lookbehind, `0x007a7b60`
 # yields the "identifier" `x007a7b60`, which resolves to nothing, and every hex constant in the
 # tree becomes unresolvable -- the residue swallows the universe and no address can ever be proven
 # unclaimed. A `.` is in the lookbehind so a method call is left as punctuation the arithmetic
@@ -321,13 +321,13 @@ BUILTIN = {
 
 ARITHMETIC_ONLY = re.compile(r"^[0-9a-fA-FxXoObB_+\-*/%()<>|&^~! ]*$")
 
-# HOW WIDE IS THE SLOT? The residue is what blocks a "nothing claims this" proof, so shrinking it
+# How wide is the slot? The residue is what blocks a "nothing claims this" proof, so shrinking it
 # soundly matters more than shrinking it. This is the one sound way to shrink it: a `u8` cannot
 # hold 0x7ad710 no matter what expression fills it, so an unevaluated `&[u8; 64]` byte string is
 # not a declaration that "might be the address" -- it is one that PROVABLY is not.
 #
 # It is the same move `check-stale-rva-calls.py` makes when it excludes `PE_DOS_LFANEW_OFFSET` by
-# VALUE rather than by name: an exclusion has to rest on what the thing IS. Excluding byte arrays
+# value rather than by name: an exclusion has to rest on what the thing is. Excluding byte arrays
 # because they "look like strings" would be the name-based reasoning this whole module exists to
 # stop.
 SCALAR_WIDTH = re.compile(r"\b(" + INT_SCALAR + r")\b")
@@ -338,8 +338,8 @@ WIDTH = {
 
 # (size, align) in bytes, x86_64-pc-windows-msvc -- the one target this repo cross-compiles the
 # game DLLs for (`cargo xwin build --release --target x86_64-pc-windows-msvc`), so `usize`/`isize`
-# are pinned at 8 rather than left target-generic. Used ONLY to compute `offset_of!`/`size_of!` /
-# `align_of!` calls that reach a REAL Rust type -- never to guess a value, so an unlisted type
+# are pinned at 8 rather than left target-generic. Used only to compute `offset_of!`/`size_of!` /
+# `align_of!` calls that reach a real Rust type -- never to guess a value, so an unlisted type
 # (a generic, a smart pointer, a `#[repr(Rust)]` struct with no field list we trust) simply misses
 # this table and the caller falls back to "unresolved", the same as before this table existed.
 PRIMITIVE_SIZE_ALIGN = {
@@ -361,18 +361,18 @@ def _can_hold(type_text, value):
     return True if bits is None else value < (1 << bits)
 
 
-# RUST TYPE LAYOUT IS NOT A GAME ADDRESS. `offset_of!`, `size_of` and `align_of` compute the layout
-# of OUR OWN types: a byte offset inside a struct, or a length. Neither is an address in
-# eldenring.exe's image, so a declaration built ONLY from them and integer literals names no game
+# Rust type layout is not a game address. `offset_of!`, `size_of` and `align_of` compute the layout
+# of our own types: a byte offset inside a struct, or a length. Neither is an address in
+# eldenring.exe's image, so a declaration built only from them and integer literals names no game
 # address whatever number it happens to evaluate to, and keeping it in the residue would suppress
 # every proof forever for no reason. Measured 2026-08-30: 219 of this tree's 285 unevaluated
 # address-capable declarations are exactly that (`PROFILE_SUMMARY_LEVEL_OFFSET`,
 # `PGD_NAME_9C_OFFSET`, the `read_character.rs` field table), leaving 66 that are genuinely
 # unread -- and 4 once the width test below has ruled out the ones too narrow to hold a game RVA.
 #
-# The exclusion is RECURSIVE and it is by WHAT THE EXPRESSION IS, not by what it is called -- the
-# same discipline as excluding a PE-header field by value. A constant that ADDS a layout quantity
-# to something else (`SOME_RVA + size_of::<T>()`) is NOT layout-derived: the other operand could be
+# The exclusion is RECURSIVE and it is by what the expression is, not by what it is called -- the
+# same discipline as excluding a PE-header field by value. A constant that adds a layout quantity
+# to something else (`SOME_RVA + size_of::<T>()`) is not layout-derived: the other operand could be
 # a game address, so it stays in the residue and continues to block the proof.
 LAYOUT_CALL = re.compile(
     r"(?:[A-Za-z_]\w*\s*::\s*)*(?:offset_of|size_of|align_of|size_of_val)\s*(?:!|::\s*<[^<>]*>)?\s*\("
@@ -400,7 +400,7 @@ def _strip_layout_calls(expr):
 
 
 # --------------------------------------------------------------------------------------------
-# Rust type layout -- EVALUATED, not just recognised. `_strip_layout_calls` above answers "is this
+# Rust type layout -- Evaluated, not just recognised. `_strip_layout_calls` above answers "is this
 # expression built only from layout intrinsics" (for the residue exclusion); the functions below
 # answer "what NUMBER does this layout intrinsic actually compute", by reading the real
 # `#[repr(C)]` struct/enum/bitfield-wrapper definitions this tree and its `fromsoftware-rs` sibling
@@ -411,11 +411,11 @@ def _strip_layout_calls(expr):
 # or a struct without `#[repr(C...)]` returns None and the caller is left unresolved exactly as it
 # was before this existed -- nothing here can manufacture a wrong value, only a missing one.
 REPR_C = re.compile(r"repr\s*\(\s*C\b")
-# A permissive sibling of `ENUM_HEAD` (used for address DISCRIMINANTS) for LAYOUT purposes only:
+# A permissive sibling of `ENUM_HEAD` (used for address DISCRIMINANTS) for layout purposes only:
 # `ChrAsmArmStyle` carries `#[repr(u32)]` followed by a `#[derive(..)]` before `enum`, which
 # `ENUM_HEAD`'s single-optional-attribute shape does not admit. Kept separate rather than loosening
-# `ENUM_HEAD` itself, so this change cannot alter which enum VARIANTS the address-claim scanner
-# sees -- it only widens what this module can compute a SIZE for.
+# `ENUM_HEAD` itself, so this change cannot alter which enum variants the address-claim scanner
+# sees -- it only widens what this module can compute a size for.
 ENUM_TYPE_HEAD = re.compile(
     r"#\s*\[\s*repr\s*\(\s*([A-Za-z0-9_]+)\s*\)\s*\]\s*"
     r"(?:#\s*\[[^\[\]]*\]\s*)*"
@@ -428,7 +428,7 @@ FIELD_RE = re.compile(
     r"^(?:#\s*\[[^\[\]]*\]\s*)*(?:pub(?:\s*\([^)]*\))?\s+)?([A-Za-z_]\w*)\s*:\s*(.+)$", re.S
 )
 # `bitfield! { ... pub struct GaitemHandle(u32); ... }` -- a primitive-wrapping newtype whose size
-# is its inner primitive's size. Only the struct LINE inside the macro body is matched; the bit
+# is its inner primitive's size. Only the struct line inside the macro body is matched; the bit
 # accessor methods around it are irrelevant to layout.
 BITFIELD_MACRO = re.compile(r"\bbitfield!\s*\{")
 BITFIELD_STRUCT_LINE = re.compile(r"\bstruct\s+([A-Za-z_]\w*)\s*\(\s*([A-Za-z_][\w:]*)\s*\)\s*;")
@@ -443,7 +443,7 @@ SOLO_PARAM_TUPLE = re.compile(
     r"^\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_][\w:<>]*)\s*,\s*(.+?)\s*\)$", re.S
 )
 # `core::mem::offset_of!(ChrAsm, equipment_param_ids)`, `core::mem::size_of::<i32>()`,
-# `align_of::<T>()`. These substitute a NUMBER into the expression text before the ordinary
+# `align_of::<T>()`. These substitute a number into the expression text before the ordinary
 # arithmetic evaluator runs, so downstream arithmetic (`OFFSET + COUNT * size_of::<i32>()`) needs
 # no special-casing at all once the intrinsic itself is a plain digit string.
 OFFSET_OF_RE = re.compile(
@@ -458,7 +458,7 @@ ALIGN_OF_TURBOFISH = re.compile(
 
 
 def _scan_balanced(text, open_index, open_char, close_char):
-    """Index of the `close_char` matching the `open_char` AT `open_index`, or None."""
+    """Index of the `close_char` matching the `open_char` at `open_index`, or None."""
     depth, i, n = 0, open_index, len(text)
     while i < n:
         if text[i] == open_char:
@@ -536,7 +536,7 @@ class Literal:
 
 
 class Claims:
-    """The answer to "who claims this address", and how much of it is PROVEN."""
+    """The answer to "who claims this address", and how much of it is proven."""
 
     __slots__ = (
         "address",
@@ -565,10 +565,10 @@ class Claims:
 
     @property
     def proven_unclaimed(self):
-        """True ONLY when nothing claims it AND the resolver could evaluate everything.
+        """True only when nothing claims it and the resolver could evaluate everything.
 
         The two halves are separate on purpose. `found_nothing` is what a regex can tell you;
-        this is what a resolver can PROVE, and only this may be used to advise a deletion.
+        this is what a resolver can prove, and only this may be used to advise a deletion.
         """
         return self.files_read > 0 and self.found_nothing and not self.residue
 
@@ -576,8 +576,8 @@ class Claims:
 def _element_count(expr):
     """How many elements a literal `[..]` / `&[..]` table has, or None if it is not one.
 
-    The ELEMENTS need not be numbers: `const ALL_SEAMS: &[MapSeam] = &[MapSeam { .. }, ..];`
-    yields no values at all, but its LENGTH is still an ordinary compile-time integer, and leaving
+    The elements need not be numbers: `const ALL_SEAMS: &[MapSeam] = &[MapSeam { .. }, ..];`
+    yields no values at all, but its length is still an ordinary compile-time integer, and leaving
     `ALL_SEAMS.len()` unresolved put a log-line limit into the residue that blocks every proof.
     """
     expr = expr.strip()
@@ -633,7 +633,7 @@ class Index:
         self.literals = []
         self.files_read = 0
         self.text = {}  # path -> comment/string-stripped source
-        # Type LAYOUT, not address declarations -- see the module docstring above `REPR_C`. Keyed
+        # Type layout, not address declarations -- see the module docstring above `REPR_C`. Keyed
         # by simple type name; a list because the same name can be declared more than once (only
         # `len(..) == 1` is trusted, same "ambiguous is unresolved" rule as everywhere else here).
         self.structs = {}  # name -> [(path, [(field_name, type_text), ..]), ..]
@@ -665,12 +665,12 @@ class Index:
         return index
 
     def _read_external(self):
-        """`fromsoftware-rs` sibling: type LAYOUT + macro-sourced consts, VALUE SOURCE ONLY.
+        """`fromsoftware-rs` sibling: type layout + macro-sourced consts, value source only.
 
         Deliberately does not touch `files_read`, `decls`, `text`, `by_simple`/`by_qualified`, or
         `literals` -- those define "who in crates/ claims this address", and this tree is not
         `crates/`. See the `FROMSOFT_TYPE_ROOTS` comment for why this scope is safe to widen (it
-        can only ADD resolving power, never remove an address from the claims universe).
+        can only add resolving power, never remove an address from the claims universe).
         """
         for root_dir in FROMSOFT_TYPE_ROOTS:
             if not os.path.isdir(root_dir):
@@ -697,7 +697,7 @@ class Index:
                 continue
             type_text, expr, _ = scanned
             # `match.start(1)`, not `match.start()`: the head pattern eats one leading character
-            # so it can anchor on a boundary, and counting newlines to it reports the PREVIOUS
+            # so it can anchor on a boundary, and counting newlines to it reports the previous
             # line whenever that character is the newline itself.
             line = text.count("\n", 0, match.start(1)) + 1
             self._add(Decl(path, line, match.group(2), None, match.group(1), type_text, expr))
@@ -775,7 +775,7 @@ class Index:
             line = text.count("\n", 0, match.start()) + 1
             self.literals.append(Literal(path, line, token, value))
 
-    # -- type layout (structs/enums/bitfield wrappers), VALUE SOURCE ONLY ---------------------
+    # -- type layout (structs/enums/bitfield wrappers), value source only ---------------------
 
     def _read_type_defs(self, path, text):
         self._read_structs(path, text)
@@ -785,7 +785,7 @@ class Index:
     def _read_structs(self, path, text):
         """Named-field `#[repr(C)]` structs -> ordered `(field_name, type_text)` lists.
 
-        A struct with NO `#[repr(C)]` in its attribute cluster is skipped outright: Rust's default
+        A struct with no `#[repr(C)]` in its attribute cluster is skipped outright: Rust's default
         repr has unspecified field order, so guessing a layout for one would not be evaluation, it
         would be fabrication wearing the same shape.
         """
@@ -846,7 +846,7 @@ class Index:
         """`solo_params!( (Type, StructType, Index), .. )` -> `Type::INDEX = Index`.
 
         The macro's own body only ever contains `const INDEX: u32 = $Index;` -- the placeholder,
-        never a number -- so the invocation's tuple list is the ONLY place the real value is
+        never a number -- so the invocation's tuple list is the only place the real value is
         written down at all.
         """
         for match in SOLO_PARAMS_CALL.finditer(text):
@@ -871,7 +871,7 @@ class Index:
     # -- type layout evaluation ----------------------------------------------------------------
 
     def _type_size_align(self, type_text, seen=None):
-        """`(size, align)` in bytes for a Rust type TEXT, or None if it cannot be computed.
+        """`(size, align)` in bytes for a Rust type text, or None if it cannot be computed.
 
         Fails closed at every branch: a type this cannot classify (a generic, a smart pointer, an
         ambiguous or undeclared struct/enum/bitfield name) returns None rather than a guess.
@@ -983,7 +983,7 @@ class Index:
         return bool(INT_TYPE.match(decl.type_text or ""))
 
     def value_of(self, decl, seen=None):
-        """`decl`'s value(s), or None. `seen` is the ANCESTOR PATH, not a visited set.
+        """`decl`'s value(s), or None. `seen` is the ancestor path, not a visited set.
 
         It has to be popped on the way out. Left as a visited set it also excludes SIBLINGS: one
         traversal that happens to touch `QuitRow::SaveGame` and then, later in the same traversal,
@@ -1065,11 +1065,11 @@ class Index:
     def _scalar(self, expr, seen, scope=None):
         expr = expr.strip()
         # `core::mem::offset_of!(ChrAsm, equipment_param_ids)`, `size_of::<i32>()`,
-        # `align_of::<T>()` -- substituted with the ACTUAL computed number (via `_offset_of` /
+        # `align_of::<T>()` -- substituted with the actual computed number (via `_offset_of` /
         # `_type_size_align`, which read real `#[repr(C)]` layouts) before anything else runs, so
-        # downstream arithmetic needs no special-casing at all: `OFFSET + COUNT *
+        # downstream arithmetic needs no special-casing at all: `offset + count *
         # size_of::<i32>()` becomes an ordinary digit expression once the intrinsic is a digit.
-        # Each loop `break`s (never substitutes a partial answer) the moment ONE occurrence can't
+        # Each loop `break`s (never substitutes a partial answer) the moment one occurrence can't
         # be computed, so a call this cannot resolve is left verbatim and falls through to the
         # ordinary "not an arithmetic expression" rejection below, exactly as before this existed.
         while True:
@@ -1133,7 +1133,7 @@ class Index:
         if not ARITHMETIC_ONLY.fullmatch(expr):
             return None
         expr = re.sub(r"(?<![/])/(?![/])", "//", expr)
-        # Rust spells bitwise NOT `!`; Python spells it `~`. `!X` is how this tree writes a
+        # Rust spells bitwise not `!`; Python spells it `~`. `!X` is how this tree writes a
         # sentinel (`const OWN_STEPPER_SLOT_NONE: i32 = !OWN_STEPPER_SLOT_ZERO;`).
         expr = expr.replace("!", "~")
         try:
@@ -1151,9 +1151,9 @@ class Index:
         return chosen[0] if len(chosen) == 1 else None
 
     def _lookup(self, path, seen, scope=None):
-        """A name at a USE site -> its value(s). Aliases, module paths and enum variants alike.
+        """A name at a use site -> its value(s). Aliases, module paths and enum variants alike.
 
-        `scope` is the FILE the name was written in, and its declarations are consulted first.
+        `scope` is the file the name was written in, and its declarations are consulted first.
         Without that, a short name that several crates declare independently -- `BASE` is declared
         three times with three meanings -- reads as ambiguous and drags every constant built on it
         into the residue, which is a wrong answer (it is not ambiguous at the site that wrote it)
@@ -1165,8 +1165,8 @@ class Index:
         segments = [s for s in path.split("::") if s]
         if not segments:
             return None
-        # A declaration already being evaluated is NOT a candidate for its own value. This tree
-        # re-exports a crate-wide address under the SAME simple name in a hundred places
+        # A declaration already being evaluated is not a candidate for its own value. This tree
+        # re-exports a crate-wide address under the same simple name in a hundred places
         # (`const GAME_MAN_SINGLETON_RVA: usize = er_game_base::rva::GAME_MAN_SINGLETON_RVA;`), so
         # without this a file-local preference resolves the name to the constant currently being
         # resolved, hits the cycle guard, and reports a perfectly ordinary re-export as residue.
@@ -1194,7 +1194,7 @@ class Index:
             return self._first_value(pool, seen)
         # No declaration in `crates/` names this -- the last resort is a fromsoftware-rs macro
         # const (`SpEffectParam::INDEX`, from `solo_params!`; see `_read_solo_params`). Checked
-        # LAST, after every local possibility, for the same reason `scope`-local decls win above:
+        # last, after every local possibility, for the same reason `scope`-local decls win above:
         # this repo's own declarations are the authority on its own names.
         if len(segments) >= 2:
             qualified = "::".join(segments[-2:])
@@ -1209,7 +1209,7 @@ class Index:
             got = self.value_of(decl, seen)
             if got is not None:
                 values |= got
-        # A name declared twice with DIFFERENT values is AMBIGUOUS, and ambiguous is unresolved:
+        # A name declared twice with different values is ambiguous, and ambiguous is unresolved:
         # picking one would be a guess wearing a number.
         return values if len(values) == 1 else None
 
@@ -1218,8 +1218,8 @@ class Index:
     def layout_derived(self, decl, seen=None):
         """Is this declaration built only from Rust type layout and integer literals?
 
-        `seen` is the ancestor PATH and is popped on the way out, for the same reason it is in
-        `value_of`: as a visited set it also rejects SIBLINGS, so a constant that adds two layout
+        `seen` is the ancestor path and is popped on the way out, for the same reason it is in
+        `value_of`: as a visited set it also rejects siblings, so a constant that adds two layout
         offsets together decided the second one was unknown purely because the first had already
         been looked at.
         """
@@ -1242,7 +1242,7 @@ class Index:
             if match.group(0).replace(" ", "") not in BUILTIN
         ]
         # A literal is not layout-derived, and neither is an empty expression. An expression that
-        # is nothing but ANOTHER layout constant is -- `const ITEM_FUNCTOR_A8: usize =
+        # is nothing but another layout constant is -- `const ITEM_FUNCTOR_A8: usize =
         # MENU_ITEM_FUNCTOR_A8_OFFSET;` re-exports a struct offset and is no more an address than
         # the offset_of! it forwards.
         if not removed and not names:
@@ -1266,7 +1266,7 @@ class Index:
         """Declarations in the address-capable universe that could not be evaluated.
 
         This is the reason a caller may not say "nothing claims this address". Each entry is a
-        declaration that MIGHT be the address and could not be read.
+        declaration that might be the address and could not be read.
         """
         return [
             decl
@@ -1294,7 +1294,7 @@ class Index:
         return out
 
     def claims(self, address):
-        """Everything that claims `address`, and whether "nothing does" is PROVEN.
+        """Everything that claims `address`, and whether "nothing does" is proven.
 
         Both the RVA and the `0x140000000 +` VA spelling are looked for, because the tree writes
         an address either way and a resolver that only knew one would repeat the class of miss
@@ -1322,7 +1322,7 @@ class Index:
                 result.literals.append(literal)
         for symbol in sorted(claimed_names):
             result.uses[symbol] = self.uses_of(symbol)
-        # The residue is computed FOR THIS ADDRESS, not in the abstract: a declaration whose type
+        # The residue is computed for this address, not in the abstract: a declaration whose type
         # cannot represent the address is not a declaration that might be it.
         result.residue = [
             decl
@@ -1396,13 +1396,13 @@ def describe_claims(result, out=sys.stdout, indent="  "):
 # Selftest
 # --------------------------------------------------------------------------------------------
 
-# THE MATCHER THIS MODULE REPLACES, frozen as a LITERAL. `check-1170-translation-collisions.py`
+# The MATCHER this module replaces, frozen as a literal. `check-1170-translation-collisions.py`
 # built its question as `rf"const [A-Z0-9_]+: *usize *= *0x{rva:x}\b"` and, finding no match, told
 # the reader to delete the row. Kept here so the controls below can prove each widening is
-# load-bearing: a control the OLD pattern also catches would pass on the broken gate and prove
+# load-bearing: a control the old pattern also catches would pass on the broken gate and prove
 # nothing.
 #
-# SPELLED OUT, NOT COMPOSED. A frozen control assembled from the live pieces is not frozen -- it
+# Spelled out, not composed. A frozen control assembled from the live pieces is not frozen -- it
 # widens whenever they widen, and "the old matcher misses this" silently becomes "the new matcher
 # misses this", which is the opposite claim. That is exactly how `check-stale-rva-calls.py`'s
 # controls nearly stopped proving anything.
@@ -1438,7 +1438,7 @@ def selftest():
             open(path, "w", encoding="utf-8").write(body)
         return Index.build(root=scratch)
 
-    # THE CONTROL THIS MODULE EXISTS FOR. An address declared ONLY as an enum discriminant. The
+    # The control this module exists for. An address declared only as an enum discriminant. The
     # old matcher cannot see it, and on that silence the gate recommended deleting the row.
     check(
         "the OLD matcher misses an enum-discriminant address (control is non-vacuous)",
@@ -1455,7 +1455,7 @@ def selftest():
     check("...so the address is not unclaimed", found.proven_unclaimed, False)
     check("...and it is not merely 'found nothing'", found.found_nothing, False)
 
-    # THE OTHER DECLARATION FORMS, each one a spelling that defeated a matcher in this tree.
+    # The other declaration forms, each one a spelling that defeated a matcher in this tree.
     forms = tree(
         {
             "crates/a/src/lib.rs": (
@@ -1501,11 +1501,11 @@ def selftest():
         True,
     )
 
-    # PROOF, NOT SILENCE. A tree the resolver fully understands may report an address unclaimed.
+    # Proof, not silence. A tree the resolver fully understands may report an address unclaimed.
     clean = tree({"crates/a/src/lib.rs": "pub const ONLY_RVA: usize = 0x111000;\n"})
     check("a fully-resolved tree can PROVE an address unclaimed", clean.claims(0x999000).proven_unclaimed, True)
 
-    # ...and one it does NOT fully understand may not, even though it found nothing. This is the
+    # ...and one it does not fully understand may not, even though it found nothing. This is the
     # whole point: the two answers must not print the same sentence.
     murky = tree(
         {
@@ -1520,7 +1520,7 @@ def selftest():
     check("...so the address is NOT proven unclaimed", unknown.proven_unclaimed, False)
     check("...even though nothing was found", unknown.found_nothing, True)
 
-    # A NON-ADDRESS type does not pollute the residue: a `&str` cannot be an address, and letting
+    # A non-address type does not pollute the residue: a `&str` cannot be an address, and letting
     # one block the proof forever would make the safe answer useless rather than safe.
     strings = tree(
         {
@@ -1532,11 +1532,11 @@ def selftest():
     )
     check("a &str const is outside the address universe", strings.claims(0x999000).proven_unclaimed, True)
 
-    # AN EMPTY WALK IS NOT A CLEAN WALK. A scan that read nothing must never look like proof.
+    # An empty walk is not a clean walk. A scan that read nothing must never look like proof.
     empty = tree({})
     check("a walk that read no files cannot prove anything", empty.claims(0x111000).proven_unclaimed, False)
 
-    # PROSE IS NOT A CLAIM. All three collision addresses appear in crates/ only inside doc
+    # Prose is not a claim. All three collision addresses appear in crates/ only inside doc
     # comments that describe the collision; counting those would make every address look live.
     prose = tree(
         {
@@ -1549,8 +1549,8 @@ def selftest():
     )
     check("a doc comment does not claim an address", prose.claims(0x7AD710).proven_unclaimed, True)
 
-    # AMBIGUITY IS UNRESOLVED, NOT A GUESS -- but only real ambiguity. A name declared in the
-    # SAME file as the use resolves there; a name that only two OTHER files declare, differently,
+    # Ambiguity is unresolved, not a guess -- but only real ambiguity. A name declared in the
+    # same file as the use resolves there; a name that only two other files declare, differently,
     # does not, and the constant built on it stays residue rather than taking a number on faith.
     ambiguous = tree(
         {
@@ -1576,7 +1576,7 @@ def selftest():
         True,
     )
 
-    # THE REAL TREE. A resolver that only ever runs against its own fixtures is a fixture.
+    # The real tree. A resolver that only ever runs against its own fixtures is a fixture.
     live = index()
     check("the real walk reads a tree", live.files_read > 200, True)
     check("the real universe is populated", live.universe_size() > 500, True)
@@ -1588,13 +1588,13 @@ def selftest():
     )
     check("...and it has live use sites", sum(len(u) for u in real.uses.values()) > 0, True)
 
-    # THE FOUR THAT BLOCKED `proven_unclaimed` FOR EVERY `.text` ADDRESS, 2026-08-30. Frozen
+    # The four that blocked `proven_unclaimed` for every `.text` address, 2026-08-30. Frozen
     # expected values, hand-derived independently of this resolver (never by calling it and
     # asserting the result equals itself, which would let a widened matcher grade its own
     # homework):
     #   * SP_EFFECT_PARAM_INDEX -- `solo_params!` in fromsoftware-rs's `solo_param_repository.rs`
     #     lists `(SpEffectParam, SP_EFFECT_PARAM_ST, 15)`: row 15, read by source inspection.
-    #   * CHR_ASM_UNKD4_OFFSET / CHR_ASM_UNKD8_OFFSET -- `chr_asm_layout.rs`'s OWN doc comments
+    #   * CHR_ASM_UNKD4_OFFSET / CHR_ASM_UNKD8_OFFSET -- `chr_asm_layout.rs`'s own doc comments
     #     name +0xd4/+0xd8 from the ctor's `movq $-1,0xd4(%rsi)` (deobf 0x1403be208), independent
     #     disassembly evidence that predates this fix and does not depend on it.
     #   * CHR_ASM_ENTRY_COUNT -- the same file's `CHR_ASM_EQUIPMENT_ENTRY_COUNT` is independently
@@ -1611,17 +1611,17 @@ def selftest():
         if len(decls) == 1:
             check(f"{name} EVALUATES to its real (frozen) value", decls[0].value, {expected})
 
-    # PROOF, NOT SILENCE -- ON THE REAL TREE. Before this fix, `proven_unclaimed` was False for
-    # EVERY `.text`-scale address (all four sat in every query's residue, wide enough to hold
-    # anything). An address nothing declares must now PROVE unclaimed...
+    # Proof, not silence -- On the real tree. Before this fix, `proven_unclaimed` was False for
+    # every `.text`-scale address (all four sat in every query's residue, wide enough to hold
+    # anything). An address nothing declares must now prove unclaimed...
     check(
         "an undeclared .text-scale address is now PROVEN unclaimed on the real tree",
         live.claims(0x6F6F6F6F).proven_unclaimed,
         True,
     )
-    # ...while a REAL address this fix's own new machinery resolved (CHR_ASM_UNKD4_OFFSET's own
+    # ...while a real address this fix's own new machinery resolved (CHR_ASM_UNKD4_OFFSET's own
     # computed value, reached only through offset_of!/size_of! evaluation -- a non-literal path)
-    # correctly still reports CLAIMED, not unclaimed. The fix must not make its own targets look
+    # correctly still reports claimed, not unclaimed. The fix must not make its own targets look
     # free.
     unkd4_claims = live.claims(0xD4)
     check(
@@ -1631,7 +1631,7 @@ def selftest():
     )
     check("...so THAT address is not proven unclaimed", unkd4_claims.proven_unclaimed, False)
 
-    # THE MECHANISM, ON A FIXTURE -- so this control does not depend on fromsoftware-rs's CURRENT
+    # The mechanism, on a fixture -- so this control does not depend on fromsoftware-rs's current
     # content, which can drift independently of this test. Mirrors the shape that blocked the real
     # CHR_ASM offsets: offset_of! through a nested #[repr(C)] struct, an array of a bitfield-
     # wrapped primitive newtype, and a fieldless #[repr(u32)] enum field. Expected offsets are
@@ -1685,9 +1685,9 @@ def selftest():
         {"UNKD4_OFFSET"},
     )
 
-    # THE MACRO PATH, DIRECTLY -- `solo_params!` is only read from the fromsoftware-rs sibling
+    # The macro path, directly -- `solo_params!` is only read from the fromsoftware-rs sibling
     # (`_read_external`), which a `tree()` fixture's synthetic root does not stand in for. Exercise
-    # `_read_solo_params` on its own fixture text instead: still evaluation of REAL source shape,
+    # `_read_solo_params` on its own fixture text instead: still evaluation of real source shape,
     # just not routed through the sibling-directory walk for this control.
     solo_probe = Index()
     solo_probe._read_solo_params(

@@ -3,14 +3,14 @@
 workflow-steer.py -- generic, cooperative steering channel for the Claude Code
 Workflow tool.
 
-The workflow SCRIPT runs in a sandbox with no filesystem/network. It can only
+The workflow script runs in a sandbox with no filesystem/network. It can only
 observe live user input by spawning an agent() that reads an external channel
 and returns its contents. This helper is that channel's read/consume side: a
 reader-agent (between phases) or a worker-agent (before finalizing) shells out
 to this script to fetch any pending user steering, and the script branches on
 the returned text.
 
-The USER is the writer. They steer transparently by dropping a plain-text file
+The user is the writer. They steer transparently by dropping a plain-text file
 into the control directory (or appending a directive). Claude only authored this
 generic hook; it never sees or mediates the injected content -- the workflow
 reads it directly at the next poll boundary.
@@ -18,12 +18,12 @@ reads it directly at the next poll boundary.
 Channel layout (all under a control dir, default: <repo>/.workflow-steer/):
   inbox/                 user drops steering files here (any name, *.txt/*.md/*.json)
   consumed/              this script atomically moves files here after reading (audit trail)
-  STOP                   presence => emit a hard-stop directive (kill switch)
+  stop                   presence => emit a hard-stop directive (kill switch)
   scope=<name>.txt       optional per-phase / per-worker targeting (see --scope)
 
-Usage (invoked BY a workflow agent, not by the user):
+Usage (invoked by a workflow agent, not by the user):
   python3 scripts/workflow-steer.py read            # read+consume all pending, print JSON
-  python3 scripts/workflow-steer.py peek            # read WITHOUT consuming (idempotent poll)
+  python3 scripts/workflow-steer.py peek            # read without consuming (idempotent poll)
   python3 scripts/workflow-steer.py read --scope refine-agent-3
   python3 scripts/workflow-steer.py wait --timeout 45 --interval 3   # bounded poll gate
   python3 scripts/workflow-steer.py status          # counts only
@@ -82,7 +82,7 @@ def _read_text(p: Path) -> str:
 
 
 def _scope_match(name: str, scope: str | None) -> bool:
-    """A file targets a scope if its name starts with 'scope=<scope>' OR carries
+    """A file targets a scope if its name starts with 'scope=<scope>' or carries
     no scope= prefix at all (broadcast). This lets a user aim a directive at one
     worker (scope=refine-agent-3.txt) or at everyone (redir.txt)."""
     if scope is None:

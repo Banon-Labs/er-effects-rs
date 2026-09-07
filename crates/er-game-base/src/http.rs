@@ -1,9 +1,9 @@
-//! Blocking HTTPS via WinHTTP: a GET, and a JSON POST.
+//! Blocking HTTPS via WinHTTP: a get, and a JSON post.
 //!
 //! WinHTTP rather than a Rust TLS stack because it is what Wine actually implements: a
 //! standalone probe built exactly like this completed the full handshake inside the game's
 //! own Proton prefix (`WINEPREFIX=.../compatdata/1245620/pfx`), returning HTTP 200 and the
-//! expected 6871-byte body with no winetricks, no CA bundle and no native override. That
+//! expected 6871-byte body with no winetricks, no ca bundle and no native override. That
 //! measurement is the only reason this module exists in this shape.
 //!
 //! The functions are declared by hand rather than pulled from the `windows` crate's
@@ -112,7 +112,7 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-/// GET `https://{host}{path}` and return the body.
+/// Get `https://{host}{path}` and return the body.
 ///
 /// Blocking. Must not be called from `DllMain` (loader lock) or from a frame callback --
 /// run it on a worker thread.
@@ -140,9 +140,9 @@ pub fn get(host: &str, path: &str, user_agent: &str) -> Result<String, HttpError
     get_inner(host, path, user_agent, MAX_BODY_BYTES)
 }
 
-/// POST `body` as JSON to `https://{host}{path}` and return the response body.
+/// Post `body` as JSON to `https://{host}{path}` and return the response body.
 ///
-/// `headers` is the extra request-header block, CRLF-separated and WITHOUT a trailing CRLF --
+/// `headers` is the extra request-header block, CRLF-separated and without a trailing CRLF --
 /// `Content-Type` is added here, so a caller supplies only what is its own (an authorization
 /// header, say). Pass an empty string for none.
 ///
@@ -180,7 +180,7 @@ fn get_inner(
 
 /// One request, whatever the verb.
 ///
-/// The GET and the POST differ in three places -- the verb, the header block, and whether a body
+/// The get and the post differ in three places -- the verb, the header block, and whether a body
 /// is sent -- so they share a body rather than being copied apart, which is how the two would end
 /// up disagreeing about which status codes count as success.
 fn request(

@@ -10,12 +10,12 @@ self-match the repo already bans `pgrep` for, and it killed this session's shell
 
 Two rules make it safe:
 
-  * Match on `/proc/<pid>/exe` and `/proc/<pid>/comm` -- what the process IS -- never on the
+  * Match on `/proc/<pid>/exe` and `/proc/<pid>/comm` -- what the process is -- never on the
     command line, which is where a search pattern would appear as text.
   * Refuse to signal this process, any of its ancestors, or PID 1.
 
 Only the direct/offline `eldenring.exe` and an `me3` launcher are targets. The EAC launcher
-`start_protected_game.exe` is deliberately NOT killable here: agents may detect it but must not
+`start_protected_game.exe` is deliberately not killable here: agents may detect it but must not
 drive it (AGENTS.md).
 
     python3 scripts/teardown-er.py            # SIGTERM the session

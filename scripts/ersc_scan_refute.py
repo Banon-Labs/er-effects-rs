@@ -15,7 +15,7 @@ from capstone.x86 import X86_OP_MEM, X86_OP_IMM, X86_OP_REG, X86_REG_RIP
 
 
 def text_funcs(pe):
-    """Function ranges limited to .text, from BOTH the exception directory and the
+    """Function ranges limited to .text, from both the exception directory and the
     .pdata section, unioned (Themida rebuilt the directory)."""
     t = [s for s in pe.sections if s['name'] == '.text'][0]
     lo, hi = t['rva'], t['rva'] + t['vsz']

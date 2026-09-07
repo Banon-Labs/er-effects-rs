@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# WHICH GIT_* VARIABLES DOES A HOOK ACTUALLY INHERIT? MEASURE IT; DO NOT ARGUE ABOUT IT.
+# Which GIT_* variables does a hook actually inherit? Measure it; Do not argue about it.
 #
 # This exists because two agents produced contradictory answers on 2026-08-31 and the
 # disagreement was load-bearing: `scripts/check-git-hooks-installed.sh --selftest` builds its
-# fixtures with `git init` and `git -C <fixture> config ...`, and `git -C` does NOT override
-# GIT_DIR. So IF a hook exports GIT_DIR, every one of those fixture commands is redirected at the
+# fixtures with `git init` and `git -C <fixture> config ...`, and `git -C` does not override
+# GIT_DIR. So if a hook exports GIT_DIR, every one of those fixture commands is redirected at the
 # live repository and the selftest silently rewrites the hook configuration it exists to protect.
 # Whether that is a real route or only a theoretical one comes down to one measurable fact.
 #
 # The measurement has a trap in it, which is why this is a script and not a one-liner: a hook that
-# NEVER RAN reports exactly the same thing as a hook that ran and inherited nothing -- an empty
+# never ran reports exactly the same thing as a hook that ran and inherited nothing -- an empty
 # list. So the dumper always writes a marker line first, and --selftest refuses to pass unless
 # every hook it expected actually fired.
 #
-# It covers the cell the earlier measurement missed: a LINKED WORKTREE. There, GIT_DIR is
-# <main>/.git/worktrees/<name> -- a git dir NOT named `.git` -- and `git init` under it writes
-# `core.bare = true` into the SHARED <main>/.git/config. That is the exact damage observed on the
+# It covers the cell the earlier measurement missed: a linked WORKTREE. There, GIT_DIR is
+# <main>/.git/worktrees/<name> -- a git dir not named `.git` -- and `git init` under it writes
+# `core.bare = true` into the shared <main>/.git/config. That is the exact damage observed on the
 # main checkout on 2026-08-31. See bd hooks-selftest-under-git-hook-blanks-the-live-config-2026-08-31.
 #
 # Usage:
@@ -68,14 +68,14 @@ out="$tmp/observed.txt"
 git init -q "$tmp/remote" --bare
 git init -q "$tmp/main"
 git -C "$tmp/main" -c user.name=t -c user.email=t@t.t commit -q --allow-empty -m base
-# ABSOLUTE on purpose: a relative core.hooksPath resolves against EACH worktree's own root, so a
+# Absolute on purpose: a relative core.hooksPath resolves against each worktree's own root, so a
 # relative value would leave the linked-worktree scenario with no hooks at all and the report would
 # say "did not fire" for every row that matters. (It did, the first time this was run.)
 install_dumpers "$tmp/hookdir" "$out" main
 git -C "$tmp/main" config core.hooksPath "$tmp/hookdir"
 drive_hooks "$tmp/main" "$tmp/remote"
 
-# --- scenario 2: a LINKED WORKTREE of that checkout --------------------------------------------
+# --- scenario 2: a linked WORKTREE of that checkout --------------------------------------------
 # The hooks directory is shared (core.hooksPath lives in the common config), so the same dumpers
 # fire; only the environment differs. Re-tagging means re-writing them for the worktree run.
 git -C "$tmp/main" worktree add -q -b linked "$tmp/linked"
@@ -117,15 +117,15 @@ if [[ "${1:-}" == "--selftest" ]]; then
 		echo "  vacuous -- it cannot distinguish 'inherited nothing' from 'never ran'." >&2
 		exit 1
 	fi
-	# 2. And it must observe SOME GIT_* variable, or the dumper's env filter is broken and every
+	# 2. And it must observe some GIT_* variable, or the dumper's env filter is broken and every
 	#    hook would report an empty inheritance no matter what git actually exported.
 	if ! grep -q ' VAR GIT_' "$out"; then
 		echo "[measure-git-hook-env] SELFTEST FAIL: hooks fired but not one GIT_* variable was" >&2
 		echo "  captured. The dumper's filter is broken; a 'no GIT_DIR' finding would be an artefact." >&2
 		exit 1
 	fi
-	# 3. Positive control for the claim the report makes: with GIT_DIR aimed at a LINKED WORKTREE,
-	#    `git init` writes core.bare = true into the SHARED config. If that ever stops being true
+	# 3. Positive control for the claim the report makes: with GIT_DIR aimed at a linked WORKTREE,
+	#    `git init` writes core.bare = true into the shared config. If that ever stops being true
 	#    the diagnosis this script carries has expired and must be re-derived, not repeated.
 	before=$(cat "$tmp/main/.git/config")
 	(cd "$tmp/linked" && GIT_DIR=$(git rev-parse --absolute-git-dir) git init -q)

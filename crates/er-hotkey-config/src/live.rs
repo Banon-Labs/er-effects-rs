@@ -1,6 +1,6 @@
 //! A binding a hook callback can read without taking a lock.
 //!
-//! The place a hotkey is actually MATCHED is inside a detour on the game's own keyboard read --
+//! The place a hotkey is actually matched is inside a detour on the game's own keyboard read --
 //! `IDirectInputDevice8::GetDeviceState`, or a `WH_KEYBOARD_LL` procedure. That code runs on
 //! whatever thread the game happened to poll from, arbitrarily often, and while it runs the game is
 //! waiting. Reaching for a `Mutex` there buys two problems for no benefit: a lock the reload path

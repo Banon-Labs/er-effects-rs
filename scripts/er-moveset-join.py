@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Join one creature's moveset across all four offline sources.
 
-  behavior graph  (<chr>.behbnd.dcx -> Havok TAG0)   fireable EVENT NAME -> state -> clip
+  behavior graph  (<chr>.behbnd.dcx -> Havok TAG0)   fireable event name -> state -> clip
   animation set   (<chr>.anibnd.dcx sidecar XML)     which clips actually ship
   TimeAct         (<chr>.tae, event type 1)          Behavior Judge ID per animation
   regulation.bin  NpcParam -> BehaviorParam          Behavior Judge ID -> AtkParam_Npc row

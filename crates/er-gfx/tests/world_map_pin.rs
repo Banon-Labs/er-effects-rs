@@ -1,4 +1,4 @@
-//! Install the red pin frame into the REAL world-map movie.
+//! Install the red pin frame into the real world-map movie.
 //!
 //! The unit tests in `er_gfx::world_map_pin` build a synthetic sprite, so they prove the edit's
 //! shape but not that the shipped movie has that shape. This does the part that matters: it
@@ -91,7 +91,7 @@ fn the_vanilla_icon_sprite_has_the_shape_the_edit_assumes() {
         !placements.iter().any(|(frame, _)| *frame == RED_PIN_FRAME),
         "frame {RED_PIN_FRAME} must be unused in vanilla"
     );
-    // And the red marker must already be a character in THIS movie, since the edit places it by
+    // And the red marker must already be a character in this movie, since the edit places it by
     // id and defines nothing. `GFX_DefineExternalImage2` (code 1009) is not modelled by the
     // codec, so it arrives as `Unknown` and its character id is the first u16 of the body.
     const GFX_DEFINE_EXTERNAL_IMAGE2: u16 = 1009;
@@ -134,7 +134,7 @@ fn the_edit_applies_to_the_real_movie_and_re_parses() {
 #[test]
 fn every_marker_frame_of_the_real_movie_carries_a_drawable_placement() {
     // The gap this closes. The byte delta was checked (+66 = three 22-byte placements) and treated
-    // as proof the frames would DRAW -- which is a different claim, and a live run then showed 510
+    // as proof the frames would draw -- which is a different claim, and a live run then showed 510
     // of 512 pins invisible after they were built on frames 301/302. Writing a placement and
     // Scaleform rendering it are separate things; this asserts the first properly against the real
     // movie so the second can be investigated without re-litigating the first.
@@ -158,8 +158,8 @@ fn every_marker_frame_of_the_real_movie_carries_a_drawable_placement() {
             found.len()
         );
     }
-    // Within one brightness the three must reference three DIFFERENT characters, or the tiers are
-    // indistinguishable even when every structural check passes. ACROSS brightness they reuse the
+    // Within one brightness the three must reference three different characters, or the tiers are
+    // indistinguishable even when every structural check passes. Across brightness they reuse the
     // same three on purpose: dimming a tier must not change which tier it looks like.
     for dimmed in [false, true] {
         let characters: std::collections::BTreeSet<u16> = PIN_MARKERS
@@ -198,10 +198,10 @@ fn cxform_on_frame(tags: &[Tag], frame: u16) -> Option<Option<er_gfx::CxformWith
 
 #[test]
 fn the_dim_survives_serialisation_into_the_real_movie() {
-    // The unit tests assert the Tag we BUILD carries the transform. This asserts the transform is
+    // The unit tests assert the Tag we build carries the transform. This asserts the transform is
     // still there after the writer packed it into real bytes and the reader unpacked it again --
     // the bit-level round trip the game actually consumes. A CXFORM is bit-packed and byte-aligned
-    // at its end, so a width or ordering mistake corrupts the tags that FOLLOW it rather than
+    // at its end, so a width or ordering mistake corrupts the tags that follow it rather than
     // failing loudly here; parsing the whole movie back is what catches that.
     let Some(vanilla) = vanilla_or_skip() else {
         return;
@@ -219,7 +219,7 @@ fn the_dim_survives_serialisation_into_the_real_movie() {
             });
             assert_eq!(cxform, expected, "{}", marker.name);
         } else {
-            // The bright half must come back with NOTHING. This is the half that renders while the
+            // The bright half must come back with nothing. This is the half that renders while the
             // player is idle, and a transform leaking onto it would dim the map permanently --
             // which is the exact behaviour this pairing exists to undo.
             assert_eq!(
@@ -230,7 +230,7 @@ fn the_dim_survives_serialisation_into_the_real_movie() {
         }
     }
 
-    // And no SHIPPED icon frame gained one. The dim is meant to be contained to our own dead
+    // And no shipped icon frame gained one. The dim is meant to be contained to our own dead
     // frames; sprite 171 carries no colour transform at all in vanilla, so any non-`None` on a
     // frame that is not ours means the splice landed in the wrong span.
     let ours = |frame: u16| PIN_MARKERS.iter().any(|marker| marker.frame == frame);

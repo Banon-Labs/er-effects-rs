@@ -6,8 +6,8 @@
 //! 1. **A malformed value keeps the previous working key.** Falling back to the built-in default
 //!    silently moves the binding somewhere the player did not ask for; disabling the feature
 //!    removes it entirely. Both leave a typo looking like a crash. [`BindingUpdate::Rejected`]
-//!    carries the value that failed AND the key still in force, so the log line can say both.
-//! 2. **A value that parses to the SAME key is not a change.** A reload resets the edge detector,
+//!    carries the value that failed and the key still in force, so the log line can say both.
+//! 2. **A value that parses to the same key is not a change.** A reload resets the edge detector,
 //!    and a reset while the key is held fires it again -- a press the player never made. Reformatting
 //!    a config file, or writing `"f7"` where it said `"F7"`, must not do that.
 //! 3. **A real change says so.** [`BindingUpdate::Changed`] carries both keys so the caller logs
@@ -23,7 +23,7 @@ use crate::keys::KeyParseError;
 pub enum BindingUpdate<C> {
     /// The value parsed to the key already in force. Nothing to do, and specifically no edge reset.
     Unchanged,
-    /// The binding moved. The caller MUST reset its key edge state, or a key held at this moment
+    /// The binding moved. The caller must reset its key edge state, or a key held at this moment
     /// reads as a fresh press.
     Changed {
         /// The key that was in force.
@@ -31,7 +31,7 @@ pub enum BindingUpdate<C> {
         /// The key now in force.
         to: C,
     },
-    /// The value did not parse. The previous key is STILL IN FORCE -- this is not a disabled
+    /// The value did not parse. The previous key is still in force -- this is not a disabled
     /// feature, and the log line must say so.
     Rejected {
         /// The text that could not be read, verbatim, so the player can find it in their file.
@@ -143,7 +143,7 @@ mod tests {
         assert_eq!(binding.code(), 0x77);
     }
 
-    /// A value that means the same key is NOT a change. Reporting one resets the edge detector,
+    /// A value that means the same key is not a change. Reporting one resets the edge detector,
     /// and a key held at that instant then fires without being pressed.
     #[test]
     fn a_value_that_means_the_same_key_is_not_a_change() {
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(binding.code(), 0x76);
     }
 
-    /// THE RULE THAT MATTERS. A typo keeps the key that was working -- it does not fall back to
+    /// The rule that matters. A typo keeps the key that was working -- it does not fall back to
     /// the built-in default, and it does not turn the feature off.
     #[test]
     fn a_malformed_value_falls_back_to_the_previous_value_not_to_nothing() {
@@ -168,7 +168,7 @@ mod tests {
             BindingUpdate::Rejected {
                 value: "Winkey".to_owned(),
                 error: crate::keys::KeyParseError::Unknown("Winkey".to_owned()),
-                // F8, the last value that WORKED -- not F7, the built-in default.
+                // F8, the last value that worked -- not F7, the built-in default.
                 kept: 0x77,
             }
         );

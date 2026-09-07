@@ -33,7 +33,7 @@ use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 /// happily resolve `"?GoodsName?"` to whichever row asked last.
 const PLACEHOLDER_PREFIX: char = '?';
 
-/// The OTHER placeholder, and the one that actually ships in the message files: FromSoftware names
+/// The other placeholder, and the one that actually ships in the message files: FromSoftware names
 /// its dummy and unused rows `[ERROR]`, `[ERROR]Type 1`, `[ERROR]type 10`, and so on. There are
 /// hundreds of them -- they are why a catalog build reports around a hundred colliding names, all
 /// of them this one string -- and not one is an item. Treating them as names lets a slot holding a
@@ -56,7 +56,7 @@ mod rva {
     pub const GET_GOODS_NAME_RVA: usize = 0xd10600;
     /// `MsgRepositoryImp::GetGemName` -- base bundle `0x142`, DLC `0x1a6`.
     ///
-    /// Names the *gem item* ("Ash of War: Lion's Claw"), which is NOT what a build's
+    /// Names the *gem item* ("Ash of War: Lion's Claw"), which is not what a build's
     /// `weaponArt` says -- so it is not what the catalog keys on. It is used as the test for
     /// whether a gem row is a real, obtainable ash rather than a development placeholder,
     /// which is how the ash catalog picks between several gems carrying one skill.
@@ -74,7 +74,7 @@ mod rva {
 /// `EquipGreatRune` rejects anything whose `id & 0xF0000000` is not `0x40000000` and takes
 /// the row id as `id & 0x0FFFFFFF`.
 /// `repr(u32)` because the gem category's discriminant sets bit 31, which does not fit a signed
-/// pointer-width discriminant on a 32-bit target -- and the tags ARE u32 item ids, not indices.
+/// pointer-width discriminant on a 32-bit target -- and the tags are u32 item ids, not indices.
 #[derive(Clone, Copy)]
 #[repr(u32)]
 enum Tag {
@@ -82,7 +82,7 @@ enum Tag {
     Protector = 0x1000_0000,
     Accessory = 0x2000_0000,
     Goods = 0x4000_0000,
-    /// `EquipParamGem`, i.e. an ash of war as an ITEM.
+    /// `EquipParamGem`, i.e. an ash of war as an item.
     ///
     /// Same evidence as the others, from the same switch: `GetGaitemHandleByItemId` sends
     /// `itemId >> 28 == 8` to `GetGaItemHandleGem`, and `GaitemLookupResult::GetSwordArtsParamId`
@@ -102,25 +102,25 @@ struct Source {
 
 /// Every category the importer resolves.
 ///
-/// ASHES OF WAR ARE THE ONE CATEGORY WHOSE NAME AND ID COME FROM DIFFERENT TABLES, which is
+/// Ashes of war are the one category whose name and ID come from different tables, which is
 /// why they are not in this list and are built by [`insert_ashes_of_war`] instead.
 ///
 /// A build's `weaponArt` names the *skill* ("Bloodhound's Step"), which is a `SwordArtsParam`
-/// row and is named out of the arts bundle. But the thing the game can PUT ON A WEAPON is the
+/// row and is named out of the arts bundle. But the thing the game can put on a weapon is the
 /// *gem* ("Ash of War: Bloodhound's Step"), an `EquipParamGem` row -- `GetSwordArtsParamId`
 /// reads `0x8000_0000 | gem row`, and `GetGaItemHandleGem` mints from a gem row. So the catalog
-/// keys on the arts name and stores the GEM id.
+/// keys on the arts name and stores the gem id.
 ///
 /// Resolving to the `SwordArtsParam` row instead is the bug this replaces, and it was invisible:
 /// every ash in a build resolved, the importer reported `0 unresolved`, and not one weapon came
 /// out carrying its ash. The planner's own ids were the tell all along -- 80100, 401000, 505000
 /// are multiples of 100 in gem space (`gem = arts * 100` for most ashes), not arts rows.
 ///
-/// Spells and tools are BOTH `EquipParamGoods` rows sharing one name bundle -- a sorcery's
+/// Spells and tools are both `EquipParamGoods` rows sharing one name bundle -- a sorcery's
 /// item id really is `0x4 << 28 | goodsRowId`. They are separated by whether the same row
 /// id also exists in `MAGIC_PARAM_ST`, which is the game's own distinction, not a heuristic.
 ///
-/// Armaments and AMMUNITION are the second such pair: arrows and bolts are `EquipParamWeapon`
+/// Armaments and ammunition are the second such pair: arrows and bolts are `EquipParamWeapon`
 /// rows sharing the weapon name bundle and the weapon category nibble, and the game separates
 /// them by `weaponCategory` -- see [`Quivers`]. They are split rather than left in one kind
 /// because the planner does the same: its build document keeps ammo in `items.ammo`, keyed by
@@ -182,14 +182,14 @@ pub struct BuildStats {
     pub unnamed: usize,
     /// How many goods rows were classified as spells.
     pub spell_rows: usize,
-    /// Ashes whose ONLY `EquipParamGem` row draws no icon, so the tile badge falls back to the
+    /// Ashes whose only `EquipParamGem` row draws no icon, so the tile badge falls back to the
     /// literal `ICON` placeholder. Non-zero is not a crash and not a wrong ash -- the name and
     /// the skill are right -- but it is the exact defect a player reports as "the ash symbol
-    /// says ICON", so it is a number here rather than a discovery in-game.
+    /// says icon", so it is a number here rather than a discovery in-game.
     pub iconless_ashes: usize,
-    /// Goods rows the game POT-CAPS, i.e. rows [`PotGroups`] classified as pot consumables.
+    /// Goods rows the game POT-caps, i.e. rows [`PotGroups`] classified as pot consumables.
     ///
-    /// Reported because a ZERO here means the grant path's pot handling is inert for the session
+    /// Reported because a zero here means the grant path's pot handling is inert for the session
     /// -- the param table was not readable when the catalog was built -- and that failure is
     /// otherwise indistinguishable from a character who simply has no pot conflicts.
     pub pot_capped_rows: usize,
@@ -201,11 +201,11 @@ pub struct BuildStats {
     pub max_held_rows: usize,
     /// `EquipParamWeapon` rows [`Quivers`] classified as ammunition.
     ///
-    /// Reported for a sharper reason than the two above: this number is a DENOMINATOR for the
+    /// Reported for a sharper reason than the two above: this number is a denominator for the
     /// armament catalog as well. Ammunition is subtracted from `Kind::Weapon` and added to
     /// `Kind::Ammo`, so a zero here does not merely mean "no arrows resolve" -- it means the
     /// split did not happen, `Kind::Weapon` still holds every arrow, and an ammo name in a build
-    /// will come back UNRESOLVED while the same name sits in the armament catalog. The installed
+    /// will come back unresolved while the same name sits in the armament catalog. The installed
     /// 1.17 table has 73; anything far from that is the param read, not the build.
     pub ammo_rows: usize,
     /// Rows the two ammunition classifications disagreed about. See [`Quivers::disagreements`].
@@ -266,8 +266,8 @@ unsafe fn name_of(getter: usize, msg: usize, row_id: u32) -> Option<String> {
 /// The name getter for one category, or `None` for a category the game does not name this way.
 ///
 /// [`Kind::AshOfWar`] is answered explicitly rather than out of [`SOURCES`]: it is not in that
-/// table (its rows come from the gem table, see [`insert_ashes_of_war`]), but it IS named by
-/// `GetArtsName` keyed on a `SwordArtsParam` row, which is exactly what the EXPORT direction has
+/// table (its rows come from the gem table, see [`insert_ashes_of_war`]), but it is named by
+/// `GetArtsName` keyed on a `SwordArtsParam` row, which is exactly what the export direction has
 /// in hand when it asks.
 fn getter_rva_for(kind: Kind) -> Option<usize> {
     if kind == Kind::AshOfWar {
@@ -279,14 +279,14 @@ fn getter_rva_for(kind: Kind) -> Option<usize> {
         .map(|source| source.getter_rva)
 }
 
-/// Ask the game what ONE row is called -- the export direction.
+/// Ask the game what one row is called -- the export direction.
 ///
 /// # Why this exists next to [`build_from_game`] rather than inverting it
 ///
 /// The importer needs name -> id, which the game cannot answer, so it enumerates every row and
-/// inverts. The EXPORTER needs id -> name, which is the direction the game answers natively: one
+/// inverts. The exporter needs id -> name, which is the direction the game answers natively: one
 /// call, no table. Building the whole catalog to read it backwards would be a few thousand calls
-/// to answer a question the getter answers directly -- and it would also be WRONG in one case,
+/// to answer a question the getter answers directly -- and it would also be wrong in one case,
 /// because the inverted map is keyed by folded name and two rows can fold together.
 ///
 /// `Kind` still matters: the same row id means different items in different tables, so the caller
@@ -296,7 +296,7 @@ fn getter_rva_for(kind: Kind) -> Option<usize> {
 ///
 /// `msg` must be a live `MsgRepositoryImp*` and `module_base` the loaded image base.
 pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) -> Option<String> {
-    // RESOLVED, not added. `name_of` transmutes this into a function pointer and CALLS it, and its
+    // Resolved, not added. `name_of` transmutes this into a function pointer and calls it, and its
     // safety comment says the caller guarantees the address is one of the verified getters --
     // which was not true while this was bare addition against a 1.16.2 RVA. A refusal means the
     // row goes unnamed, which is an answer this function already has.
@@ -309,11 +309,11 @@ pub unsafe fn name_for(kind: Kind, msg: usize, module_base: usize, row_id: u32) 
 
 /// The engine's own name for one name getter, for the refusal log.
 ///
-/// Keyed on the RVA rather than on [`Kind`] because that is what the getter IS -- several kinds
+/// Keyed on the RVA rather than on [`Kind`] because that is what the getter is -- several kinds
 /// share one getter (talismans and great runes both come out of the goods bundle), and a label
 /// derived from the kind would report the same missing function under three different names.
 /// A name per getter rather than one shared label, because a reader who sees a refusal wants to
-/// know WHICH table stopped naming rows.
+/// know which table stopped naming rows.
 fn name_getter_of(getter_rva: usize) -> &'static str {
     match getter_rva {
         rva::GET_WEAPON_NAME_RVA => "MsgRepositoryImp::GetWeaponName",
@@ -323,7 +323,7 @@ fn name_getter_of(getter_rva: usize) -> &'static str {
         rva::GET_GEM_NAME_RVA => "MsgRepositoryImp::GetGemName",
         rva::GET_ARTS_NAME_RVA => "MsgRepositoryImp::GetArtsName",
         // Unreachable through `SOURCES` and `getter_rva_for`, which between them cover every
-        // constant above. A catch-all rather than a panic: this is a LOG LABEL, and taking a
+        // constant above. A catch-all rather than a panic: this is a log label, and taking a
         // game-loaded DLL down to complain about one is not a trade worth making.
         _ => "an unrecognised MsgRepositoryImp name getter",
     }
@@ -331,7 +331,7 @@ fn name_getter_of(getter_rva: usize) -> &'static str {
 
 /// Insert one resolved row.
 ///
-/// `somber` is left false ON PURPOSE, and setting it would be a regression rather than a fix.
+/// `somber` is left false on purpose, and setting it would be a regression rather than a fix.
 /// It only feeds [`er_build_import_core::plan::somber_remap`], a table this repository reproduces from
 /// the planner without knowing its intent, and the importer no longer needs to guess how far an
 /// armament upgrades: [`ReinforceLevels`] asks the game which `reinforceTypeId + level` rows
@@ -351,13 +351,13 @@ fn insert(
         name,
         Entry {
             full_item_id: (source.tag as u32) | row_id,
-            // GOODS ONLY, because `maxNum` is a goods field and the engine does not consult it
+            // Goods only, because `maxNum` is a goods field and the engine does not consult it
             // for anything else: `GetMaxAmountForItem` sends every other category to
             // `GetMaxItemQuantity`, a different function with a different answer. Leaving those
             // `None` says "not asked", which the plan reads as one -- the right number for an
             // armament or a piece of armour anyway.
             max_stored: match (source.kind, source.tag) {
-                // AMMUNITION HAS ITS OWN FIELD IN ITS OWN TABLE, and the engine reads that one
+                // Ammunition has its own field in its own table, and the engine reads that one
                 // rather than `maxNum` for it: `GetMaxAmountForItem` sends every non-goods
                 // category to `GetMaxItemQuantity`, whose weapon branch answers
                 // `maxArrowQuantity` for categories 13 and 14 and a bare 1 for every other
@@ -399,7 +399,7 @@ fn row_ids(kind: Kind, spells: &BTreeSet<u32>, quivers: &Quivers) -> Vec<u32> {
         // The weapon table carries both; `weaponCategory` decides which, exactly as the goods
         // table is split by membership in `MAGIC_PARAM_ST`.
         //
-        // MEMBERSHIP, NOT QUANTITY. `contains` and not `of(..).is_none()`: an ammunition row that
+        // Membership, not quantity. `contains` and not `of(..).is_none()`: an ammunition row that
         // declares no `maxArrowQuantity` is still ammunition, and asking the quantity question
         // would file it back under `Kind::Weapon` -- putting an arrow in the armament catalog,
         // where a name lookup could equip it into a hand. The two questions are separate for
@@ -419,7 +419,7 @@ fn row_ids(kind: Kind, spells: &BTreeSet<u32>, quivers: &Quivers) -> Vec<u32> {
             .rows::<EquipParamAccessory>()
             .map(|(id, _)| id)
             .collect(),
-        // Built from the gem table by `insert_ashes_of_war`, which needs BOTH ids per row.
+        // Built from the gem table by `insert_ashes_of_war`, which needs both ids per row.
         Kind::AshOfWar => Vec::new(),
         // The goods table carries both; membership in MAGIC_PARAM_ST decides which.
         Kind::Spell => repo
@@ -470,7 +470,7 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
     };
 
     for source in SOURCES {
-        // Resolved for the RUNNING build, once per table rather than once per row: the loop below
+        // Resolved for the running build, once per table rather than once per row: the loop below
         // is thousands of calls and a refusal is a property of the build, not of a row. A table
         // whose getter has no mapping contributes no names, and every row in it lands in
         // `stats.unnamed` -- which the caller already prints beside `stats.named`, so a catalog
@@ -510,7 +510,7 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
     (catalog, stats)
 }
 
-/// Add every ash of war, keyed by SKILL name and valued by GEM id.
+/// Add every ash of war, keyed by skill name and valued by gem id.
 ///
 /// # Why this is not just another [`Source`]
 ///
@@ -524,7 +524,7 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
 ///
 /// The gem table holds development and placeholder rows alongside the real ashes, and more than
 /// one row can name the same skill. Rather than trust `arts * 100` -- a heuristic that lands on
-/// an UNRELATED row for some ashes (arts 309 "Thops's Barrier" -> gem 30900 is "No Skill";
+/// an unrelated row for some ashes (arts 309 "Thops's Barrier" -> gem 30900 is "No Skill";
 /// Igon's Drake Hunt is arts 4210 but gem 548000) -- this walks the whole table and keeps, per
 /// skill, the first of: a gem the game gives a display name to, else the lowest row id. Both
 /// tie-breaks are order-independent, so the catalog is the same on every run.
@@ -548,7 +548,7 @@ unsafe fn insert_ashes_of_war(
         return;
     };
     // Resolved for the running build rather than added blind: `name_of` transmutes these into
-    // function pointers and CALLS them, and its safety comment says the caller guarantees the
+    // function pointers and calls them, and its safety comment says the caller guarantees the
     // address is one of the verified getters -- which was not true while this was bare addition.
     // On a build that moved the code, an unresolvable getter means no ash names, not a call into
     // whatever now occupies the address.
@@ -568,15 +568,15 @@ unsafe fn insert_ashes_of_war(
         return;
     };
 
-    // skill row -> (this gem IS the canonical `arts * 100` row, it draws an icon, it has an
+    // skill row -> (this gem is the canonical `arts * 100` row, it draws an icon, it has an
     // item name, gem row).
     //
-    // THE ICON IS THE FIRST KEY, and it is why this is not just "named, else lowest row".
-    // MEASURED 2026-08-23: a build imported with every ash NAME correct and the ash badge on the
+    // The icon is the first key, and it is why this is not just "named, else lowest row".
+    // Measured 2026-08-23: a build imported with every ash name correct and the ash badge on the
     // tile rendering the literal placeholder text `ICON`. The names were right because the label
     // comes from `EquipParamGem.swordArtsParamId` -> `GetArtsName`, which a development row
     // carries just as faithfully as a real one; the icon was missing because that row has none.
-    // The old tiebreak fell back to THE LOWEST ROW ID whenever no gem for a skill was named, and
+    // The old tiebreak fell back to the lowest row ID whenever no gem for a skill was named, and
     // the lowest rows are exactly the placeholder rows -- which is how ids like 103, 146, 185 and
     // 191 ended up mounted on the player's weapons next to real ashes at 401000 and 22800.
     //
@@ -598,19 +598,19 @@ unsafe fn insert_ashes_of_war(
         let named = unsafe { name_of(gem_getter, msg, gem_id) }.is_some();
         let icon = row.icon_id();
         let has_icon = icon != 0 && icon != u16::MAX;
-        // THE CANONICAL ROW WINS OUTRIGHT. `gem == arts * 100` is where the purchasable "Ash of
+        // The canonical row wins outright. `gem == arts * 100` is where the purchasable "Ash of
         // War: <skill>" item lives for the overwhelming majority of skills, and it is only
-        // reached here after the walk has already CONFIRMED this row carries this arts id -- so
+        // reached here after the walk has already confirmed this row carries this arts id -- so
         // the heuristic the module header warns about (arts 309 -> gem 30900 is "No Skill",
         // Igon's Drake Hunt is arts 4210 but gem 548000) cannot fire: a row that does not carry
         // the skill never becomes a candidate for it, and those skills fall through to the keys
         // below exactly as before.
         //
-        // WITHOUT THIS, "lowest row id" decides -- and it is wrong, because a block of low
+        // Without this, "lowest row id" decides -- and it is wrong, because a block of low
         // four-digit rows around 1000-1020 carries the same skills as the real ash items and is
-        // named and iconned enough to beat nothing. MEASURED 2026-08-23: Flaming Strike (arts 214)
+        // named and iconned enough to beat nothing. Measured 2026-08-23: Flaming Strike (arts 214)
         // resolved to gem 1010 instead of 21400 and the tile drew the `ICON` placeholder, with the
-        // ash NAME still correct because that comes from `swordArtsParamId`. Broadsword took 1002
+        // ash name still correct because that comes from `swordArtsParamId`. Broadsword took 1002
         // over 10300, Star Fist 1013 over 50200, Rusted Anchor 1010 over 21400.
         let canonical = gem_id == arts_id.saturating_mul(100);
         let candidate = (canonical, has_icon, named, gem_id);
@@ -632,12 +632,12 @@ unsafe fn insert_ashes_of_war(
     }
 
     for (arts_id, (_, has_icon, _, gem_id)) in best {
-        // Counted, not silently accepted: an ash whose ONLY gem row draws no icon will still
+        // Counted, not silently accepted: an ash whose only gem row draws no icon will still
         // render `ICON` on the tile, and that has to be a number in the log rather than a
         // surprise on the player's weapon.
         if !has_icon {
             iconless += 1;
-            // NAMED, not just counted. "5 ashes have no icon" cannot be acted on; "Flaming Strike
+            // Named, not just counted. "5 ashes have no icon" cannot be acted on; "Flaming Strike
             // has no icon, its winning gem is row N with iconId 0, and it has M gem rows" says
             // straight away whether the row is a genuine placeholder or whether `0` is a real
             // icon id this filter is wrongly rejecting.
@@ -674,14 +674,14 @@ unsafe fn insert_ashes_of_war(
     stats.iconless_ashes = iconless;
 }
 
-/// Every goods row the game POT-CAPS, and which group it is capped against.
+/// Every goods row the game POT-caps, and which group it is capped against.
 ///
 /// # What a pot group is, and why an importer has to know
 ///
 /// `EquipParamGoods.potGroupId` (壺グループID, `s8`, `-1..15`) ties a crafted consumable to the
 /// vessel it needs. `EquipInventoryData::UpdatePotsStates` (1.16.2 `0x14024e930`, same address on
-/// 1.17) walks the CARRIED inventory once and builds two `int[16]` tables on the inventory
-/// itself: `potItemsCapacity` at `+0xc8`, summed from the group's REGENERATIVE MATERIALS (the
+/// 1.17) walks the carried inventory once and builds two `int[16]` tables on the inventory
+/// itself: `potItemsCapacity` at `+0xc8`, summed from the group's regenerative materials (the
 /// Cracked Pots), and `potItemsCount` at `+0x88`, summed from its CONSUMABLES (the pots you
 /// throw). `GetMaxAmountForItem` (`0x14024e570`) then answers `capacity[g] - count[g]`.
 ///
@@ -705,8 +705,8 @@ unsafe fn insert_ashes_of_war(
 /// ```
 ///
 /// The Cracked Pot itself is `goodsType == 0x0b` (REGENERATIVE_MATERIAL, per
-/// `IsRegenerativeMaterial` at `0x140d3a1c0` / `0x140d3b910`) and is deliberately NOT in here.
-/// It is what SUPPLIES the capacity, so a caller that deposited it to free space would be
+/// `IsRegenerativeMaterial` at `0x140d3a1c0` / `0x140d3b910`) and is deliberately not in here.
+/// It is what supplies the capacity, so a caller that deposited it to free space would be
 /// removing the space. Measured against the installed regulation by
 /// `scripts/regulation-potgroup-census.py`: 67 consumable rows across 4 groups, each group with
 /// exactly one material (9500, 9510, 9501, 2009500).
@@ -717,9 +717,9 @@ unsafe fn insert_ashes_of_war(
 /// the table is the player's patch level with their DLC, and a shipped list of pot ids would be
 /// a copy of it that goes stale silently.
 pub struct PotGroups {
-    /// Goods ROW id -> group, for pot consumables only.
+    /// Goods row id -> group, for pot consumables only.
     by_row: std::collections::BTreeMap<u32, u8>,
-    /// Group -> every pot-consumable ITEM id (goods-tagged) in it.
+    /// Group -> every pot-consumable item id (goods-tagged) in it.
     members: [Vec<u32>; POT_GROUP_COUNT],
 }
 
@@ -759,14 +759,14 @@ impl PotGroups {
         Self { by_row, members }
     }
 
-    /// The group a goods ROW id is capped against, or `None` when the game does not cap it.
+    /// The group a goods row id is capped against, or `None` when the game does not cap it.
     pub fn group_of(&self, row_id: u32) -> Option<u8> {
         self.by_row.get(&row_id).copied()
     }
 
-    /// Every pot-consumable ITEM id in `group`, goods category nibble included.
+    /// Every pot-consumable item id in `group`, goods category nibble included.
     ///
-    /// These are the only items whose deposit RAISES the ceiling for another member of the group.
+    /// These are the only items whose deposit raises the ceiling for another member of the group.
     pub fn members(&self, group: u8) -> &[u32] {
         self.members
             .get(usize::from(group))
@@ -784,7 +784,7 @@ impl PotGroups {
     }
 }
 
-/// Which `EquipParamWeapon` rows are AMMUNITION, and how many of each the game lets a player hold.
+/// Which `EquipParamWeapon` rows are ammunition, and how many of each the game lets a player hold.
 ///
 /// # Ammunition is a weapon, and `maxNum` says nothing about it
 ///
@@ -802,7 +802,7 @@ impl PotGroups {
 /// return 1;                                   // every other weapon: one armament
 /// ```
 ///
-/// So the same two fields answer BOTH questions this type exists for -- "is this row ammunition"
+/// So the same two fields answer both questions this type exists for -- "is this row ammunition"
 /// and "how many of it may be held" -- and they answer them the way the engine does rather than
 /// the way a classification of our own would.
 ///
@@ -814,30 +814,30 @@ impl PotGroups {
 ///
 /// * The 1.16.2 dump's own `_EQUIP_PARAM_WEAPON_ST` (struct size 664) names `weaponCategory` at
 ///   offset 230 (`0xE6`, `u8`) and `maxArrowQuantity` at 565 (`0x235`, `u8`).
-/// * 1.17 confirms them by reading the function that CONSUMES them. The instruction bytes are
+/// * 1.17 confirms them by reading the function that consumes them. The instruction bytes are
 ///   identical between builds --
 ///   `0f b6 91 e6 00 00 00 / 80 fa 0d / 74 09 / 80 fa 0e / 0f 85 .. / 0f b6 81 35 02 00 00` --
 ///   at `0x140674887` in `eldenring-deobf.bin` and `0x1406756d7` in `eldenring-deobf-1.17.bin`.
-/// * The installed 1.17 `regulation.bin` corroborates by VALUE
+/// * The installed 1.17 `regulation.bin` corroborates by value
 ///   (`scripts/regulation-ammo-census.py`): it derives the same 664-byte stride, finds 73 rows in
 ///   categories 13 and 14, and reads `maxArrowQuantity` `{1: 2, 20: 5, 30: 8, 99: 58}` -- the 20s
 ///   the five Ballista Bolts, the 30s the eight Great Arrows, the 99s every ordinary arrow and
 ///   bolt. Those are the quiver limits the game enforces.
 ///
-/// The `const` assertions below are the part that cannot rot: they ask the COMPILER where the
+/// The `const` assertions below are the part that cannot rot: they ask the compiler where the
 /// fields are, so a layout change in `../fromsoftware-rs` becomes a build error rather than a
 /// wrong read at runtime.
 ///
 /// # Two classifications of ammunition, measured to agree
 ///
 /// [`crate::read_character`] classifies ammunition by `wepType` (81 Arrow, 83 Great Arrow,
-/// 85 Bolt, 86 Ballista Bolt) because that is what the EXPORT side has in hand. This side uses
+/// 85 Bolt, 86 Ballista Bolt) because that is what the export side has in hand. This side uses
 /// `weaponCategory` because that is the field the engine's own quantity gate reads. The two select
 /// the identical 73 rows of the installed table, with zero rows on either side of the difference,
 /// and `scripts/regulation-ammo-census.py` exits non-zero if they ever stop agreeing -- so the
 /// duplication is checked rather than merely asserted.
 pub struct Quivers {
-    /// Ammunition ROW id -> `maxArrowQuantity`, whatever it declares.
+    /// Ammunition row id -> `maxArrowQuantity`, whatever it declares.
     by_row: std::collections::BTreeMap<u32, u32>,
     /// Rows the `weaponCategory` and `wepType` classifications disagreed about. See
     /// [`Quivers::disagreements`].
@@ -851,15 +851,15 @@ impl Quivers {
     const CATEGORY_BOLT: u8 = 14;
 
     /// Read the weapon table. Empty when the repository is not up -- which leaves the ammunition
-    /// catalog empty and every arrow in the build UNRESOLVED, rather than silently reclassifying
+    /// catalog empty and every arrow in the build unresolved, rather than silently reclassifying
     /// arrows as armaments and equipping them into a hand.
     pub fn read() -> Self {
         use eldenring::cs::{EquipParamWeapon, SoloParamRepository};
         use fromsoftware_shared::FromStatic;
 
-        // WHAT THE COMPILER CAN BE ASKED, AND WHAT IT CANNOT. `EQUIP_PARAM_WEAPON_ST`'s fields
+        // What the compiler can be asked, and what it cannot. `EQUIP_PARAM_WEAPON_ST`'s fields
         // are private in `../fromsoftware-rs`, so `offset_of!` cannot name them and the
-        // field-level pin used for `PlayerGameData` is simply not available here. Its SIZE is,
+        // field-level pin used for `PlayerGameData` is simply not available here. Its size is,
         // and 664 is verified twice over -- the 1.16.2 dump's struct is 664 bytes, and the
         // installed 1.17 `regulation.bin` derives a 664-byte stride from the gaps between its own
         // row offsets. That is a bracket, not a proof: a compensating insert-and-remove inside
@@ -880,8 +880,8 @@ impl Quivers {
         for (row_id, row) in repo.rows::<EquipParamWeapon>() {
             let category = row.weapon_category();
             let by_category = category == Self::CATEGORY_ARROW || category == Self::CATEGORY_BOLT;
-            // THE CROSS-CHECK THAT STANDS IN FOR THE PIN THE COMPILER WOULD NOT TAKE. `wepType`
-            // is a SECOND field, at a different offset (`+0x1A6`, `u16`), whose ammunition values
+            // The cross-check that stands in for the pin the compiler would not take. `wepType`
+            // is a second field, at a different offset (`+0x1A6`, `u16`), whose ammunition values
             // the exporter measured independently -- and on the installed table the two select
             // the identical 73 rows. A layout shift that moved one of them would move it out from
             // under only one of these two reads, so a non-zero count here is a wrong-offset alarm
@@ -893,7 +893,7 @@ impl Quivers {
                 continue;
             }
             // A row in an ammunition category with no declared quantity is still ammunition, so
-            // it belongs in the ROW SET either way; it is the QUANTITY that is absent, and the
+            // it belongs in the row set either way; it is the quantity that is absent, and the
             // plan reads that as one. Recorded as such rather than dropped, because dropping it
             // would send an arrow back into `Kind::Weapon` and into a hand slot.
             by_row.insert(row_id, u32::from(row.max_arrow_quantity()));
@@ -919,7 +919,7 @@ impl Quivers {
         self.by_row.keys().copied().collect()
     }
 
-    /// The `maxArrowQuantity` an ammunition ROW declares, or `None` for a row that is not
+    /// The `maxArrowQuantity` an ammunition row declares, or `None` for a row that is not
     /// ammunition at all.
     ///
     /// A declared zero comes back as `None` for the same reason [`MaxHeld`] leaves a
@@ -980,7 +980,7 @@ impl Quivers {
 /// their DLC, and the actual read goes through `EquipParamGoods::max_num()`, so the offset above
 /// is documentation of what that accessor owns rather than a second copy of it.
 pub struct MaxHeld {
-    /// Goods ROW id -> `maxNum`, for rows that declare a positive one.
+    /// Goods row id -> `maxNum`, for rows that declare a positive one.
     by_row: std::collections::BTreeMap<u32, u32>,
 }
 
@@ -998,7 +998,7 @@ impl MaxHeld {
         };
         for (row_id, row) in repo.rows::<EquipParamGoods>() {
             let max_num = row.max_num();
-            // `0 < maxNum` IS THE ENGINE'S OWN TEST, kept rather than paraphrased. A row that
+            // `0 < maxNum` is the engine'S own test, kept rather than paraphrased. A row that
             // declares nothing is left absent, so the plan grants one -- the engine would hand
             // out 99 for such a row, and handing a player 99 of something the game itself has no
             // opinion about is the over-grant this whole path is trying not to be. Two rows in
@@ -1010,7 +1010,7 @@ impl MaxHeld {
         Self { by_row }
     }
 
-    /// The `maxNum` a goods ROW declares, or `None` when it declares none.
+    /// The `maxNum` a goods row declares, or `None` when it declares none.
     pub fn of(&self, row_id: u32) -> Option<u32> {
         self.by_row.get(&row_id).copied()
     }
@@ -1069,7 +1069,7 @@ pub fn params_ready() -> bool {
 
 /// The live `CS::MsgRepositoryImp*`, or `None` before it exists.
 ///
-/// Read out of the game's own global rather than through a typed upstream singleton. There IS a
+/// Read out of the game's own global rather than through a typed upstream singleton. There is a
 /// `MsgRepositoryImp` in `fromsoftware-rs` -- but only in a local fork, not at the revision CI
 /// pins, so importing it compiles on one machine and fails everywhere else. The address lives in
 /// `er-game-base::rva` beside the other cross-crate ones.
@@ -1146,17 +1146,17 @@ impl ReinforceLevels {
         Self { rows }
     }
 
-    /// The GAME level to store for an armament the build wants at `requested`.
+    /// The game level to store for an armament the build wants at `requested`.
     ///
-    /// Two numbers reach this function on DIFFERENT scales, and `is_character_default` says which
+    /// Two numbers reach this function on different scales, and `is_character_default` says which
     /// one this is (see `er_build_import_core::plan::Grant::upgrade_is_character_default`):
     ///
     /// * a per-slot `upgrade` is already the game's level, so it is only clamped;
-    /// * the character-wide `weaponUpgrade` is in regular smithing-stone levels for EVERY
+    /// * the character-wide `weaponUpgrade` is in regular smithing-stone levels for every
     ///   armament, so for a somber one it is mapped down first -- `weaponUpgrade: 17` means the
     ///   game's +7 there, and clamping 17 instead would silently hand over a maxed +10.
     ///
-    /// Somber is MEASURED rather than flagged: an armament whose highest existing
+    /// Somber is measured rather than flagged: an armament whose highest existing
     /// `reinforceTypeId + level` row is [`er_build_import_core::plan::MAX_SOMBER_LEVEL`] is one,
     /// which is the same question [`Self::clamp`] already answers.
     pub fn game_level_for(

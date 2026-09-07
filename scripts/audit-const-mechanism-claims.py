@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Audit address constants whose doc comment makes a *mechanism* claim.
 
-The failure mode this hunts is a CORRECT address carrying a WRONG STORY: a doc that
+The failure mode this hunts is a correct address carrying a wrong STORY: a doc that
 says "pointer that is dereferenced" for something whose single reader immediately
-``CALL``s it (a call slot), a "guard/flag" that is only ever written once at init, a
+``call``s it (a call slot), a "guard/flag" that is only ever written once at init, a
 "vtable" nothing indirect-calls through, or a "table of N entries" whose second qword
 belongs to a different object.
 
@@ -18,7 +18,7 @@ Usage:
     python3 scripts/audit-const-mechanism-claims.py --report
 
 Ghidra: :8765 is 1.16.2 (the only image with curated names/types/RTTI), which is why
-semantic questions go there. Both dump/flat-image/runtime shifts are ZERO.
+semantic questions go there. Both dump/flat-image/runtime shifts are zero.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 MCP = REPO / "scripts" / "ghidra" / "mcp_query.py"
 PORT_1162 = 8765
 
-# A constant declaration whose NAME looks like an address.
+# A constant declaration whose name looks like an address.
 DECL_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+([A-Z][A-Z0-9_]*)\s*:\s*([^=]+?)\s*=\s*(.*)$"
 )

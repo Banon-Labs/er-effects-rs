@@ -5,12 +5,12 @@ The behavior graph payloads inside <chr>.behbnd.dcx are Havok 2018.1.0 TAG0
 tagfiles. hkbBehaviorGraphStringData holds four hkArray<hkStringPtr> members at
 fixed byte offsets inside its serialized blob:
 
-    +0x18 eventNames             <- the ONLY names hkbBehaviorGraph::fireEvent accepts
+    +0x18 eventNames             <- the only names hkbBehaviorGraph::fireEvent accepts
     +0x28 attributeNames
     +0x38 variableNames
     +0x48 characterPropertyNames
 
-Event IDs are the INDEX into eventNames, i.e. per-graph, not global.
+Event IDs are the index into eventNames, i.e. per-graph, not global.
 
 Usage:
   er-behbnd-events.py <behbnd-dir|hkx>            # dump events

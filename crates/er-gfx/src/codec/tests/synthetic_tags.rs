@@ -329,7 +329,7 @@
     }
 
     /// Every `DefineShape*` across the whole corpus must decode to the typed
-    /// [`Tag::DefineShape`] variant -- NOT silently fall back to [`Tag::Unknown`].
+    /// [`Tag::DefineShape`] variant -- Not silently fall back to [`Tag::Unknown`].
     /// The `tests/roundtrip.rs` byte-identity gate passes either way (an opaque
     /// body also round-trips), so this gate separately proves the Tier-3 typed
     /// shape codec actually handles all 366 corpus shapes byte-cleanly rather
@@ -454,7 +454,7 @@
 
     #[test]
     fn matrix_primitive_non_minimal_translate_bits_exact_bytes() {
-        // From corpus 01_000_fe.gfx PlaceObject2 body `0501000d8000`: the MATRIX
+        // From corpus 01_000_fe.gfx PlaceObject2 body `0501000d8000`: the matrix
         // body is `0d8000`. translate uses 6 bits though the values (-16, 0) only
         // need 5 -- the exporter is non-minimal, so storing translate_nbits=6 is
         // mandatory for byte-identity.

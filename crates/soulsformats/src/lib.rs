@@ -363,7 +363,7 @@ impl SoulsFormats {
 
 /// The workspace root this crate belongs to.
 ///
-/// `CARGO_MANIFEST_DIR` is set in the ENVIRONMENT only under `cargo run`/`cargo test`. Reading
+/// `CARGO_MANIFEST_DIR` is set in the environment only under `cargo run`/`cargo test`. Reading
 /// it solely from the environment meant the built binary failed with `path is not valid UTF-8:
 /// "CARGO_MANIFEST_DIR"` -- a message about UTF-8 for a variable that was simply not set, which
 /// sent a reader looking for an encoding problem instead of the real one. The compile-time
@@ -585,10 +585,10 @@ mod tests {
         assert_eq!(tfm_from_csproj("<TargetFramework></TargetFramework>"), None);
     }
 
-    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
     /// Both filesystem tests below build a tree under `std::env::temp_dir()` and then delete it,
-    /// and `std::env::temp_dir()` is ONE directory shared by every process on the machine. A name
+    /// and `std::env::temp_dir()` is one directory shared by every process on the machine. A name
     /// keyed only by `tag` is therefore the same directory in two test binaries at once, which is
     /// the ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the
     /// gate run twice over, or a second checkout. Each run's cleanup then deletes the other's
@@ -600,7 +600,7 @@ mod tests {
     /// had removed underneath it. With the pid in the name, eight of eight are green.
     ///
     /// The directory is created here and wiped first, so a test never inherits a leftover tree
-    /// from a run of ITS OWN pid that was killed before its cleanup line.
+    /// from a run of its own pid that was killed before its cleanup line.
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "er-soulsformats-{tag}-p{pid}",

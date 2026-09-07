@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""TOOL 3 of the real oracle (user 2026-07-20): a VERSIONED store mapping the DLL-package SHAs -> the
+"""Tool 3 of the real oracle (user 2026-07-20): a VERSIONED store mapping the DLL-package SHAs -> the
 set of named-phase imprints.
 
-An imprint set is tied to the EXACT build that produced it: the sha256 of the product + trace + input-
-harness DLLs. Each named PHASE (boot_to_control, control_to_confirm, continue, load2_to_control, ...)
-is a column holding that phase's imprint JSON. New phases (e.g. a 3rd load) are added via MIGRATIONS
-(append to MIGRATIONS below -> `ALTER TABLE ... ADD COLUMN phase_<name> TEXT`), so the schema grows
+An imprint set is tied to the exact build that produced it: the sha256 of the product + trace + input-
+harness DLLs. Each named phase (boot_to_control, control_to_confirm, continue, load2_to_control, ...)
+is a column holding that phase's imprint JSON. New phases (e.g. a 3rd load) are added via migrations
+(append to migrations below -> `ALTER TABLE ... ADD COLUMN phase_<name> TEXT`), so the schema grows
 without losing prior data. The comparator (oracle-compare.py) looks up the imprint for the current
 build's shas (or a chosen reference build) and phase, then checks a live run against it.
 
@@ -31,7 +31,7 @@ from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "oracle" / "imprints.db"
 
-# Phase columns created at schema v1. ADD NEW PHASES via a new migration tuple below -- never edit an
+# Phase columns created at schema v1. Add new phases via a new migration tuple below -- never edit an
 # applied migration. Each phase column holds that phase's imprint JSON (or NULL if not captured).
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (
@@ -53,7 +53,7 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
                )""",
         ],
     ),
-    # The vanilla NATIVE Continue is the correct reference to diff load2 against (user 2026-07-20).
+    # The vanilla native Continue is the correct reference to diff load2 against (user 2026-07-20).
     (2, ["ALTER TABLE imprint_sets ADD COLUMN phase_vanilla_continue TEXT"]),
     # Example future migration (append when the 3rd load phase exists):
     # (3, ["ALTER TABLE imprint_sets ADD COLUMN phase_load3_to_control TEXT"]),

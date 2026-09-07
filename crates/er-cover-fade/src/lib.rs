@@ -1,19 +1,19 @@
 #![cfg(windows)]
 
-//! The loading cover's ONE-WAY RELEASE FADE, at the D3D12 level: the command objects it submits on,
+//! The loading cover's one-way release fade, at the D3D12 level: the command objects it submits on,
 //! the root signature / PSO / texture slot it draws with, and the single alpha-blended full-screen
 //! frame it composites onto the game's backbuffer.
 //!
 //! Extracted from `er-quickload`'s `experiments/gpu_readback/boot_progress.rs`, which had grown past
 //! the repo's hard Rust file-size limit. This half came out because it holds no product decision:
-//! WHEN to fade, WHAT alpha, whether a hold pauses it and what the frame should look like are all
+//! When to fade, what alpha, whether a hold pauses it and what the frame should look like are all
 //! still decided in the DLL. What is here is the GPU work those decisions turn into, and the
 //! resource-state bookkeeping that work needs to be correct.
 //!
 //! The two seams are deliberate and narrow:
 //!   * the frame's pixels arrive through a `rasterize(w, h) -> Vec<u8>` callback, so the strip
 //!     geometry, the phase label and the progress reading stay with the code that owns them;
-//!   * the draw-busy latch is taken by the CALLER, because the same latch also guards the opaque
+//!   * the draw-busy latch is taken by the caller, because the same latch also guards the opaque
 //!     composite path, and a lock whose two users live in different crates is a lock nobody owns.
 //!
 //! Everything below is a verbatim move: the counters it writes are the same statics the oracle
@@ -29,8 +29,8 @@ use er_loading_portrait_core::gpu_draw_shared::{
     execute_and_wait, srv_gpu_handle_at,
 };
 use er_loading_portrait_core::{MAX_RT_DIM, record_transition};
-// Our OWN persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
-// windows-rs COM types are !Send). Deliberately SEPARATE from the OVERLAY_* objects so the boot view
+// Our own persistent command objects (leaked raw pointers, same pattern as the portrait overlay --
+// windows-rs COM types are !Send). Deliberately separate from the OVERLAY_* objects so the boot view
 // cannot interfere with the proven portrait composite path or thrash its cached buffers at handoff.
 // They live in `er-telemetry-core` because the oracle emission reads them back; this crate writes
 // them. `BOOT_VIEW_RTV_HEAP` is the 1-descriptor RTV heap for the self-present full-clear (the
@@ -59,7 +59,7 @@ use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::core::Interface;
 
 /// The fade's own D3D12 objects. Separate from the opaque cover's copy path on purpose, exactly as
-/// they were when they lived beside it: a fade frame is a DRAW (root signature + PSO + SRV), not a
+/// they were when they lived beside it: a fade frame is a draw (root signature + PSO + SRV), not a
 /// texture copy, and giving it its own slots keeps it from thrashing the proven copy path's state.
 static BOOT_VIEW_FADE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_PSO: AtomicUsize = AtomicUsize::new(0);
@@ -73,7 +73,7 @@ static BOOT_VIEW_FADE_TEX_H: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_TEX_STATE: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_FADE_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 
-/// One-time command-object init (device derived from the backbuffer; own DIRECT queue -- never the
+/// One-time command-object init (device derived from the backbuffer; own direct queue -- never the
 /// game's). Mirrors the proven portrait-overlay init; separate objects on purpose.
 ///
 /// # Safety
@@ -225,7 +225,7 @@ unsafe fn fill_fade_upload(
     true
 }
 
-/// Composite ONE alpha-blended full-screen fade frame onto the swapchain's current backbuffer.
+/// Composite one alpha-blended full-screen fade frame onto the swapchain's current backbuffer.
 ///
 /// `rasterize(w, h)` supplies the tight RGBA the frame is built from; this applies `alpha` to every
 /// pixel of it, uploads it and draws it. Returns whether the frame reached the backbuffer.
@@ -427,7 +427,7 @@ pub unsafe fn composite_release_fade_frame(
     if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
-    // The post-stop draw detector and the fade-hit tally are the HOST's bookkeeping about its own
+    // The post-stop draw detector and the fade-hit tally are the host's bookkeeping about its own
     // cover window, so they stay at the call site -- still on success only, still in this order,
     // still inside the draw-busy latch the caller holds.
     true

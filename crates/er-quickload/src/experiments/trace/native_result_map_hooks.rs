@@ -362,10 +362,10 @@ unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, la
         return;
     }
     let update_rva = unsafe { task_node_update_rva(base, candidate) };
-    // `task_node_update_rva` returns a LIVE RVA (`update - base`), so comparing it to the 1.16.2
+    // `task_node_update_rva` returns a live RVA (`update - base`), so comparing it to the 1.16.2
     // constant is the same stale-address defect as a raw `base + RVA` with the base cancelled off
     // both sides -- and invisible to any scan for `base +`. The Continue task wrapper moved on
-    // 1.17 (0x82bac0 -> 0x82cab0), so no task node was ever captured. Compare ADDRESSES instead.
+    // 1.17 (0x82bac0 -> 0x82cab0), so no task node was ever captured. Compare addresses instead.
     let want_wrapper = er_game_base::mem::game_data_addr(
         base,
         TRACE_MENU_CONTINUE_WRAPPER_RVA as usize,
@@ -505,7 +505,7 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     }
     // Both were raw 1.16.2 return addresses compared against live frames. They now name the
     // containing function and an offset, resolved for the running build; when this build has no
-    // pair for that function BOTH come back `None` and the two caller-shaped matches below are
+    // pair for that function both come back `None` and the two caller-shaped matches below are
     // skipped, leaving the three object-identity matches -- which do not depend on a game version
     // at all and were always the stronger evidence.
     let idle_call_site = menu_continue_idle_insert_call_site();

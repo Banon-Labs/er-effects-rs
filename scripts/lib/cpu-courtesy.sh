@@ -1,49 +1,49 @@
 # shellcheck shell=bash
 # Make a long build or gate yield to the human at the keyboard. Sourced, never executed.
 #
-# WHY THIS EXISTS
+# Why this exists
 # ---------------
-# MEASURED 2026-09-06: the user reported the machine was unusable at 100% CPU while a pre-push
+# Measured 2026-09-06: the user reported the machine was unusable at 100% CPU while a pre-push
 # `check.sh` ran. The hogs were ten `scripts/check-*.py` workers -- and they were running at
-# **nice -4**, i.e. at HIGHER priority than the desktop they were starving. Nothing in this repo
+# **nice -4**, i.e. at higher priority than the desktop they were starving. Nothing in this repo
 # asked for that. The agent harness runs its shells at -4, and nice is inherited across fork and
 # exec, so every gate, every cargo invocation and every rustc the agent ever spawned silently
 # outranked the compositor, the browser and the game.
 #
-# That is the whole defect: the build did not merely use the CPU, it was given priority OVER the
+# That is the whole defect: the build did not merely use the CPU, it was given priority over the
 # person trying to use the computer. Load average hit 34 on 16 cores and the desktop stopped
 # responding.
 #
-# SO THE FIX BELONGS HERE, NOT IN THE CALLER. A wrapper the caller has to remember (`nice -n19
+# So the fix belongs here, not in the caller. A wrapper the caller has to remember (`nice -n19
 # bash scripts/check.sh`) is not enforcement -- it fails exactly when someone forgets, which is
 # every time an agent invokes the script directly or a git hook does. These scripts therefore
-# renice THEMSELVES at startup, whatever they inherited, so no caller can hand them a priority
+# renice themselves at startup, whatever they inherited, so no caller can hand them a priority
 # they should not have.
 #
-# WHY RENICE IS SAFE AND ONE-WAY
+# Why RENICE is safe and one-way
 # ------------------------------
-# Raising niceness (lower priority) needs no privilege and is always permitted; LOWERING it below
+# Raising niceness (lower priority) needs no privilege and is always permitted; Lowering it below
 # 0 needs CAP_SYS_NICE, which this repo does not have and does not want. `cpu_courtesy` therefore
 # only ever moves in the yielding direction, and is a no-op when the process is already at or
 # below the floor. It cannot escalate anything.
 #
-# WHY A JOBS CAP TOO, AND WHY IT IS NOT ENOUGH ON ITS OWN
+# Why a jobs cap too, and why it is not enough on its own
 # -------------------------------------------------------
-# `nice` fixes WHO WINS a contended core; it does not reduce how many cores are contended, so a
+# `nice` fixes who wins a contended core; it does not reduce how many cores are contended, so a
 # 16-job build still pins every core and the desktop stutters even while winning. `CARGO_BUILD_JOBS`
 # bounds the rustc processes cargo spawns. Neither one covers the other:
 #
-#   * cargo's `jobs` does NOTHING for the ~190 non-cargo gates in check.sh, which were the actual
-#     hogs in the measurement above, nor for threads INSIDE a single rustc, nor for the linker.
+#   * cargo's `jobs` does nothing for the ~190 non-cargo gates in check.sh, which were the actual
+#     hogs in the measurement above, nor for threads inside a single rustc, nor for the linker.
 #   * `nice` alone leaves every core saturated.
 #
 # Hence both, and hence the cap is a fraction of the machine rather than `nproc - 1`: leaving one
 # core free does not make a desktop responsive when the other fifteen are pinned.
 #
-# WHY A SCHED-POLICY LEVER TOO, AND WHY NICE ABOVE IS NOT ENOUGH ON THIS CLASS OF MACHINE
+# Why a SCHED-policy lever too, and why nice above is not enough on this class of machine
 # ----------------------------------------------------------------------------------------
-# MEASURED 2026-09-06 on this CachyOS box, live from /proc during a real gate run: the renice
-# above is INERT here. `git push` sat at nice 11 (a relative `nice -n 15` on a -4 parent), but its
+# Measured 2026-09-06 on this CachyOS box, live from /proc during a real gate run: the renice
+# above is inert here. `git push` sat at nice 11 (a relative `nice -n 15` on a -4 parent), but its
 # child `bash check.sh` was back at nice -4 -- a child cannot lower its own nice below what it
 # inherited -- and the eight `check-moveset-table.py` workers it forked inherited that -4 too. The
 # `cpu_courtesy` banner had printed "nice 11 -> 11" for that very shell, correctly reading 11 and
@@ -55,8 +55,8 @@
 # (`/etc/ananicy.d/00-types.types`). It re-applies that pin to every bash on this machine roughly
 # every 15 seconds, including every gate script and everything it forks, so the renice above wins
 # for at most one sweep before losing again -- it is not merely weak here, it is actively
-# reversed. CONFIRMED on a single pid across one 20s window: `renice -n 10` plus `chrt -i` at t=0
-# read back as `nice=10, SCHED_IDLE`; at t=20s (past one `check_freq`) the SAME pid read back as
+# reversed. Confirmed on a single pid across one 20s window: `renice -n 10` plus `chrt -i` at t=0
+# read back as `nice=10, SCHED_IDLE`; at t=20s (past one `check_freq`) the same pid read back as
 # `nice=-4, SCHED_IDLE` -- ananicy reverted the nice, unchanged, and left the scheduling policy
 # alone. The `Doc-View` type carries no `sched` key, so it has nothing to reapply there.
 #
@@ -113,11 +113,11 @@ er_job_cap() {
 cpu_courtesy() {
 	local who="${1:-build}" current floor cap
 
-	# IDEMPOTENT, BECAUSE THE CAP READS A NUMBER IT ITSELF CHANGED. `er_cpu_count` calls `nproc`,
-	# which reports the AFFINITY MASK, not the socket -- so a second call inside a nested script
+	# IDEMPOTENT, because the cap reads a number it itself changed. `er_cpu_count` calls `nproc`,
+	# which reports the affinity mask, not the socket -- so a second call inside a nested script
 	# sees the 8 cores the first call granted and halves them again. check.sh sources this and
 	# then invokes check-rust-build.sh, which sources it too: without this guard that run would
-	# have proceeded on 4 cores, then 2, ratcheting toward serial. MEASURED in this file's own
+	# have proceeded on 4 cores, then 2, ratcheting toward serial. Measured in this file's own
 	# banner on 2026-09-06, which printed "CARGO_BUILD_JOBS=8 of 8 cores" -- the 8 was already
 	# the masked count, one nesting level away from being wrong rather than merely confusing.
 	#
@@ -129,7 +129,7 @@ cpu_courtesy() {
 	fi
 
 	floor="$ER_NICE_FLOOR"
-	# Read the machine BEFORE masking it, and remember it, so the banner below reports the cap
+	# Read the machine before masking it, and remember it, so the banner below reports the cap
 	# against the real core count instead of against itself.
 	local cores
 	cores=$(er_cpu_count)
@@ -140,11 +140,11 @@ cpu_courtesy() {
 	# reaches every nested cargo invocation, including the ones inside other scripts.
 	export CARGO_BUILD_JOBS="$cap"
 
-	# AND THE PYTHON WORKER POOLS, which is the half `nice` cannot reach and the half that
-	# actually pinned this machine. MEASURED 2026-09-06: with every gate process already
+	# And the Python worker pools, which is the half `nice` cannot reach and the half that
+	# actually pinned this machine. Measured 2026-09-06: with every gate process already
 	# reniced to 19, `scripts/check-moveset-table.py` still held 81.4% of a 16-core box,
 	# because it sizes its pool `int(os.environ.get('SWEEP_JOBS', os.cpu_count() or 8))` --
-	# one worker per core, each at ~90% CPU. Priority decides who WINS a contended core; it
+	# one worker per core, each at ~90% CPU. Priority decides who wins a contended core; it
 	# does nothing about how many cores are contended, so the desktop stayed unusable while
 	# formally losing every race. `SWEEP_JOBS` is the knob that gate already reads.
 	export SWEEP_JOBS="${SWEEP_JOBS:-$cap}"

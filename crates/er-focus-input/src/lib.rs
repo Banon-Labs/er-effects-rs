@@ -1,6 +1,6 @@
 //! er-focus-input -- ELDEN RING accepts input while its window is UNFOCUSED.
 //!
-//! A standalone `er_focus_input.dll`, loaded as its own `[[natives]]` entry. Its mere PRESENCE
+//! A standalone `er_focus_input.dll`, loaded as its own `[[natives]]` entry. Its mere presence
 //! enables it: no env var, no marker file, no config. Omit it from the profile to get vanilla
 //! focus behaviour back.
 //!
@@ -17,7 +17,7 @@
 //!
 //! # Mechanism, in one line
 //!
-//! `CS::CSPadStep::STEP_Update` skips the whole input update on an unfocused frame UNLESS
+//! `CS::CSPadStep::STEP_Update` skips the whole input update on an unfocused frame unless
 //! `Game.Debug.IsEnableControlOnDisactiveWindow()` is true. That accessor is a single
 //! `movzx eax, byte ptr [<global>]`, and this shell writes that global from the game thread each
 //! frame. Read `predicate.rs` before changing anything here -- it carries the addresses, the two
@@ -32,7 +32,7 @@
 
 // A cdylib whose only consumers are `DllMain` and the `#[cfg(windows)]` game task it registers. On
 // a host build those callers are cfg'd out, so `dead_code` there reports the cfg rather than real
-// debt; the SHIPPING target carries the full workspace deny. Same shape as er-input-harness.
+// debt; the shipping target carries the full workspace deny. Same shape as er-input-harness.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 mod log;
@@ -68,7 +68,7 @@ static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 /// Frames on which the store succeeded. Also the log throttle.
 static FORCED_FRAMES: AtomicU64 = AtomicU64::new(0);
 
-/// Frames on which the store was REFUSED -- an unresolved address on an unrecognised build. Counted
+/// Frames on which the store was refused -- an unresolved address on an unrecognised build. Counted
 /// separately so a run can tell "the shell did nothing" apart from "the shell was not loaded", and
 /// so the refusal is reported once rather than every frame.
 static REFUSED_FRAMES: AtomicU64 = AtomicU64::new(0);
@@ -124,7 +124,7 @@ fn on_frame() {
         return;
     }
     // Refused: the running build has no verified translation for this global, so nothing was
-    // written. Say so ONCE -- a per-frame refusal line is the 339,764-line failure mode
+    // written. Say so once -- a per-frame refusal line is the 339,764-line failure mode
     // `er_game_base::game_build` exists to avoid.
     if REFUSED_FRAMES.fetch_add(1, Ordering::Relaxed) == 0 {
         focus_log!(
@@ -148,7 +148,7 @@ fn install() {
          CSTaskImp FrameBegin task -- no detour, no OS input, one byte store per frame ({})",
         er_game_base::game_build::describe_build(),
     );
-    // BOUNDED wait for the task manager: the unbounded yield loop every shell used to open with
+    // Bounded wait for the task manager: the unbounded yield loop every shell used to open with
     // starved the wineserver and hung a boot (see er_game_base::wait).
     let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
     else {
@@ -177,8 +177,8 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
-        // FIRST, before anything that can panic. A panic in a cdylib crossing an `extern "system"`
-        // boundary becomes an ABORT, and what survives is an anonymous 0xe06d7363 record naming
+        // First, before anything that can panic. A panic in a cdylib crossing an `extern "system"`
+        // boundary becomes an abort, and what survives is an anonymous 0xe06d7363 record naming
         // the module and nothing else. Enforced by scripts/check-panic-reporter-installed.py.
         er_game_base::panic_report::report_panics_to("er-focus-input", crate::log::log_line);
         START.call_once(|| {

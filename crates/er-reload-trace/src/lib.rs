@@ -17,10 +17,10 @@ const GAME_DATA_MAN_GLOBAL_RVA: usize = er_game_base::rva::GAME_DATA_MAN_GLOBAL_
 /// Mounted-EBL-archive registry -- the `DLIO::DLFileDeviceManager` singleton, whose deobf VA is
 /// `0x1448464a8`.
 ///
-/// IT WAS `0x448464a8` HERE UNTIL 2026-08-30, AND THAT WAS A TRANSCRIPTION SLIP, NOT A MIGRATION
-/// CASUALTY. `0x1448464a8 - 0x140000000 = 0x48464a8`; the old constant had dropped a leading `0x14`
+/// It was `0x448464a8` here until 2026-08-30, and that was a transcription SLIP, not a migration
+/// casualty. `0x1448464a8 - 0x140000000 = 0x48464a8`; the old constant had dropped a leading `0x14`
 /// instead of the full image base, leaving an RVA of 0x448464a8 -- about 1.1 GB past the end of a
-/// 0x5e08000-byte image, on EVERY build. `read_usize` is `ReadProcessMemory`-backed and the call
+/// 0x5e08000-byte image, on every build. `read_usize` is `ReadProcessMemory`-backed and the call
 /// site ended in `.unwrap_or(0)`, so the read never faulted and never logged: the mount census in
 /// every trace line this DLL has ever written reported `mounted_registry=0x0` because the address
 /// was unmappable, not because nothing was mounted. `docs/recon/rva-map-1162-to-1170.data.tsv`
@@ -31,7 +31,7 @@ const MOUNTED_ARCHIVE_REGISTRY_RVA: usize = er_game_base::rva::DL_FILE_DEVICE_MA
 // MoveMapStep finalize advancer FUN_140afa7c0 (dump) -> deobf 0x140afa6d0 -> rva 0xafa6d0 (content-
 // unique, scripts/dump-deobf-shift.py). param_1 (rcx) = MoveMapStep; field25_0x12a = the finalize
 // sub-state (0..9). cVar10 (the ending request it computes) is written to menuData+0x5e; its rt5d input
-// is menuData+0x5d. Hooking this proves whether the advancer is even TICKED for load2 and what it reads.
+// is menuData+0x5d. Hooking this proves whether the advancer is even ticked for load2 and what it reads.
 const MOVEMAPSTEP_FINALIZE_12A_OFFSET: usize = 0x12a;
 /// Child teardown FUN_140eb54e0 (dump) -> deobf 0x140eb54c0 / rva 0xeb54c0. STEP_MoveMap_Update calls
 /// it to tear down the MoveMapStep child (whose EzChildStepBase = MoveMapStep + 0x108). Hooking it +
@@ -61,22 +61,22 @@ const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 )]
 const GAME_MAN_FIELD_B73_OFFSET: usize = 0xb73;
 const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
-/// `CS::GameMan::saveState` -- the one-slot arbiter over the SL device, stamped by BOTH the save
+/// `CS::GameMan::saveState` -- the one-slot arbiter over the SL device, stamped by both the save
 /// lane (1) and the load lane (2), not a "load phase". Renamed 2026-08-31 from
 /// `GAME_MAN_LOAD_PHASE_B80_OFFSET`; the witnesses and the full value table are on the
 /// declaration in `er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET`.
 const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = 0xb80;
 const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = 0xac0;
-/// `CS::GameMan::stayInMultipleAreaBlockId` -- NOT "the current map", which is what this constant
+/// `CS::GameMan::stayInMultipleAreaBlockId` -- Not "the current map", which is what this constant
 /// claimed until 2026-08-31. The map-move target is `moveMapStepBlockId` at **+0x14**, and
-/// `SetMoveMapStepBlockId` (`0x14067abd0`) writes it FROM this field via the getter
+/// `SetMoveMapStepBlockId` (`0x14067abd0`) writes it from this field via the getter
 /// `FUN_140679560`. So +0xc30 is the source of the next map move: seeded from slot body+0x04 by
 /// the deserializer `FUN_14067bd70` on load, and maintained by the stay-in-multiplay path
 /// (`FUN_14067afa0`, `FUN_14067aac0`) during play. See
 /// `er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET` for the complete access set.
 const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
-/// `GameMan + 0xdf0` -- the LENGTH of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
-/// starts at `GameMan + 0xdd0`. It is NOT a "resident device" pointer; the old name was invented
+/// `GameMan + 0xdf0` -- the length of the `DLString<wchar_t>` inside the `FD4FilePathBase` that
+/// starts at `GameMan + 0xdd0`. It is not a "resident device" pointer; the old name was invented
 /// from the value's shape and nothing ever measured it.
 ///
 /// The constructor hands the whole `0xdd0..0xe08` region off in one `lea` and never touches the
@@ -98,8 +98,8 @@ const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// `0xe08`. The whole GameMan constructor aligns 1296/1296 against 1.17 with zero moved offsets,
 /// and the `lea` that anchors this region is at the same `0xdd0` in both images.
 ///
-/// WHAT READS IT, in the decompiler's own words -- a third witness, independent of both the type
-/// and the constructor, and the reason this is logged in DECIMAL. Both save gates spell the test
+/// What reads it, in the decompiler's own words -- a third witness, independent of both the type
+/// and the constructor, and the reason this is logged in decimal. Both save gates spell the test
 /// as a string length, not as a handle:
 ///
 /// ```text
@@ -112,15 +112,15 @@ const GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// this read must stay an `Option` rather than `unwrap_or(0)`: a failed read rendered as `0` is
 /// indistinguishable from an empty path, i.e. from the gate being open.
 const GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET: usize = 0xdf0;
-// LOAD-SUBMIT gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
+// Load-submit gate fields (bd load-submit-67dc00-gate-offsets-to-instrument-pin-load2-divergence).
 // combined_load_67b940 -> submit 0x14067dc00 bails (0x14067e12f) unless these GameMan[0x143d69918]
 // flags are clear/set. Logging them at the finalize-advancer heartbeat (which fires for load2 in the
-// stuck window) pins WHICH gate is the sole load2 divergence vs load1, without Ghidra and without
+// stuck window) pins which gate is the sole load2 divergence vs load1, without Ghidra and without
 // forcing state. cb1/cb2/bca/b5e are byte flags; the global at rva 0x3d68078 must be non-null.
 const GAME_MAN_SUBMIT_GATE_CB1_OFFSET: usize = 0xcb1;
 const GAME_MAN_SUBMIT_GATE_CB2_OFFSET: usize = 0xcb2;
 /// `CS::GameMan::eventWorldType`, a byte. Renamed 2026-08-31 from
-/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path DOES read it (`FUN_14067dc00` branches on
+/// `GAME_MAN_SUBMIT_GATE_BCA_OFFSET`: the submit path does read it (`FUN_14067dc00` branches on
 /// `GLOBAL_GameMan->eventWorldType != 0`), but naming a field after one consumer buried the fact
 /// that it is a named field with its own accessor pair -- `EventWorldType` (`0x140679820`,
 /// `movzx eax, byte ptr [rax+0xbca]`) and `SetWorldEventType` (`0x14067aeb0`,
@@ -137,23 +137,23 @@ const HOOK_ORIGINAL_UNSET: usize = 0;
 
 type TraceHookFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
-/// Bounded wait for the product DLL to map + export `er_effects_union_register`, asked ONCE so the
+/// Bounded wait for the product DLL to map + export `er_effects_union_register`, asked once so the
 /// answer is settled before any hook is registered. ~1s at 25ms, matching `er-hook`'s own budget.
 ///
 /// This is a presence question only -- `er_hook::register_shared_hook` does the routing. The old
-/// ~3s hand-rolled poll ALSO decided which code path installed the hooks, and its timeout dropped a
+/// ~3s hand-rolled poll also decided which code path installed the hooks, and its timeout dropped a
 /// multi-DLL run onto a completely ungated MinHook path. There is no such path left: both answers
 /// now resolve the address through the gate, so a late product load costs a chained handler, never
 /// a stale write.
 const PRODUCT_RESOLVE_TRIES: u32 = 40;
 const PRODUCT_RESOLVE_SLEEP_MS: u32 = 25;
 
-/// Addresses the PRODUCT DLL owns with a BARE `MhHook` (not its union) in the sq-repro reload mode
+/// Addresses the product DLL owns with a bare `MhHook` (not its union) in the sq-repro reload mode
 /// this trace runs alongside: 0x67b200 = SYSTEM_QUIT_REQUEST_LOAD_SLOT, 0x67b290 =
-/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Registering OUR observer
+/// SYSTEM_QUIT_INWORLD_LOAD (the reload's picked-slot deserialize proof). Registering our observer
 /// there would create the union dispatcher on that address first if our install thread wins the
 /// race, making the product's later `MhHook::new` return ALREADY_CREATED and silently dropping the
-/// product's CRITICAL reload hook. So whenever the product DLL is in the process we SKIP these two --
+/// product's critical reload hook. So whenever the product DLL is in the process we skip these two --
 /// the product's own menu-trace union hooks + its inworld-load debug line already log the same
 /// deserialize events. A standalone trace run, with no product DLL present, still installs them
 /// (through this DLL's own gated union, so the address is still resolved for the running build).
@@ -165,11 +165,11 @@ static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// sub-state change + a periodic heartbeat, instead of per-frame spam).
 static FIN_ADVANCER_CALLS: AtomicU64 = AtomicU64::new(0);
 static LAST_FIN12A: AtomicI32 = AtomicI32::new(-2);
-/// rt5d DIAGNOSTIC DRIVE (bd DECISIVE-load2-divergence-is-rt5d-menudata5d): load1's finalize naturally
+/// rt5d diagnostic drive (bd decisive-load2-divergence-is-rt5d-menudata5d): load1's finalize naturally
 /// gets menuData+0x5d(rt5d)=1 and walks field25 0..9; load2's stays 0 and parks at field25=0 forever.
-/// Once a SINGLE MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
+/// Once a single MoveMapStep has been stuck at field25=0 for RT5D_DRIVE_THRESHOLD consecutive advancer
 /// calls (load1 flips at ~call#133, so this only ever fires for a genuinely-stuck load2), supply rt5d=1
-/// once so the game's OWN finalize completes -- then observe complete(field25->9, movable) vs teardown.
+/// once so the game's own finalize completes -- then observe complete(field25->9, movable) vs teardown.
 #[allow(
     dead_code,
     reason = "retained RE fact: the removed rt5d drive's stuck-call threshold, kept with its sibling drive statics"
@@ -178,8 +178,8 @@ const RT5D_DRIVE_THRESHOLD: u64 = 30;
 static RT5D_DRIVE_MMS: AtomicUsize = AtomicUsize::new(0);
 static RT5D_DRIVE_ZERO_STREAK: AtomicU64 = AtomicU64::new(0);
 static RT5D_DRIVE_DONE_MMS: AtomicUsize = AtomicUsize::new(0);
-/// The most recent MoveMapStep whose finalize was seen ADVANCING (field25>=5) -- i.e. a load that
-/// completes on its own (load1, or a driven load2). Once set, any DIFFERENT mms stuck at field25=0 is
+/// The most recent MoveMapStep whose finalize was seen advancing (field25>=5) -- i.e. a load that
+/// completes on its own (load1, or a driven load2). Once set, any different mms stuck at field25=0 is
 /// the divergent next load; drive it after only RT5D_DRIVE_THRESHOLD stuck calls (a short run may never
 /// reach a large global count). Also lets the same logic catch load3 after load2 completes.
 static COMPLETION_SEEN_MMS: AtomicUsize = AtomicUsize::new(0);
@@ -233,24 +233,24 @@ struct HookSpec {
     original: &'static AtomicUsize,
 }
 
-// NO RAW MinHook FFI HERE, deliberately, and this crate is why the rule exists.
+// No raw MinHook FFI here, deliberately, and this crate is why the rule exists.
 //
 // Until 2026-08-30 this file imported the raw `MH_CreateHook` / `MH_EnableHook` externs and called
 // them on a hand-built `base + spec.rva`. `er-hook`'s 1.17 resolve gate lives inside `MhHook::new`,
 // `register_union_hook` and `register_shared_hook` -- none of which were on that path -- so on the
 // 1.17 image all 40 targets were stale 1.16.2 addresses and MinHook wrote 34 five-byte JMPs into
-// live code, 19 of them SPLITTING an instruction (`STEP_BeginLogo`, `STEP_MsbLoad`,
+// live code, 19 of them splitting an instruction (`STEP_BeginLogo`, `STEP_MsbLoad`,
 // `_CheckEndingRequest`, the GameMan accessor). It failed invisibly: 34 `installed` lines, zero
 // refusals, zero detour events, and no crash record. Every registration now goes through
-// `er_hook::register_shared_hook`, which resolves (or REFUSES) the address for the running build
+// `er_hook::register_shared_hook`, which resolves (or refuses) the address for the running build
 // and picks the product's single MinHook instance when the product DLL is co-loaded.
 //
 // NOTE for whoever owns `scripts/check-reload-trace-policy.py`: its `has_minhook` fact is the
 // literal presence of the two names above anywhere in this crate's sources, so it is currently
-// satisfied by THIS COMMENT rather than by any call. The assertion it stands for -- "must use
+// satisfied by this comment rather than by any call. The assertion it stands for -- "must use
 // MinHook trampolines for pass-through instrumentation" -- is still true (via `er-hook`'s union),
 // but the fact should be re-pointed at `register_shared_hook`, and the raw externs should become a
-// DENY for this crate, so the bypass this comment describes cannot be reintroduced silently.
+// deny for this crate, so the bypass this comment describes cannot be reintroduced silently.
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -267,14 +267,14 @@ unsafe extern "system" {
 
 /// This run's trace path: the launcher's redirect, else `LOG_PATH` beside `eldenring.exe`.
 ///
-/// THE BIGGEST PRODUCER IN THE REPO, AND UNTIL NOW THE LEAST MOVABLE. This trace runs at roughly
+/// The biggest producer in the REPO, and until now the least movable. This trace runs at roughly
 /// 655 MB/hour, and it used to resolve as a bare CWD-relative name that no launcher could move, so
 /// every launch rotated the previous run's trace to `.prev` and the launch after that destroyed it
 /// outright. The redirect (and the game-directory fallback behind it) lives in
-/// `er_game_base::log`, shared with every other per-run artifact so there is ONE convention for
+/// `er_game_base::log`, shared with every other per-run artifact so there is one convention for
 /// where a run's evidence goes rather than one per crate.
 ///
-/// This is an output PATH, not a runtime gate: nothing this DLL does changes with it, and the
+/// This is an output path, not a runtime gate: nothing this DLL does changes with it, and the
 /// crate reads no environment itself — `.auto/reload_trace_policy.rego` still holds.
 fn log_path() -> std::path::PathBuf {
     er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_RELOAD_TRACE_PATH", LOG_PATH)
@@ -383,8 +383,8 @@ fn mms_header_window(a: usize) -> String {
 }
 
 /// Custom detour for the MoveMapStep finalize advancer (0xafa6d0). Logs field25_0x12a before/after the
-/// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- ONLY on a sub-state change or every 600th
-/// call (heartbeat), so a FROZEN load2 (field25 stuck at 0) is visible without per-frame flooding while
+/// native call plus menuData 0x5d(rt5d)/0x5e(cVar10 out) -- Only on a sub-state change or every 600th
+/// call (heartbeat), so a frozen load2 (field25 stuck at 0) is visible without per-frame flooding while
 /// a healthy walk 0->9 logs every transition. rcx (`a`) = MoveMapStep.
 unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d: usize) -> usize {
     let calls = FIN_ADVANCER_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -397,11 +397,11 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
         ))
     });
     let menu_data = menu.and_then(|m| unsafe { read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) });
-    // NOTE: the rt5d/save-flag DRIVE was REMOVED (bd CORRECTION-rt5d-drive-tears-down-load2). Driving
-    // menuData+0x5d=1 (+ clearing saveRequested/0xb73) DID complete load2's finalize 0..9, but that
-    // TORE THE PLAYER DOWN (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
+    // NOTE: the rt5d/save-flag drive was removed (bd correction-rt5d-drive-tears-down-load2). Driving
+    // menuData+0x5d=1 (+ clearing saveRequested/0xb73) did complete load2's finalize 0..9, but that
+    // TORE the player down (post-completion: present=False, havok=None, mms=-1 at ~60fps = a player-less
     // world) -- load2's player is not movable at fin=0 when the finalize runs, unlike load1. So the
-    // finalize-drive is a proven DEAD END; this hook is log-only again so traces show the natural load2.
+    // finalize-drive is a proven dead end; this hook is log-only again so traces show the natural load2.
     // The old drive statics/consts are retained for reference but intentionally unused.
     let _ = (
         &RT5D_DRIVE_MMS,
@@ -418,7 +418,7 @@ unsafe extern "system" fn hook_finalize_advancer(a: usize, b: usize, c: usize, d
         .and_then(|md| unsafe { read_u8(md + MENU_DATA_ENDING_5E_OFFSET) })
         .map_or(-1, i32::from);
     let last = LAST_FIN12A.swap(fin_after, Ordering::SeqCst);
-    // Log EVERY advancer tick with the mms header window. load2's Update ticks only ~6x before the FD4
+    // Log every advancer tick with the mms header window. load2's Update ticks only ~6x before the FD4
     // scheduler drops it (load1 ~145x), so the per-tick header lets a run diff which mms field flips
     // when load2 stops ticking. Volume is bounded (a few hundred lines/run) -- acceptable for a
     // diagnostic (bd load2-real-blocker-movemapstep-child-advancer-tick-never-runs).
@@ -467,9 +467,9 @@ fn snapshot() -> String {
         ))
     }
     .unwrap_or(0);
-    // Resolved, then CHECKED FOR ZERO. `game_data_addr` answers 0 when the running build has no
+    // Resolved, then checked for zero. `game_data_addr` answers 0 when the running build has no
     // mapping for the address, and `read_usize(0)` fails the same way a genuinely null global
-    // reads -- so without this branch a REFUSAL and "nothing is mounted" print identically, which
+    // reads -- so without this branch a refusal and "nothing is mounted" print identically, which
     // is the confident-false-negative this whole migration keeps producing.
     let mounted_addr = er_game_base::mem::game_data_addr(
         base,
@@ -486,8 +486,8 @@ fn snapshot() -> String {
     let b80 = unsafe { read_i32(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) };
     let ac0 = unsafe { read_i32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET) };
     let c30 = unsafe { read_i32(gm + GAME_MAN_STAY_IN_MULTIPLAY_AREA_BLOCK_ID_C30_OFFSET) };
-    // A COUNT OF CHARACTERS, kept as `Option` and printed in decimal. `.unwrap_or(0)` was wrong
-    // twice over: 0 is the value the two gates below TEST FOR, so an unreadable read printed as
+    // A count of characters, kept as `Option` and printed in decimal. `.unwrap_or(0)` was wrong
+    // twice over: 0 is the value the two gates below test for, so an unreadable read printed as
     // "the path is empty" -- the reading that makes both gates look open.
     let path_len = unsafe { read_usize(gm + GAME_MAN_FILE_PATH_STRING_LEN_DF0_OFFSET) };
     let pgd = unsafe { read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0);
@@ -500,7 +500,7 @@ fn snapshot() -> String {
     let g_b5e = unsafe { read_u8(gm + GAME_MAN_SUBMIT_GATE_B5E_OFFSET) };
     // RESOLVED: `SAVE_DATA_SUBSYSTEM_GATE_RVA` moved +0x4070 on 1.17 (0x3d68078 -> 0x3d6c0e8).
     // Read raw, this trace line prints the contents of an unrelated global as the submit gate --
-    // and the whole point of the line is to DIFF load1 against load2 to find the gate that is
+    // and the whole point of the line is to diff load1 against load2 to find the gate that is
     // holding, which a wrong-but-plausible value makes actively misleading.
     let g_glob = unsafe {
         read_usize(er_game_base::mem::game_data_addr(
@@ -538,7 +538,7 @@ fn fmt_u8(value: Option<u8>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
-/// A `DLString` LENGTH, printed in decimal so no reader chases it as an address.
+/// A `DLString` length, printed in decimal so no reader chases it as an address.
 ///
 /// It was `df0=0x{:x}` for this line's whole life, under a constant named
 /// `GAME_MAN_RESIDENT_DEVICE_DF0_OFFSET`, so the log said "pointer" in both the key and the
@@ -550,7 +550,7 @@ fn fmt_len(value: Option<usize>) -> String {
     value.map_or_else(|| "<unreadable>".to_owned(), |value| value.to_string())
 }
 
-/// Three outcomes the mount census used to print identically as `0x0`: the running build REFUSED
+/// Three outcomes the mount census used to print identically as `0x0`: the running build refused
 /// the address (outer `None`), the read failed (inner `None`), or the global really is what it
 /// says. Collapsing the first two into `0x0` is what let a 1.1 GB-out-of-range constant look like
 /// "nothing is mounted" for the DLL's entire existence.
@@ -967,28 +967,28 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_menu_window_job_idle_ctor,
         original: &ORIG_MENU_WINDOW_JOB_IDLE_CTOR,
     },
-    // title_native_ready_733150 REMOVED 2026-08-30. The address is real and unchanged (1.16.2
+    // title_native_ready_733150 removed 2026-08-30. The address is real and unchanged (1.16.2
     // `bool FUN_140733150(SceneObjProxy*)` -> `(scaleformValue.dataType & 0x8f) != 0`, "is this
-    // proxy bound to a real GFx display object"; BYTE-IDENTICAL at 1.17 0x733fa0). It was dropped
-    // because observing it HERE was duplicative and, co-loaded, actively misleading:
+    // proxy bound to a real GFx display object"; Byte-identical at 1.17 0x733fa0). It was dropped
+    // because observing it here was duplicative and, co-loaded, actively misleading:
     //
     //   DUPLICATIVE. `er-quickload` detours the same prologue for the same purpose as
     //   `cap_title_native_ready_733150` (its `experiments/trace/menu_trace_hooks.rs`, via
     //   `er_title_flow::TITLE_NATIVE_READY_PREDICATE_RVA`), gated by `trace_continue_enabled()` =
-    //   `product_autoload_enabled()` -- i.e. ON in a default product run. Every profile that
+    //   `product_autoload_enabled()` -- i.e. On in a default product run. Every profile that
     //   carries this DLL also carries the product (`~/Elden/group-1170.me3`,
     //   `main-all-dlls.me3`, `main-all-dlls-no-mushroom.me3`, `invasion-path-test.me3`), so the
     //   observation was never actually lost by removing it here.
     //
-    //   MISLEADING. `er-armament-icons` CALLS this predicate -- it does not detour it -- from
+    //   Misleading. `er-armament-icons` calls this predicate -- it does not detour it -- from
     //   `hud_badge.rs` and four sites in its `lib.rs`, on the TilePopulate path (its own counters
-    //   heartbeat every 512 fires). `trace_hook` writes TWO unthrottled lines per call, each
+    //   heartbeat every 512 fires). `trace_hook` writes two unthrottled lines per call, each
     //   embedding a `snapshot()` that reads GameMan, under the log file's mutex. In the profiles
     //   above that meant every inventory tile emitting a pair of log lines labelled
     //   `title_native_ready_733150` -- attributing another DLL's icon queries to the native title
     //   flow, in a DLL whose entire product is a truthful trace.
     //
-    // This is the ONE prologue this crate shared with a shell it had no union relationship to, and
+    // This is the one prologue this crate shared with a shell it had no union relationship to, and
     // `scripts/check-shared-hook-rvas.py` is what surfaced it. Restoring the row is legitimate for
     // a standalone title-flow investigation (`~/Elden/sweep-er-reload-trace.me3`, no product, no
     // armament-icons); if you do, expect the gate to ask for a conflict-table entry naming
@@ -999,13 +999,13 @@ static HOOKS: &[HookSpec] = &[
         detour: hook_finalize_advancer,
         original: &ORIG_FINALIZE_ADVANCER,
     },
-    // loadlist_init_aec480 (STEP_MoveMap_LoadlistInit) REMOVED 2026-08-30: 0xaec480 was never a
-    // function entry on ANY build. On 1.16.2 it is INSIDE `mov word ptr [rbp-0x28], r12w`
+    // loadlist_init_aec480 (STEP_MoveMap_LoadlistInit) removed 2026-08-30: 0xaec480 was never a
+    // function entry on any build. On 1.16.2 it is inside `mov word ptr [rbp-0x28], r12w`
     // (`66 44 89 65 d8`, 0x140aec47f..0x140aec483), so the five-byte JMP truncated a live
     // instruction, and the crate's own 1.16.2 trace -- 323,338 lines -- never logged this hook
-    // ONCE. The real entry is 0xaec570 (`er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA`); the
+    // once. The real entry is 0xaec570 (`er_game_base::rva::STEP_MOVEMAP_LOADLIST_INIT_RVA`); the
     // shift tool mislanded at 0xaec480 in its -0xf0 sub-region, as
-    // `er-title-flow/src/title_load_step_hooks.rs` already recorded. That entry is a PRODUCT hook
+    // `er-title-flow/src/title_load_step_hooks.rs` already recorded. That entry is a product hook
     // (the union chains a base MinHook the product owns and the trace-DLL copy never fired), so
     // this crate does not re-derive it -- it drops the wrong address rather than carrying it.
     HookSpec {
@@ -1016,12 +1016,12 @@ static HOOKS: &[HookSpec] = &[
     },
     // child_done_query_eb5530 (FUN_140eb5550 in the dump / deobf 0x140eb5530 / rva 0xeb5530 -- the
     // child-done query STEP_MoveMap_Update calls, tearing the MoveMapStep child down when it returns
-    // nonzero) removed: the PRODUCT DLL now owns 0xeb5530 with its override hook
+    // nonzero) removed: the product DLL now owns 0xeb5530 with its override hook
     // (child_done_query_override_detour); a second trace hook here would chain and muddy the override.
     // Its log-only trace detour + statics were deleted with the spec entry rather than left parked.
 ];
 
-/// Install every trace observer, through `er-hook`'s gated registrar -- and RESOLVE EXACTLY ONCE.
+/// Install every trace observer, through `er-hook`'s gated registrar -- and resolve exactly once.
 ///
 /// There used to be two paths here and only one of them was safe. The "unioned" path handed the
 /// address to the product DLL's `er_effects_union_register`, which resolves it; the standalone
@@ -1030,16 +1030,16 @@ static HOOKS: &[HookSpec] = &[
 /// multi-DLL run where the product loaded late -- patched 34 stale 1.16.2 addresses into the live
 /// 1.17 image. Both paths now resolve.
 ///
-/// WHY NOT `er_hook::register_shared_hook`, which exists to collapse this into one call: it
-/// resolves and THEN hands the resolved address to the product's export, which resolves it AGAIN.
+/// Why not `er_hook::register_shared_hook`, which exists to collapse this into one call: it
+/// resolves and then hands the resolved address to the product's export, which resolves it again.
 /// Resolution is not idempotent, and it is not merely non-idempotent -- it can silently succeed
-/// with the WRONG answer. The translation table is keyed by 1.16.2 RVA, so a 1.17 destination that
+/// with the wrong answer. The translation table is keyed by 1.16.2 RVA, so a 1.17 destination that
 /// happens to equal some other row's 1.16.2 source gets translated a second time. Measured on this
 /// hook set 2026-08-30: `native_submit_7ac890` translates to `0x7ad710`, and `0x7ad710` is itself a
-/// tracked source mapping to `0x7ae590` (both rows BYTE-IDENTICAL in
+/// tracked source mapping to `0x7ae590` (both rows byte-identical in
 /// `rva-map-1162-to-1170.needed-verified.tsv`), so the second resolve would move the detour into a
 /// different function and report success. Three detour rows in the current table have that shape
-/// (`0x6156c0`, `0x7ad710`, `0xbbbd90`). So each branch below is given the UNRESOLVED address and
+/// (`0x6156c0`, `0x7ad710`, `0xbbbd90`). So each branch below is given the unresolved address and
 /// resolves it once: the product's export resolves for the product-present branch,
 /// `register_union_hook` resolves for the standalone one.
 fn install_hooks() {
@@ -1051,7 +1051,7 @@ fn install_hooks() {
         log_line(format_args!("install abort: game module base unresolved"));
         return;
     };
-    // Asked ONCE, and no longer load-bearing for safety: a timeout now costs a chained handler,
+    // Asked once, and no longer load-bearing for safety: a timeout now costs a chained handler,
     // not an ungated write. `er-hook` owns the module lookup so this crate no longer carries its
     // own `GetProcAddress` poll.
     let product =
@@ -1090,9 +1090,9 @@ fn install_hooks() {
     ));
 }
 
-/// Register one trace observer, returning whether it is ARMED.
+/// Register one trace observer, returning whether it is armed.
 ///
-/// A refusal is PER HOOK and never aborts the installer. The value of this DLL is the observers
+/// A refusal is per hook and never aborts the installer. The value of this DLL is the observers
 /// whose addresses the running build does have, and taking the whole run down because one row is
 /// missing from the map trades a diagnosable partial trace for no trace at all -- the same rule
 /// `er-better-refills` and `system_quit_ownership_repro.rs` follow (bd
@@ -1102,7 +1102,7 @@ fn install_one(base: usize, spec: &HookSpec, product: Option<er_hook::UnionRegis
     let outcome = match product {
         // SAFETY: the export's C-ABI shape is fixed by the product DLL, `spec.detour` is exactly
         // its `UnionFn`, and `spec.original` is a live `'static` cell in this image. The address is
-        // handed over UNRESOLVED on purpose -- the export resolves it, and resolving here too would
+        // handed over unresolved on purpose -- the export resolves it, and resolving here too would
         // translate twice (see `install_hooks`).
         Some(register) => match unsafe { register(requested, spec.detour, spec.original.as_ptr()) }
         {
@@ -1150,9 +1150,9 @@ pub unsafe extern "system" fn DllMain(
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
         // One sink for this DLL's hook + address lines. Without it a refused address is
-        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // silent here, because every cdylib links its own copy of er-hook/er-game-base.
         // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
-        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and nothing
         // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
         er_game_base::panic_report::report_panics_to("er-reload-trace", log_line);
         er_hook::set_hook_logger(log_line);

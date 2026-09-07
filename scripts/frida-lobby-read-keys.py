@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Read the keys on one Steam lobby, to tell a HOST advertisement from an invader's search lobby.
+"""Read the keys on one Steam lobby, to tell a host advertisement from an invader's search lobby.
 
-WHY
+Why
 ---
-`lobby_publish` gates publishing on "a non-zero lobby id exists at session+0x178 AND it carries
+`lobby_publish` gates publishing on "a non-zero lobby id exists at session+0x178 and it carries
 `lobby_type = yknx3_seamless_master_lobby`". Measured 2026-08-06, that gate is not host-specific:
 an INVADER's search session populates the same field at session state 0x15, and the publish fired
 during a search. An invader advertising a location is meaningless at best -- nobody can invade an
@@ -15,7 +15,7 @@ run captured `lobby_breakin_lobby_ykssr_199_6 = "true"` and
 `matchmaking_breakin_lobby_ykssr_199_6 = "4_3"`. If a search lobby lacks those, one of them is the
 discriminator the publish gate should use.
 
-READ ONLY. `GetLobbyData` (vtable slot 19) changes nothing for any player; this writes nothing and
+Read only. `GetLobbyData` (vtable slot 19) changes nothing for any player; this writes nothing and
 starts no session.
 
     uv run --with frida python3 scripts/frida-lobby-read-keys.py --lobby 0x18600001692080e
@@ -31,8 +31,8 @@ import sys
 GADGET = "127.0.0.1:27042"
 ACCESSOR = "SteamAPI_SteamMatchmaking_v009"
 
-#: What ersc's own query DEMANDS of each key, captured from its filter set. Presence is not the
-#: test -- VALUE is. Measured 2026-08-06: a host lobby carried
+#: What ersc's own query demands of each key, captured from its filter set. Presence is not the
+#: test -- Value is. Measured 2026-08-06: a host lobby carried
 #: `lobby_breakin_lobby_ykssr_199_6 = "false"`, and a presence check called that advertised. A
 #: lobby whose value does not equal what the filter asks for is invisible to every invader, exactly
 #: as if the key were missing.
@@ -143,12 +143,12 @@ rpc.exports = {
 def discriminator(values: dict) -> dict:
     """Which observed key, if any, separates a host advertisement from a search lobby.
 
-    A key counts only when it is PRESENT and non-empty. Steam returns an empty string for a key a
+    A key counts only when it is present and non-empty. Steam returns an empty string for a key a
     lobby does not carry, so "" and absent are the same answer and neither is evidence of a host.
     """
     present = {k: v for k, v in values.items() if v not in (None, "")}
     is_master = present.get(LOBBY_TYPE_KEY) == "yknx3_seamless_master_lobby"
-    # VALUE equality, not presence. `breakin = "false"` is a key that is there and says no.
+    # Value equality, not presence. `breakin = "false"` is a key that is there and says no.
     mismatched = {
         key: values.get(key)
         for key, wanted in REQUIRED_VALUES.items()
@@ -199,7 +199,7 @@ def _selftest() -> int:
     check(v["verdict"] == "REACHABLE-BY-INVADERS", "a lobby matching every filter value is reachable")
     check("can return" in v["note"], "and says our key is on a queryable lobby")
 
-    # THE MEASURED TRAP, 2026-08-06: breakin was PRESENT with the value "false", and a
+    # The measured trap, 2026-08-06: breakin was present with the value "false", and a
     # presence-based check reported the lobby as advertised. ersc filters on == "true", so that
     # lobby is invisible to every invader -- a key that is there and says no.
     says_no = dict(reachable, **{"lobby_breakin_lobby_ykssr_199_6": "false"})

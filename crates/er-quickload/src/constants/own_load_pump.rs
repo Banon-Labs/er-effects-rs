@@ -1,4 +1,4 @@
-// The PATH-B private-pump ("own the load") constant table moved VERBATIM into the
+// The path-B private-pump ("own the load") constant table moved verbatim into the
 // er-title-flow crate (crates/er-title-flow/src/constants_own_load_pump.rs) with the
 // autoload/title-flow slice. Only visibility changed (`pub(crate)` -> `pub`); the single
 // `pub(crate) use er_title_flow::*;` shim in constants.rs re-exports the whole table into this

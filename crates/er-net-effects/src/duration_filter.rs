@@ -1,6 +1,6 @@
 //! Filtering the selectable catalog by SpEffect duration.
 //!
-//! WHY DURATION IS WORTH FILTERING ON. Applying an effect with network sync broadcasts it
+//! Why duration is worth filtering on. Applying an effect with network sync broadcasts it
 //! (`SendSpEffectIdSync`), but removal has no network counterpart anywhere in the game -- so an
 //! effect you put on other players ends for them only when its own duration expires there. An
 //! effect whose `SpEffectParam.effectEndurance` is `-1` never expires, and is therefore permanent
@@ -8,7 +8,7 @@
 //! of 842 entries, so "am I about to pick something I can never take back" is a question worth
 //! being able to answer by not being offered those entries at all.
 //!
-//! `-1` IS THE ONLY NEGATIVE the field ever holds: across all 11325 rows of the master catalog
+//! `-1` is the only negative the field ever holds: across all 11325 rows of the master catalog
 //! the only negative `effectEndurance` value is exactly `-1`, 3636 times. So permanence is that
 //! sentinel and not a range test.
 
@@ -22,7 +22,7 @@ pub(crate) const PERMANENT_ENDURANCE: f32 = -1.0;
 ///
 /// The generator drops any field equal to its PARAMDEF default, and `SpEffect.xml` declares
 /// `f32 effectEndurance` with no `= default`, so the generator's fallback of `0` applies: an
-/// entry with no `effectEndurance` has a duration of zero (a one-shot), NOT a permanent one.
+/// entry with no `effectEndurance` has a duration of zero (a one-shot), not a permanent one.
 /// Reading absence as "unknown" would have hidden 3089 instant effects from the `only` mode and
 /// leaked them into `exclude`.
 pub(crate) const PARAMDEF_DEFAULT_ENDURANCE: f32 = 0.0;
@@ -35,7 +35,7 @@ pub(crate) enum PermanentEffects {
     Include,
     /// Hide effects that never expire -- the ones that cannot be taken back off other players.
     Exclude,
-    /// Offer ONLY the never-expiring effects.
+    /// Offer only the never-expiring effects.
     Only,
 }
 
@@ -65,7 +65,7 @@ impl PermanentEffects {
     /// May an effect with this duration be offered?
     ///
     /// `None` is a duration we could not establish at all -- no master catalog on disk, so no
-    /// `effectEndurance` for anything. Both filtering modes then refuse to CLAIM anything about
+    /// `effectEndurance` for anything. Both filtering modes then refuse to claim anything about
     /// an entry: `exclude` keeps it (it cannot be shown to be permanent) and `only` drops it (it
     /// cannot be shown to be permanent either). Guessing in either direction would quietly hand
     /// the player exactly the entries the setting exists to keep away from them.

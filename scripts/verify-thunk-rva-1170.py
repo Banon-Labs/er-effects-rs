@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Verify a 1.16.2 -> 1.17 pair whose function has NO `.pdata` extent.
+"""Verify a 1.16.2 -> 1.17 pair whose function has no `.pdata` extent.
 
-WHY `verify-rva-map-1170.py` CANNOT DO IT
+Why `verify-rva-map-1170.py` cannot do it
 -----------------------------------------
 That tool stops a decode at (1) the `.pdata` extent, (2) a `ret`, or (3) a `jmp` immediately
-followed by an `int3`. A LEAF THUNK satisfies none of them. MSVC emits no unwind data for a
+followed by an `int3`. A leaf THUNK satisfies none of them. MSVC emits no unwind data for a
 function that neither allocates stack nor saves a register, so there is no extent; the thunk ends
-in a TAIL CALL, so there is no `ret`; and in this de-Arxan'd image the alignment gap after the
+in a tail call, so there is no `ret`; and in this de-Arxan'd image the alignment gap after the
 tail call is not `int3` padding -- it is whatever the deobfuscator left there, which differs
 between builds.
 
-The decode therefore runs off the end, through the gap, into the NEXT thunk and beyond, and the
+The decode therefore runs off the end, through the gap, into the next thunk and beyond, and the
 first place the two builds' unrelated trailing bytes disagree is reported as the function
 DIVERGING. That verdict is not merely useless: `er-game-base/build.rs::refuted_sources()` reads
-`DIVERGES` as positive evidence the address is WRONG and subtracts it from the CALL map too. So an
+`DIVERGES` as positive evidence the address is wrong and subtracts it from the call map too. So an
 over-read on a thunk that did not change removes a working address.
 
 Measured examples, both `CS::KnowledgeLoadingScreen` `_Func_impl` lambdas:
@@ -25,18 +25,18 @@ Both thunks are 23 bytes and differ in exactly four bytes: the `lea rdx,[rip+X]`
 `.rdata` label literal that moved, and the tail-call `rel32` to a callee that moved. Every diff the
 verifier found was past byte 23.
 
-WHAT THIS DOES INSTEAD
+What this does instead
 ----------------------
 It bounds the decode by REACHABILITY, which is the property a `.pdata` extent stands in for: an
 unconditional `jmp` ends the function unless something already decoded branches past it. Then it
-compares the two bodies BYTE for byte with the relocation-sensitive operand fields (RIP-relative
+compares the two bodies byte for byte with the relocation-sensitive operand fields (RIP-relative
 displacements, branch targets) masked out, and reports which bytes remain different.
 
 A clean result is stronger evidence than `IDENTICAL`, not weaker: nothing is normalised away
-except the fields a patch is REQUIRED to change. Immediates and struct displacements are compared
+except the fields a patch is required to change. Immediates and struct displacements are compared
 literally, so a retuned constant or a moved field shows up as a difference rather than vanishing.
 
-USAGE
+Usage
     uv run --with capstone python3 scripts/verify-thunk-rva-1170.py 0x14090a0a0 0x14090b240
     uv run --with capstone python3 scripts/verify-thunk-rva-1170.py --pairs <file.tsv>
 """
@@ -95,8 +95,8 @@ def body(image, rva):
         if insn.mnemonic == "ret":
             end = insn.address - rva + insn.size
             break
-        # The reachability test must use branches decoded BEFORE this instruction. Folding the
-        # tail call's OWN forward target into the reckoning is what made an early version run
+        # The reachability test must use branches decoded before this instruction. Folding the
+        # tail call's own forward target into the reckoning is what made an early version run
         # 296 bytes past a 12-byte thunk: `jmp <helper>` jumps forward, so it appeared to keep
         # the following bytes reachable from itself.
         if insn.mnemonic == "jmp" and furthest_branch <= insn.address:

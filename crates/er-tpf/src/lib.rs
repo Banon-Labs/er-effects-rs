@@ -22,7 +22,7 @@
 //!   the documented SoulsFormats `TPF` layout. The wrap is **never** Kraken/DCX
 //!   compressed -- this crate emits only the decompressed in-memory form.
 //!
-//! # NEVER compressed
+//! # never compressed
 //!
 //! This crate emits Kraken/DCX/Oodle data **nowhere**. The whole point is the
 //! post-decompress blob; compression is a transport concern handled elsewhere.

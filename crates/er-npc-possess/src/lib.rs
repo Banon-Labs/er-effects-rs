@@ -11,7 +11,7 @@
 //! filled that seam in and nothing above it had to change, which is the only real evidence that
 //! the seam was cut in the right place.
 //!
-//! Layer 4 added the other half of "pick an NPC to control": [`spawn`] CREATES the creature named
+//! Layer 4 added the other half of "pick an NPC to control": [`spawn`] creates the creature named
 //! in `[spawn]` rather than finding one the map placed, waits for it to become drivable, and takes
 //! it away again afterwards. There is no residency restriction on which creature -- assets load on
 //! demand and nothing on the spawn path validates the id -- so what replaces one is a deadline,
@@ -31,18 +31,18 @@
 //! character, which are the two things that cannot be done by writing a field. The prologue is
 //! `CS::CSFeManImp::UpdatePlayerComponents`, detoured by [`hud`] so the HP, FP and stamina bars
 //! read the possessed creature. All four go through `game_rva_named`, so on a build with no
-//! verified 1.16.2 -> 1.17 mapping the feature is REFUSED rather than jumping into whatever now
+//! verified 1.16.2 -> 1.17 mapping the feature is refused rather than jumping into whatever now
 //! occupies those bytes -- `er-hook` logs `HOOK REFUSED` and the bars keep showing your own
 //! character. That is the whole of this DLL's footprint in the game image; it is recorded in
 //! `scripts/me3-dll-conflicts.toml`, and no other shell in the suite hooks that function or its
 //! caller.
 //!
-//! One more hook exists and is NOT a game prologue: hudhook's DX12 `Present`, which [`picker`]
+//! One more hook exists and is not a game prologue: hudhook's DX12 `Present`, which [`picker`]
 //! installs the first time the creature list is opened and never otherwise. That is a swapchain
 //! vtable slot, arbitrated by `er_build_watermark_core::overlay_host` so the process keeps exactly
 //! one of them however many shells want to draw.
 //!
-//! The one thing it does that IS dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
+//! The one thing it does that is dangerous is write `ChrCtrl+0x3b0`, because `ChrCtrl::Unref`
 //! DLPanics on a non-null value there. Every path that can end a possession -- the hotkey, the
 //! creature dying, the creature despawning, and `DLL_PROCESS_DETACH` below -- goes through
 //! `possess::teardown`, which clears it whatever else failed.
@@ -109,7 +109,7 @@ static EDGES: Mutex<Option<Edges>> = Mutex::new(None);
 
 #[cfg(windows)]
 fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
-    // BOUNDED. An unbounded `loop { yield_now() }` here starved the wineserver on 1.17 when the
+    // Bounded. An unbounded `loop { yield_now() }` here starved the wineserver on 1.17 when the
     // singleton did not turn up promptly; see er_game_base::wait for the measurement.
     er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
 }
@@ -118,11 +118,11 @@ fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
 /// a press into a possession request.
 #[cfg(windows)]
 fn tick() {
-    // Sample the pad BEFORE the reload, so a rebind can seed its latch from the buttons that are
+    // Sample the pad before the reload, so a rebind can seed its latch from the buttons that are
     // down at that instant instead of clearing it and manufacturing a press.
     let buttons = input::read_pad_buttons();
 
-    // THE RELOAD GATE. A config reload must not land mid-animation -- the mapping tables are read
+    // The reload gate. A config reload must not land mid-animation -- the mapping tables are read
     // while an attack is playing, and swapping them under it would finish one character's swing
     // with another's. Only the engine knows whether the body is neutral, so it decides when the
     // file may be consumed. With no engine installed this is always open; see `engine`.
@@ -131,7 +131,7 @@ fn tick() {
     {
         config::log_update(&update);
         if update.bindings_moved() {
-            // The latches are re-seated below, from the pad sample taken THIS frame. This is only
+            // The latches are re-seated below, from the pad sample taken this frame. This is only
             // the reason the "now listening" line is about to appear.
             possess_log(format_args!(
                 "config: a hotkey binding moved; re-seating the latches"
@@ -166,7 +166,7 @@ fn tick() {
     // does not read the button that was already down as a fresh press.
     drop(guard);
 
-    // THE PICKER TICKS BEFORE THE MASTER-SWITCH RETURN, and the master switch is folded into the
+    // The PICKER ticks before the master-switch return, and the master switch is folded into the
     // picker's own `enabled` rather than short-circuiting past it. It has to be: the panel is
     // drawn from a snapshot the picker republishes each frame, so a `return` here with the list
     // up would freeze that snapshot on screen with no key left that could clear it -- `enabled =
@@ -177,7 +177,7 @@ fn tick() {
     let mut picker_settings = config::picker();
     picker_settings.enabled &= bindings.enabled;
     if picker::tick(picker_settings, buttons) {
-        // The list just opened, so the overlay now has to exist. Installed HERE rather than
+        // The list just opened, so the overlay now has to exist. Installed here rather than
         // inside the picker because the install waits on the game's window, takes a named mutex
         // and may end in `Hudhook::apply()`; none of that may happen while the picker's own lock
         // is held. It spawns a thread and returns immediately.
@@ -204,8 +204,8 @@ fn tick() {
 
     if let Some(source) = sample.possess_source() {
         PRESSES_SEEN.fetch_add(1, Ordering::Relaxed);
-        // THE PICKER GETS THIS PRESS FIRST. While the creature list is up, the possess hotkey
-        // CHOOSES rather than possesses -- one key to learn instead of two, and "the key that
+        // The PICKER gets this press first. While the creature list is up, the possess hotkey
+        // chooses rather than possesses -- one key to learn instead of two, and "the key that
         // starts a possession also picks what to possess" is a sentence the config file can
         // print. `take_confirm` returns `None` whenever the list is closed, which is every frame
         // the picker is not in use, so the possession path below is unchanged.
@@ -237,17 +237,17 @@ fn tick() {
             };
             possess_log(format_args!("{}", report.line(&binding)));
         }
-        // NOT a `return` in the picker branch. `engine::tick_engine()` below has to run on every
+        // Not a `return` in the picker branch. `engine::tick_engine()` below has to run on every
         // frame -- it is what notices a possessed character dying or despawning -- so skipping it
         // on the one frame a pick was confirmed would leave a dead body possessed for a frame.
     }
 
-    // THE POSSESSION ITSELF, one frame of it. After the hotkey edge, so a press and its first
+    // The possession itself, one frame of it. After the hotkey edge, so a press and its first
     // frame land in that order; unconditional, because the engine has to notice a possessed
     // character dying or despawning on a frame nobody pressed anything.
     engine::tick_engine();
 
-    // THE SECOND INSTALL TRIGGER, and it is not redundant with the picker's. A possession does
+    // The second install trigger, and it is not redundant with the picker's. A possession does
     // not require the creature list -- `[target] mode = "lock_on"` is the default and never opens
     // it -- so an attack-set panel gated on the picker's install would draw nothing at all in
     // exactly the session that needs it. The live run of 2026-09-02 was that session:
@@ -259,10 +259,10 @@ fn tick() {
 
     if ticks.is_multiple_of(STATUS_LOG_TICKS) {
         let (state, presses) = engine::snapshot();
-        // EVERY COUNTER HERE NAMES WHAT IT COUNTS, and that is a correction rather than a style
+        // Every counter here names what it counts, and that is a correction rather than a style
         // choice. This line used to read `picker_overlay=true picker_draws=3747 picker_rows=0`,
         // where `picker_draws` was Present frames (not picker frames) and `picker_rows` is 0
-        // whenever the list is closed -- so the honest reading of a CLOSED picker looked exactly
+        // whenever the list is closed -- so the honest reading of a closed picker looked exactly
         // like a picker that had rendered 3747 empty frames, and it was diagnosed as one. The
         // counters are now split: `overlay_frames` is the swapchain, `picker_panel_draws` and
         // `banner_draws` are the two panels, and each is zero for a reason its own name gives.
@@ -351,13 +351,13 @@ fn install() {
         config::DERIVED_CONFIG_FILE_NAME,
     ));
 
-    // THE HUD LAYER, AND THE CRATE'S ONLY DETOUR. Installed here rather than lazily on the first
+    // The HUD layer, and the crate'S only detour. Installed here rather than lazily on the first
     // possession: patching the game image is a thing to do once, on our own install thread, not on
     // a game task the first time somebody presses a key. `[hud] enabled = false` skips it
     // entirely, so a player who does not want the feature carries no patched bytes at all.
     hud::install(config.tables.hud.enabled);
 
-    // STACK LAYERS 2, 3 AND 4. Pressing the key writes a forwarding thunk into the target's
+    // Stack layers 2, 3 and 4. Pressing the key writes a forwarding thunk into the target's
     // `ChrCtrl+0x3b0`, points `WorldChrManDbg+0xb8` at it, and co-locates the player's own
     // (invisible, silent, invincible, non-attacking) body with it every frame; the four face
     // inputs fire that creature's own attacks out of the offline-classified table; and in
@@ -400,13 +400,13 @@ pub unsafe extern "system" fn DllMain(
         // attack-set panel. A session that does neither therefore still hooks nothing at all.
         overlay::arm(module.0 as usize);
         // A `rust_panic` in a cdylib loaded into the game is otherwise anonymous: the message goes
-        // to a stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and
+        // to a stderr nobody reads, and what survives is a 0xe06d7363 record naming the module and
         // nothing else. Every cdylib links its own copy of er-game-base, so this is per-DLL.
         //
         er_game_base::panic_report::report_panics_to("er-npc-possess", crate::possess_log);
-        // THE REFUSAL SINK, and it must be installed BEFORE anything resolves an address. Every
+        // The refusal sink, and it must be installed before anything resolves an address. Every
         // cdylib statically links its own copy of `er-hook` and `er-game-base`, so the logger they
-        // call through is a per-DLL static and an uninstalled one is silent PER DLL. The two lines
+        // call through is a per-DLL static and an uninstalled one is silent per DLL. The two lines
         // it carries are the ones that say a feature just went inert -- `HOOK REFUSED` and
         // `ADDRESS REFUSED` -- and without it `MH_ERROR_UNSUPPORTED_FUNCTION` is ambiguous between
         // "MinHook cannot hook this" and "the build gate refused the address", which are different
@@ -418,17 +418,17 @@ pub unsafe extern "system" fn DllMain(
                 .spawn(install);
         });
     }
-    // THE ONE TEARDOWN THAT IS NOT OPTIONAL. A possession leaves a pointer to OUR memory in the
+    // The one TEARDOWN that is not optional. A possession leaves a pointer to our memory in the
     // possessed character's `ChrCtrl+0x3b0`, and `ChrCtrl::Unref` DLPanics on a non-null slot -- so
     // a DLL that unloads without clearing it arms a crash for whenever that character is next torn
     // down, in a process where our code is no longer present to explain it.
     if reason == DLL_PROCESS_DETACH {
         engine::shutdown_engine();
-        // ...AND THE DETOUR, which is the other pointer to our memory the game is holding. The
+        // ...AND the detour, which is the other pointer to our memory the game is holding. The
         // release above disarmed the post-pass; this decides whether the five patched bytes come
         // back out. `lpReserved` is how `DllMain` says which kind of detach this is: NULL means a
         // real `FreeLibrary` -- the game keeps running with our code unmapped, so a detour still
-        // pointing into it would jump into nothing on the next frame and the bytes MUST be
+        // pointing into it would jump into nothing on the next frame and the bytes must be
         // reverted. Non-NULL means the process is exiting, where MinHook's thread suspension under
         // the loader lock is the bigger hazard and there is nothing left to protect.
         hud::shutdown(!reserved.is_null());
@@ -436,12 +436,12 @@ pub unsafe extern "system" fn DllMain(
     DLL_MAIN_SUCCESS
 }
 
-// IF THIS MODULE WINS THE IMGUI CONTEXT, every other overlay in the process has to be able to
+// If this module wins the IMGUI context, every other overlay in the process has to be able to
 // find it by name. `overlay_host::register_with_host` locates the host by looking this export up
 // on each loaded module, so a host that does not define it is a host nobody can register with --
 // and every other overlay in the profile silently draws nothing. That is the #336 regression the
 // arbitration exists to prevent, and omitting this line reintroduces it. The picker installs
-// lazily, so this DLL normally LOSES the claim to a shell that installs at attach; "normally" is
+// lazily, so this DLL normally loses the claim to a shell that installs at attach; "normally" is
 // a timing accident, not a guarantee.
 #[cfg(windows)]
 er_build_watermark_core::export_overlay_host!();

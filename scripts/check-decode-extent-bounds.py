@@ -1,49 +1,49 @@
 #!/usr/bin/env python3
-"""Refuse a NEW forward disassembly bounded by a byte COUNT instead of a function EXTENT.
+"""Refuse a new forward disassembly bounded by a byte count instead of a function extent.
 
-THE CLASS, IN ONE SENTENCE
+The class, in one sentence
 --------------------------
 A linear x86-64 decode starting inside the de-Arxan'd ELDEN RING images is trustworthy only until
 that function's last byte; past it the decoder is reading inter-function padding and the
-deobfuscator's LEFTOVER BYTES -- not a uniform `cc`/`90` run -- so it RESYNCHRONISES into
+deobfuscator's leftover bytes -- not a uniform `cc`/`90` run -- so it RESYNCHRONISES into
 plausible-looking instructions that were never assembled, and any verdict taken from them is a
 verdict about noise.
 
-FIVE CONFIRMED INSTANCES BEFORE THIS GATE EXISTED
+Five confirmed instances before this gate existed
 --------------------------------------------------
   1. `audit-1170-hook-targets.py::patch_safe` read a flat 0x400 from the hook target. On a
      14-byte leaf that is 0x3f2 bytes of the neighbours, and it manufactured a
-     `jno 0x14067ac91` -- a branch into the five bytes MinHook overwrites -- out of ONE padding
+     `jno 0x14067ac91` -- a branch into the five bytes MinHook overwrites -- out of one padding
      byte. The 1.17 counterpart of that function is the same fourteen bytes and stayed green only
      because its junk pad byte happened to be `28` instead of `83`. One leftover byte decided
      whether a hand-derived, four-times-confirmed correct ledger row failed.
   2. 12 false `DIVERGE` verdicts (2026-08-30), a verifier decoding past a tail call.
-     `build.rs::refuted_sources` reads DIVERGES as evidence an address is WRONG and SUBTRACTS it
-     from the CALL map, so the artefact deleted working addresses.
+     `build.rs::refuted_sources` reads DIVERGES as evidence an address is wrong and SUBTRACTS it
+     from the call map, so the artefact deleted working addresses.
   3. 31 false `SHAPE-DIFF`s, same date, same cause.
   4. A trampoline walk that counted bytes past its own `ret`, reporting a 3-byte leaf as 8B
      relocatable and a 4-byte one as 11B.
   5. `check-singleton-field-offsets.py::_follow` (found by the 2026-08-31 sweep this gate closes)
-     walked five instructions from a singleton load and collected field offsets out of the NEXT
+     walked five instructions from a singleton load and collected field offsets out of the next
      function. It invented `SessionManager +0x18` in 1.17 -- a `lea` six bytes past the boundary,
-     and the SOLE evidence for that gate's headline claim -- and `CS::GameMan +0x0` in both
+     and the sole evidence for that gate's headline claim -- and `CS::GameMan +0x0` in both
      images, whose 1.17 witnesses decode as `sar dword ptr [rax], 0x6f` and
-     `and dword ptr [rax], esp`. The window parameter had been TUNED to include them.
+     `and dword ptr [rax], esp`. The window parameter had been tuned to include them.
 
-WHAT THIS GATE ACTUALLY MATCHES
+What this gate actually matches
 -------------------------------
 An AST scan of `scripts/**/*.py` for capstone `.disasm` / `.disasm_lite` calls, classifying the
 byte range handed to each:
 
-  BOUNDED           the slice's upper bound is an independent expression -- `data[start:end]`,
-                    `image[func : disp_at + 16]` (anchored on the SITE, not the start) -- or the
+  Bounded           the slice's upper bound is an independent expression -- `data[start:end]`,
+                    `image[func : disp_at + 16]` (anchored on the site, not the start) -- or the
                     span is a SUBTRACTION of two endpoints (`off : off + (end - begin)`), which is
                     an extent length wearing an addition. Nothing to justify.
-  SPAN-FROM-START   the upper bound is the lower bound PLUS a length: `blob[off : off + N]`. This
+  Span-from-start   the upper bound is the lower bound plus a length: `blob[off : off + N]`. This
                     is the shape of all five instances. Every such site needs a row in
                     `decode-extent-allowlist.tsv` saying why it is safe, or the gate goes red.
-  UNRESOLVED        the first argument is not a slice this scan can follow to its bounds -- a
-                    parameter, a helper's return value. NOT A PASS: it is printed and counted
+  Unresolved        the first argument is not a slice this scan can follow to its bounds -- a
+                    parameter, a helper's return value. Not a PASS: it is printed and counted
                     every run, because instance 5's sibling in `map-callsite-rva-1162-to-1170.py`
                     hid in exactly that shape (the caller fabricated the extent, so the callee
                     looked extent-bounded).
@@ -51,11 +51,11 @@ byte range handed to each:
 Spans of 16 or fewer literal bytes are exempt without a row: the longest x86-64 instruction is 15
 bytes, so such a decode cannot leave the instruction it starts on, let alone the function.
 
-THE FIX FOR A NEW HIT IS `scripts/function_extent.py`
+The fix for a new hit is `scripts/function_extent.py`
 -----------------------------------------------------
 `function_extent.body_end(blob, va)` resolves the extent from `.pdata`'s declared start, then an
 enclosing declared extent, then a decoded leaf watermark -- and returns None rather than guessing.
-IMPORT IT. A second implementation of extent resolution is the next divergence bug: the rule's own
+Import it. A second implementation of extent resolution is the next divergence bug: the rule's own
 history is two earlier wrong versions, and a hand-rolled `.pdata` walk written during the
 2026-08-31 sweep dropped a legitimate `CS::PlayerGameData +0xe5` witness because it did not merge
 chunk runs.
@@ -89,7 +89,7 @@ BOUNDED = "BOUNDED"
 SPAN_FROM_START = "SPAN-FROM-START"
 UNRESOLVED = "UNRESOLVED"
 
-# THE OTHER DISASSEMBLER IN THIS REPO. capstone is not the only decoder the offline tooling
+# The other DISASSEMBLER in this REPO. capstone is not the only decoder the offline tooling
 # drives: `objdump -D -b binary --start-address=A --stop-address=B` is used by the shell dump
 # helpers and by `check-dump-deobf-identity.py`, and it takes its span in exactly the shape this
 # gate is about -- a start plus a byte count, with no idea where the function ends. The AST scan
@@ -171,7 +171,7 @@ def classify_source(text, relpath):
     tree = ast.parse(text, relpath)
     owner = _enclosing_functions(tree)
     # The last assignment to a plain name within a scope, so `body = blob[a:b]` two lines above
-    # `md.disasm(body, va)` is followed rather than reported UNRESOLVED. Deliberately simple: a
+    # `md.disasm(body, va)` is followed rather than reported unresolved. Deliberately simple: a
     # name assigned twice resolves to the later one, and a wrong guess here shows up as a verdict
     # the reader can check against the line number, never as a silent pass.
     assigned = {}
@@ -239,9 +239,9 @@ def objdump_sites(text, relpath):
 
     No attempt is made to prove the expression: an objdump span is assembled as shell or as a
     subprocess argument list, and reading a start-plus-count out of that reliably is a parser this
-    gate does not have. So every one is SPAN-FROM-START and every one needs a row -- there are six
+    gate does not have. So every one is span-from-start and every one needs a row -- there are six
     in the tree and each is either a human dump with an operator-typed length or a comparison that
-    reads the SAME span on both sides. Being conservative here costs six rows; being clever would
+    reads the same span on both sides. Being conservative here costs six rows; being clever would
     cost the ability to notice a seventh.
     """
     out = []
@@ -264,7 +264,7 @@ def scan_tree(root=SCRIPTS):
         except OSError as exc:
             unparsable.append((relpath, str(exc)))
             continue
-        # This file NAMES the flag in its own docstring and matcher; matching itself would be a
+        # This file names the flag in its own docstring and matcher; matching itself would be a
         # self-reference, not a decode.
         if path.resolve() != Path(__file__).resolve():
             sites.extend(objdump_sites(text, relpath))
@@ -311,7 +311,7 @@ def audit(out=sys.stdout):
           f"{len(sites) - len(budgets) - len(unresolved)} extent-bounded, "
           f"{len(budgets)} on a byte budget, {len(unresolved)} unresolved", file=out)
     if unresolved:
-        # NOT a pass, and said so every run. `map-callsite-rva-1162-to-1170.py::carry` hid a
+        # Not a pass, and said so every run. `map-callsite-rva-1162-to-1170.py::carry` hid a
         # fabricated extent behind a helper that took `(image, begin, end)` and therefore looked
         # perfectly bounded from here.
         print(f"  {len(unresolved)} site(s) this scan cannot follow to their bounds -- read them "
@@ -449,7 +449,7 @@ def selftest(out=sys.stdout):
 
     sites, _unparsable = scan_tree()
     budgets = [s for s in sites if s.verdict == SPAN_FROM_START]
-    # There is no plausible state of this repo in which the scan finds NO capstone decode at all:
+    # There is no plausible state of this repo in which the scan finds no capstone decode at all:
     # the RE tooling is built out of them. Zero means the reads went blind, and a gate reporting
     # "0 unjustified sites" over an empty scan is the silent-zero failure this repo has hit nine
     # times.
@@ -463,7 +463,7 @@ def selftest(out=sys.stdout):
             "the scan found no byte-budget site anywhere. Several are known to exist and are "
             "listed in the allowlist; finding none means the classifier stopped discriminating."
         )
-    # The objdump half has its OWN matcher -- a regex over the file text, because the span is
+    # The objdump half has its own matcher -- a regex over the file text, because the span is
     # assembled for a subprocess and the AST cannot see it. Assert it separately, or a broken
     # `OBJDUMP_SPAN` would silently drop six sites while the capstone half kept the selftest
     # green. This is also the assertion that makes the gate answerable under

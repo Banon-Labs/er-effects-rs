@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Every Rego builtin our policies use must survive Cupcake's WASM runtime.
 
-WHY THIS GATE EXISTS (2026-08-22). Every Stop-event guard in this repo was inert for 36 days and
+Why this gate exists (2026-08-22). Every Stop-event guard in this repo was inert for 36 days and
 nothing noticed, because a policy that cannot execute does not fail -- it returns nothing, and
 "nothing" is indistinguishable from "clean turn".
 
-The mechanism: `cupcake eval` does NOT run policies in the OPA interpreter. It shells out to
+The mechanism: `cupcake eval` does not run policies in the OPA interpreter. It shells out to
 `opa build -t wasm` and executes the compiled module in its own embedded WASM runtime. OPA's WASM
 target implements many builtins inside the module, but the rest are compiled as *host-dispatched*
-calls -- the module emits the builtin's NAME into a dispatch table and calls back out, and the
+calls -- the module emits the builtin's name into a dispatch table and calls back out, and the
 embedding host must supply an implementation. `sprintf` is host-dispatched, and cupcake 0.5.2 does
 not implement it (the string `sprintf` does not appear anywhere in the cupcake binary). A missing
-host builtin does not raise: the call yields UNDEFINED, undefined propagates up through the rule
-body, the decision set comes back empty, and cupcake logs "Synthesized ALLOW decision (no policies
+host builtin does not raise: the call yields undefined, undefined propagates up through the rule
+body, the decision set comes back empty, and cupcake logs "Synthesized allow decision (no policies
 triggered)" with exit code 0.
 
 That is why the failure sorted itself by event type and looked like a routing bug. It never was:
@@ -20,14 +20,14 @@ That is why the failure sorted itself by event type and looked like a routing bu
     * every Stop guard interpolated a captured signal phrase with `sprintf`  -> all silently dead.
 The `walk()` aggregation in .cupcake/system/evaluate.rego was never at fault and is proven fine.
 
-WHAT THIS GATE DOES. It refuses to take any builtin on trust:
+What this gate does. It refuses to take any builtin on trust:
   1. it extracts every builtin actually called by .cupcake/policies/** and .cupcake/system/**
      (comments and string literals stripped, so prose mentioning a name is not a call);
-  2. every such builtin must have a PROBE recipe below. A builtin with no recipe is a HARD FAILURE,
+  2. every such builtin must have a probe recipe below. A builtin with no recipe is a hard failure,
      not a pass -- that is the anti-rot property: a new policy reaching for an unverified builtin
      breaks this gate until someone adds a probe and the probe passes;
   3. it then generates one throwaway halt policy per builtin, aggregates them through the repo's own
-     evaluate.rego, and runs the REAL `cupcake eval` binary. A builtin whose halt does not come back
+     evaluate.rego, and runs the real `cupcake eval` binary. A builtin whose halt does not come back
      is one the WASM runtime cannot execute, and the gate names it.
 
 Step 3 is the load-bearing half. A hand-maintained blocklist of known-bad builtins would have to be
@@ -47,10 +47,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CUPCAKE_DIR = REPO_ROOT / ".cupcake"
-# .cupcake/tests holds Rego UNIT tests, which run in the OPA interpreter and never reach WASM.
+# .cupcake/tests holds Rego unit tests, which run in the OPA interpreter and never reach WASM.
 SCAN_DIRS = [CUPCAKE_DIR / "policies", CUPCAKE_DIR / "system"]
 
-# A Rego expression per builtin, written so the builtin is genuinely CALLED and its result reaches
+# A Rego expression per builtin, written so the builtin is genuinely called and its result reaches
 # the emitted decision (a probe whose builtin is optimised away would prove nothing).
 # `str:` recipes produce the halt's reason string. `cond:` recipes are boolean conditions guarding it.
 PROBES: dict[str, str] = {
@@ -85,7 +85,7 @@ PROBES: dict[str, str] = {
     "sprintf": 'str:sprintf("%s", ["a"])',
 }
 
-# Strip block/line comments and double-quoted or backtick-quoted strings, so a builtin NAME appearing
+# Strip block/line comments and double-quoted or backtick-quoted strings, so a builtin name appearing
 # in prose or inside a reason string is never mistaken for a call.
 _STRIP = re.compile(
     r'"(?:[^"\\\n]|\\.)*"'  # double-quoted string
@@ -125,7 +125,7 @@ def probe_policy(name: str, recipe: str) -> tuple[str, str]:
     slug = re.sub(r"[^a-z0-9]", "_", name.lower())
     rule_id = f"WASMPROBE-{slug.upper()}"
     kind, _, expr = recipe.partition(":")
-    # The rule_id is folded into the REASON because cupcake renders a lone decision as a bare reason
+    # The rule_id is folded into the reason because cupcake renders a lone decision as a bare reason
     # string with no [rule_id] prefix; without this a single surviving probe would look like a miss.
     body = (
         f'\t{expr}\n\treason := "{rule_id}|ok"'
@@ -151,24 +151,24 @@ halt contains decision if {{
 
 
 def run_probes(targets: dict[str, str]) -> set[str]:
-    """Run every probe through the REAL cupcake WASM runtime. Returns the set of rule_ids that fired."""
+    """Run every probe through the real cupcake WASM runtime. Returns the set of rule_ids that fired."""
     with tempfile.TemporaryDirectory(prefix="cupcake-wasm-probe-") as tmp:
         root = Path(tmp) / ".cupcake"
         (root / "policies" / "claude").mkdir(parents=True)
         (root / "system").mkdir(parents=True)
-        # ISOLATION, and it has to be an EMPTY DIRECTORY. This probe measures one thing -- does
-        # the WASM runtime execute this builtin -- so the ONLY policies in the evaluation must be
+        # Isolation, and it has to be an empty directory. This probe measures one thing -- does
+        # the WASM runtime execute this builtin -- so the only policies in the evaluation must be
         # the throwaway ones generated below. Left to itself cupcake discovers a global config at
         # ${XDG_CONFIG_HOME:-$HOME/.config}/cupcake, which on a developer machine carries live
         # custom policies; one of them denying could put a second `rule_id|` line in stdout and
         # make a probe's presence or absence depend on the user's personal setup.
         #
-        # This used to pass a FILE (`root / "rulebook.yml"`) and it did isolate the probe -- but
+        # This used to pass a file (`root / "rulebook.yml"`) and it did isolate the probe -- but
         # only by accident. cupcake 0.5.2 rejects any --global-config that is not a directory,
         # logs "Global config path must be a directory" at DEBUG, and continues project-only
-        # WITHOUT falling back to discovery; the isolation was a side effect of a rejection, and
+        # without falling back to discovery; the isolation was a side effect of a rejection, and
         # would evaporate the day a bad path became fatal or started falling back. An empty
-        # directory is instead ACCEPTED and loaded -- measured against 0.5.2: "Global
+        # directory is instead accepted and loaded -- measured against 0.5.2: "Global
         # configuration discovered at ..." / "Global configuration initialization complete" --
         # and contributes no policy, so the isolation is now what the argument says it is.
         global_root = Path(tmp) / "empty-global-config"

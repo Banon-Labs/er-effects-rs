@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Decide whether a Seamless session state's dwell is a FRAME COUNT, a WALL CLOCK, or neither.
+"""Decide whether a Seamless session state's dwell is a frame count, a wall clock, or neither.
 
 Reads `er-invasion-warp.log` and looks at the transition lines the DLL emits:
 
     local-invasion: session state 0x0e (unreversed) -> 0x11 (unreversed) -- held 612 ticks / 10203ms (~59 fps)
 
 The interesting one is `0x11`, Seamless's no-match retry wait. Whether that wait is counted in
-FRAMES or in SECONDS decides whether raising the frame rate would shorten it -- the difference
+frames or in seconds decides whether raising the frame rate would shorten it -- the difference
 between "run the game faster while hunting" being a real lever and being void.
 
-WHY THIS SCRIPT EXISTS RATHER THAN AN EYEBALL
+Why this script exists rather than an eyeball
 ---------------------------------------------
 An earlier reading of "600 ticks, nine times, zero variance" was taken from a heartbeat that fires
 every 600 ticks unconditionally -- it measured the logger's own period and was mistaken for a
 measurement of the game. Eyeballing a column of numbers is exactly how that happens.
 
-THE METHOD: whichever quantity the timer counts is the one it holds constant, while the other is
-forced to absorb every wobble in frame rate. So the two columns are compared on RELATIVE spread
+The METHOD: whichever quantity the timer counts is the one it holds constant, while the other is
+forced to absorb every wobble in frame rate. So the two columns are compared on relative spread
 and the tighter one names the mechanism. This works even when the frame rate barely moves -- a
 small fps spread shrinks both columns' variation without changing the ratio between them, which
 is the quantity the inference actually rests on.
@@ -46,7 +46,7 @@ DWELL_RE = re.compile(
     r".*?held (\d+) ticks / (\d+)ms(?: \(~(\d+) fps\))?"
 )
 
-# The discriminator is the RATIO of the two columns' relative spread, not the frame-rate spread.
+# The discriminator is the ratio of the two columns' relative spread, not the frame-rate spread.
 #
 # Whichever quantity the timer is really counting is the one held constant; the other is forced to
 # absorb every wobble in frame rate. So compare coefficient of variation between the columns: the
@@ -54,11 +54,11 @@ DWELL_RE = re.compile(
 # before the call is made.
 #
 # This supersedes an earlier rule that demanded a large frame-rate spread before deciding. That
-# asked the wrong question and produced a false INCONCLUSIVE on decisive data: six live 0x11
+# asked the wrong question and produced a false inconclusive on decisive data: six live 0x11
 # dwells at only a 1.08x fps spread nevertheless pinned wall clock, because the wall clock held to
 # 0.22% while ticks moved 2.64% -- and the tick range predicted by a 15.0s clock (812-875) matched
 # the observed range (814-876) almost exactly. A small fps spread does not weaken the inference; it
-# only shrinks both numbers, leaving the RATIO between them intact.
+# only shrinks both numbers, leaving the ratio between them intact.
 CV_RATIO_MARGIN = 3.0
 
 # Below this, a column counts as flat -- within sampling noise of "the same value every time".
@@ -75,18 +75,18 @@ CV_LOOSE = 0.20
 class Dwell:
     """One measured stay in a state, as the DLL reported it.
 
-    THE ATTRIBUTION IS THE EASY THING TO GET WRONG, so it is spelled out here. A log line reads
+    The attribution is the easy thing to get wrong, so it is spelled out here. A log line reads
 
-        session state 0x11 (unreversed) -> 0x0d SEARCHING -- held 816 ticks / 14990ms
+        session state 0x11 (unreversed) -> 0x0d searching -- held 816 ticks / 14990ms
 
-    and the `held` figure is how long the state on the LEFT was occupied -- the DLL stamps the
+    and the `held` figure is how long the state on the left was occupied -- the DLL stamps the
     interval since the previous transition, which is the interval during which it sat in `0x11`.
-    So `state` below is the LEFT-hand state, the one being left; `next_state` is where it went.
+    So `state` below is the left-hand state, the one being left; `next_state` is where it went.
 
     Grouping by `next_state` instead is silently wrong rather than obviously wrong: it still
     produces plausible per-state numbers, just for the wrong states. It cost a live run's analysis
     on 2026-08-06, where "state 0x11" reported 7-9 tick dwells that actually belonged to 0x0e,
-    while the real 0x11 dwells were ~815 ticks sitting on the lines that LEAVE 0x11.
+    while the real 0x11 dwells were ~815 ticks sitting on the lines that leave 0x11.
     """
 
     state: str
@@ -128,11 +128,11 @@ def _cv(values: list[float]) -> float:
 
 
 def verdict(dwells: list[Dwell]) -> tuple[str, str]:
-    """Classify a set of dwells in ONE state. Returns (verdict, the reasoning behind it).
+    """Classify a set of dwells in one state. Returns (verdict, the reasoning behind it).
 
     Whichever quantity the timer counts is the one it holds constant; the other absorbs every
     wobble in frame rate. So the tighter column names the mechanism, and the strength of the
-    inference is the RATIO between the two columns' relative spread -- not how much the frame
+    inference is the ratio between the two columns' relative spread -- not how much the frame
     rate happened to move. See [`CV_RATIO_MARGIN`].
     """
     if len(dwells) < 2:
@@ -237,14 +237,14 @@ def selftest() -> int:
     ]
     check("event driven", verdict(event)[0], "EVENT-DRIVEN")
 
-    # THE IMPORTANT ONE. Constant ticks at a CONSTANT frame rate must NOT read as a frame counter:
+    # The important one. Constant ticks at a constant frame rate must not read as a frame counter:
     # that is exactly the reading that produced the original wrong claim.
     steady = [Dwell("0x11", "0x0d", 600, 10_000), Dwell("0x11", "0x0d", 600, 10_000)]
     check("steady fps is not evidence", verdict(steady)[0], "INCONCLUSIVE")
 
     check("single sample", verdict(frame[:1])[0], "INCONCLUSIVE")
 
-    # THE REAL LIVE DATA, and the case the previous rule got WRONG. These six dwells span only a
+    # The real live data, and the case the previous rule got wrong. These six dwells span only a
     # 1.08x frame-rate spread, which the old "needs a big fps spread" gate rejected as
     # inconclusive -- yet they pin wall clock decisively, because the clock is ~12x tighter than
     # the tick count. Pinned verbatim so the threshold can never drift back to refusing them.
@@ -261,12 +261,12 @@ def selftest() -> int:
     if "CANNOT shorten" not in why:
         failures.append("live 0x11 verdict must say the frame rate cannot shorten it")
 
-    # The same six dwells must NOT be readable as a frame counter under any reordering -- the
+    # The same six dwells must not be readable as a frame counter under any reordering -- the
     # statistic is order-independent, and a verdict that flipped on ordering would be noise.
     check("order independent", verdict(list(reversed(live_0x11)))[0], "WALL CLOCK")
 
-    # THE REGRESSION THAT PROMPTED THE REWRITE. A dwell must be attributed to the state being
-    # LEFT, not the one being entered. Grouping the other way is silently wrong -- it still
+    # The regression that prompted the rewrite. A dwell must be attributed to the state being
+    # left, not the one being entered. Grouping the other way is silently wrong -- it still
     # yields plausible-looking per-state numbers, for the wrong states -- so it is pinned with
     # real log text rather than a constructed object.
     attributed = parse(
@@ -277,7 +277,7 @@ def selftest() -> int:
     if attributed:
         check("dwell belongs to the state LEFT", attributed[0].state, "0x11")
         check("destination recorded separately", attributed[0].next_state, "0x0d")
-        # Reported under 0x11, and NOT under 0x0d.
+        # Reported under 0x11, and not under 0x0d.
         check("grouped under the held state", report(attributed, "0x11"), 0)
         check("not grouped under the destination", report(attributed, "0x0d"), 2)
 

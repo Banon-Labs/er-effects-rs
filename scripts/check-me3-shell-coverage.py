@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Every ME3-loadable DLL must be LINKED by a gate. This proves the list that does it is complete.
+"""Every ME3-loadable DLL must be linked by a gate. This proves the list that does it is complete.
 
 `scripts/check-rust-build.sh` carries an `me3_shells` array of `package:artifact` pairs and links
 each one, because `cargo xwin check` stops at metadata and never invokes the linker, and the plain
 `cargo xwin build` honours `default-members` (= `crates/er-quickload`) and so builds only the
 product. Before that array existed, 13 of the cdylibs a user can list in an me3 `[[natives]]` entry
-were never linked by ANY gate: a shell that could not link -- a missing `#[no_mangle] DllMain`, a
+were never linked by any gate: a shell that could not link -- a missing `#[no_mangle] DllMain`, a
 wrong crate-type, an unresolved import inside a `cfg(windows)` block -- passed the whole suite
 while being unloadable.
 
-The array closed that. What it did NOT close is the array itself going stale: it was kept correct
+The array closed that. What it did not close is the array itself going stale: it was kept correct
 by a comment saying "keep this list in sync", which is not enforcement. Add a new DLL crate and the
 gate stays green while never linking it -- the exact hole, one level up.
 
 So this checks three things:
 
 1. **Coverage.** Every cdylib crate that defines a `DllMain` is either in the array or is the
-   product (which the default build already links) -- or is explicitly exempt here WITH a reason.
-2. **Artifact names.** The `.dll` a package produces is NOT reliably its name with dashes swapped
+   product (which the default build already links) -- or is explicitly exempt here with a reason.
+2. **Artifact names.** The `.dll` a package produces is not reliably its name with dashes swapped
    for underscores: four crates override `[lib] name`, and deriving the filename instead of listing
    it silently skipped all four. Each pair's artifact must match what Cargo will actually emit.
 3. **No dead entries.** A listed package must exist and still be a cdylib, so a rename or a
@@ -81,9 +81,9 @@ def parse_me3_shells(script_text: str) -> list[tuple[str, str]]:
 def cdylib_crates(crates_dir: Path) -> dict[str, str]:
     """Map package name -> the artifact stem Cargo will emit, for every cdylib crate.
 
-    The crate-type is read out of the `[lib]` section's `crate-type` key, NOT by looking for the
+    The crate-type is read out of the `[lib]` section's `crate-type` key, not by looking for the
     word "cdylib" anywhere in the manifest. That whole-file substring test was inverted by its own
-    subject matter: `er-build-import-runtime` is a plain library whose manifest COMMENT explains
+    subject matter: `er-build-import-runtime` is a plain library whose manifest comment explains
     that a cdylib cannot be linked into another cdylib, and the comment alone made this gate demand
     a `DllMain` from it. A manifest that merely talks about cdylibs is not one.
     """
@@ -175,7 +175,7 @@ def check(crates_dir: Path, script_text: str) -> list[str]:
                 f"or its crate-type changed)"
             )
 
-    # 4. No `-dll` suffix, on either half of the pair. Checked against the ARRAY rather than the
+    # 4. No `-dll` suffix, on either half of the pair. Checked against the array rather than the
     # crate directory listing so a shell that is renamed back is caught at the place a gate would
     # otherwise happily keep linking it.
     for package, artifact in listed:
@@ -264,7 +264,7 @@ def selftest() -> int:
             any("ghost-shell" in p and "not a cdylib crate" in p for p in problems),
         )
 
-        # A plain library whose manifest only TALKS about cdylibs. The whole-file substring test
+        # A plain library whose manifest only talks about cdylibs. The whole-file substring test
         # this replaced classified it as a shell and demanded a `DllMain` it must never have.
         (root / "talks-about-cdylibs" / "src").mkdir(parents=True)
         (root / "talks-about-cdylibs" / "Cargo.toml").write_text(

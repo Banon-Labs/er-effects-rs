@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # WSL-aware "is Steam running?" check. Exits 0 if Steam is up, 1 otherwise.
 #
-# Why this exists (2026-07-18): on a WSL2 + native-Windows-Steam box, Steam runs as the WINDOWS
-# process steam.exe (visible only via tasklist.exe), so the naive `pgrep -x steam` ALWAYS returns
+# Why this exists (2026-07-18): on a WSL2 + native-Windows-Steam box, Steam runs as the Windows
+# process steam.exe (visible only via tasklist.exe), so the naive `pgrep -x steam` always returns
 # no-match = a false negative that reports "Steam is down" when it is up. That false negative once
-# blocked an entire overnight runtime session. Check BOTH the Linux process (native Steam / Proton
-# on a Linux-Steam box) AND the Windows process list (WSL + Windows Steam). See bd
+# blocked an entire overnight runtime session. Check both the Linux process (native Steam / Proton
+# on a Linux-Steam box) and the Windows process list (WSL + Windows Steam). See bd
 # steam-detection-wsl-false-negative-2026-07-18.
 steam_running() {
   # 1. native Linux Steam

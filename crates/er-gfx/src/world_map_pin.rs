@@ -29,7 +29,7 @@
 //! It is already a character in this same movie, so nothing new is defined and no texture is
 //! shipped: the edit is one `RemoveObject2` and one `PlaceObject3` on a dead frame.
 //!
-//! # Why each marker is installed TWICE, bright and dimmed
+//! # Why each marker is installed twice, bright and dimmed
 //!
 //! While a Seamless invasion attempt is in flight the pins are not clickable -- `er_invasion_warp_core`'s
 //! policy gate refuses every warp for its duration, from the map and the hotkeys alike -- and a pin
@@ -37,25 +37,25 @@
 //! than no pin. So the marker says so itself: the dimmed variant is placed through a
 //! `CXFORMWITHALPHA` that drops it to [`DIMMED_ALPHA_MULT`] of full opacity.
 //!
-//! It has to be a second FRAME, not a flag. A colour transform is baked into the frame, and the
+//! It has to be a second frame, not a flag. A colour transform is baked into the frame, and the
 //! only input the engine gives a pin is `Icon_0.gotoAndStop(id)` -- so one id cannot be bright at
 //! one moment and dim the next. Two ids can, and switching the id per pin is the mechanism the
 //! tiers already use. Hence six frames: three tiers times bright and dimmed.
 //!
-//! The BRIGHT three keep their original placement bytes and carry NO colour transform, so the idle
+//! The bright three keep their original placement bytes and carry no colour transform, so the idle
 //! map is byte-identical to the one already proven to render. Dimming unconditionally was the first
-//! attempt and it was wrong for a reason worth keeping written down: a pin that is ALWAYS dim
+//! attempt and it was wrong for a reason worth keeping written down: a pin that is always dim
 //! cannot say "not clickable right now", because nothing brighter exists to read it against.
 //!
-//! The dim is ALPHA-ONLY, and that is measured rather than stylistic. A scan of the vanilla movie
-//! finds 193 distinct colour transforms; exactly ONE moves an RGB multiplier off
+//! The dim is alpha-only, and that is measured rather than stylistic. A scan of the vanilla movie
+//! finds 193 distinct colour transforms; exactly one moves an RGB multiplier off
 //! [`CXFORM_UNITY_MULT`] (sprite 180, `[223, 218, 205, 256]`) and it is a parchment tint that
 //! leaves alpha alone, i.e. not a dim. Five carry no multiply term at all. Every remaining one
 //! holds RGB at unity and varies only alpha. So the movie has no precedent for dimming by colour
 //! and 187 for dimming by alpha.
 //!
 //! The reason behind the convention is the one that matters here: reducing the RGB multipliers
-//! pushes the marker toward black, and against a light parchment map that RAISES contrast -- the
+//! pushes the marker toward black, and against a light parchment map that raises contrast -- the
 //! opposite of the intent -- whereas lowering alpha blends toward whatever is behind it and is
 //! therefore monotonically less visible on any background, which is a property no assumption about
 //! the map's colour is needed to rely on.
@@ -75,7 +75,7 @@ use crate::{CxformWithAlpha, GfxError, Matrix, Movie, Tag};
 /// The movie that owns the world-map pin icons.
 pub const WORLD_MAP_MOVIE_FILE_NAME: &str = "02_120_worldmap.gfx";
 
-/// Sprite id of the `Icon_0` clip whose frames ARE the icon-id space.
+/// Sprite id of the `Icon_0` clip whose frames are the icon-id space.
 pub const ICON_SPRITE_ID: u16 = 171;
 
 /// Frames the icon clip declares. Frame numbers the engine passes are 1-based.
@@ -96,14 +96,14 @@ pub const RED_MARKER_CHARACTER: u16 = 52;
 /// # Why the size is carried rather than assumed
 ///
 /// The placement centres a bitmap by translating back half its drawn size, and the original
-/// single-marker code folded that into ONE constant because `MENU_MAP_Enemy_02` happens to be
+/// single-marker code folded that into one constant because `MENU_MAP_Enemy_02` happens to be
 /// square. Its siblings are not -- 68x72, 102x104, 188x190 -- so a shared constant would hang
 /// three of the four markers off their anchor. Sizes below are read from the hi-res atlas layout
 /// (`SB_MapCursor.layout`), not inferred: the low-res layout is exactly half of each, which is
 /// what confirms the 146x146 the original constant already assumed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PinMarker {
-    /// Spare frame in the icon clip. This IS the icon id the engine is handed.
+    /// Spare frame in the icon clip. This is the icon id the engine is handed.
     pub frame: u16,
     /// External-image character in this same movie. Read out of the movie's own
     /// `GFX_DefineExternalImage2` tags, so nothing new is defined and no texture is shipped.
@@ -115,7 +115,7 @@ pub struct PinMarker {
     /// Placement scale in 16.16 fixed point.
     ///
     /// Every shipped icon frame places at `0.5`, and so does every marker here by default. It is a
-    /// per-marker field rather than a constant because a marker's DRAWN size is the only thing the
+    /// per-marker field rather than a constant because a marker's drawn size is the only thing the
     /// player can actually judge, and the declared atlas sizes do not always land where they should
     /// on screen -- `MENU_MAP_Enemy_03` is 188x190, half again the default marker, which reads as
     /// oversized at map scale.
@@ -135,7 +135,7 @@ impl PinMarker {
     /// The same marker on its dimmed twin frame.
     ///
     /// Derived rather than written out a second time: a hand-copied pair drifts the moment one side
-    /// is retuned, and a bright/dim pair that differ in SIZE or SCALE would read as two different
+    /// is retuned, and a bright/dim pair that differ in size or scale would read as two different
     /// markers rather than one marker in two states.
     #[must_use]
     pub const fn dimmed_at(&self, frame: u16) -> Self {
@@ -148,7 +148,7 @@ impl PinMarker {
 
     /// Twips to translate on each axis so the bitmap is centred on the pin's anchor.
     ///
-    /// The shipped frames translate back by half the DRAWN size, and the drawn size is the declared
+    /// The shipped frames translate back by half the drawn size, and the drawn size is the declared
     /// size times the placement scale. So the shift is `-declared * 20 * scale / 2`, which at the
     /// usual `0.5` reduces to `-declared * 5` -- reproducing the `-730` the hand-derived
     /// single-marker constant used for 146.
@@ -196,8 +196,8 @@ const fn percent_of_half_scale(percent: i32) -> i32 {
 /// ~62x63 px against the default marker's ~73x73.
 ///
 /// NOTE that this deliberately breaks the size ordering the three tiers used to have (188 > 146 >
-/// 68). Chosen now draws SMALLER than untouched, so size no longer encodes tier. That is fine
-/// because size was never the thing distinguishing them -- each tier is a DIFFERENT BITMAP
+/// 68). Chosen now draws smaller than untouched, so size no longer encodes tier. That is fine
+/// because size was never the thing distinguishing them -- each tier is a different BITMAP
 /// (`Enemy_03` / `Enemy_02` / `Enemy_00`), and the frame number is what the engine switches on.
 /// Do not "restore" the ordering without asking: it was changed on a look at the real map.
 pub const MARKER_CHOSEN: PinMarker = PinMarker {
@@ -210,13 +210,13 @@ pub const MARKER_CHOSEN: PinMarker = PinMarker {
     name: "MENU_MAP_Enemy_03",
 };
 
-/// The DEFAULT marker -- a location the user has expressed no opinion about.
+/// The default marker -- a location the user has expressed no opinion about.
 ///
 /// This is deliberately [`RED_PIN_FRAME`], the frame invasion pins have always used, and that is
 /// the whole point: with an untouched config every pin is `Untouched`, so a player who never marks
 /// anything sees exactly the map they saw before this feature existed.
 ///
-/// The previous arrangement put `Untouched` on a NEW frame, which meant the default state moved
+/// The previous arrangement put `Untouched` on a new frame, which meant the default state moved
 /// all 512 pins onto a frame that had never been seen to render -- and a live run came back with a
 /// blank map. Only the two deviations may use new frames now, so the worst case is losing the pins
 /// you explicitly marked, which is bounded and immediately diagnosable, instead of all of them.
@@ -230,7 +230,7 @@ pub const MARKER_UNTOUCHED: PinMarker = PinMarker {
     name: "MENU_MAP_Enemy_02",
 };
 
-/// The SMALLEST marker: a location the user excluded.
+/// The smallest marker: a location the user excluded.
 pub const MARKER_EXCLUDED: PinMarker = PinMarker {
     frame: 302,
     character: 54,
@@ -274,7 +274,7 @@ pub const ICON_DEPTH: u16 = 1;
 
 /// `PlaceObject3` `flags1`: `HasCharacter | HasMatrix`, matching every shipped icon frame.
 const PLACE_FLAGS1_CHARACTER_AND_MATRIX: u8 = 0x06;
-/// `PlaceObject3` `flags1` for OUR frames: the above plus `HasColorTransform`.
+/// `PlaceObject3` `flags1` for our frames: the above plus `HasColorTransform`.
 ///
 /// The flags byte is the writer's source of truth -- it emits the `CXFORMWITHALPHA` iff `0x08` is
 /// set and panics on a transform supplied without the bit -- so the two must be changed together.
@@ -293,18 +293,18 @@ pub const CXFORM_UNITY_MULT: i32 = 256;
 /// `102/256` is ~40%, and it is taken from shipped art rather than invented: `01_002_fe_saveicon.
 /// gfx` places its `AutoSaveIcon` at exactly `[256, 256, 256, 102]` (ffdec-confirmed, and covered by
 /// this crate's codec tests). That is the closest thing the menu corpus has to a "present but
-/// inactive" convention -- the world map's own alpha values are all frames of fade RAMPS, which say
+/// inactive" convention -- the world map's own alpha values are all frames of fade ramps, which say
 /// nothing about where a steady faded element should sit.
 ///
 /// Whether ~40% reads as "much dimmer" against the parchment at map zoom is a claim about pixels
-/// and is NOT settled by any test here; it is one constant precisely so retuning it is a one-line
+/// and is not settled by any test here; it is one constant precisely so retuning it is a one-line
 /// change that automatically applies to all three tiers.
 pub const DIMMED_ALPHA_MULT: i32 = 102;
 
 /// Bit width the emitted `CXFORMWITHALPHA` packs its terms at.
 ///
 /// Every alpha cxform in the vanilla world-map movie uses `10`, and the width must hold
-/// [`CXFORM_UNITY_MULT`] as a SIGNED value -- 9 bits reach only 255, so 256 would be written as
+/// [`CXFORM_UNITY_MULT`] as a signed value -- 9 bits reach only 255, so 256 would be written as
 /// `-256` and the marker would render inverted rather than dim.
 const CXFORM_NBITS: u32 = 10;
 
@@ -338,7 +338,7 @@ const RED_MARKER_TRANSLATE_TWIPS: i32 = -730;
 
 /// 16.16 fixed-point `0.5`, the scale every full-size icon frame uses.
 const HALF_SCALE_FIXED: i32 = 0x0000_8000;
-/// Bit widths for the emitted MATRIX fields. These need not match any particular shipped tag --
+/// Bit widths for the emitted matrix fields. These need not match any particular shipped tag --
 /// the writer re-packs from these -- but they must be wide enough to hold the values.
 const SCALE_NBITS: u32 = 17;
 const TRANSLATE_NBITS: u32 = 16;
@@ -393,9 +393,9 @@ impl std::error::Error for RedPinError {}
 /// The `PlaceObject3` that draws one marker, centred, at the icon depth -- dimmed iff the marker
 /// says so.
 ///
-/// The flags byte and the transform are derived from the SAME field, so they cannot disagree: the
+/// The flags byte and the transform are derived from the same field, so they cannot disagree: the
 /// writer emits a `CXFORMWITHALPHA` iff `0x08` is set and panics on a transform supplied without
-/// the bit, and a transform WITHOUT the bit would be silently dropped and leave the pin opaque.
+/// the bit, and a transform without the bit would be silently dropped and leave the pin opaque.
 fn marker_placement(marker: PinMarker) -> Tag {
     Tag::PlaceObject3 {
         flags1: if marker.dimmed {
@@ -498,7 +498,7 @@ pub fn install_red_pin_frame(movie: &mut Movie) -> Result<(), RedPinError> {
             found: *declared_frames,
         });
     }
-    // Validate EVERY frame before writing ANY of them. A partial install would leave the movie
+    // Validate every frame before writing any of them. A partial install would leave the movie
     // with some markers present and others missing, and the caller's fallback ("no markers, use a
     // vanilla icon") could no longer describe what is actually in front of Scaleform.
     for marker in PIN_MARKERS {
@@ -510,14 +510,14 @@ pub fn install_red_pin_frame(movie: &mut Movie) -> Result<(), RedPinError> {
             return Err(RedPinError::FrameNotEmpty);
         }
     }
-    // Insert from the LAST frame backwards. Each splice shifts every later index, so walking
+    // Insert from the last frame backwards. Each splice shifts every later index, so walking
     // forwards would invalidate the indices computed for the frames still to come.
     for marker in PIN_MARKERS.iter().rev() {
         let show_frame =
             show_frame_index(tags, marker.frame).ok_or(RedPinError::FrameOutOfRange {
                 frames_found: frame_count(tags),
             })?;
-        // Insert immediately BEFORE the frame's ShowFrame, so the placement belongs to this frame.
+        // Insert immediately before the frame's ShowFrame, so the placement belongs to this frame.
         // The RemoveObject2 first, mirroring every shipped icon frame: the display list persists
         // across frames, so without it the previous icon stays under ours at the same depth.
         tags.splice(
@@ -606,7 +606,7 @@ mod tests {
             panic!("sprite");
         };
         // The placement must sit in frame RED_PIN_FRAME's span, i.e. between the (N-1)th and
-        // Nth ShowFrame. An off-by-one here silently gives the pins a DIFFERENT icon.
+        // Nth ShowFrame. An off-by-one here silently gives the pins a different icon.
         let target = show_frame_index(tags, RED_PIN_FRAME).expect("target frame");
         let previous = show_frame_index(tags, RED_PIN_FRAME - 1).expect("previous frame");
         let span = &tags[previous + 1..target];
@@ -661,7 +661,7 @@ mod tests {
         // renders two different things identically.
         let frames: std::collections::BTreeSet<_> = PIN_MARKERS.iter().map(|m| m.frame).collect();
         assert_eq!(frames.len(), PIN_MARKERS.len(), "frames must not collide");
-        // Bitmaps must differ WITHIN a brightness, not across it: the dimmed set deliberately
+        // Bitmaps must differ within a brightness, not across it: the dimmed set deliberately
         // reuses the same three bitmaps, because a tier has to stay recognisable as the same tier
         // when it dims. Asserting global distinctness would forbid exactly that.
         for dimmed in [false, true] {
@@ -678,7 +678,7 @@ mod tests {
     fn each_tier_is_installed_bright_and_dimmed_as_the_same_marker() {
         // The pairing invariant. A bright/dim pair that differed in bitmap, size or scale would
         // read as two different markers rather than one marker in two states -- the pin would
-        // appear to CHANGE WHAT IT IS when an invasion starts, instead of greying out.
+        // appear to change what it is when an invasion starts, instead of greying out.
         for bright in PIN_MARKERS.iter().filter(|m| !m.dimmed) {
             let twin = PIN_MARKERS
                 .iter()
@@ -701,7 +701,7 @@ mod tests {
 
     #[test]
     fn a_non_square_marker_is_centred_on_both_axes_independently() {
-        // The original code folded centring into ONE constant because Enemy_02 is square. Its
+        // The original code folded centring into one constant because Enemy_02 is square. Its
         // siblings are 68x72 and 102x104; a shared translate would hang them off the anchor.
         assert_eq!(
             PinMarker::translate_twips_at(146, HALF_SCALE_FIXED),
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(scale, HALF_SCALE_FIXED * 66 / 100);
         let (w, h) = MARKER_CHOSEN.drawn_size();
         assert_eq!((w, h), (62, 62));
-        // And it now draws SMALLER than the default marker -- deliberately. If this ever flips back
+        // And it now draws smaller than the default marker -- deliberately. If this ever flips back
         // the change was not asked for.
         let (default_w, _) = MARKER_UNTOUCHED.drawn_size();
         assert!(w < default_w, "chosen must draw smaller than untouched");
@@ -808,7 +808,7 @@ mod tests {
         // with every other assertion still green.
         //
         // The bright half matters just as much in the other direction: a stray transform there
-        // would dim the IDLE map, which is the state the player is in almost all the time, and the
+        // would dim the idle map, which is the state the player is in almost all the time, and the
         // whole point of the conditional dim is that idle looks untouched.
         let mut movie = movie_with(sprite_with_frames(
             ICON_SPRITE_ID,
@@ -854,7 +854,7 @@ mod tests {
         let cxform = dimmed_marker_cxform();
         let mult = cxform.mult.expect("a multiply term");
         // RGB untouched: the world map's own art dims by alpha (192 of its 193 cxforms), and
-        // darkening RGB would RAISE contrast against a light parchment map.
+        // darkening RGB would raise contrast against a light parchment map.
         assert_eq!(
             [mult[0], mult[1], mult[2]],
             [CXFORM_UNITY_MULT; 3],
@@ -870,7 +870,7 @@ mod tests {
             "a fully transparent marker is an invisible one"
         );
         assert!(cxform.has_mult && !cxform.has_add);
-        // The terms are packed SIGNED at `nbits`, so unity (256) needs 10 bits. At 9 it would be
+        // The terms are packed signed at `nbits`, so unity (256) needs 10 bits. At 9 it would be
         // written as -256 and the marker would render inverted rather than dim.
         let widest = mult.iter().copied().max().expect("four terms");
         let representable = 1_i32 << (cxform.nbits - 1);
@@ -964,7 +964,7 @@ mod tests {
     #[test]
     fn the_marker_is_centred_by_the_same_rule_the_shipped_icons_use() {
         // grace: 156 px at scale 0.5 -> -780 twips. enemy: 146 px at scale 0.5 -> -730.
-        // Multiply BEFORE dividing: 146 px is an odd number of half-pixels, so `146/2/2*20`
+        // Multiply before dividing: 146 px is an odd number of half-pixels, so `146/2/2*20`
         // floors to 36 px and lands the marker 10 twips off centre.
         assert_eq!(RED_MARKER_TRANSLATE_TWIPS, -(146 * 20 / 4));
         assert_eq!(-(156 * 20 / 4), -780);

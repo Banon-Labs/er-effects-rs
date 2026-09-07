@@ -7,11 +7,11 @@ Imports the evidence-bound decoder from save-slot-oracle.py and prints one line 
 
 --deep additionally walks each slot's CS::CSGaitemImp gaitem-handle map (the array the loader
 deserializes at CSGaitemImp::Deserialize) and reports the non-empty count, whether it trips the
-loader-crash INVALID predicate, and the top item-id tallies (to spot editor-generated bulk like
+loader-crash invalid predicate, and the top item-id tallies (to spot editor-generated bulk like
 "2513x item X"). See bd memory slot0-corrupt-save-invalidity-signature-2026-07-22 for the RE chain.
 
 Usage:
-  dump-save-slots.py <save.sl2> [--deep] [--expect-name NAME] [--expect-level N] [--require]
+  dump-save-slots.py <save.sl2> [--deep] [--expect-name name] [--expect-level N] [--require]
 """
 from __future__ import annotations
 
@@ -27,11 +27,11 @@ assert spec and spec.loader
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
 
-# The starting classes, indexed by PlayerGameData::archetype. This is the SECOND copy of the
+# The starting classes, indexed by PlayerGameData::archetype. This is the second copy of the
 # list -- the product's is `STARTING_CLASSES` in crates/er-build-import-core/src/class.rs -- and
 # it was stuck at ten when 1.17 added archetypes 10 and 11, so a character of a new class printed
 # `class=10`. The copies can no longer drift apart silently: `scripts/check-starting-classes.py`
-# compares BOTH against the installed regulation.bin and the game's own GR_MenuText strings.
+# compares both against the installed regulation.bin and the game's own GR_MenuText strings.
 ARCHETYPES = {
     0: "Vagabond", 1: "Warrior", 2: "Hero", 3: "Bandit", 4: "Astrologer", 5: "Prophet",
     6: "Confessor", 7: "Samurai", 8: "Prisoner", 9: "Wretch",
@@ -58,7 +58,7 @@ GAITEM_INVALID_NONEMPTY = 0x1380
 # A live gaitem handle is {category-nibble | instance-byte | table-index} with
 # the top bit set, so its top nibble is 0x8..0xc == categories 0..4
 # (Weapon/Protector/Accessory/Goods/Gem via (handle>>28)&7).  A non-empty pair
-# whose top nibble is outside 0x8..0xc is NOT a gaitem handle: it is the first
+# whose top nibble is outside 0x8..0xc is not a gaitem handle: it is the first
 # byte of the variable-length gaitem *stream* / following save data that trails
 # the packed map (the naive "walk all 0x1400" from the RE note reads into it and
 # reports hundreds of bogus class>=5 "handles" even on healthy saves -- see the

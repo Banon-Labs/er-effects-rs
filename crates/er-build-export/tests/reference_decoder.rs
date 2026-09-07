@@ -7,11 +7,11 @@
 //! expression is not an approximation of the planner's import path; it is copied out of
 //! `loadFromSerialised`.
 //!
-//! It needs two things this repository does not carry: a `node` on PATH, and an extracted
+//! It needs two things this repository does not carry: a `node` on path, and an extracted
 //! copy of the planner's LZ-UTF8 bundle. Neither is versioned here -- the bundle is
 //! third-party minified JavaScript pulled from a live site, and the point of a reference
 //! decoder is that it is *theirs*, so vendoring a copy that then drifts would defeat it. So
-//! this test SKIPS, loudly, when either is missing, exactly like the game-asset corpus tests
+//! this test skips, loudly, when either is missing, exactly like the game-asset corpus tests
 //! in `er-gfx`. Point `ER_LZUTF8_REFERENCE_JS` at the bundle to run it.
 
 mod common;
@@ -138,7 +138,7 @@ fn bundle_loads(bundle: &std::path::Path) -> Result<(), String> {
         .to_owned())
 }
 
-/// Whether a usable `node` is on PATH.
+/// Whether a usable `node` is on path.
 fn node_available() -> bool {
     Command::new("node")
         .arg("--version")
@@ -162,10 +162,10 @@ fn decode_through_the_site(doc: &BuildExportDoc) -> Option<String> {
             return None;
         }
     };
-    // FINDING THE SHIM IS NOT THE SAME AS BEING ABLE TO LOAD IT. `tests/reference/lzutf8_extract.js`
+    // Finding the SHIM is not the same as being able to load it. `tests/reference/lzutf8_extract.js`
     // is versioned here, so the existence check above always passes -- but the shim `require`s
     // `lzutf8` from npm, which is not, and a checkout that never ran the install got four hard
-    // FAILURES from a gate whose whole design is to skip loudly when its environment is absent.
+    // failures from a gate whose whole design is to skip loudly when its environment is absent.
     // The library is third-party minified JavaScript pulled from a live site and deliberately not
     // vendored (see the module header), so "absent" is the ordinary state on a fresh checkout and
     // on CI, and it has to read as a skip.

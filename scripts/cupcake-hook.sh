@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # Run a cupcake hook evaluation, surviving harness permission modes cupcake does not know yet.
 #
-# FOUR BUGS THIS EXISTS TO FIX. The first two were observed live on 2026-08-24 with
+# Four bugs this exists to fix. The first two were observed live on 2026-08-24 with
 # cupcake 0.5.2, the third was measured against the same binary on 2026-08-26, and the
 # fourth on 2026-08-31:
 #
-# 1. NEW PERMISSION MODES ARE FATAL. Claude Code grew an `auto` permission mode; cupcake
+# 1. New permission modes are fatal. Claude Code grew an `auto` permission mode; cupcake
 #    deserializes `permission_mode` into a closed enum and exits 1 on anything outside
 #    {default, plan, acceptEdits, bypassPermissions}:
 #
 #        Error: unknown variant `auto`, expected one of `default`, `plan`, ...
 #
-#    That is not a Stop-hook problem, it is EVERY hook -- PreToolUse and PostToolUse included --
+#    That is not a Stop-hook problem, it is every hook -- PreToolUse and PostToolUse included --
 #    so every guard in .cupcake/policies went inert for a whole session while the suite stayed
 #    green. This repo has been here before (see the check.sh comment about every guard being
 #    partly or wholly inert until 2026-08-22), which is exactly why the mode is normalised here
 #    rather than waited on: an unrecognised mode must degrade to "evaluate anyway", never to
 #    "evaluate nothing".
 #
-# 2. THE DEFAULT LOG LEVEL IS `info`. Unset, cupcake writes ~60 INFO lines to stderr on every
+# 2. The default log level is `info`. Unset, cupcake writes ~60 info lines to stderr on every
 #    single hook -- policy-by-policy parse chatter, WASM compilation, signal gathering. The
 #    user's own global config already passes `--log-level error`; the repo's hooks did not.
 #
-# 3. THE ENGINE ERASES UNQUOTED NEWLINES, so line 2 of a Bash command has no separator in
+# 3. The engine ERASES UNQUOTED NEWLINES, so line 2 of a Bash command has no separator in
 #    front of it (bd er-effects-rs-5eah). Measured, not inferred: `cupcake eval` replaces
 #    UNQUOTED newlines with spaces before any policy runs, while newlines inside quotes
 #    survive. Every git guard anchors command position on `(^|[;&|(\n])`, so
@@ -30,7 +30,7 @@
 #        echo hi
 #        git push origin main
 #
-#    arrived as `echo hi git push origin main` and was ALLOWED in production, while the very
+#    arrived as `echo hi git push origin main` and was allowed in production, while the very
 #    same text denies under `opa test`. No pattern in any .rego file can reach this: the
 #    separator is gone before evaluation. This script is the last place that sees the raw
 #    text, so it restores the boundary here, rewriting each unquoted newline to `; `.
@@ -38,22 +38,22 @@
 #    `;` is the right character on three independent counts: it is in the anchor class of
 #    every git guard (`[;&|(\n]`, and `[;&|]\s*|\n` in the fresh-origin-main guard); the
 #    Elden Ring launch guard already normalises `\n` to `;` itself before scanning; and the
-#    engine measurement above shows `echo hi;<newline>git push origin main` DENYING, so the
+#    engine measurement above shows `echo hi;<newline>git push origin main` denying, so the
 #    character demonstrably survives the collapse the newline does not. The trailing space
 #    matters too -- commands.has_verb anchors on `(^|\s)verb(\s|$)`, which `;git` would miss.
 #
-#    WHAT COUNTS AS QUOTED IS NOT THIS SCRIPT'S OWN OPINION. It is the same rule
+#    What counts as quoted is not this script'S own opinion. It is the same rule
 #    .cupcake/system/commands.rego uses (escaped quotes stripped, split on the quote char,
 #    odd indices are quoted, double-quoted-outer tried first and single-quoted-outer as the
 #    fallback), transcribed below and mirrored deliberately. A newline inside a quoted span
-#    is left alone: a `bd remember` body, a commit message or a doc that merely QUOTES a
+#    is left alone: a `bd remember` body, a commit message or a doc that merely quotes a
 #    guarded command must stay allowed, and turning those into `;` would manufacture exactly
 #    the false positive bd er-effects-rs-dt2e removed. Where this shim and the policies
 #    disagree about what is quoted, one of them is wrong; keeping them the same rule is the
 #    point.
 #
-# 4. `--global-config` WANTS A DIRECTORY, AND THE WRONG SHAPE IS SILENT. This file used to
-#    pass `--global-config <repo>/.cupcake/rulebook.yml` -- a FILE. cupcake 0.5.2's own
+# 4. `--global-config` wants a directory, and the wrong shape is silent. This file used to
+#    pass `--global-config <repo>/.cupcake/rulebook.yml` -- a file. cupcake 0.5.2's own
 #    `--help` calls the argument a "global configuration file path", so the shape has to be
 #    measured rather than read: the engine rejects anything that is not a directory, and then
 #    carries on regardless.
@@ -62,34 +62,34 @@
 #        DEBUG No global configuration found - using project config only
 #
 #    Both lines are DEBUG and this hook runs at `--log-level error` (bug 2), so the degrade
-#    was invisible: the hook loaded NO global policies for its whole life while reporting
+#    was invisible: the hook loaded no global policies for its whole life while reporting
 #    success. Measured on 2026-08-31, same event both ways: with the file path
-#    `gh pr ready 999` returned `{}` (allow); with the directory it DENIES. The global set is
+#    `gh pr ready 999` returned `{}` (allow); with the directory it denies. The global set is
 #    not inert -- its builtins are all disabled, but ~/.config/cupcake/policies/claude carries
 #    two live policies (github_pr_draft_guard, github_attribution_guard) this hook never saw.
 #    Nothing was lost in practice only because the user's ~/.claude/settings.json registers a
-#    SECOND cupcake hook that does load them; that is a property of this machine, not of this
+#    second cupcake hook that does load them; that is a property of this machine, not of this
 #    file.
 #
-#    WHAT THE ENGINE WANTS is the global config ROOT DIRECTORY -- the one holding
+#    What the engine wants is the global config root directory -- the one holding
 #    rulebook.yml, policies/<harness>/ and signals/ -- which it otherwise discovers itself at
 #    ${XDG_CONFIG_HOME:-$HOME/.config}/cupcake. Both branches of that expression were measured
 #    against 0.5.2, as were its two rejection modes ("must be a directory", "does not exist").
-#    In BOTH rejection modes it goes project-only and does NOT fall back to discovery, so a
+#    In both rejection modes it goes project-only and does not fall back to discovery, so a
 #    bad override loads strictly less than no override -- which is why the failure path below
 #    drops the override instead of forwarding it.
 #
-#    FAIL LOUD, NOT CLOSED. The precondition is checked here, before the engine runs, and a
+#    Fail loud, not closed. The precondition is checked here, before the engine runs, and a
 #    failure is announced twice: a banner on stderr, and a `systemMessage` merged into the
 #    hook's JSON stdout, which Claude Code shows to the user on every hook it fires. It
-#    deliberately does NOT block. This hook sits in front of EVERY tool call, so exiting
+#    deliberately does not block. This hook sits in front of every tool call, so exiting
 #    non-zero on a bad config path would stop all work including the work needed to repair it;
 #    and since cupcake signals a deny through stdout JSON at exit 0, changing the exit code
 #    risks the harness discarding a real deny verdict -- the same fail-open as bug 1. Shouting
 #    on every call is the point, and it stops the moment the path is right.
 #
-#    RESIDUE, stated rather than hidden: this checks the two structural preconditions that
-#    make loading POSSIBLE -- the root is a directory, and the harness policy directory exists
+#    Residue, stated rather than hidden: this checks the two structural preconditions that
+#    make loading possible -- the root is a directory, and the harness policy directory exists
 #    under it -- not that any policy actually compiled. cupcake reports that only at
 #    INFO/DEBUG, which bug 2 suppresses on purpose. A global root whose policies/claude is
 #    present but empty still contributes nothing and still reports success here.
@@ -103,7 +103,7 @@ CUPCAKE_BIN="${CUPCAKE_BIN:-cupcake}"
 
 # The whole normalisation, as one program so the hook still costs a single python start.
 # `--normalize-only` runs it and stops, which is how scripts/test-cupcake-hook-shim.py gets
-# at the REAL code for its span cases instead of a second transcription that could drift.
+# at the real code for its span cases instead of a second transcription that could drift.
 NORMALIZER=$(cat <<'PYSRC'
 import json
 import re
@@ -159,7 +159,7 @@ def heredoc_region(text):
         return NO_HEREDOC
     if len(parts) != 2:
         # More than one heredoc. commands.rego understands exactly one and keeps scanning
-        # the RAW text; this stops instead (see the UNRESOLVABLE note in rewrite_command),
+        # the raw text; this stops instead (see the UNRESOLVABLE note in rewrite_command),
         # because the bodies it can no longer locate are usually documentation.
         return UNRESOLVABLE
     before, after = parts
@@ -176,7 +176,7 @@ def heredoc_region(text):
     terminator = "\n" + tag
     if after.count(terminator) != 1:
         # A body whose terminator never appears, or appears more than once (a line of the
-        # body starting with the tag). The body IS multi-line and cannot be located, so this
+        # body starting with the tag). The body is multi-line and cannot be located, so this
         # stops rather than guess where it ends.
         return UNRESOLVABLE
     start = len(before) + 2
@@ -249,7 +249,7 @@ def rewrite_command(command):
 
     region = heredoc_region(command)
     if region == UNRESOLVABLE:
-        # KNOWN-OPEN RESIDUE, and deliberately the safe direction. A multi-line heredoc body
+        # Known-open residue, and deliberately the safe direction. A multi-line heredoc body
         # this cannot locate (two heredocs, a terminator that never appears) leaves the whole
         # command untouched, which is exactly today's behaviour: the engine collapses those
         # newlines and the lines after the first stay invisible. That is a divergence from
@@ -269,7 +269,7 @@ def rewrite_command(command):
     # commands.rego refuses to read quote spans once command substitution is present,
     # because substitution inside double quotes really does execute. Same refusal here, and
     # for the same reason -- disagreeing with the policies about what is quoted is worse
-    # than leaving this shape alone. It is checked AFTER the heredoc blanking, so a `$(` in
+    # than leaving this shape alone. It is checked after the heredoc blanking, so a `$(` in
     # a documentation heredoc does not disqualify the whole command (its `(` is gone).
     resolved = "".join(work)
     if "$(" in resolved or "`" in resolved:
@@ -340,7 +340,7 @@ if [ "$normalize_rc" -ne 0 ] || [ -z "$normalized" ]; then
 	normalized=$raw_event
 fi
 
-# The global policy set lives OUTSIDE the repo. Resolve it the way cupcake 0.5.2 resolves it
+# The global policy set lives outside the repo. Resolve it the way cupcake 0.5.2 resolves it
 # when given no override (measured, both branches of the expression), so the value passed below
 # is the one discovery would have found anyway, and CUPCAKE_GLOBAL_CONFIG can still point a
 # test or another machine somewhere else.
@@ -350,7 +350,7 @@ global_problem=""
 if [ ! -d "$cupcake_global_root" ]; then
 	global_problem="global config root is not a directory: $cupcake_global_root"
 elif [ ! -d "$cupcake_global_root/policies/claude" ]; then
-	# No harness policy directory means no global policy CAN load -- builtins live under
+	# No harness policy directory means no global policy can load -- builtins live under
 	# policies/<harness>/builtins/ too -- so this is a guaranteed-inert config, not a style note.
 	global_problem="global config has no claude policies: $cupcake_global_root/policies/claude"
 fi
@@ -409,7 +409,7 @@ sys.stdout.write(json.dumps(parsed))
 PYSRC
 )
 
-# The override is DROPPED here rather than forwarded: a rejected --global-config does not fall
+# The override is dropped here rather than forwarded: a rejected --global-config does not fall
 # back to discovery, so passing a known-bad value can only load less than omitting it.
 run_cupcake | python3 -c "$ANNOUNCER" "$warning"
 exit "${PIPESTATUS[0]}"

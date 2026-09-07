@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Launch a long-running command fully detached so the invoking shell (and any
 # 45s agent Bash-tool cap) returns immediately while the work continues as a
-# separate OS process. Progress is observable via the log file and a DONE marker
+# separate OS process. Progress is observable via the log file and a done marker
 # (sleep-free, file-based synchronization per repo runtime hygiene).
 #
 #   scripts/run-detached.sh <logfile> <cmd...>

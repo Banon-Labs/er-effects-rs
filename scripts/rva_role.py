@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Which `*RVA*`-named constants are NOT game addresses, proven from how the workspace uses them.
+"""Which `*RVA*`-named constants are not game addresses, proven from how the workspace uses them.
 
-THE DOOR THIS CLOSES
+The door this closes
 --------------------
 `select-needed-1170-rows.py` and `map-data-rvas-1162-to-1170.py` both decide what to translate
 with the same regex:
 
     const\\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\\s*:\\s*(usize|u32|u64)\\s*=\\s*0x...
 
-That is a NAME test standing in for a SEMANTIC one, and the name it tests is a SUBSTRING. Two
+That is a name test standing in for a semantic one, and the name it tests is a SUBSTRING. Two
 things follow, both measured on this tree on 2026-08-31:
 
   * `INTERVAL` contains `RVA`. Every `*INTERVAL*` constant in the workspace -- 35 of them, from
     `OWN_STEPPER_LOG_INTERVAL` to `SNAPSHOT_INTERVAL_MS` to `PATCH_RETRY_LOG_INTERVAL` -- matches
     the name filter. Not one of them is an address; all are tick counts and millisecond periods.
-    They stay out of the ledgers for one reason only: they are written in DECIMAL, and the regex
+    They stay out of the ledgers for one reason only: they are written in decimal, and the regex
     demands `0x`. Rewrite `const LOG_INTERVAL: usize = 30;` as `0x1e` and it is harvested.
-  * Three constants that ARE written in hex are harvested today: `FIRST_SECTION_RVA` (0x1000),
+  * Three constants that are written in hex are harvested today: `FIRST_SECTION_RVA` (0x1000),
     `GAME_TEXT_RVA_LIMIT` (0x4000000) and `SW_BP_RVA_LIMIT` (0x5000000). Only the first reached a
     ledger, and only because 0x1000 happens to be a `.pdata`-declared function start in both
     builds; the other two sit past `.text`, so `functions.tsv` had no pair to give them. Luck,
@@ -31,7 +31,7 @@ are identical across the two builds -- and `er-game-base/build.rs` admitted it t
 inert. It is still a non-address in the address table, and a confident verdict is exactly what a
 meaningless row earns.
 
-WHICH DIRECTION THIS IS ALLOWED TO BE WRONG IN
+Which direction this is allowed to be wrong in
 ----------------------------------------------
 Refusing a real address is the expensive mistake and this repo has made it four times: a
 `_BOUND`-suffixed name, an `Enum::Variant as usize` alias, a bare `rva: 0x..` table field, and all
@@ -40,10 +40,10 @@ address invisible end to end -- never selected, never mapped, never verified -- 
 game refused it while the telemetry reported success. Admitting a non-address, by contrast, adds
 an inert row.
 
-So this module NEVER classifies by name and NEVER guesses. It answers one question, with a proof
+So this module never classifies by name and never guesses. It answers one question, with a proof
 or not at all:
 
-    Is every use of this constant in `crates/` a COMPARISON, with no use that consumes it as an
+    Is every use of this constant in `crates/` a comparison, with no use that consumes it as an
     address?
 
 A constant used only as the right-hand side of `<`, `<=`, `>`, `>=`, `==` or `!=` is a bound, a
@@ -54,14 +54,14 @@ in the ledger exactly as before, and nothing breaks. There is no heuristic fallb
 value threshold; a value test was already measured and rejected upstream, because `>= 0x1000`
 admits eleven non-addresses, ten of them exactly `0x1000`.
 
-Run against this tree the proof fires on THREE constants and no others: out of 694 constants whose
+Run against this tree the proof fires on three constants and no others: out of 694 constants whose
 name carries `RVA`, 515 that the harvesters can admit, and 477 that already occupy a row in
 `rva-map-1162-to-1170.{needed,needed-verified,data}.tsv`.
 
 Usage:
     python3 scripts/rva_role.py             # report every proven non-address in crates/
     python3 scripts/rva_role.py --selftest  # controls: a planted bound, and a real address that
-                                            # must NOT be proven
+                                            # must not be proven
 """
 
 from __future__ import annotations
@@ -75,13 +75,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-# THE DOCUMENTED EXCLUSION LIST. Every entry here is a constant the harvesters' name filter admits
-# and that `prove_not_an_address` independently PROVES is not an address. The list is what makes
+# The documented exclusion list. Every entry here is a constant the harvesters' name filter admits
+# and that `prove_not_an_address` independently proves is not an address. The list is what makes
 # the absence deliberate and visible: an address missing from a ledger with no record of why is
 # indistinguishable from one nobody ever mapped, which is the failure mode
 # `wholesale-refresh-deletes-hand-rows-silently-2026-08-30` is about.
 #
-# The list and the proof check EACH OTHER, and the selftest asserts both directions:
+# The list and the proof check each other, and the selftest asserts both directions:
 #   * every name here must still be provable -- otherwise the entry is stale, the constant may have
 #     become an address, and silently keeping it out of the ledgers would break the feature using
 #     it;
@@ -116,7 +116,7 @@ NOT_AN_ADDRESS: dict[str, str] = {
 def blank_rust(text: str) -> str:
     """`text` with comments and string/char literals replaced by spaces, offsets preserved.
 
-    An identifier inside a doc comment or a log message is not a USE of it, and this repo is
+    An identifier inside a doc comment or a log message is not a use of it, and this repo is
     unusually full of both -- the constant names appear in `//!` module prose, in `///` RE notes
     and in the log strings that name the address being resolved. Counting those as uses would make
     almost every constant unclassifiable, which is the safe direction but also the useless one.
@@ -163,13 +163,13 @@ USE_ITEM = re.compile(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s")
 IDENT = re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b")
 COMPARISONS = ("<=", ">=", "==", "!=", "<", ">")
 DECLARATION = re.compile(r"\b(?:const|static)\s+(?:mut\s+)?$")
-# `getter_rva: rva::GET_WEAPON_NAME,` -- a table field that HOLDS an address. The named twin of
+# `getter_rva: rva::GET_WEAPON_NAME,` -- a table field that holds an address. The named twin of
 # the bare `rva: 0x..` literal, and how four of the six MsgRepository name getters reach the
 # resolver without ever appearing inside a resolver call. See `rva_usage.FIELD_CONST`.
 ADDRESS_FIELD = re.compile(r"\brva\w*\s*:\s*(?:\w+\s*::\s*)*$", re.IGNORECASE)
 
-# The roles one occurrence can have. Only COMPARE is evidence AGAINST an address; only ADDRESS is
-# evidence FOR one. DECL, IMPORT and UNKNOWN are silence, and silence withholds the verdict.
+# The roles one occurrence can have. Only compare is evidence against an address; only address is
+# evidence for one. DECL, import and unknown are silence, and silence withholds the verdict.
 COMPARE, ADDRESS, DECL, IMPORT, UNKNOWN = "compare", "address", "decl", "import", "unknown"
 
 
@@ -252,12 +252,12 @@ def roles(names, sources: dict[str, str]) -> dict[str, list[tuple[str, str, int,
 
 
 def prove_not_an_address(occurrences) -> list[tuple[str, int, str]] | None:
-    """The comparison sites that PROVE this constant is a bound, or `None` if unproven.
+    """The comparison sites that prove this constant is a bound, or `None` if unproven.
 
     Proven requires all three, and the third is the one that keeps this honest:
-      * at least one COMPARE -- positive evidence of a predicate role, not merely an absence;
-      * zero ADDRESS -- nothing resolves it or offsets a module base by it;
-      * zero UNKNOWN -- every remaining use was understood. A use this module cannot read might be
+      * at least one compare -- positive evidence of a predicate role, not merely an absence;
+      * zero address -- nothing resolves it or offsets a module base by it;
+      * zero unknown -- every remaining use was understood. A use this module cannot read might be
         the one that hands the value to a resolver, so it withholds the verdict rather than
         guessing. `FREELIST_SHUTDOWN_ASSERT_FN_RVA` is the live example: it is compared once and
         also address-consumed twice, and it is a real function address.
@@ -311,7 +311,7 @@ def describe(name: str, proof, sources: dict[str, str]) -> str:
 # Controls
 # ---------------------------------------------------------------------------------------------
 
-# A PLANTED BOUND. Frozen source, so the positive control keeps meaning what it means after the
+# A planted bound. Frozen source, so the positive control keeps meaning what it means after the
 # tree moves. `PLANTED_WINDOW_RVA` is spelled exactly the way the harvesters' name filter wants
 # and is used exactly the way a bound is used.
 CONTROL_BOUND = """
@@ -321,9 +321,9 @@ pub fn accept(rva: usize) -> bool {
 }
 """
 
-# THE FROZEN NEGATIVE, and why it is spelled with no `RVA` in the name. An over-broad matcher --
+# The frozen negative, and why it is spelled with no `RVA` in the name. An over-broad matcher --
 # one that decided from the name, or from the value being small, or from "I found no resolver
-# call" -- would classify a real address as a bound and DELETE it from the ledger. The address
+# call" -- would classify a real address as a bound and delete it from the ledger. The address
 # below is the shape that is hardest for a name-based tool to see and easiest for it to lose:
 # `SET_REINFORCEMENT` is one of the 27 game functions `er-build-import-runtime` calls, none of
 # whose names carry `RVA`, and whose invisibility to the old name scan cost the whole build
@@ -336,7 +336,7 @@ pub fn install(module_base: usize) -> usize {
 }
 """
 
-# A CONSTANT THAT IS BOTH COMPARED AND RESOLVED. The live counter-example, frozen: proof must be
+# A constant that is both compared and resolved. The live counter-example, frozen: proof must be
 # withheld the moment one address-consuming use exists, however many comparisons sit beside it.
 CONTROL_MIXED = """
 pub const MIXED_SITE_RVA: usize = 0xc575e0;
@@ -345,7 +345,7 @@ pub fn pick(base: usize, candidate: usize) -> usize {
 }
 """
 
-# A USE THE READER CANNOT CLASSIFY. Silence must withhold the verdict, not grant it: this one is
+# A use the reader cannot classify. Silence must withhold the verdict, not grant it: this one is
 # compared once and then passed to something opaque, and a tool that answered "no address use
 # found, therefore a bound" would delete it.
 CONTROL_OPAQUE = """
@@ -387,7 +387,7 @@ def control_failures() -> list[str]:
           "an unreadable use must withhold the proof; 'I found no address use' is not 'there is "
           "no address use'")
 
-    # NON-VACUITY OF THE READER ITSELF. Blind the comparison detector and the positive control must
+    # Non-VACUITY of the reader itself. Blind the comparison detector and the positive control must
     # stop passing -- otherwise the three negatives above are all satisfied by a reader that sees
     # nothing at all, and the whole selftest is green for the wrong reason.
     global COMPARISONS
@@ -422,7 +422,7 @@ def control_failures() -> list[str]:
 def selftest(verbose: bool = True) -> int:
     failures = control_failures()
 
-    # THE LIVE TREE, BOTH DIRECTIONS. The list and the proof must agree, or one of them is stale.
+    # The live tree, both directions. The list and the proof must agree, or one of them is stale.
     sources = index_sources()
     if len(sources) < 200:
         failures.append(f"only {len(sources)} sources read from crates/; the live scan is not running")
@@ -461,7 +461,7 @@ def selftest(verbose: bool = True) -> int:
 def audit(population, sources: dict[str, str]) -> list[str]:
     """Both consistency directions between [`NOT_AN_ADDRESS`] and the proof, as failure strings.
 
-    Callable from another gate with ITS OWN population -- `select-needed-1170-rows.py` passes the
+    Callable from another gate with its own population -- `select-needed-1170-rows.py` passes the
     exact constant set it is about to write into a ledger, which is the population that actually
     matters. The standalone selftest passes [`harvestable_names`].
     """
@@ -484,12 +484,12 @@ def audit(population, sources: dict[str, str]) -> list[str]:
     return failures
 
 
-# THE POPULATION SELECTOR, AND WHY IT IS NOT A DECISION. To ask "is any constant the harvesters
+# The population selector, and why it is not a decision. To ask "is any constant the harvesters
 # can admit a non-address?" this has to know which constants they can admit, so it reproduces
 # their SHAPE: an `RVA`-substring name, an integer type they recognise, and a hex initialiser
 # (`map-data-rvas-1162-to-1170.py` also accepts hex arithmetic, so `0x142658c60 - 0x140000000`
 # counts). Nothing downstream is decided by it -- every verdict comes from
-# `prove_not_an_address`. It is deliberately a touch WIDER than either harvester: `BOUND`-suffixed
+# `prove_not_an_address`. It is deliberately a touch wider than either harvester: `BOUND`-suffixed
 # names are kept in, because a range endpoint is precisely the thing worth proving is a range
 # endpoint, and the selftest is happier asking about too many constants than too few.
 HARVEST_SHAPE = re.compile(
@@ -500,7 +500,7 @@ NAMED_RVA = re.compile(r"(?m)\b(?:const|static)\s+([A-Z0-9_]*RVA[A-Z0-9_]*)\s*:"
 
 
 def harvestable_names(sources: dict[str, str]) -> set[str]:
-    """Constants the `*RVA*` harvesters can admit today: the name, the type AND the hex literal."""
+    """Constants the `*RVA*` harvesters can admit today: the name, the type and the hex literal."""
     names: set[str] = set()
     for text in sources.values():
         names |= {match.group(1) for match in HARVEST_SHAPE.finditer(text)}

@@ -45,7 +45,7 @@ const ALPHA_OPAQUE: f32 = 1.0;
 /// formatting spells zero as four digits rather than as a special case.
 const IDLE_ANIMATION: i32 = 0;
 
-/// THE BODY'S RENDER SCALE while somebody else is being worn, and what it was before.
+/// The body'S render scale while somebody else is being worn, and what it was before.
 ///
 /// `None` on a [`Possessing`] means the body was left at its own size -- either the two heights
 /// did not read, or the creature is close enough to player-sized that scaling would be a write
@@ -53,14 +53,14 @@ const IDLE_ANIMATION: i32 = 0;
 #[derive(Clone, Copy)]
 struct BodyScale {
     /// What `ChrCtrl+0x2d4..0x2dc` held before the possession. Restored verbatim, rather than
-    /// assumed to be `1.0`, so a body another mod had already scaled goes back to ITS size and not
+    /// assumed to be `1.0`, so a body another mod had already scaled goes back to its size and not
     /// to ours.
     original: [f32; 3],
     /// ...and what it is set to while the possession lasts: the same vector with `Y` multiplied.
     worn: [f32; 3],
 }
 
-/// A creature THIS MOD CREATED, carried by whatever is wearing it so the teardown knows there is
+/// A creature this mod created, carried by whatever is wearing it so the teardown knows there is
 /// something to give back.
 ///
 /// `None` on a `Possessing` means the map placed the character and removing it is not ours to do.
@@ -87,8 +87,8 @@ struct Pending {
     /// `layout::ene_dat_cap_offsets` for the running build, resolved once at spawn rather than per
     /// frame. `None` makes the asset gate undecidable, which the readiness machine skips.
     caps: Option<(usize, usize)>,
-    /// Where the creature is put the instant it becomes placeable, at the CONFIGURED distance.
-    /// Captured at spawn, from the player's position THEN -- so a player who walks away while it
+    /// Where the creature is put the instant it becomes placeable, at the configured distance.
+    /// Captured at spawn, from the player's position then -- so a player who walks away while it
     /// loads does not drag the spawn point with them.
     ///
     /// The fallback rather than the answer: [`Self::place_from`] and
@@ -98,12 +98,12 @@ struct Pending {
     /// The player's position at the press, so the placement can be re-derived at a different
     /// distance without moving the spawn point to wherever the player has since walked.
     place_from: [f32; 3],
-    /// `[spawn].distance_m`, kept because it is now a FLOOR rather than the whole answer. See
+    /// `[spawn].distance_m`, kept because it is now a floor rather than the whole answer. See
     /// [`crate::spawn::placement`].
     configured_distance_m: f32,
     place_yaw: f32,
     started: std::time::Instant,
-    /// The last gate a line was written about, so progress is logged on CHANGE rather than sixty
+    /// The last gate a line was written about, so progress is logged on change rather than sixty
     /// times a second.
     reported: Option<Gate>,
     despawn_on_release: bool,
@@ -116,7 +116,7 @@ struct Possessing {
     player: Chr,
     /// Set only when this mod created the creature; see [`SpawnedBody`].
     spawned: Option<SpawnedBody>,
-    /// THE LOCK-ON ANCHOR, expressed as the only thing that moves it; see [`BodyScale`] and
+    /// The lock-on anchor, expressed as the only thing that moves it; see [`BodyScale`] and
     /// [`body_size`]. `None` means the body was left at its own size.
     body_scale: Option<BodyScale>,
     /// Kept alive for exactly as long as `ChrCtrl+0x3b0` points at it. Dropping it frees the page,
@@ -127,15 +127,15 @@ struct Possessing {
     /// which case the no-attack neuter is skipped rather than written eight bytes off target.
     debug_flags_offset: Option<usize>,
     release_on_death: bool,
-    /// THE CREATURE'S POSITION, CACHED EVERY FRAME.
+    /// The creature'S position, CACHED every frame.
     ///
     /// Death must never need a late read. `WorldChrManImp::RemoveChrIns` nulls the camera override
-    /// DURING removal, so reading the corpse's position at that point is a use-after-free race.
+    /// during removal, so reading the corpse's position at that point is a use-after-free race.
     /// This is read while the creature is definitely alive and used afterwards.
     last_position: [f32; 3],
     /// Likewise, and the fallback when the creature dies airborne.
     last_grounded: Option<[f32; 3]>,
-    /// The FRAME on which the movement telemetry line was last written, so a held key does not
+    /// The frame on which the movement telemetry line was last written, so a held key does not
     /// produce sixty log lines a second. A frame count rather than an `Instant` because the
     /// no-timeouts gate bans wall-clock `elapsed()` control flow, and because the frame loop is
     /// the clock the thing being measured actually runs on. `None` until the first line.
@@ -143,7 +143,7 @@ struct Possessing {
     /// Was the creature on solid ground at the last good read?
     last_on_ground: bool,
     frames: u64,
-    /// THE MOVESET, or `None` when this creature is not in the shipped table.
+    /// The MOVESET, or `None` when this creature is not in the shipped table.
     ///
     /// `None` is a real and ordinary state -- 20 of the 408 creatures the generator looked at have
     /// nothing fireable of their own -- so it is an `Option` rather than an empty dispatcher that
@@ -155,7 +155,7 @@ struct Possessing {
     /// The two attack-set page keys, as rising edges. Same latch as [`Self::face`]; see
     /// [`crate::input::read_page_inputs`].
     pages: FaceEdges,
-    /// THE CAMERA, sized to this creature. Present even when nothing was adapted, because it also
+    /// The camera, sized to this creature. Present even when nothing was adapted, because it also
     /// carries the reason -- see [`crate::camera`].
     camera: camera::Session,
     watchdog: Watchdog,
@@ -171,7 +171,7 @@ struct Possessing {
     /// log opens and closes the file per line, so an unguarded one on a held button would cost
     /// sixty opens a second.
     reported_dead_input: [bool; 4],
-    /// The last availability state reported, so the log carries one line per CHANGE.
+    /// The last availability state reported, so the log carries one line per change.
     reported_availability: Option<(Availability, Source)>,
     /// Has the "a movement move fired" note been said this possession?
     reported_movement_fire: bool,
@@ -183,17 +183,17 @@ struct Possessing {
     reported_buffered_press: bool,
     /// Whether the "this hand has one page" line has been said, per hand.
     reported_one_page: [bool; 2],
-    /// WHAT TEAM THE CREATURE WAS ON before it was worn, so release puts it back on it.
+    /// What team the creature was on before it was worn, so release puts it back on it.
     ///
     /// `None` means the byte did not read and nothing was written, which is also what stops the
     /// release from writing a guess over a live field. See [`game::Chr::set_team_type`].
     original_team: Option<u8>,
-    /// The FRAME the aim telemetry line was last written on. Same throttle and same reason as
-    /// [`Self::last_movement_log`], but NOT gated on an input: aiming is the thing you do while
+    /// The frame the aim telemetry line was last written on. Same throttle and same reason as
+    /// [`Self::last_movement_log`], but not gated on an input: aiming is the thing you do while
     /// standing still, so a line that only appeared while a key was held would be silent on
     /// exactly the case the user reported.
     last_aim_log: Option<u64>,
-    /// WHO ELSE IS IN THE SESSION, AND WHETHER THEIR HP IS MOVING.
+    /// Who else is in the session, and whether their HP is moving.
     ///
     /// The user reported "I can't damage other players ... neither HP bar goes down", and the
     /// answer is a table in the binary rather than anything this crate does -- see
@@ -242,16 +242,16 @@ impl NpcPossessionEngine {
     /// costs more than writing it, and `lastGroundedPosition` has to track the body every frame or
     /// it is not tracking it at all.
     ///
-    /// **THE INVINCIBILITY BIT COVERS MORE THAN THIS COMMENT USED TO SAY, AND THAT IS THE
-    /// CORRECTION IT NOW CARRIES.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather
+    /// **the INVINCIBILITY bit covers more than this comment used to say, and that is the
+    /// correction it now carries.** `layout::chr_ins::INVINCIBLE` was re-verified on 1.17 rather
     /// than assumed -- `ChrIns::IsImmuneToAttack` at `0x1403f3dc0` is `TESTB $0x10,0x1c5(%r9)`, the
     /// same instruction 1.16.2 has at `0x1403f3c76`, and `+0x1c5` sits below the `+0x3b8` insertion
     /// that grew `ChrIns` on this build, so it could not have moved. This block used to claim the
-    /// bit gates HIT RESOLUTION "and nothing else", and that the fall path never asks whether the
+    /// bit gates hit resolution "and nothing else", and that the fall path never asks whether the
     /// victim is immune. It does: `CSChrFallModule::Update`'s damage block is gated on
     /// `FUN_14044e730`, which calls exactly that vtable slot and returns false when it answers yes
     /// (`0x14044e866`; the byte trace is in [`crate::possess::fall`]). So a possessed body cannot
-    /// be charged for a fall AT ALL while the bit is on.
+    /// be charged for a fall at all while the bit is on.
     ///
     /// The `lastGroundedPosition` write below is therefore not what keeps the body alive during a
     /// possession -- it is what keeps the field honest for the frames after one, when the bit comes
@@ -259,17 +259,17 @@ impl NpcPossessionEngine {
     /// CLAMPED to the body's own height rather than the creature's, so the difference the engine
     /// subtracts can never come out positive at any subject size.
     ///
-    /// **THE INVINCIBILITY IS ALSO WHY THE POSSESSED CREATURE'S GRABS NEVER LAND, and that is
+    /// **the INVINCIBILITY is also why the possessed creature'S grabs never land, and that is
     /// kept deliberately.** `layout::chr_ins::INVINCIBLE` carries the trace: every route into the
     /// throw system is behind `IsImmuneToAttack`, which reads exactly this bit, and the only
     /// legal victim for 189 of the 190 creature `ThrowParam` rows is the player's own body. The
     /// two shapes the fix could take were both checked and both refused. Dropping the bit for a
-    /// grab window makes the body damageable by EVERYTHING for that window and lets the creature
+    /// grab window makes the body damageable by everything for that window and lets the creature
     /// the player is wearing throw, hurt and kill them -- a state this crate's teardown does not
-    /// model, since `release_on_death` watches the CREATURE. Keeping it unhittable by everything
+    /// model, since `release_on_death` watches the creature. Keeping it unhittable by everything
     /// except the possessed creature is not expressible: the predicate has no per-attacker
     /// exemption, and the game's one throw entry that skips it (`RequestThrow_AllChr`, driven
-    /// from `ChrCtrl` for a non-DEFAULT manipulator) builds its `ThrowData` with `throwTypeId`
+    /// from `ChrCtrl` for a non-default manipulator) builds its `ThrowData` with `throwTypeId`
     /// zero, so it can only ever match a backstab/riposte row and never a creature grab.
     ///
     /// The co-location is an independent second refusal even if the bit were dropped:
@@ -285,7 +285,7 @@ impl NpcPossessionEngine {
         if let Some(offset) = state.debug_flags_offset {
             state.player.set_no_attack(offset, true);
         }
-        // THE LOCK-ON ANCHOR. Re-asserted with the rest rather than written once at possession
+        // The lock-on anchor. Re-asserted with the rest rather than written once at possession
         // start, for the cheapest of reasons: nothing in the game recomputes `scaleSize` (its only
         // writers are the `ChrCtrl` constructor and `SetScaleSize`, whose one caller is character
         // construction), so this is insurance against a respawn rebuilding the body mid-possession
@@ -293,19 +293,19 @@ impl NpcPossessionEngine {
         if let Some(scale) = state.body_scale {
             state.player.set_body_scale(scale.worn);
         }
-        // The co-location target for THIS frame, which is where the body is about to be put, and
+        // The co-location target for this frame, which is where the body is about to be put, and
         // the one line that says what was written and what the body's own grounding read as.
         Self::pin_and_report(state, "carried", state.last_position);
     }
 
-    /// Pin the body's fall bookkeeping to a point, and SAY WHAT WAS WRITTEN AND WHAT THE BODY'S
-    /// GROUNDING WAS.
+    /// Pin the body's fall bookkeeping to a point, and say what was written and what the body'S
+    /// grounding was.
     ///
     /// # Why this line exists
     ///
     /// The only account this engine could previously give of a player who died mid-possession was
     /// the player's own: "I got sent through the floor and died." Every field the engine's fall
-    /// path actually reads was invisible. The creature's position was logged; the BODY's was not,
+    /// path actually reads was invisible. The creature's position was logged; the body's was not,
     /// and the body is the thing that dies.
     ///
     /// So this reports, in order: the point the co-location is writing, the point the body is
@@ -316,12 +316,12 @@ impl NpcPossessionEngine {
     ///
     /// # Two lines, throttled differently
     ///
-    /// The routine line is one a second (see [`fall::colocation_line_due`]). The ALARM -- the body
+    /// The routine line is one a second (see [`fall::colocation_line_due`]). The alarm -- the body
     /// is further below the co-location target than its own `maxStepHeight` -- is not throttled at
     /// all, because it is rare by construction and the frame it happens on is the frame worth
     /// having.
     fn pin_and_report(state: &Possessing, phase: &str, target: [f32; 3]) {
-        // BEFORE the pin, so the line can show what the field held on the way in. One pointer walk
+        // Before the pin, so the line can show what the field held on the way in. One pointer walk
         // for everything the fall path reads.
         let before = state.player.fall_state();
         let pinned = state.player.pin_last_grounded(target);
@@ -428,8 +428,8 @@ impl NpcPossessionEngine {
         // A press that lands while a spawn is still coming up cancels it. Handled before the
         // active state because the two are mutually exclusive and this one has its own teardown.
         if let Some(pending) = self.pending.take() {
-            // A HOTKEY PRESS INSIDE THE READINESS WINDOW IS IGNORED, not treated as a cancel.
-            // A spawn takes up to `[spawn].readiness_ms` to become drivable and NOTHING ON SCREEN
+            // A HOTKEY press inside the readiness window is ignored, not treated as a cancel.
+            // A spawn takes up to `[spawn].readiness_ms` to become drivable and nothing on screen
             // says one is in flight, so a player who taps twice -- or holds the key a beat too
             // long -- used to create a creature and delete it 166 ms later, which is
             // indistinguishable from the key doing nothing at all. Measured live 2026-09-02:
@@ -455,16 +455,16 @@ impl NpcPossessionEngine {
             // it unconditionally, and so does the state machine after a refusal.
             return PossessionOutcome::Accepted;
         };
-        // THE PANEL COMES DOWN HERE, ahead of the teardown and outside [`Step`]. Every way a
+        // The panel comes down here, ahead of the teardown and outside [`Step`]. Every way a
         // possession can end -- the hotkey, death, despawn, a config reload, shutdown -- passes
         // through this function after `active.take()` succeeded, so this is the one place that
-        // covers all of them. It is not a `Step` because the steps exist to pin an ORDER between
+        // covers all of them. It is not a `Step` because the steps exist to pin an order between
         // things that read through the creature, and this reads through nothing: it stores `None`
         // behind a mutex and clears an atomic. Leaving it up would put a panel describing four
         // buttons on screen after those buttons stopped doing anything, which is worse than no
         // panel.
         banner::clear();
-        // THE NET-DAMAGE WATCH CLOSES HERE, beside the banner and for the same reason: every way
+        // The net-damage watch closes here, beside the banner and for the same reason: every way
         // a possession can end passes through this point, and a ledger that only reported while
         // it was running would leave the question "did anybody's HP move" unanswered exactly when
         // the player has stopped and gone to read the log.
@@ -478,7 +478,7 @@ impl NpcPossessionEngine {
         let release_point = state.release_point();
         run.run(|step| match step {
             // Infallible -- one atomic store -- so this always reports success. It is a step
-            // rather than a line at the top of this function because the ORDER is the thing the
+            // rather than a line at the top of this function because the order is the thing the
             // state machine exists to enforce: every step below reads through the creature.
             Step::StopHudRetarget => {
                 hud::stop();
@@ -486,17 +486,17 @@ impl NpcPossessionEngine {
             }
             Step::RestoreBody => Self::restore(&state),
             // Nothing to undo: the per-frame driver stops the moment `active` is `None`, which
-            // happened at the `take()` above. The step exists so the ORDER is a thing the state
+            // happened at the `take()` above. The step exists so the order is a thing the state
             // machine enforces rather than a comment.
             Step::StopColocating => true,
-            // PINNED BEFORE THE MOVE, not after: this is the last teleport the body takes and it
-            // is the one most likely to be DOWNWARD -- `release_point` falls back to the creature's
+            // Pinned before the move, not after: this is the last teleport the body takes and it
+            // is the one most likely to be downward -- `release_point` falls back to the creature's
             // `lastGroundedPosition` when it died airborne, which is by construction below where
             // the body has been riding. Without this the very act of giving the body back reads to
             // `CSChrFallModule` as a fall of exactly that height. See
             // [`game::Chr::pin_last_grounded`].
             Step::MovePlayer => {
-                // THE SAME PIN AS EVERY CARRIED FRAME, and reported the same way -- this is the
+                // The same pin as every carried frame, and reported the same way -- this is the
                 // teleport most likely to be downward and the last one taken while the body is
                 // still immune, so it is the one whose numbers a post-mortem needs.
                 Self::pin_and_report(&state, "released", release_point);
@@ -504,15 +504,15 @@ impl NpcPossessionEngine {
             }
             Step::RestoreCameraSize => state.camera.restore(),
             Step::ClearCameraOverride => game::set_camera_override(None),
-            // The AI move request is cancelled BEFORE the vtable goes back, because after it the
+            // The AI move request is cancelled before the vtable goes back, because after it the
             // creature is the AI's again and our last order is a run command it did not issue.
             // `stop_move_intent` writes exactly what `CS::AiIns::ClearMoveRequest` writes, so what
             // the AI wakes up to is a state its own code produces. Its failure is not this step's
-            // failure: the RESTORE is THE step that must happen -- our patched table lives in a
+            // failure: the restore is the step that must happen -- our patched table lives in a
             // page that is about to be freed -- and a creature that jogs for one frame is not a
             // reason to report the release broken.
             Step::RestoreManipulatorVtable => {
-                // THE TEAM GOES BACK HERE, with the AI, because they are the same handover: a
+                // The team goes back here, with the AI, because they are the same handover: a
                 // creature whose goal selection is live again must be on the team its own think
                 // logic was written for. Its result is deliberately not folded into this step's
                 // verdict -- for the same reason `stop_move_intent`'s is not, and one step further
@@ -533,18 +533,18 @@ impl NpcPossessionEngine {
                 state.creature.stop_move_intent();
                 game::Chr::restore_manipulator_vtable(swizzled_com, original_vptr, patched_vptr)
             }
-            // AFTER the override clear, always; see `Step::DespawnCreature`, whose discriminant is
+            // After the override clear, always; see `Step::DespawnCreature`, whose discriminant is
             // that ordering and whose test fails if anyone moves it.
             Step::DespawnCreature => match state.spawned {
                 // The map placed this character. Removing it is not ours to do.
                 None => true,
                 // The player asked for it to stay. Nothing failed.
                 Some(body) if !body.despawn_on_release => true,
-                // THE GAME ALREADY REMOVED IT, which is the only thing `CreatureGone` can mean:
+                // The game already removed it, which is the only thing `CreatureGone` can mean:
                 // `Chr::is_live` fails when `ChrCtrl.owner` no longer points back at the `ChrIns`,
                 // and that is a destroyed character rather than a transient read. `RemoveChrIns`
                 // hands its argument to `CSDelayDeleteMan`, so calling it on a character the game
-                // has already queued for destruction queues a freed `ChrIns` for a SECOND one --
+                // has already queued for destruction queues a freed `ChrIns` for a second one --
                 // and `spawn_game::despawn`'s own guard cannot catch it, because it proves the
                 // first qword is mapped and freed heap still is.
                 //
@@ -561,7 +561,7 @@ impl NpcPossessionEngine {
                     ));
                     true
                 }
-                // `DLL_PROCESS_DETACH` RUNS ON A THREAD THAT IS NOT THE GAME THREAD, under the
+                // `DLL_PROCESS_DETACH` runs on a thread that is not the game thread, under the
                 // loader lock, with the other threads possibly already gone. `RemoveChrIns` walks
                 // four singletons, calls a virtual on the character and DLPanics if any of them is
                 // missing -- so it is refused here, and an orphaned NPC is accepted instead.
@@ -588,7 +588,7 @@ impl NpcPossessionEngine {
         });
         possess_log(format_args!("{}", run.line()));
         if run.has_critical_failure() {
-            // The page STAYS MAPPED. `ChrCtrl+0x3b0` still points into it, and freeing memory the
+            // The page stays mapped. `ChrCtrl+0x3b0` still points into it, and freeing memory the
             // game is about to dispatch through turns a DLPanic into an arbitrary jump. Leaking
             // one page is the cheaper of the two.
             core::mem::forget(state.thunk);
@@ -603,7 +603,7 @@ impl NpcPossessionEngine {
 
     /// Look the creature up in the shipped table and apply the player's `[chr.cNNNN]` corrections.
     ///
-    /// The order is deliberate: `unusable` is applied BEFORE `usable`, so a player who lists the
+    /// The order is deliberate: `unusable` is applied before `usable`, so a player who lists the
     /// same animation in both gets it -- the more specific instruction ("offer this") wins over
     /// the broader one, rather than the answer depending on which line they typed first.
     fn build_moveset(chr_id: u32, request: &PossessionRequest) -> Option<Dispatcher> {
@@ -643,13 +643,13 @@ impl NpcPossessionEngine {
 
     /// One frame of the moveset: watch what is playing, then act on what was pressed.
     ///
-    /// ORDER MATTERS AND IS NOT ARBITRARY. The watchdog runs FIRST, so a press arriving on the
+    /// Order matters and is not arbitrary. The watchdog runs first, so a press arriving on the
     /// same frame a stuck animation is detected does not queue behind it -- the forced idle wins
     /// and the press is spent on a frame that could not have fired anyway. Firing first would
     /// leave the new request overwritten by the idle a line later, which reads to the player as a
     /// button that sometimes does nothing.
     ///
-    /// `moving` is whether this frame actually ASKED the creature to move -- the gait written into
+    /// `moving` is whether this frame actually asked the creature to move -- the gait written into
     /// `AiIns.walkType`, not whether a stick was touched. The two differ on exactly the frames
     /// where the request was refused (an unreadable heading, a junk `speed_scale`), and on those
     /// the body is standing still, so offering it a running attack would be wrong.
@@ -657,13 +657,13 @@ impl NpcPossessionEngine {
         let Some(dispatcher) = state.moveset.as_mut() else {
             return;
         };
-        // THE PAGE KEYS ARE HANDLED FIRST AND OUTSIDE EVERY EARLY RETURN BELOW. Turning a page
+        // The page keys are handled first and outside every early return below. Turning a page
         // fires nothing, so it is not subject to the one-request-per-frame rule, to what the
         // creature is currently playing, or to the "nothing pressed" shortcut -- a player who taps
-        // right arrow mid-swing means it for the NEXT press, and dropping it there would make the
+        // right arrow mid-swing means it for the next press, and dropping it there would make the
         // key feel unreliable in exactly the moment it is most useful.
         //
-        // ONE pad read answers both questions -- see [`crate::input::read_moveset_inputs`] -- so
+        // One pad read answers both questions -- see [`crate::input::read_moveset_inputs`] -- so
         // the face levels are sampled here and spent a few lines below rather than re-read.
         let (face_held, page_held) = crate::input::read_moveset_inputs(dispatcher.buttons());
         let page_pressed = state.pages.feed(page_held);
@@ -684,7 +684,7 @@ impl NpcPossessionEngine {
                         leads(first),
                         leads(second),
                     ));
-                    // ON SCREEN, and this is the half the player actually sees. The two writes
+                    // On screen, and this is the half the player actually sees. The two writes
                     // below are both "say what the buttons do now" and they differ only in where
                     // a player can read them from: the derived file needs an alt-tab, the banner
                     // is in the corner of the game they are looking at. Publishing the hand that
@@ -717,7 +717,7 @@ impl NpcPossessionEngine {
         }
 
         let pressed = state.face.feed(face_held);
-        // CONSUMED, not held, and now the ENGINE's answer rather than ours. See
+        // Consumed, not held, and now the engine's answer rather than ours. See
         // [`Sample::input_consumed`]: a press that fired nothing is evidence of being stuck, not
         // evidence against it, so a player mashing at a softlock must not be able to hold the
         // watchdog off indefinitely. This used to be "we wrote the request field last frame",
@@ -725,7 +725,7 @@ impl NpcPossessionEngine {
         // the dispatch and drops a refused request silently. `+0x24` bit 0 is what it sets when
         // the request really did become a graph event.
         let consumed = state.creature.animation_request_dispatched();
-        // What the creature is doing, and whether it is willing to be left. Read ONCE per frame
+        // What the creature is doing, and whether it is willing to be left. Read once per frame
         // and shared by the release and the press, so a buffered press and a fresh one on the
         // same frame cannot disagree about what is playing. `None` means the creature is
         // animating nothing -- see `Chr::current_anim_frame`, which refuses to hand back a stale
@@ -746,7 +746,7 @@ impl NpcPossessionEngine {
         let mut availability = reading.availability;
 
         {
-            // The watchdog runs on EVERY frame, including the ones with nothing playing. That is
+            // The watchdog runs on every frame, including the ones with nothing playing. That is
             // what makes `ReturnedToNeutral` fire when a creature stops animating rather than only
             // when it animates something neutral -- and a cursor that never resets is a combo that
             // never starts again.
@@ -754,7 +754,7 @@ impl NpcPossessionEngine {
                 animation: frame.map_or(IDLE_ANIMATION, |frame| frame.animation),
                 local_time: frame.and_then(|frame| frame.local_time),
                 // The same membership question the chain gate asked, and the same answer -- both
-                // layers have to agree on whether the creature is doing something of OURS, or
+                // layers have to agree on whether the creature is doing something of ours, or
                 // the watchdog arms on an idle loop while the gate calls it idle.
                 is_known_move: reading.source != Source::NotOurMove,
                 input_consumed: consumed,
@@ -770,11 +770,11 @@ impl NpcPossessionEngine {
                         .deny(blame, Denial::UnusableAtRuntime);
                     // A press queued behind an animation that has just been declared unusable is
                     // stale: it was aimed at continuing a chain that turned out to be a softlock.
-                    // Dropped explicitly, because `on_neutral` deliberately does NOT reset while
+                    // Dropped explicitly, because `on_neutral` deliberately does not reset while
                     // something is waiting.
                     dispatcher.forget_buffered_press();
                     dispatcher.on_neutral();
-                    // THE NUMBER IS THE POSSESSION CLOCK, NOT THE STUCK DURATION, and the wording
+                    // The number is the possession clock, not the stuck duration, and the wording
                     // used to say the opposite -- "stuck ... for {elapsed_ms} ms" reported a
                     // 29,701 ms hang on a watchdog whose threshold is four seconds. The stuck
                     // duration lives in `Watchdog::armed.suspect_since_ms` and is not on
@@ -806,7 +806,7 @@ impl NpcPossessionEngine {
         if pressed == 0 && !dispatcher.is_holding() {
             return;
         }
-        // ONE REQUEST PER FRAME, and only into an empty slot. `requestAnimationId` holds a single
+        // One request per frame, and only into an empty slot. `requestAnimationId` holds a single
         // id which `CSChrEventModule::Update` consumes once per frame; a second write before that
         // runs discards the first silently. Two buttons in one frame therefore has to mean one
         // attack, not one attack lost.
@@ -837,7 +837,7 @@ impl NpcPossessionEngine {
                     chosen,
                 );
                 // The frame's one request slot is now spent on an attack that has just started,
-                // so anything ALSO pressed this frame is by definition arriving mid-animation.
+                // so anything also pressed this frame is by definition arriving mid-animation.
                 // Saying so rather than returning is what keeps it: it buffers instead of being
                 // thrown away, and the chain carries on.
                 availability = Availability::Committed;
@@ -872,7 +872,7 @@ impl NpcPossessionEngine {
             ),
             Press::Waiting(held) => {
                 // Once per possession, not per press. The point is to tell a player who expected
-                // a cancel that the press was KEPT rather than eaten; repeating it sixty times a
+                // a cancel that the press was kept rather than eaten; repeating it sixty times a
                 // second would bury the log.
                 if !state.reported_buffered_press {
                     state.reported_buffered_press = true;
@@ -895,13 +895,13 @@ impl NpcPossessionEngine {
         }
     }
 
-    /// Say what the availability oracle READ and which branch it took, once per change.
+    /// Say what the availability oracle read and which branch it took, once per change.
     ///
     /// This exists because the 2026-09-02 run could not be diagnosed from its own log. Four lines
     /// said presses were being held and dropped; nothing said what the resolver had looked at, so
     /// which of three possible causes it was had to be settled by reading the binary afterwards.
     /// A line per frame would be sixty file opens a second, and a line per possession would miss
-    /// the transition that matters -- so it is a line per CHANGE of the resolved state, which for
+    /// the transition that matters -- so it is a line per change of the resolved state, which for
     /// a creature being played is a handful per attack and exactly zero while nothing happens.
     ///
     /// Takes the one field it mutates rather than `&mut Possessing`, because the caller is
@@ -956,10 +956,10 @@ impl NpcPossessionEngine {
             return;
         }
         watchdog.armed_with(chosen.fire);
-        // A MOVEMENT-BUCKET MOVE THAT FIRES AND GOES NOWHERE LOOKS LIKE A DEAD BUTTON, and it is
+        // A movement-bucket move that fires and goes nowhere looks like a dead button, and it is
         // a different fault from the one the availability gate can cause. `l2` is the creature's
         // own dodges and steps, and while the locomotion layer cannot translate the body, those
-        // clips play in place: the press WAS honoured and the animation IS running. Said once,
+        // clips play in place: the press was honoured and the animation is running. Said once,
         // so the two failures are not mistaken for each other in a log.
         if chosen.bucket == Bucket::Movement && !*reported_movement_fire {
             *reported_movement_fire = true;
@@ -991,7 +991,7 @@ impl NpcPossessionEngine {
 
     /// Fire one move, by whichever of the two paths its prefix says.
     ///
-    /// THE SPLIT IS THE POINT. `Prefix::Event` -- 4,667 of the shipped moves -- is a write to
+    /// The split is the point. `Prefix::Event` -- 4,667 of the shipped moves -- is a write to
     /// `CSChrEventModule+0x18` and resolves no game address, so it keeps working on a build nobody
     /// has mapped. Everything else builds the event name the graph actually declares and calls
     /// `PlayAnimationByBehaviorName`, which costs the one address this crate resolves. Preferring
@@ -1019,11 +1019,11 @@ impl NpcPossessionEngine {
         }
     }
 
-    /// Put what the four buttons do onto the SCREEN, for the render thread to pick up.
+    /// Put what the four buttons do onto the screen, for the render thread to pick up.
     ///
     /// The counterpart of [`Self::write_derived`] and deliberately called beside it every time:
     /// the derived file is the reference a player reads with the game paused or alt-tabbed, this
-    /// is the one they read WHILE playing. `flash` names the hand whose page key caused this
+    /// is the one they read while playing. `flash` names the hand whose page key caused this
     /// publish, which is what the panel highlights for a couple of seconds.
     ///
     /// Called on possession start and on every page turn -- never per frame. The name lookup
@@ -1058,9 +1058,9 @@ impl NpcPossessionEngine {
                 text.push_str(&derived::pages_block(dispatcher));
                 text
             }
-            // WRITTEN ANYWAY for a creature with no shipped moveset, because it still gets a
+            // Written anyway for a creature with no shipped moveset, because it still gets a
             // camera and still gets the HUD block -- and skipping the write would leave the
-            // PREVIOUS possession's file on disk, describing a different character, which is
+            // previous possession's file on disk, describing a different character, which is
             // worse than no report when its whole job is to explain numbers the player is
             // looking at right now. `render` already has a block for a moveset that is empty.
             None => derived::render(
@@ -1074,7 +1074,7 @@ impl NpcPossessionEngine {
         let _ = std::fs::write(crate::config::DERIVED_CONFIG_FILE_NAME, text);
     }
 
-    /// The `[hud]` block: which character the bars are reading, and why, for THIS creature.
+    /// The `[hud]` block: which character the bars are reading, and why, for this creature.
     fn hud_block(chr_id: u32, creature: Chr) -> String {
         let decision = match hud::outcome().off_reason() {
             Some(off) => hud::Decision::Off(off),
@@ -1092,7 +1092,7 @@ impl NpcPossessionEngine {
         let Some(state) = self.active.as_mut() else {
             return;
         };
-        // THE LIVENESS CHECK COMES FIRST. Everything below reads through the creature, and a
+        // The LIVENESS check comes first. Everything below reads through the creature, and a
         // despawn between frames is ordinary rather than exceptional.
         if !state.creature.is_live() {
             possess_log(format_args!(
@@ -1118,7 +1118,7 @@ impl NpcPossessionEngine {
         // frame-counted window would be twice as long as the file says it is.
         state.elapsed_ms = u64::try_from(state.started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        // CACHE BEFORE ANYTHING ELSE. Death and despawn both make this unreadable, and the release
+        // Cache before anything else. Death and despawn both make this unreadable, and the release
         // point has to come from a read taken while the creature was definitely alive.
         if let Some(position) = state.creature.position() {
             state.last_position = position;
@@ -1139,7 +1139,7 @@ impl NpcPossessionEngine {
         if !game::camera_override_is(state.creature) {
             game::set_camera_override(Some(state.creature));
         }
-        // ...and the same for the TEAM. One byte read, and a write only when something has put it
+        // ...and the same for the team. One byte read, and a write only when something has put it
         // back: an aggro transition, a `TemporaryTeamType` slot arriving, or a respawn. Skipped
         // entirely when the original did not read at possession start, because then nothing was
         // written and there is nothing to hold.
@@ -1148,11 +1148,11 @@ impl NpcPossessionEngine {
         {
             state.creature.set_team_type(chr_ins::TEAM_TYPE_CHARMED);
         }
-        // ...and the same for the camera's SIZE. Nothing in the game writes
+        // ...and the same for the camera's size. Nothing in the game writes
         // `ChrExFollowCam+0x468`, but the constructor sets it to -1, so a camera rebuilt by a warp
         // or a map load mid-possession would quietly go back to framing a Tarnished.
         //
-        // `refresh` first, because it may reinstall the whole patch: `[camera]` is LIVE, so a
+        // `refresh` first, because it may reinstall the whole patch: `[camera]` is live, so a
         // saved edit re-derives the row and re-points the override the same way a fresh possession
         // would. It costs one relaxed atomic load on the frames nothing has been edited.
         if state.camera.refresh() {
@@ -1166,7 +1166,7 @@ impl NpcPossessionEngine {
         }
         state.camera.reassert();
 
-        // Point the HUD at the creature, EVERY frame rather than once at possession start, so
+        // Point the HUD at the creature, every frame rather than once at possession start, so
         // that toggling `[hud] enabled` in the config file takes effect mid-possession like every
         // other live table. Two atomic loads and a store; the detour itself does the work.
         if crate::config::hud().enabled {
@@ -1190,19 +1190,19 @@ impl NpcPossessionEngine {
             movement.speed_scale,
             movement.turn_deadzone_deg,
         );
-        // WHERE THE PLAYER IS AIMING, and the reason it has to be turned into a FACING rather
+        // Where the player is aiming, and the reason it has to be turned into a facing rather
         // than handed to the attack.
         //
         // A player's own attacks get their spawn orientation from `FUN_1403fb0b0`, which starts
         // from `ChrCtrl::GetPhysicsOrientation` and only bends it toward the camera when
-        // `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a vtable predicate on the CLASS, so
+        // `(*chr->vfptr->IsPlayerIns)(chr)` is true. That is a vtable predicate on the class, so
         // an `EnemyIns` can never take that branch and `camOverrideChrIns` cannot help -- the
-        // override moves a POINTER, not a type. Whatever the possessed creature fires therefore
+        // override moves a pointer, not a type. Whatever the possessed creature fires therefore
         // leaves along its body facing, which is why the camera appeared to do nothing.
         //
         // So the bridge is the body: `wantToMoveTo` with `turnTarget = TARGET_SELF` is what
-        // `UpdateMovement` turns into `aiIns+0xc3f0`, and `[vt+0x50]` differences THAT against the
-        // live orientation OUTSIDE the `walkType` gate -- so the body turns toward the aim even
+        // `UpdateMovement` turns into `aiIns+0xc3f0`, and `[vt+0x50]` differences that against the
+        // live orientation outside the `walkType` gate -- so the body turns toward the aim even
         // standing still, and the movement staged at `ComManipulator+0x140` is untouched.
         let aim = intent::aim(
             state.last_position,
@@ -1215,8 +1215,8 @@ impl NpcPossessionEngine {
         };
         Self::tick_moveset(state, write.moving());
 
-        // THE NET-DAMAGE WATCH, on its own cadence. Placed after the moveset tick so a sample
-        // taken on a frame that fired something is taken AFTER the fire, and outside every
+        // The net-damage watch, on its own cadence. Placed after the moveset tick so a sample
+        // taken on a frame that fired something is taken after the fire, and outside every
         // input gate so it keeps reporting while the player stands still -- "neither HP bar goes
         // down" is a thing you notice by watching, not by pressing.
         if state.net.due(state.frames) {
@@ -1237,7 +1237,7 @@ impl NpcPossessionEngine {
                 possess_log(format_args!("{line}"));
             }
         }
-        // THE MANUAL STAGE IS GONE, and its removal is the fix rather than a simplification.
+        // The manual stage is gone, and its removal is the fix rather than a simplification.
         //
         // It was written when the vtable override starved the locomotion consumers: `[vt+0x50]`
         // published into the real manipulator and `FUN_1403cbff0` read the override's zeroes, so
@@ -1254,11 +1254,11 @@ impl NpcPossessionEngine {
         // is never asked to rotate at all.
         //
         // So the AI write below is now the whole mechanism, which is what the native path was
-        // always supposed to be: we fill the move REQUEST, and the engine computes the direction,
+        // always supposed to be: we fill the move request, and the engine computes the direction,
         // the gait scaling, the facing and the clip selection from it -- the same code that drives
         // every unpossessed creature in the game.
         if first_frame {
-            // ONCE per possession, not sixty times a second. The read-back is taken immediately
+            // Once per possession, not sixty times a second. The read-back is taken immediately
             // after the AI write and is expected to disagree with it -- that disagreement is the
             // goal machine's `ClearMoveRequest`, and it is why `staged` is the value that moves
             // the body. A line that showed them agreeing would mean the goal churn had stopped.
@@ -1276,20 +1276,20 @@ impl NpcPossessionEngine {
                 write.walk_type, write.target[0],
             ));
         }
-        // THE INSTRUMENT, because three movement fixes have now shipped without one.
+        // The instrument, because three movement fixes have now shipped without one.
         //
         // The canary only answers "did the write land somewhere legitimate". It has never
         // answered the question the user keeps asking, which is "did pressing W produce
         // anything at all" -- and with no line between the key and the field, every attempt so
         // far has been a guess dressed as a diagnosis. This says, in order: whether an input
         // was read this frame, what gait and target came out of it, and what the field reads
-        // back as AFTER the write. A press that produces `stick=none` is an input bug; a
+        // back as after the write. A press that produces `stick=none` is an input bug; a
         // `stick=some` that reads back as zero is an engine bug; and those are different
         // repairs that were previously indistinguishable from the log.
         //
         // Rate-limited to one line a second and only while an input is actually being held, so
         // standing still is silent and a held key does not write sixty lines a second.
-        // Throttled by FRAME COUNT, not wall clock. `scripts/check-no-timeouts.py` bans an
+        // Throttled by frame count, not wall clock. `scripts/check-no-timeouts.py` bans an
         // `elapsed()` gate outright, and it is right to: the frame counter is the clock this
         // engine actually runs on, it cannot drift against the thing being measured, and a
         // stalled frame loop stops the log instead of flooding it.
@@ -1316,7 +1316,7 @@ impl NpcPossessionEngine {
                  the body's own displacement: NON-ZERO with posNow constant is a clip playing \
                  against something that holds the body. proxyFlags is a control, not a suspect: \
                  it reads 0",
-                // THE CREATURE, first, because sliding is creature-DEPENDENT now: some move
+                // The creature, first, because sliding is creature-dependent now: some move
                 // correctly and at least one does not, so a line that describes the symptom
                 // without naming the subject cannot be acted on.
                 state.chr_id,
@@ -1335,9 +1335,9 @@ impl NpcPossessionEngine {
                 state.creature.published_move_vector(),
                 state.creature.chr_proxy_flags(),
                 state.creature.root_motion_squared(),
-                // Read HERE rather than reused from `state.last_position`, which was sampled
+                // Read here rather than reused from `state.last_position`, which was sampled
                 // earlier in the frame: "position constant while rootMotion is non-zero" is the
-                // whole distinction between a body that is HELD and a body that was never asked
+                // whole distinction between a body that is held and a body that was never asked
                 // to move, and it is only a distinction if both halves are one instant apart.
                 state.creature.position(),
                 state
@@ -1347,7 +1347,7 @@ impl NpcPossessionEngine {
                 write.gait_scale(),
             ));
         }
-        // THE AIM INSTRUMENT, and deliberately NOT gated on an input.
+        // The aim instrument, and deliberately not gated on an input.
         //
         // The reported defect is "I move the camera and the cast vector does not follow", which is
         // a thing you observe standing still, so a line throttled behind `stick.is_some()` would
@@ -1380,11 +1380,11 @@ impl NpcPossessionEngine {
                 chr_ins::TEAM_TYPE_CHARMED,
             ));
         }
-        // THE BRACKET. The read in the telemetry block above happens BEFORE this write, so it
+        // The bracket. The read in the telemetry block above happens before this write, so it
         // shows what survived the previous frame -- it can say the request is gone but not who
         // took it. This one is taken immediately after our own store, same frame, same thread. If
         // it reads back what we wrote and the next frame's line reads 0, the clearer runs between
-        // this task and `[vt+0x50]`; if it disagrees HERE, the store never landed at all. That is
+        // this task and `[vt+0x50]`; if it disagrees here, the store never landed at all. That is
         // the fork the last round could not settle.
         let stored = state.creature.write_move_intent(write);
         if telemetry_due {
@@ -1415,7 +1415,7 @@ impl NpcPossessionEngine {
 impl NpcPossessionEngine {
     /// Ask the game to create the creature `[spawn]` names, and start waiting for it.
     ///
-    /// Returns `Accepted` the moment the `ChrIns` exists -- NOT when it is drivable. The state
+    /// Returns `Accepted` the moment the `ChrIns` exists -- Not when it is drivable. The state
     /// machine above treats that as an active possession, which is right: the player pressed the
     /// key, something happened, and pressing again must cancel it rather than start a second one.
     fn begin_spawn(&mut self, request: &PossessionRequest, player: Chr) -> PossessionOutcome {
@@ -1424,7 +1424,7 @@ impl NpcPossessionEngine {
             return PossessionOutcome::Refused("the player's position did not read".to_owned());
         };
         let yaw = player.yaw().unwrap_or(0.0);
-        // In front of the player, at the player's own height, using the SAME basis the movement
+        // In front of the player, at the player's own height, using the same basis the movement
         // target uses -- see `intent::ahead_of` for why that is one function and not two.
         let place_at = intent::ahead_of(position, yaw, settings.distance_m);
         let spec = SpawnSpec {
@@ -1482,7 +1482,7 @@ impl NpcPossessionEngine {
             .observe(elapsed, |gate| spawn_game::evaluate(&spawned, caps, gate));
         match verdict {
             Poll::Waiting(gate) => {
-                // Once per gate CHANGE. A per-frame line on a five-second wait is three hundred
+                // Once per gate change. A per-frame line on a five-second wait is three hundred
                 // identical lines, which is the same as no line at all.
                 if pending.reported != Some(gate) {
                     pending.reported = Some(gate);
@@ -1498,9 +1498,9 @@ impl NpcPossessionEngine {
                 let pending = self.pending.take().expect("checked above");
                 self.finish_spawn(pending, elapsed);
             }
-            // THE GAME took it away -- `EnemyIns::InitializeCharacterRendering` self-despawns a
+            // The game took it away -- `EnemyIns::InitializeCharacterRendering` self-despawns a
             // character whose caps loaded but yielded no FLVER. The pointer is already dead, so
-            // this drops it and MUST NOT call `RemoveChrIns` again.
+            // this drops it and must not call `RemoveChrIns` again.
             Poll::Vanished => {
                 let pending = self.pending.take().expect("checked above");
                 let reason = format!(
@@ -1514,7 +1514,7 @@ impl NpcPossessionEngine {
             Poll::Expired(gate) => {
                 let reached = pending.readiness.reached();
                 let pending = self.pending.take().expect("checked above");
-                // BOTH the gate it died on AND how far it ever got. "waiting on chrres-loaded"
+                // Both the gate it died on and how far it ever got. "waiting on chrres-loaded"
                 // reads the same whether nothing at all happened or everything up to the assets
                 // did, and those are different problems.
                 let reason = format!(
@@ -1534,13 +1534,13 @@ impl NpcPossessionEngine {
 
     /// The creature is drivable. Put it where the press asked for it and wear it.
     fn finish_spawn(&mut self, pending: Pending, elapsed: u64) {
-        // Placed HERE and not at spawn time, because the creature's position field is not read on
+        // Placed here and not at spawn time, because the creature's position field is not read on
         // the creature path of `CreateCharacter` at all -- `InitEnemyChrBaseData` supplies the base
         // data and the request's vectors are consumed only by the PlayerIns branch. So the request
         // says where it should be and this is what actually puts it there, through the same proxy
         // drain co-location uses.
         //
-        // ...AND IT IS ALSO THE FIRST MOMENT THE CREATURE'S OWN SIZE CAN BE READ, which is why the
+        // ...AND it is also the first moment the creature'S own size can be read, which is why the
         // size-aware distance is derived here rather than at the press. `CSChrPhysicsModule` does
         // not exist until `InitForEnemy` has run; by this point it does, and `hit_radius` is the
         // real `NpcParam.hitRadius` rather than a guess. See `crate::spawn::placement` for why
@@ -1619,7 +1619,7 @@ impl NpcPossessionEngine {
     ///
     /// The failed-write case still answers `Some`, and that is deliberate rather than sloppy: the
     /// record is what the release path restores from, so returning `None` after a write that
-    /// PARTLY landed would leave the body carrying a scale nothing will ever take off it.
+    /// partly landed would leave the body carrying a scale nothing will ever take off it.
     fn plan_body_scale(creature: Chr, player: Chr) -> Option<BodyScale> {
         let (Some(creature_height), Some(player_height)) =
             (creature.hit_height(), player.hit_height())
@@ -1677,7 +1677,7 @@ impl NpcPossessionEngine {
     /// Wear `creature`: install the thunk, move the camera, neuter the player's body and build the
     /// moveset.
     ///
-    /// Extracted so the found-a-target path and the spawned-one path are the SAME code. They
+    /// Extracted so the found-a-target path and the spawned-one path are the same code. They
     /// differ only in where the creature came from -- and `spawned` is that difference, carried
     /// into the teardown so it knows whether it owes the world a despawn.
     fn enter(
@@ -1707,7 +1707,7 @@ impl NpcPossessionEngine {
             );
         }
         if !game::set_camera_override(Some(creature)) {
-            // Roll the ONE thing that is already installed back before giving up, or the creature
+            // Roll the one thing that is already installed back before giving up, or the creature
             // is left brainless with nobody driving it.
             game::Chr::restore_manipulator_vtable(
                 thunk.real_com(),
@@ -1727,27 +1727,27 @@ impl NpcPossessionEngine {
             ));
         }
         let chr_id = creature.npc_param_id().unwrap_or(0);
-        // THE CAMERA, last of the installs and after everything that can still refuse -- so there
+        // The camera, last of the installs and after everything that can still refuse -- so there
         // is nothing to roll back if it fails, and nothing left behind if it succeeds and a later
         // step does not. `Session::begin` never panics and answers with a reason rather than an
         // error; see [`crate::camera`].
         let camera = camera::Session::begin(creature.address(), chr_id);
         possess_log(format_args!("{}", camera.log_line()));
         let moveset = Self::build_moveset(chr_id, request);
-        // AFTER everything that can still refuse, like the camera above: this one writes the
+        // After everything that can still refuse, like the camera above: this one writes the
         // player's body rather than the creature's, so a later refusal would leave the body
         // wearing a size nothing is going to take off it.
         let body_scale = Self::plan_body_scale(creature, player);
-        // THE LOCK-ON FIX, and the smallest write in this whole function.
+        // The lock-on fix, and the smallest write in this whole function.
         //
-        // Possession makes the creature the lock-on SUBJECT, so `CS::ChrIns::CanTargetTeamType`
+        // Possession makes the creature the lock-on subject, so `CS::ChrIns::CanTargetTeamType`
         // is asked `relation[creature.team][candidate.team]` for every candidate in the world --
-        // and an enemy creature is FRIEND to every other enemy and ENEMY to the player. That is
+        // and an enemy creature is friend to every other enemy and enemy to the player. That is
         // one relation table lookup away from being the whole of what the player saw: the only
         // thing they could lock onto was their own co-located body, because it was the only
         // candidate on an opposing team. Putting the worn creature on `Charmed` inverts both
         // halves at once -- see [`chr_ins::TEAM_TYPE_CHARMED`] for the row read off the shipped
-        // matrix. Read BEFORE the write, so the release has the real previous value and not an
+        // matrix. Read before the write, so the release has the real previous value and not an
         // assumption that every creature ships on the same team.
         let original_team = creature.team_type();
         let team_written =
@@ -1768,7 +1768,7 @@ impl NpcPossessionEngine {
                 "NOT WRITTEN -- lock-on is unchanged and the body is still the only candidate"
             },
         ));
-        // So the FIRST carried frame of every possession writes a co-location line, rather than
+        // So the first carried frame of every possession writes a co-location line, rather than
         // whichever frame the previous possession happened to leave the counter on.
         fall::reset_colocation_throttle();
         let state = Possessing {
@@ -1811,7 +1811,7 @@ impl NpcPossessionEngine {
         Self::write_derived(chr_id, &state.camera, creature, state.moveset.as_ref());
         match state.moveset.as_ref() {
             Some(dispatcher) => {
-                // THE PANEL GOES UP WITH THE POSSESSION, not on the first page turn. A player who
+                // The panel goes up with the possession, not on the first page turn. A player who
                 // never presses a page key still needs to know what r1/r2/l1/l2 fire on the
                 // creature they just became -- and a panel that only appears once you have
                 // already used the feature is no help to somebody trying to find out that the
@@ -1821,12 +1821,12 @@ impl NpcPossessionEngine {
                     "moveset: c{chr_id:04} {}",
                     dispatcher.summary()
                 ));
-                // THE COUNTS ARE NOT A SENTENCE. `light=0 heavy=0 ranged=0 movement=12` is the
+                // The counts are not a sentence. `light=0 heavy=0 ranged=0 movement=12` is the
                 // whole answer to "why do none of my attacks work", and a player reads it as
                 // noise: they press the four attack buttons, get a step animation or nothing, and
                 // conclude the mod is broken. 25 of the 408 creatures in the shipped table really
                 // do have no attack animations -- a Balloon Dummy is one -- so this is a fact
-                // about the creature that has to be SAID, not a failure to be hidden.
+                // about the creature that has to be said, not a failure to be hidden.
                 if dispatcher.attack_count() == 0 {
                     possess_log(format_args!(
                         "moveset: c{chr_id:04} HAS NO ATTACK ANIMATIONS -- every move it has is \
@@ -1854,7 +1854,7 @@ impl NpcPossessionEngine {
                 }
             }
             None => {
-                // A PANEL THAT SAYS "NOTHING" RATHER THAN NO PANEL. The log line below is the
+                // A panel that says "NOTHING" rather than no panel. The log line below is the
                 // full explanation, but it is in a file; on screen, the difference between "this
                 // creature has no attacks" and "the panel is broken" has to be visible, and only
                 // a drawn panel can carry it.
@@ -1902,7 +1902,7 @@ impl PossessionEngine for NpcPossessionEngine {
         let Some(player) = game::main_player() else {
             return PossessionOutcome::Refused("no local player".to_owned());
         };
-        // THE MODE THAT CREATES RATHER THAN FINDS. It returns before any of the possession
+        // The mode that creates rather than finds. It returns before any of the possession
         // machinery, because there is nothing to possess yet -- see `tick_pending`.
         if request.target.mode == TargetMode::Spawn {
             return self.begin_spawn(request, player);
@@ -1936,7 +1936,7 @@ impl PossessionEngine for NpcPossessionEngine {
     /// A spawn in flight counts as active.
     ///
     /// Otherwise `tick_engine` would reconcile the toggle back to idle on the first frame of the
-    /// wait, and the player's next press would start a SECOND spawn while the first was still
+    /// wait, and the player's next press would start a second spawn while the first was still
     /// loading -- two creatures, one of them untracked and never removed.
     fn is_active(&self) -> bool {
         self.active.is_some() || self.pending.is_some()
@@ -1953,11 +1953,11 @@ impl PossessionEngine for NpcPossessionEngine {
     }
 
     fn shutdown(&mut self) {
-        // The one release that MUST happen even though nobody asked: an armed `ChrCtrl+0x3b0` in a
+        // The one release that must happen even though nobody asked: an armed `ChrCtrl+0x3b0` in a
         // process that is about to unload this DLL is a DLPanic the next time that character is
         // torn down, with our code no longer present to explain it.
         //
-        // A PENDING SPAWN GOES THROUGH THE SAME CALL, and this is why the check covers both: the
+        // A pending spawn goes through the same call, and this is why the check covers both: the
         // creature it created is real and registered even though nothing is possessed yet, so
         // "nothing to release" would be wrong. `release_with` declines the game call on this
         // thread and says the creature is being left; see `Step::DespawnCreature`.

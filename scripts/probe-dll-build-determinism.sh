@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measure whether the Windows-target DLL build is byte-reproducible, and whether a
-# PURE CODE MOVE (a function relocated verbatim into a submodule, zero behaviour
+# pure code move (a function relocated verbatim into a submodule, zero behaviour
 # change) leaves the DLL bytes untouched.
 #
 # This exists to answer, with evidence rather than intuition, whether a CI gate of

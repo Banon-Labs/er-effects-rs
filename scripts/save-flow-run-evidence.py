@@ -4,31 +4,31 @@
 Answers the three questions a save-flow run exists to answer, in order of how badly each
 matters:
 
-  1. Did the live save CHANGE? Suppression's whole claim is that no save byte is written
+  1. Did the live save change? Suppression's whole claim is that no save byte is written
      unless the Save Game row armed the one-shot bypass. A sha256 comparison against a
      pre-run snapshot is the only honest way to score that -- an mtime is not evidence,
      because the native writer patches blocks in place and a same-size same-mtime file can
      still differ.
-  2. What did the DLL SAY it did? The `save-suppress:` / `save-flow:` / `save-dest:` lines
-     appended by THIS run (seeked past a pre-run byte offset, so an old log cannot be
+  2. What did the DLL say it did? The `save-suppress:` / `save-flow:` / `save-dest:` lines
+     appended by this run (seeked past a pre-run byte offset, so an old log cannot be
      mistaken for fresh evidence).
   3. What do the RAM oracles report? The `oracle_save_*` fields are the run-stopping
      detectors; the log is corroboration.
 
-Deliberately NOT a pass/fail gate on the log text. A missing log line is a missing
+Deliberately not a pass/fail gate on the log text. A missing log line is a missing
 observation, not a proven absence -- so the save-integrity sha is reported separately and
 never inferred from what the log happens to contain.
 
 Usage:
     python3 scripts/save-flow-run-evidence.py [--baseline DIR]
 
-Environment overrides (all optional; defaults suit a Steam+Proton layout under $HOME):
+Environment overrides (all optional; defaults suit a Steam+Proton layout under $home):
     ER_GAME_DIR        directory holding er-quickload-*.log / er-quickload-telemetry.json
     ER_SAVE_DIR        directory holding ER0000.sl2
     ER_STEAM_ROOT      Steam root used to derive the two above (default $HOME/.local/share/Steam)
     ER_RUN_BASELINE    directory holding pre-run-sizes.json + pre-run-save-sha.txt
 
-Write the baseline BEFORE the run with --snapshot.
+Write the baseline before the run with --snapshot.
 """
 
 import argparse
@@ -208,7 +208,7 @@ WRITE_BRANCH_OBSERVER_COUNT = 2
 def report_write_branch(telemetry: dict) -> None:
     """Name which of `FUN_14240fd70`'s two write paths executed.
 
-    A bare pair of numbers is not the answer here, because zero/zero is a THIRD outcome --
+    A bare pair of numbers is not the answer here, because zero/zero is a third outcome --
     no save was written at all -- and it is indistinguishable from "nothing was watching"
     unless the installed count is read first. So this reports the verdict, not the counters.
     """

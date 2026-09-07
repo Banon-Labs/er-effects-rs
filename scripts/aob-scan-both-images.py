@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Scan an IDA-style AOB signature across the .text of BOTH deobfuscated ER images.
+"""Scan an IDA-style AOB signature across the .text of both deobfuscated ER images.
 
-Why: several DLLs locate a function by scanning the LIVE .text rather than hard-coding an RVA.
-An address produced that way is already an address for the RUNNING build, and putting it through
+Why: several DLLs locate a function by scanning the live .text rather than hard-coding an RVA.
+An address produced that way is already an address for the running build, and putting it through
 the 1.16.2 -> 1.17 translator moves a correct address to a wrong one. Running the same signature
 over both images is what tells the two cases apart: if the signature lands on X in 1.16.2 and on
 Y in 1.17, then a DLL that logged Y was already right.
 
-USAGE
+Usage
     python3 scripts/aob-scan-both-images.py "40 53 48 83 EC 40 48 8B 41 18"
 """
 import argparse
