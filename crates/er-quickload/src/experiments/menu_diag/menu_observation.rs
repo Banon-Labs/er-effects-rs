@@ -548,6 +548,33 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
     const HIT_CAP: usize = 24;
     const HIT_START: usize = 0;
     const HIT_STEP: usize = 1;
+    // THE ROW VECTOR, and why the flat scan above could never see into it (2026-09-06).
+    //
+    // The title's rows are NOT direct pointer fields on the dialog. `CS::TitleTopDialog::
+    // TitleTopDialog` (0x1409a8180, named in the 1.16.2 dump) adds each one through
+    // `FUN_140744540(MenuWindow*, MenuString, action_fn, enabled_fn)`, whose last act is
+    // `FUN_1407486c0(&param_1->field255_0x1f0, entry)` -- an append into a vector living in
+    // `MenuWindow` itself. `FUN_1407486c0`'s own body gives the layout with no guessing: it reads
+    // `+0x10` as END, `+0x08` as BEGIN, `+0x18` as CAPACITY, divides the offset by `0x140` and
+    // bumps END by `0x140`, so relative to the dialog that is BEGIN=+0x1f8, END=+0x200,
+    // CAP=+0x208, STRIDE=0x140. `MenuWindow`'s Ghidra layout agrees: `+0x1f0 DLAllocator*` then
+    // three longlongs.
+    //
+    // The flat scan sees `dialog+0x1f8` as one candidate pointer, reads the FIRST ROW's first
+    // qword as if it were a vtable, gets no match, and moves on -- it never strides. That is why
+    // run br-20260906-195900-9b8f (PR #403) and br-20260906-195423-28aa (main) BOTH logged
+    // `loadgame-scan: done hits=0` and then parked at `PREPARING SAVE 6/11 (COMPLETE 2/2)`
+    // forever: the Continue MenuWindowJob latch is unsatisfiable by construction (bd
+    // `continue-latch-is-unsatisfiable-docall-is-backscreen-accept-is-global-busy-2026-09-06`),
+    // so this scan is the ONLY path to a fireable node, and it was looking one dereference short.
+    //
+    // Each row is walked with the SAME fingerprints and the SAME `reaches_factory` validation the
+    // flat scan uses, so nothing new is trusted -- only a place that was never looked at.
+    const ROW_VEC_BEGIN_1F8: usize = 0x1f8;
+    const ROW_VEC_END_200: usize = 0x200;
+    const ROW_STRIDE: usize = 0x140;
+    const ROW_QWORDS: usize = ROW_STRIDE / PTR_SZ;
+    const ROW_CAP: usize = 64;
 
     let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
     if dialog == NULL {
@@ -680,8 +707,71 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
         }
         q += QW_STEP;
     }
+    // ROW-VECTOR PASS. Only runs when the flat pass came up short, so a dialog whose rows the flat
+    // scan already resolved keeps its existing behaviour byte for byte.
+    let mut rows_walked = HIT_START;
+    if found_member_node.is_none() || found_item.is_none() {
+        let begin = unsafe { safe_read_usize(dialog + ROW_VEC_BEGIN_1F8) }.unwrap_or(NULL);
+        let end = unsafe { safe_read_usize(dialog + ROW_VEC_END_200) }.unwrap_or(NULL);
+        let sane = begin != NULL
+            && end != NULL
+            && end >= begin
+            && begin >= HEAP_LO
+            && (begin & PTR_ALIGN_MASK) == QW_START
+            && (end - begin) % ROW_STRIDE == QW_START;
+        let rows = if sane {
+            (end - begin) / ROW_STRIDE
+        } else {
+            QW_START
+        };
+        append_autoload_debug(format_args!(
+            "loadgame-scan: row vector begin(0x1f8)=0x{begin:x} end(0x200)=0x{end:x} stride=0x{ROW_STRIDE:x} rows={rows} sane={sane}"
+        ));
+        let mut row = QW_START;
+        while sane && row < rows && row < ROW_CAP {
+            let entry = begin + row * ROW_STRIDE;
+            let mut q = QW_START;
+            while q < ROW_QWORDS {
+                let p = unsafe { safe_read_usize(entry + q * PTR_SZ) }.unwrap_or(NULL);
+                if p != NULL && (p & PTR_ALIGN_MASK) == QW_START && p >= HEAP_LO {
+                    let vt = unsafe { safe_read_usize(p) }.unwrap_or(NULL);
+                    if vt == memberjob_vt {
+                        let mfn = unsafe { safe_read_usize(p + MEMBER_FN_18) }.unwrap_or(NULL);
+                        let rf = reaches_factory(mfn);
+                        append_autoload_debug(format_args!(
+                            "loadgame-scan: row {row} +0x{:x} MenuMemberFuncJob node=0x{p:x} member_fn=0x{mfn:x} reaches_factory={rf}",
+                            q * PTR_SZ
+                        ));
+                        if rf && found_member_node.is_none() {
+                            found_member_node = Some(p);
+                        }
+                        hits += HIT_STEP;
+                    } else {
+                        let fa8 = unsafe { safe_read_usize(p + ITEM_FUNCTOR_A8) }.unwrap_or(NULL);
+                        if fa8 != NULL
+                            && (fa8 & PTR_ALIGN_MASK) == QW_START
+                            && fa8 >= HEAP_LO
+                            && unsafe { safe_read_usize(fa8) }.unwrap_or(NULL) == functor_vt
+                        {
+                            append_autoload_debug(format_args!(
+                                "loadgame-scan: row {row} +0x{:x} d180 MenuWindowJob item=0x{p:x} functor=0x{fa8:x} -- LOAD-GAME candidate",
+                                q * PTR_SZ
+                            ));
+                            if found_item.is_none() {
+                                found_item = Some(p);
+                            }
+                            hits += HIT_STEP;
+                        }
+                    }
+                }
+                q += QW_STEP;
+            }
+            rows_walked += HIT_STEP;
+            row += QW_STEP;
+        }
+    }
     append_autoload_debug(format_args!(
-        "loadgame-scan: done hits={hits} found_member_node=0x{:x} found_item=0x{:x}",
+        "loadgame-scan: done hits={hits} rows_walked={rows_walked} found_member_node=0x{:x} found_item=0x{:x}",
         found_member_node.unwrap_or(NULL),
         found_item.unwrap_or(NULL)
     ));
