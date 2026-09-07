@@ -39,6 +39,33 @@
 #
 # Hence both, and hence the cap is a fraction of the machine rather than `nproc - 1`: leaving one
 # core free does not make a desktop responsive when the other fifteen are pinned.
+#
+# WHY A SCHED-POLICY LEVER TOO, AND WHY NICE ABOVE IS NOT ENOUGH ON THIS CLASS OF MACHINE
+# ----------------------------------------------------------------------------------------
+# MEASURED 2026-09-06 on this CachyOS box, live from /proc during a real gate run: the renice
+# above is INERT here. `git push` sat at nice 11 (a relative `nice -n 15` on a -4 parent), but its
+# child `bash check.sh` was back at nice -4 -- a child cannot lower its own nice below what it
+# inherited -- and the eight `check-moveset-table.py` workers it forked inherited that -4 too. The
+# `cpu_courtesy` banner had printed "nice 11 -> 11" for that very shell, correctly reading 11 and
+# leaving it; something with `CAP_SYS_NICE` moved it afterwards, unprompted.
+#
+# That something is `ananicy-cpp`, a systemd daemon (`apply_nice = true`, `check_freq = 15` in
+# `/etc/ananicy.d/ananicy.conf`) that classifies every process literally named `bash` as type
+# `Doc-View` (`/etc/ananicy.d/bash.rules`) and pins that type to nice -4
+# (`/etc/ananicy.d/00-types.types`). It re-applies that pin to every bash on this machine roughly
+# every 15 seconds, including every gate script and everything it forks, so the renice above wins
+# for at most one sweep before losing again -- it is not merely weak here, it is actively
+# reversed. CONFIRMED on a single pid across one 20s window: `renice -n 10` plus `chrt -i` at t=0
+# read back as `nice=10, SCHED_IDLE`; at t=20s (past one `check_freq`) the SAME pid read back as
+# `nice=-4, SCHED_IDLE` -- ananicy reverted the nice, unchanged, and left the scheduling policy
+# alone. The `Doc-View` type carries no `sched` key, so it has nothing to reapply there.
+#
+# Hence `chrt -i` (`SCHED_IDLE`): the process only runs when no other runnable task wants that
+# core, which is strictly below anything `nice` alone can guarantee and survives a daemon that
+# actively fights the nice value on this class of machine. It is additive to, not a replacement
+# for, the renice above -- a machine without ananicy (or any daemon like it) still benefits from
+# both, and the renice is what a `nice`-only reader of `/proc` will see until they check
+# `chrt -p` too.
 
 # Lowest priority this repo's long jobs may run at. 10 rather than 19 so a build still makes
 # real progress on an otherwise idle machine while losing every contested slice to the user.
@@ -47,6 +74,11 @@
 # Fraction of the machine a build may take, as a divisor. 2 = half the cores. Chosen so the user
 # keeps enough parallelism for a browser, a compositor and a game while a cold cross-compile runs.
 : "${ER_JOB_DIVISOR:=2}"
+
+# Drop to SCHED_IDLE (`chrt -i`) in addition to the renice above. Set to 0 for a CI runner or an
+# operator who wants the whole box -- SCHED_IDLE means "only run when nothing else wants this
+# core," which is the wrong trade on a machine nobody is sitting at.
+: "${ER_SCHED_IDLE:=1}"
 
 # How many cores this machine has, or a conservative guess when it cannot be read.
 er_cpu_count() {
@@ -136,6 +168,16 @@ cpu_courtesy() {
 	# skipped silently where the scheduler or the container does not allow it.
 	command -v ionice >/dev/null 2>&1 && ionice -c 3 -p $$ >/dev/null 2>&1 || true
 
-	echo "[$who] cpu courtesy: nice $current -> $(nice), CARGO_BUILD_JOBS=$cap of $cores cores, SWEEP_JOBS=$SWEEP_JOBS" >&2
-	echo "[$who]   override with ER_BUILD_JOBS=<n> ER_NICE_FLOOR=<n>; see scripts/lib/cpu-courtesy.sh" >&2
+	# SCHED_IDLE, because on this class of machine the renice above is reversed within seconds --
+	# see the header comment. Best-effort exactly like `ionice` above: a missing `chrt`, a refused
+	# call, or a container that forbids it must leave the process at whatever policy it inherited,
+	# never fail the gate. `$$` again, for the same reason: children inherit scheduling policy.
+	local sched=""
+	if [[ "$ER_SCHED_IDLE" != "0" ]] && command -v chrt >/dev/null 2>&1; then
+		chrt -i -p 0 $$ >/dev/null 2>&1 || true
+	fi
+	command -v chrt >/dev/null 2>&1 && sched=$(chrt -p $$ 2>/dev/null | sed -n 's/.*scheduling policy: //p')
+
+	echo "[$who] cpu courtesy: nice $current -> $(nice), CARGO_BUILD_JOBS=$cap of $cores cores, SWEEP_JOBS=$SWEEP_JOBS, sched=${sched:-unknown}" >&2
+	echo "[$who]   override with ER_BUILD_JOBS=<n> ER_NICE_FLOOR=<n> ER_SCHED_IDLE=0; see scripts/lib/cpu-courtesy.sh" >&2
 }

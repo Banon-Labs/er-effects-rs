@@ -1,46 +1,31 @@
 #!/usr/bin/env python3
-"""Find the Seamless Co-op entry points this repo pins, in whatever `ersc.dll` is installed.
+"""Locate `er-invasion-warp`'s pinned Seamless Co-op entry points in an installed `ersc.dll`.
 
-WHY THIS EXISTS
----------------
-`crates/er-invasion-warp` reads and hooks four functions inside `ersc.dll` by
-`module base + RVA`. Those RVAs were measured against **Seamless Co-op v1.9.9**. `ersc.dll` is
-third-party: the user installs and updates it whenever they like, and on 2026-09-02 **v2.0.0**
-replaced v1.9.9 and moved everything. The pinned VA `0x180022d30` -- `show()` in v1.9.9 -- now
-reads `ff ff ff 7f ...`, a float bit pattern in the middle of unrelated data.
+Every ERSC address this repo holds is `module base + RVA`, measured against ONE Seamless build --
+the one `ERSC_SUPPORTED_VERSION` records. `ersc.dll` is third-party and the user updates it on
+their own schedule, so when a new build ships every pinned RVA moves at once and this tool is how
+they are found again.
 
-That is not a repo defect and no longer breaks the build (see the "Whose file is it?" section of
-`build-support/prologue_build.rs`). It does mean the runtime filter DISARMS, because its prologue
-gate correctly refuses to call an address it cannot recognise. This tool is how you find out where
-things went before re-pinning them.
+    uv run --with capstone python3 scripts/locate-ersc-entry-points.py --reference <old ersc.dll>
 
-WHAT A RESULT MEANS -- read this before pinning anything it prints
-------------------------------------------------------------------
-A match here is a CANDIDATE, never an identification. Two lessons from the v1.9.9 -> v2.0.0 move,
-both measured:
+A match here is a CANDIDATE, never an identification. Two lessons from the last such move, both
+paid for the hard way:
 
-* The eight callee-saved pushes that open `show()` appear **1248 times** in `ersc.dll`. A prologue
-  is a code SHAPE. Only with the frame size appended does it become unique.
-* `BUILD_LOBBY_KEY_PROLOGUE`'s full 19 bytes match exactly ONE place in v2.0.0 -- and it is the
-  WRONG function. Mapping the v1.9.9 function's BODY by masked content lands somewhere else
-  entirely. A unique byte match is evidence, not proof; read the function.
+  * A masked BODY search can miss a function that did not move, because one inverted branch
+    changes an OPCODE byte the mask keeps.
+  * A unique PROLOGUE hit is a code SHAPE, not a function -- big-frame MSVC functions in one
+    source file look alike from the top, and the last migration's prologue search landed
+    confidently on the WRONG function.
 
-And the addresses are not the whole job. v2.0.0 also moved the session object's fields and changed
-the option-action codes, both of which `local_invasion_filter.rs` hard-codes:
-
-    field / code                     v1.9.9        v2.0.0
-    session state                    S+0x110       S+0x150
-    guard                            S+0x10c       S+0x14c
-    sub-object the actions lea       S+0xc0        S+0x100
-    "invade" action writes           0xd           (no action writes 0xd)
-    "cancel" action writes           0x22          0x23
-
-So a correct v2.0.0 address used with v1.9.9 field offsets would read and write the wrong things
-in a live multiplayer session. Re-pinning is a reverse-engineering job, not a find-and-replace.
+Resolve candidates by reading, by `.pdata` index and by function size -- never by picking the
+first hit. And note that an address and the field offsets it operates on travel TOGETHER: a
+correct new address used with the previous build's offsets reads and writes the wrong fields of a
+live multiplayer session, which is the failure this whole module exists to avoid. Re-pinning is a
+reverse-engineering job, not a find-and-replace.
 
 USAGE
     uv run --with capstone python3 scripts/locate-ersc-entry-points.py
-    uv run --with capstone python3 scripts/locate-ersc-entry-points.py --reference <v1.9.9 ersc.dll>
+    uv run --with capstone python3 scripts/locate-ersc-entry-points.py --reference <old ersc.dll>
     python3 scripts/locate-ersc-entry-points.py --selftest
 
 `capstone` is only needed for the `--reference` body mapping, which is the strong evidence; the
@@ -113,7 +98,7 @@ class Pe:
         """`(file_offset, length, rva_of_that_offset)` per section holding real compiler-emitted code.
 
         Executable AND NOT writable. `ersc.dll` keeps most of itself in an Oreans WinLicense VM
-        section (`.themida` in v1.9.9, renamed `ERSC` in v2.0.0) that is 11 MB of ciphertext and
+        section (named `ERSC`, `.themida` in older builds) that is 11 MB of ciphertext and
         is marked writable; scanning it manufactures coincidental hits. Selecting by section
         characteristics rather than by the name `.text` keeps the rule true if the next build
         renames things again -- which this one already did once.
@@ -158,7 +143,7 @@ class Pe:
 
 
 def parse_version_markers(source):
-    """`{"Ersc199": "Seamless Co-op v1.9.9 by Yui", ...}` out of `Image::version_marker`."""
+    """`{"Ersc200": "Seamless Co-op v2.0.0 by Yui"}` out of `Image::version_marker`."""
     return dict(re.findall(r'Self::(Ersc\w+)\s*=>\s*Some\("([^"]+)"\)', source))
 
 
