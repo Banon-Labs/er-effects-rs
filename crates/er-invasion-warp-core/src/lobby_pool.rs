@@ -2,7 +2,7 @@
 //!
 //! # What `lobby_key` actually is
 //!
-//! Reversed 2026-08-06 out of `ersc.dll` v1.9.9. It is NOT the co-op password, which was the
+//! Reversed 2026-08-06 out of `ersc.dll`. It is NOT the co-op password, which was the
 //! working assumption for most of a day and was wrong twice over — a player with a different
 //! password matched us live, and the derivation never contains a password:
 //!
