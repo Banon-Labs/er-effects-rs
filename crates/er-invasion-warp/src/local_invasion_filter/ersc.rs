@@ -3,69 +3,59 @@
 //!
 //! # Why this is a table rather than four constants
 //!
-//! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and v2.0.0
-//! (2026-09-02) moved every address this module pins AND the fields those addresses operate on.
+//! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and the last
+//! update moved every address this module pins AND the fields those addresses operate on.
 //! A single constant set can only ever be right about one build, and the build it is right about
 //! changes without warning -- so the addresses live in an [`Abi`] record that
 //! [`super::resolve_ersc_abi`] selects by fingerprint, refusing anything it cannot identify.
 //!
 //! **[`SUPPORTED`] holds exactly one entry, and that is a product decision: this mod drives the
 //! LATEST Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
-//! next build is a new entry measured the way this one was. v1.9.9, which this module did drive
-//! until 2026-09-02, is kept in [`RETIRED`] as a fingerprint and nothing else.
+//! next build REPLACES this entry, measured the way this one was. A build that is no longer the
+//! latest leaves nothing behind: no second entry, no fingerprint, no pinned addresses. The
+//! refusal does not need to name which stale build it found, only that it is not the supported
+//! one.
 //!
-//! Nobody loses a co-op session to that decision: v2.0.0 changed the lobby-key salt, so v1.9.9 and
-//! v2.0.0 clients are already invisible to each other whatever this mod does.
+//! # How each address here was identified
 //!
-//! # What v2.0.0 moved, and how each address was identified
+//! A byte match was not accepted as an identification for any of these. Every one is reproducible
+//! with `scripts/ersc-disas.py` against the installed DLL, read in place.
 //!
-//! A byte match was not accepted as an identification for any of these. The measurements are
-//! reproducible with `scripts/ersc-disas.py` against the two DLLs, read in place.
+//! | | RVA | what identifies it |
+//! |---|---|---|
+//! | `show` | `0x241a0` | unique masked-body match; `.pdata` index 301; function size `0xa0a` |
+//! | invade action | `0x25850` | `.pdata` index 319, on a shift that holds unbroken over 78 consecutive functions; the only action of its shape writing `0xe`, at `0x25886`, out of 4903 functions |
+//! | cancel action | `0x258d0` | unique masked-body match, AND `.pdata` index 320 on that same shift, AND size `0x64` |
+//! | `BuildLobbyKey` | `0xad6e0` | `.pdata` index 1782, size `0x2d1`; loads the SHA-256 IV and a 32-byte `.rdata` salt `0x23` bytes apart; its two callers sit in ONE function that calls it twice `0xaf` apart; its opening decodes to `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
 //!
-//! | | v1.9.9 | v2.0.0 | what identifies the v2.0.0 address |
-//! |---|---|---|---|
-//! | `show` | `0x22d30` | `0x241a0` | unique masked-body match; `.pdata` index 296 -> 301; function SIZE identical (`0xa0a`) |
-//! | invade action | `0x243e0` | `0x25850` | `.pdata` index 314 -> 319 at the same `+5` shift that holds unbroken over 78 consecutive functions; the only action of its shape writing `0xe`, the `+1` counterpart of `0xd` |
-//! | cancel action | `0x24460` | `0x258d0` | unique masked-body match, AND `.pdata` index 315 -> 320 at that same `+5`, AND size identical (`0x64`) |
-//! | `BuildLobbyKey` | `0xabc20` | `0xad590` | loads the SHA-256 IV and a 32-byte `.rdata` salt at the same internal spacing (`0x23` bytes apart); its two callers sit in ONE function that is byte-size-identical across the builds (`0xf18`) and calls it twice `0xaf` apart, exactly as v1.9.9's does; and its opening decodes instruction-for-instruction against v1.9.9's, including `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
+//! Two lessons from that measurement are worth keeping, because they are about METHOD and will
+//! apply again the next time Seamless ships:
 //!
-//! The two failures the previous measurement hit are both explained, which is what turns them
-//! from "the function is gone" into "the function is right here":
+//! * **A masked body signature can miss a function that has not moved.** The compiler inverted the
+//!   invade action's idle guard -- `cmp [rdi+STATE],IDLE; je <continue>` became
+//!   `cmp [rdi+STATE],IDLE; jne <return>` -- and `je`/`jne` differ in the OPCODE byte, which a
+//!   masked search keeps. One byte at offset 21 defeated every signature length on the ladder.
+//! * **A unique prologue hit is a code SHAPE, not a function.** `BuildLobbyKey`'s 19-byte prologue
+//!   matched exactly one address and it was the wrong one: `0x1a6d0` merely happens to frame
+//!   `0x148` too, and sits at `.pdata` index 193 -- 1589 entries from the real function.
+//!   Big-frame MSVC functions in one source file look alike from the top; the resolution has to
+//!   come from reading, not from picking.
 //!
-//! * **The invade action matched no body signature at any length.** The compiler INVERTED its
-//!   idle guard -- `cmp [rdi+0x110],0; je <continue>` became `cmp [rdi+0x150],1; jne <return>` --
-//!   and `je` and `jne` differ in the OPCODE byte, which a masked search keeps. The divergence is
-//!   at offset 21, inside even the shortest signature on the ladder.
-//! * **`BuildLobbyKey`'s 19-byte prologue matched exactly one v2.0.0 address, and it was the
-//!   wrong function.** `0x1a6d0` merely happens to frame `0x148` too. It sits at `.pdata` index
-//!   193, some 1568 entries from where `BuildLobbyKey`'s neighbourhood is -- so a unique prologue
-//!   hit really is a code SHAPE and nothing more.
+//! # The session ABI moves as one block
 //!
-//! And the two candidates its masked BODY search returned instead are worth naming, because one of
-//! them is not a coincidence at all: `0xab5f0` is `BuildLobbyKey`'s own CALLER -- the lobby
-//! search-and-publish function, `0xaa2f0` in v1.9.9, the same `0xf18` bytes in both builds. A body
-//! signature taken from the top of a big-frame MSVC function matches the top of another big-frame
-//! MSVC function in the same source file; that it landed one level up the call graph rather than
-//! somewhere random is exactly why "two candidates" had to be resolved by reading, not by picking.
+//! The mutex sub-object, the guard and the state field keep their relative spacing
+//! (`guard = mutex+0x4c`, `state = mutex+0x50`), so they move together. That is one finding with
+//! three consequences rather than three separate measurements, and it is the shape to re-check
+//! first when the fields move again.
 //!
-//! # The session ABI moved as one block
+//! # The state enum renumbers wholesale, so leaving a code alone is the DANGEROUS option
 //!
-//! The mutex sub-object, the guard and the state field all shifted by exactly `+0x40` and kept
-//! their relative spacing (`guard = mutex+0x4c`, `state = mutex+0x50`). That is one finding with
-//! three consequences rather than three separate measurements.
+//! Scanning every `mov dword [reg+STATE], imm32` in the real code finds seven distinct values.
+//! When Seamless last shifted them, all seven moved by a uniform `+1` and a new state was inserted
+//! at the bottom -- including the "idle" sentinel the guarded actions compare against. A state code
+//! carried across a build unchanged is therefore not the conservative choice: it is how a progress
+//! marker silently becomes a fast-fail state.
 //!
-//! # `0xd` was not replaced -- the whole enum was renumbered `+1`
-//!
-//! "No v2.0.0 action writes `0xd`" was correct and led to the wrong conclusion. Scanning every
-//! `mov dword [reg+STATE], imm32` in each build's real code finds SEVEN distinct values whose
-//! site counts match one-for-one under a uniform `+1`: `0x1`x1, `0x3`x1, `0x6`x1, `0x9`x1,
-//! `0xd`x1, `0x22`x7, `0x23`x1 become `0x2`, `0x4`, `0x7`, `0xa`, `0xe`, `0x23`x7, `0x24`. The
-//! "idle" sentinel the guarded actions compare against moved `0` -> `1` in the same shift. So
-//! `0xd` became `0xe`, and a new state was inserted at the bottom of the enum.
-//!
-//! That renumber makes leaving a state code alone the DANGEROUS option, not the safe one:
-//! v1.9.9's `0x12` progress marker is, under the shift, a fast-fail state in v2.0.0.
-
 // Every `*_PROLOGUE` below is assembled from NAMED `iced-x86` instructions by this crate's
 // `build.rs`, which additionally checks each one against a real copy of the build it claims to
 // describe -- located by the Seamless version string inside the file rather than by which
@@ -74,11 +64,11 @@
 // loaded".
 include!(concat!(env!("OUT_DIR"), "/generated_ersc_prologues.rs"));
 
-/// Everything that differs between two Seamless builds, in one record.
+/// Everything a Seamless build's ABI consists of, in one record.
 ///
-/// Splitting it up is what made the previous breakage silent-adjacent: a correct v2.0.0
-/// ADDRESS used with v1.9.9 field offsets would read and write the wrong fields of a live
-/// multiplayer session, and this module's failure mode is cancelling other players'
+/// Splitting it up is what made the previous breakage silent-adjacent: a correct new ADDRESS
+/// used with the previous build's field offsets would read and write the wrong fields of a
+/// live multiplayer session, and this module's failure mode is cancelling other players'
 /// invasions. Address, layout and codes travel together or not at all.
 pub struct Abi {
     /// Human-readable build name, for the log line that says which one was recognised.
@@ -103,10 +93,10 @@ pub struct Abi {
     /// matter how well their levels, weapon levels or locations line up.
     ///
     /// The value is [`LOBBY_KEY_HEX_LEN`] lowercase hex characters -- a SHA-256 digest, from
-    /// an IV this function loads out of `.rdata` together with a 32-byte salt. **v2.0.0
-    /// rotated that salt** (`gcEz!NaR-*y7?kSPXJ8Ll7wVtspRo?EZ` -> `n7iAOMaYxNItSTYeAIIFB2+AlM8GQoXs`),
-    /// which by itself makes v1.9.9 and v2.0.0 clients invisible to each other -- worth
-    /// knowing before anyone reads a key mismatch as a bug in this module.
+    /// an IV this function loads out of `.rdata` together with a 32-byte salt. **Seamless
+    /// rotates that salt on release** -- measured 2026-09-06, no two of the last three builds
+    /// share one -- which by itself makes clients of different builds invisible to each other,
+    /// worth knowing before anyone reads a key mismatch as a bug in this module.
     ///
     /// The moment it re-derives is jittered, so a comparison between two machines must use the
     /// key that was live when the offers arrived, not merely the first one printed. Observed,
@@ -126,23 +116,23 @@ pub struct Abi {
     /// Idle: the state a cancelled search settles back to, and the state `invade` requires.
     pub state_idle: u32,
     /// The state the "Invade world" action writes -- the one and only site in the whole
-    /// unpacked `.text` that puts this value in the field, in either build.
+    /// unpacked `.text` that puts this value in the field.
     pub state_searching: u32,
     /// The state "Cancel search" writes.
     ///
     /// NOT usable as a "the user cancelled" signal, which is what it was briefly used for: the
     /// static scan found SEVEN sites writing this value and only one is the Cancel action, so
-    /// every internal abort looked like a user cancel. (Still seven in v2.0.0, at the
-    /// renumbered value.) It survives as a label for the trace.
+    /// every internal abort looked like a user cancel -- and it was still seven sites after the
+    /// last renumber. It survives as a label for the trace.
     pub state_cancelling: u32,
     /// The first state past the fast-fail path, our own progress marker for the restart
     /// backoff. See `note_attempt_progress`, its only reader, for what it gates.
     ///
-    /// v1.9.9's `0x12` was measured at runtime; v2.0.0's is that value carried through the
-    /// proven enum-wide `+1`, and is the one number in this table that is INFERRED rather than
-    /// read out of an instruction. Leaving it alone would have been worse than shifting it:
-    /// under the renumber, v1.9.9's `0x12` is a fast-fail state in v2.0.0, so an unshifted
-    /// marker would clear the backoff penalty on exactly the attempts that earned it.
+    /// The one number in this table that is INFERRED rather than read out of an instruction: it
+    /// was measured at runtime on the preceding build and carried across the proven enum-wide
+    /// `+1`. Leaving it unshifted would have been worse than moving it -- under that renumber the
+    /// stale value lands on a FAST-FAIL state, so the marker would clear the backoff penalty on
+    /// exactly the attempts that earned it.
     pub state_offer_received: u32,
 }
 
@@ -155,8 +145,8 @@ pub struct Abi {
 /// weak to tell itself from its predecessor must fail loudly rather than silently win a race.
 ///
 /// The discriminator is the INVADE action rather than `show` for two independent reasons.
-/// `show` was byte-identical between v1.9.9 and v2.0.0 -- the same code at a different address, so
-/// it could not tell them apart at all. And this module HOOKS `show`, so once the detour is
+/// `show` survived the last update byte-identical at a different address, so it could not tell
+/// one build from the other at all. And this module HOOKS `show`, so once the detour is
 /// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
 /// Seamless is a stranger, which is a bug this module has already had once.
 pub const SUPPORTED: &[Abi] = &[Abi {
@@ -186,45 +176,11 @@ pub const SUPPORTED: &[Abi] = &[Abi {
 // above, and that is not a style choice: `scripts/check-expression-constants.py` derives its
 // gated population from `const` declarations whose name carries `RVA`, and a value written as
 // a bare struct-literal field is invisible to it. Inlining these once already dropped six
-// names out of that population, which the coverage floor caught. They keep the version prefix
-// because two builds are described here and an unprefixed `SHOW_RVA` could only be one of
-// them.
+// names out of that population, which the coverage floor caught. They keep the version prefix so
+// that a re-pin lands as a NEW set of names beside the old ones for exactly one commit, rather
+// than as an in-place edit of numbers nobody diffed.
 
-/// A build this module once drove and no longer will.
-///
-/// Kept for ONE purpose: so that a user who has not updated Seamless is told exactly that,
-/// instead of being told their `ersc.dll` is unrecognised. The distinction is the whole value --
-/// "update Seamless Co-op" is an instruction someone can act on, "unrecognised build" reads as a
-/// bug in this mod and gets reported as one. Nothing in here is ever used to drive anything: a
-/// retired build carries only the fingerprint that identifies it.
-pub struct Retired {
-    /// Printed to the log verbatim.
-    pub version: &'static str,
-    /// Where [`Self::invade_prologue`] is expected, relative to the module base.
-    pub invade_action_rva: usize,
-    /// The same discriminator [`Abi::invade_prologue`] is, and measured the same way -- it occurs
-    /// exactly once in v1.9.9 and nowhere at all in v2.0.0, so recognising a retired build cannot
-    /// misfire on a supported one.
-    pub invade_prologue: &'static [u8],
-}
-
-/// Builds that are recognised only to be refused by name. See [`Retired`].
-///
-/// v1.9.9 is here rather than in [`SUPPORTED`] by product decision, not by measurement: this mod
-/// supports the latest Seamless Co-op only. The measurement happens to agree that the split costs
-/// nothing to a co-op player -- v2.0.0 changed the lobby-key salt, so v1.9.9 and v2.0.0 clients
-/// cannot see each other's sessions regardless of what this mod does.
-pub const RETIRED: &[Retired] = &[Retired {
-    version: "Seamless Co-op v1.9.9",
-    invade_action_rva: V199_INVADE_ACTION_RVA,
-    invade_prologue: V199_INVADE_PROLOGUE,
-}];
-
-/// Seamless v1.9.9, measured 2026-08-05. Only the invade action survives the retirement of that
-/// build: it is what [`RETIRED`] recognises it BY, and nothing here drives it any more.
-pub const V199_INVADE_ACTION_RVA: usize = 0x2_43e0;
-
-/// Seamless v2.0.0, measured 2026-09-02. See this module's docs for what identifies each one.
+/// Seamless v2.0.1, the supported build. See this module's docs for what identifies each one.
 pub const V201_SHOW_RVA: usize = 0x2_41a0;
 pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
 pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
@@ -233,7 +189,7 @@ pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
 
 /// `LOBBY_KEY_HEX_LEN` lowercase hex characters: a SHA-256 digest, so 32 bytes rendered as 64
-/// characters. Unchanged across the update -- both builds load the same SHA-256 IV.
+/// characters. The digest width, so it survives an update; the SHA-256 IV has not moved.
 pub const LOBBY_KEY_HEX_LEN: usize = 64;
 /// MSVC `std::string`: `{ union { char buf[16]; char* ptr; }; size_t size; size_t capacity; }`.
 /// A capacity of 16 or more means the bytes are on the heap and the first field is a pointer --
@@ -242,9 +198,8 @@ pub const STD_STRING_SIZE_OFFSET: usize = 0x10;
 pub const STD_STRING_CAPACITY_OFFSET: usize = 0x18;
 pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 
-/// `OSM+0x58` is the session object. UNCHANGED in v2.0.0: all five of its option actions
-/// still open `mov rdi,[rcx+0x58]`, and `show`'s body is byte-identical, so nothing about the
-/// OSM layout moved.
+/// `OSM+0x58` is the session object, and it has survived every update so far: all five option
+/// actions still open `mov rdi,[rcx+0x58]`.
 ///
 /// A `.data` singleton holding OSM would have let this module hook NOTHING in Seamless. One
 /// was looked for and not found: the only `.data` global that is loaded and then dereferenced
@@ -254,13 +209,13 @@ pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 /// strings (`seamless buddy system`, source paths), so there is no constructor to trace back
 /// to a singleton either. Recorded here so the next reader does not repeat the hunt.
 pub const NEXT_OBJECT_OFFSET: usize = 0x58;
-/// OSM carries the ASCII tag `seamless` here. Measured live 2026-08-04 in v1.9.9, reported as
+/// OSM carries the ASCII tag `seamless` here. Measured live 2026-08-04, reported as
 /// a diagnostic and believed by nothing -- see `show_observer` for the day it was a gate.
 pub const OSM_TAG_OFFSET: usize = 0x68;
 pub const OSM_TAG: &[u8] = b"seamless";
-/// The value the guard field holds when the session is unusable. Unchanged in v2.0.0; every
-/// option action in both builds still compares against it.
+/// The value the guard field holds when the session is unusable. Every option action still
+/// compares against it.
 pub const SESSION_GUARD_POISON: u32 = 0x7fff_ffff;
 /// The highest plausible session state, used to reject a pointer that is not a session at all.
-/// Comfortably above the largest code either build writes (`0x24`).
+/// Comfortably above the largest code the build writes (`0x24`).
 pub const SESSION_STATE_MAX: u32 = 0xff;

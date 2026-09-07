@@ -3,8 +3,8 @@
 Read-only. ersc.dll is Themida-packed, but only the entry point / IAT are
 protected: the `.text` section is plaintext and has complete `.pdata` unwind
 coverage, so normal function-boundary + xref analysis works. The function count
-is read from the file rather than stated here -- this line used to say "4839
-functions", which was v1.9.9; the installed v2.0.0 has 4903.
+is read from the file rather than stated here -- this line used to carry a
+literal count, which went stale the first time Seamless shipped an update.
 
 Usage (capstone comes from uv, there is no system pip):
     uv run --with capstone python3 scripts/ersc_static.py --help
