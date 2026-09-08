@@ -16,6 +16,11 @@ Build it with `bash scripts/er-build-dlls.sh er-lockon-filter`, which is the sam
 invocation as a bare `cargo xwin build -p er-lockon-filter` plus the provenance record every
 launch script gates on.
 
+`scripts/me3-dll-conflicts.toml` classifies it `[opt_in_only]`, so a generated profile never
+picks it up on its own -- name it: `scripts/er-run-branch.py --with er-lockon-filter`. It
+contends no prologue and corrupts nothing, but it changes what happens when you press lock-on,
+and a dependency-closure walk is not consent for that.
+
 ## What it actually does
 
 `CS::LockTgtMan`'s per-frame update walks the act-point list and admits each point on four
